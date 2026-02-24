@@ -1,0 +1,281 @@
+---
+description:
+globs: components/Tool/**
+alwaysApply: false
+---
+
+Tool is OS tool components where it should be the UI part for OS
+
+Where OS rule is located at [os.mdc](mdc:.cursor/rules/os.mdc)
+
+The purpose of Tool is where to make the AI easy to interact with universal layout
+
+basic tool layout structure
+
+components/Tool/[AppName]
+/provider
+/index.tsx
+/types.ts
+
+where the provider will contains the
+appSchema which will be used for the InteractApp
+
+for example:
+
+[index.tsx](mdc:components/Tool/TodoList/index.tsx) which contains
+
+import { useInteractApp } from "@OS/Provider/InteractAppProv";
+
+<InteractApp appSchema={appSchema} className="p-3">
+    <TabsContainer />
+</InteractApp>
+
+[todolistProvider.tsx](mdc:components/Tool/TodoList/provider/todolistProvider.tsx) contains the appSchema
+
+const appSchema: AppSchema = useMemo(() => {
+return {
+id: "hyperchotodolist",
+name: "Todo List",
+sidebar: {
+sections: [
+{
+id: "tasks",
+items: [
+{
+id: "myday",
+title: "My Day",
+icon: Sun,
+isActive: currentTab === "myday",
+onClick: () => handleTabChange("myday"),
+},
+{
+id: "starred",
+title: "Starred",
+icon: Star,
+isActive: currentTab === "starred",
+onClick: () => handleTabChange("starred"),
+},
+{
+id: "finished",
+title: "Finished",
+icon: SquareCheckBig,
+isActive: currentTab === "finished",
+onClick: () => handleTabChange("finished"),
+},
+{
+id: "task",
+title: "Tasks",
+icon: ListChecks,
+isActive: currentTab === "task",
+onClick: () => handleTabChange("task"),
+},
+],
+},
+{
+id: "lists",
+title: "Lists",
+items: [
+...lists.map((list) => ({
+id: list._id,
+title: list.name,
+icon: ListChecks,
+isActive: currentTab === "list" && listId === list._id,
+onClick: () => handleTabChange("list", list._id),
+})),
+{
+id: "create-new-list",
+title: "Create new list",
+icon: Plus,
+isDraggable: false,
+onClick: handleCreateList,
+},
+],
+type: "rowOrder+collapsible",
+reorder: handleDragEndLists,
+},
+],
+},
+detail: {
+animationKey: "todolist_detail",
+body: (
+<>
+{!selectedTask ? (
+taskLoading && <TodoDetailSkeleton />
+) : (
+<TaskDetails task={selectedTask} />
+)}
+</>
+),
+},
+};
+}, [lists, currentTab, listId, selectedTask, taskLoading]);
+
+Other example: [index.tsx](mdc:components/Tool/Note/index.tsx)
+import React from "react";
+import NoteEditor from "./component/NoteEditor";
+import { InteractApp } from "@OS/InteractApp";
+import { useNote } from "./provider/noteProvider";
+export const Note = () => {
+const { appSchema } = useNote();
+
+return (
+<InteractApp appSchema={appSchema}>
+<NoteEditor />
+</InteractApp>
+);
+};
+
+export default Note;
+
+where the note provider contains the appSchema [noteProvider.tsx](mdc:components/Tool/Note/provider/noteProvider.tsx)
+const appSchema: AppSchema = useMemo(() => {
+return {
+id: "hypercho-note",
+name: "Note",
+sidebar: {
+sections: [
+{
+id: "note-folders",
+items: [
+...folders.map((folder) => ({
+id: folder.\_id,
+title: `${folder.name} (${folder.notesLength})`,
+isActive: selectedNote?.folderId === folder.\_id,
+icon: Folder,
+onClick: () => {
+handleSelectFolder(folder);
+setSidebarStyle("list");
+},
+contextMenu: [
+menuItem({
+label: "Add Note",
+icon: Plus,
+onClick: () => handleCreateNote(folder._id),
+}),
+menuItem({
+label: "Rename",
+icon: Pencil,
+dialog: {
+id: "rename-folder",
+data: {
+folderId: folder._id,
+folderName: folder.name,
+},
+},
+}),
+menuItem({
+label: "Delete",
+icon: Trash,
+onClick: () => handleDeleteFolder(folder._id),
+}),
+],
+items: [
+...(selectedFolders[folder._id]?.notes || []).map((note) => ({
+id: note.\_id,
+title: renderNotePreview(note.content).title,
+icon: File,
+isActive: selectedNote?.\_id === note.\_id,
+isDraggable: false,
+onClick: () =>
+handleSelectNote({
+nodeId: note.\_id,
+folderId: folder.\_id,
+}),
+contextMenu: [
+menuItem({
+label: "Delete",
+icon: Trash,
+onClick: () =>
+handleDeleteNote({
+noteId: note._id,
+folderId: folder._id,
+}),
+}),
+],
+})),
+{
+id: "create-new-note",
+title: "Create new note",
+icon: Plus,
+isDraggable: false,
+onClick: () => handleCreateNote(folder.\_id),
+},
+],
+})),
+],
+type: "collapsible",
+},
+],
+footer: [
+{
+id: "note-footer",
+items: [
+{
+id: "create-new-folder",
+title: "Create new folder",
+icon: Plus,
+onClick: () => handleCreateFolder(),
+},
+{
+id: "create-new-note",
+title: "Create new note",
+icon: Plus,
+onClick: () => handleCreateNote(),
+},
+],
+},
+],
+},
+dialogs: [
+{
+id: "rename-folder",
+title: "Rename folder",
+description: "Enter a new name for your folder",
+type: "form",
+content: {
+folderName: {
+key: "folderName",
+type: "input",
+display: "Folder Name",
+placeholder: "Enter folder name",
+required: true,
+requiredMessage: "Folder name is required",
+minLength: 1,
+maxLength: 50,
+lengthHint: true,
+defaultValue: "",
+layout: "column",
+description: "Enter a new name for your folder",
+hintMessage: "Maximum 50 characters",
+},
+},
+actions: {
+primary: {
+id: "rename-folder-action",
+label: "Rename",
+onClick: async (data?: DialogData) => {
+if (data?.dialogData?.folderId && data?.formData?.folderName) {
+await handleRenameFolder(
+data.dialogData.folderId,
+data.formData.folderName
+);
+}
+},
+},
+close: {
+id: "cancel-rename-folder-action",
+label: "Cancel",
+},
+},
+},
+],
+};
+}, [
+sidebarStyle,
+currentFolder,
+folders,
+selectedFolders,
+handleDragEndLists,
+handleSelectFolder,
+handleCreateFolder,
+]);

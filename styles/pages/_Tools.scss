@@ -1,0 +1,1790 @@
+@use "../abstracts" as *;
+@use "./_Chatbot.scss" as *;
+@use "../components";
+
+@mixin Tools() {
+  .ToolsPage {
+    width: 100%;
+    height: calc(100vh - 5.5rem);
+    display: flex;
+    flex-direction: row;
+    .ChatbotPage {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      background-color: dark(assistant, container);
+      overflow: hidden;
+      border-radius: 15px;
+    }
+    .chatbotHeader {
+      width: 100%;
+      height: 7%;
+      gap: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-around;
+      background-color: dark(container, container-subheader);
+      padding: 12px;
+      border-bottom: 2px solid dark(container, container-subheader-hover-color);
+      .titleContainer {
+        display: flex;
+        flex-grow: 1;
+        flex-direction: row;
+        user-select: none;
+        .textContainer {
+          display: flex;
+          flex-direction: column;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          width: 80%;
+          .titleSpan {
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: rgb(231, 231, 231);
+          }
+          .descriptionSpan {
+            font-size: 0.6rem;
+            font-weight: 500;
+            color: dark(container, container-subheader-color);
+          }
+        }
+        .imageContainer {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          margin-right: 0.6rem;
+          .image,
+          .picPlaceholder {
+            width: 2.1rem;
+            height: 2.1rem;
+            border-radius: 50%;
+          }
+          .picPlaceholder {
+            & > img {
+              width: 100%;
+              height: 100%;
+              object-fit: cover;
+              border-radius: 50%;
+            }
+          }
+        }
+      }
+      .showAssistantButton {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 50%;
+        color: dark(container, container-subheader-color);
+        font-size: 27px;
+        width: 27px;
+        position: relative;
+        cursor: pointer;
+        &:hover {
+          color: dark(container, container-subheader-hover-color);
+        }
+        &:active {
+          color: dark(container, container-subheader-color);
+        }
+        &[aria-disabled="true"] {
+          //make th animation to turn the icon left side right
+          animation: assistantExpandRotate 0.3s ease-in-out reverse forwards; /* 'forwards' will keep it at the final state */
+        }
+        &[aria-disabled="false"] {
+          //make th animation to turn the icon right side left
+          animation: assistantExpandRotate 0.3s ease-in-out forwards; /* 'forwards' will keep it at the final state */
+        }
+      }
+      .backSpan {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 50%;
+        color: dark(container, container-subheader-color);
+        font-size: 1.5rem;
+        margin-right: 1rem;
+        width: 1.5rem;
+        position: relative;
+        cursor: pointer;
+        &:hover {
+          background-color: dark(container, container-subheader-hover-color);
+        }
+      }
+      .rightSide {
+        display: flex;
+        flex-direction: row;
+        justify-content: center;
+        align-items: center;
+        gap: 12px;
+        .LoadingIcon {
+          display: flex;
+          flex-direction: row;
+          justify-content: center;
+          align-items: center;
+          gap: 3px;
+          .loader {
+            display: flex;
+            flex-direction: row;
+            justify-content: center;
+            align-items: center;
+            svg {
+              font-size: 1.2rem;
+            }
+            svg path,
+            svg rect {
+              fill: dark(container, container-subheader-color);
+            }
+          }
+          span {
+            font-size: 1rem;
+            color: dark(container, container-subheader-color);
+          }
+        }
+        .icons {
+          @extend .backSpan;
+          margin-right: 0;
+          &:active {
+            scale: 0.9;
+          }
+          &:hover {
+            background-color: transparent;
+            color: dark(container, container-subheader-hover-color);
+          }
+        }
+        .function {
+          @extend .showAssistantButton;
+
+          .dropdownMenu {
+            position: absolute;
+            right: 0;
+            top: calc(100% + 1.2rem);
+            background-color: dark(sidebar, 1);
+            border-radius: 8px;
+            pointer-events: none;
+            transform: translateY(-10px);
+            transition: opacity 150ms ease-in-out, transform 150ms ease-in-out;
+            opacity: 0;
+            z-index: 1;
+          }
+          .dropdownMenu_open {
+            opacity: 1;
+            transform: translateY(0);
+            pointer-events: auto;
+          }
+          .dropdownGrid {
+            display: flex;
+            flex-direction: column;
+            .dropdownLinks {
+              gap: 0.25rem;
+              border-bottom: 1px solid clr(neutral, 3c);
+              padding: 0.45rem;
+              .link {
+                display: flex;
+                min-width: 260px;
+                text-decoration: none;
+                padding-left: 9px;
+                margin-bottom: 1px;
+                cursor: pointer;
+                min-height: 2.6rem;
+                border-radius: 8px;
+                font-size: 1rem;
+                line-height: 2rem;
+                font-weight: 400;
+                flex-shrink: 0;
+                width: 100%;
+                align-items: center;
+                color: dark(sidebar, font);
+                background-color: transparent;
+                .icon {
+                  font-size: 1.3rem;
+                  margin-right: 1rem;
+                }
+                &:hover {
+                  color: dark(sidebar, font-hover);
+                  background-color: dark(sidebar, element-hover);
+                  .icon {
+                    -webkit-animation-name: hvr-icon-hang-sink, hvr-icon-hang;
+                    animation-name: hvr-icon-hang-sink, hvr-icon-hang;
+                    -webkit-animation-duration: 0.3s, 1.5s;
+                    animation-duration: 0.3s, 1.5s;
+                    -webkit-animation-delay: 0s, 0.3s;
+                    animation-delay: 0s, 0.3s;
+                    -webkit-animation-timing-function: ease-out, ease-in-out;
+                    animation-timing-function: ease-out, ease-in-out;
+                    -webkit-animation-iteration-count: 1, infinite;
+                    animation-iteration-count: 1, infinite;
+                    -webkit-animation-fill-mode: forwards;
+                    animation-fill-mode: forwards;
+                    -webkit-animation-direction: normal, alternate;
+                    animation-direction: normal, alternate;
+                  }
+                }
+                &:active {
+                  color: dark(sidebar, font-active);
+                  background-color: dark(sidebar, element-active);
+                }
+              }
+              .active {
+                color: dark(sidebar, font-active);
+                background-color: dark(sidebar, element-active);
+                font-weight: 500;
+              }
+            }
+          }
+          .active {
+            border-radius: 50%;
+            background-color: dark(container, container-subheader-hover-color);
+          }
+        }
+      }
+    }
+    .ChatBody {
+      flex-grow: 1;
+      display: flex;
+      flex-direction: row;
+      overflow: hidden;
+      .chatbotBodyContainer {
+        display: flex;
+        flex-direction: row;
+        width: 100%;
+        box-shadow: 0px 0px 10px 0px rgba(0, 0, 0, 0.2);
+        justify-content: center;
+        align-items: center;
+        .chatContainer {
+          height: 100%;
+          width: 50%;
+          display: flex;
+          flex-direction: column;
+        }
+        .chatbotBody {
+          flex-grow: 1;
+          width: 100%;
+          padding: 12px;
+          overflow-y: auto;
+          overflow-x: hidden;
+
+          .userChatbotContainer {
+            display: flex;
+            justify-content: flex-end;
+            padding-top: 10px;
+            padding-bottom: 10px;
+            .userPic {
+              object-fit: cover;
+              border-radius: 50%;
+              width: 36px;
+              height: 36px;
+              border: none;
+              position: relative;
+              overflow: hidden;
+              transition: border-radius ease-out 0.3s;
+
+              .wrapper {
+                width: 100%;
+                height: 100%;
+
+                .picPlaceholder > .icon2 {
+                  width: 53%;
+                }
+
+                .image {
+                  height: 100%;
+                  width: auto;
+                  object-fit: cover;
+                }
+              }
+              &:hover {
+                border-radius: 35%;
+              }
+            }
+            .textContainer {
+              display: flex;
+              flex-direction: row;
+              justify-content: flex-end;
+              margin-right: 6px;
+              max-width: 90%;
+              .chatbotText {
+                padding: 9px;
+                border-radius: 6px;
+                background-color: dark(assistant, userContainer);
+                color: #fefefe;
+                width: 100%; /* Add this line */
+                overflow-y: auto; /* Add this line */
+                overflow-x: hidden; /* Add this line */
+                .chatbotSpan {
+                  white-space: normal;
+                  word-wrap: break-word;
+                }
+              }
+              .triangle {
+                margin-top: 13px;
+                width: 0;
+                height: 0;
+                border-top: 6px solid transparent;
+                border-bottom: 6px solid transparent;
+                border-left: 6px solid dark(assistant, userContainer);
+              }
+            }
+          }
+          .botChatbotContainer {
+            display: flex;
+            justify-content: flex-start;
+            padding-top: 10px;
+            padding-bottom: 10px;
+            .userPic {
+              object-fit: cover;
+              border-radius: 50%;
+              width: 36px;
+              height: 36px;
+              border: none;
+              position: relative;
+              overflow: hidden;
+              transition: border-radius ease-out 0.3s;
+
+              .wrapper {
+                width: 100%;
+                height: 100%;
+
+                .picPlaceholder > .icon2 {
+                  width: 53%;
+                }
+                .picPlaceholder {
+                  & > img {
+                    width: 100%;
+                    height: 100%;
+                    object-fit: cover;
+                    border-radius: 50%;
+                    transition: border-radius ease-out 0.3s;
+                    &:hover {
+                      border-radius: 35%;
+                    }
+                  }
+                }
+                .image {
+                  height: 100%;
+                  width: auto;
+                  object-fit: cover;
+                }
+              }
+              &:hover {
+                border-radius: 35%;
+              }
+            }
+            .textContainer {
+              display: flex;
+              flex-direction: row;
+              justify-content: flex-start;
+              margin-left: 6px;
+              max-width: 90%;
+              .chatbotText {
+                padding: 9px;
+                border-radius: 6px;
+                background-color: dark(assistant, assistantContainer);
+                width: 100%;
+                overflow-y: auto;
+                overflow-x: hidden;
+                .chatbotSpan {
+                  color: #d9d6d6;
+                  white-space: pre-wrap; /* Allows text to wrap and preserves whitespace */
+                  word-break: break-word; /* Allows words to break and wrap to the next line */
+                  overflow-wrap: break-word; /* Allows the text to wrap to the next line */
+                }
+              }
+              .triangle {
+                margin-top: 13px;
+                width: 0;
+                height: 0;
+                border-top: 6px solid transparent;
+                border-bottom: 6px solid transparent;
+                border-right: 6px solid dark(assistant, assistantContainer);
+              }
+            }
+          }
+          .friendChatbotContainer {
+            @extend .userChatbotContainer;
+            .textContainer {
+              .chatbotText {
+                background-color: #729fbf;
+                color: #f1f1e1;
+              }
+              .triangle {
+                border-left: 6px solid #729fbf;
+              }
+            }
+          }
+          .confirmationBox {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 9px;
+            border-radius: 6px;
+            background-color: dark(assistant, confirmContainer);
+            //background-color: ;
+            .confirmationText {
+              font-size: 1rem;
+              font-weight: 500;
+              text-align: center;
+            }
+            .confirmationButtonContainer {
+              display: flex;
+              flex-direction: row;
+              justify-content: center;
+              align-items: center;
+              gap: 1rem;
+              margin-top: 1rem;
+              .confirmationButton {
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                padding: 0.5rem 1rem;
+                border-radius: 8px;
+                font-size: 1rem;
+                font-weight: 500;
+                cursor: pointer;
+                background-color: dark(assistant, confirmButton);
+                &:hover {
+                  background-color: dark(assistant, confirmButton-hover);
+                }
+              }
+            }
+          }
+          .bottomLine {
+            height: 6%;
+          }
+        }
+        .chatFooter {
+          padding: 15px;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          .inputPromptContainer {
+            display: flex;
+            max-width: 480px;
+            width: 100%;
+            box-shadow: 1px 1px 5px 1px rgba(0, 0, 0, 0.2);
+            border-radius: 12px;
+            overflow: hidden;
+            .typingContainer {
+              width: 100%;
+              background-color: dark(container, container-input-background);
+              .typingTextarea {
+                width: 100%;
+                padding: 12px;
+                & > textarea {
+                  width: 100%;
+                  border: none;
+                  resize: none;
+                  font-size: 1rem;
+                  color: white;
+                  background: transparent;
+                  transition: none;
+                  &::placeholder {
+                    color: dark(primary, font);
+                  }
+                }
+              }
+            }
+            .typingrightSide {
+              width: 15%;
+              background-color: dark(container, container-input-background);
+              display: flex;
+              justify-content: center;
+              align-items: center;
+              .sendButton {
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                font-size: 1.2rem;
+                font-weight: 600;
+                padding: 5.1px;
+                border-radius: 3px;
+                cursor: pointer;
+
+                background-color: dark(assistant, sendButton);
+                opacity: 1;
+                pointer-events: auto;
+                user-select: auto;
+                transition: all 0.2s ease-in-out;
+                &:disabled {
+                  opacity: 0;
+                  pointer-events: none;
+                  user-select: none;
+                }
+                &:hover {
+                  background-color: dark(button, 2-hover);
+                }
+                &:active {
+                  background-color: dark(button, 2-active);
+                }
+                .icon {
+                  color: #c1c0c0;
+                }
+                .fillicon {
+                  color: dark(assistant, sendButtonIcon);
+                }
+              }
+            }
+          }
+          .footerPolicy {
+            padding: 6px 6px 0 6px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            span {
+              width: 100%;
+              font-size: 0.6rem;
+              color: dark(container, container-subheader-color);
+              text-align: center;
+              a {
+                color: dark(container, container-subheader-color);
+                text-decoration: none;
+                cursor: pointer;
+                &:hover {
+                  color: dark(container, container-subheader-hover-color);
+                  text-decoration: underline;
+                }
+                padding-right: 6px;
+              }
+            }
+          }
+        }
+      }
+      .memoryContainer {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        width: 40%;
+        overflow: hidden;
+        background-color: dark(container, container);
+        .sectionContainer {
+          display: flex;
+          flex-direction: row;
+          justify-content: space-between;
+          margin-bottom: 1%;
+          .singleSection {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            padding: 0.6rem;
+            background-color: dark(sidebar, 1);
+            &:hover {
+              background-color: dark(sidebar, element-hover);
+              color: dark(sidebar, font-hover);
+            }
+            cursor: pointer;
+            //background
+            .sectionTitle {
+              font-size: 1.5rem;
+              font-weight: 500;
+              color: dark(sidebar, font);
+            }
+          }
+          .activeSection {
+            background-color: transparent;
+            cursor: default;
+            &:hover {
+              background-color: transparent;
+              color: dark(sidebar, font-hover);
+            }
+            .sectionTitle {
+              color: dark(sidebar, font-active);
+            }
+          }
+        }
+        .featureContainer {
+          padding: 12px;
+          overflow: auto;
+          height: 100%;
+          .title {
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: dark(container, container-subheader-color);
+            margin-bottom: 1rem;
+          }
+          .function {
+            display: flex;
+            justify-content: space-around;
+            align-items: center;
+            width: 100%;
+            .icon {
+              font-size: 1.5rem;
+              cursor: pointer;
+              &:hover {
+                color: clr(primary, 2);
+              }
+            }
+            .delete {
+              color: rgb(230, 145, 145);
+              &:hover {
+                color: rgb(234, 108, 108);
+              }
+            }
+            .buttonArea {
+              width: 100%;
+              height: 100%;
+              border-radius: 9px;
+              font-weight: 600;
+              padding: 12px;
+              background-color: dark(button, 2);
+              color: #323131;
+              cursor: pointer;
+              transition: all 0.2s ease-in-out;
+              &:hover {
+                background-color: dark(button, 2-hover);
+              }
+              &:active {
+                background-color: dark(button, 2-active);
+                scale: 0.9;
+              }
+            }
+          }
+          .featureBody {
+            margin-bottom: 1rem;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            .accordion {
+              width: 100%;
+              border-radius: 0.3rem;
+              background-color: dark(container, container-subheader);
+              padding: 12px;
+              .singlePrompt {
+                display: flex;
+                flex-direction: row;
+                justify-content: space-between;
+                width: 100%;
+                transition: all 0.2s ease-in-out;
+                padding: 15px 0;
+
+                .halfSide {
+                  width: 50%;
+                  display: flex;
+                  flex-direction: row;
+                }
+
+                .clickable {
+                  display: flex;
+                  position: relative;
+                  align-items: center;
+                  justify-content: center;
+                  padding: 12px;
+                  width: fit-content;
+                  border-radius: 6px;
+                  cursor: pointer;
+                  background-color: dark(button, 1);
+                  &:hover {
+                    background-color: dark(button, 1-hover);
+                  }
+                }
+
+                .role {
+                  font-size: 1rem;
+                  font-weight: 600;
+                  color: dark(auth, font);
+                  text-align: center;
+                }
+
+                .typingContainer {
+                  width: auto;
+                  flex-grow: 1;
+                  background-color: dark(container, container-input-background);
+                  border-radius: 6px;
+                  margin-left: 9px;
+                  margin-right: 9px;
+                  .typingTextarea {
+                    width: 100%;
+                    padding: 12px;
+                    & > textarea {
+                      width: 100%;
+                      border: none;
+                      resize: none;
+                      font-size: 0.82rem;
+                      border-radius: 4px;
+                      color: white;
+                      font-weight: 500;
+                      background: transparent;
+                      &::placeholder {
+                        color: dark(primary, font);
+                      }
+                    }
+                  }
+                  .dropdownContainer {
+                    width: 100%;
+                    text-align: left;
+                    position: relative;
+                    .dropdownButton {
+                      display: flex;
+                      justify-content: space-between;
+                      align-items: center;
+                      width: 100%;
+                      height: 100%;
+                      padding: 12px;
+                      border: none;
+                      font-size: 0.82rem;
+                      border-radius: 4px;
+                      color: white;
+                      font-weight: 500;
+                      .arrowDown {
+                        &:hover {
+                          color: #fff;
+                          cursor: pointer;
+                        }
+                      }
+                      & > input {
+                        width: 100%;
+                        height: 100%;
+                        border: none;
+                        background-color: transparent;
+                        font-size: 1rem;
+                        font-weight: 500;
+                        color: dark(auth, font);
+
+                        &:focus {
+                          outline: none;
+                        }
+                        &::placeholder {
+                          color: dark(auth, font-placeholder);
+                        }
+                      }
+                      & > svg {
+                        z-index: 2;
+                      }
+                      .inputActive {
+                        &::placeholder {
+                          color: #c0bebe;
+                        }
+                      }
+                    }
+                  }
+                  .dropdownMenu {
+                    width: 100%;
+                    position: absolute;
+                    border-radius: 8px;
+                    opacity: 0;
+                    pointer-events: none;
+                    transform: translateY(-10px);
+                    transition: opacity 150ms ease-in-out,
+                      transform 150ms ease-in-out;
+                    z-index: 999;
+                    background-color: dark(auth, dropdownMenu);
+
+                    max-height: 210px;
+                    overflow-y: scroll;
+                  }
+                  .dropdownMenu_open {
+                    opacity: 1;
+                    transform: translateY(0);
+                    pointer-events: auto;
+                    z-index: 999;
+                  }
+                  .dropdownGrid {
+                    display: flex;
+                    flex-direction: column;
+                    z-index: 999;
+
+                    .dropdownLinks {
+                      gap: 0.25rem;
+                      padding: 0.45rem;
+                      width: 100%;
+                      z-index: 999;
+
+                      .link {
+                        display: flex;
+                        text-decoration: none;
+                        padding-left: 9px;
+                        margin-bottom: 1px;
+                        justify-content: space-between;
+                        cursor: pointer;
+                        min-height: 2.6rem;
+                        border-radius: 8px;
+                        font-size: 1rem;
+                        line-height: 2rem;
+                        font-weight: 400;
+                        flex-shrink: 0;
+                        width: 100%;
+                        align-items: center;
+                        color: dark(auth, font-placeholder);
+                        background-color: transparent;
+                        z-index: 999;
+                        .function {
+                          width: fit-content;
+                          display: flex;
+                          gap: 6px;
+                        }
+                        &:hover {
+                          background-color: dark(auth, dropdown-hover);
+                          color: clr(neutral, 1);
+                        }
+                        .inputBox {
+                          width: 100%;
+                          display: flex;
+                          flex-direction: row;
+                          justify-content: space-between;
+                          align-items: center;
+                          border-radius: 6px;
+                          resize: none;
+                          background-color: dark(button, 1);
+                          color: dark(auth, font);
+                          padding: 0 6px;
+                          &:hover {
+                            background-color: dark(button, 1-hover);
+                          }
+                        }
+                      }
+                      .linkActive {
+                        background-color: dark(auth, dropdown-active);
+                        color: hsl(0, 0%, 100%);
+                      }
+                    }
+                  }
+                }
+                @media screen and (max-width: 1024px) {
+                  flex-direction: column;
+                  gap: 12px;
+
+                  .clickable {
+                    width: 100%;
+                  }
+                  .typingContainer {
+                    margin: 0;
+                    width: 100%;
+                  }
+
+                  .halfSide {
+                    width: 100%;
+                    .clickable {
+                      width: fit-content;
+                    }
+                    .typingContainer {
+                      margin-left: 6px;
+                    }
+                  }
+                }
+              }
+              .hiddenInfo {
+                display: flex;
+                width: 90%;
+                flex-direction: column;
+                align-items: flex-start;
+                .hiddenTitle {
+                  .moreOptionButton {
+                    display: flex;
+                    flex-direction: row;
+                    justify-content: space-between;
+                    align-items: center;
+                    gap: 3px;
+                    width: 100%;
+                    background-color: transparent;
+                    padding: 6px;
+                    cursor: pointer;
+                    border-radius: 6px;
+                    .hiddenTitle {
+                      font-size: 1rem;
+                      font-weight: 500;
+                      color: clr(neutral, 1);
+                    }
+                    .icon {
+                      font-size: 1rem;
+                      color: clr(neutral, 1);
+                    }
+                    &:hover {
+                      background-color: dark(sidebar, element-hover);
+                    }
+                    &:active {
+                      scale: 0.9;
+                    }
+                  }
+                }
+                .hiddenBody {
+                  width: 100%;
+                  .basicInfo {
+                    .promptField {
+                      width: 100%;
+                    }
+                  }
+                }
+              }
+              .previewPrompt {
+                .hint {
+                  width: 100%;
+                  display: flex;
+                  flex-direction: row;
+                  justify-content: space-between;
+                  font-size: 0.8rem;
+                  color: rgb(130, 127, 127);
+                  padding: 0 3px;
+                }
+
+                .switchContainer {
+                  display: flex;
+                  align-items: center;
+                  @include components.Switch();
+                  padding: 6px;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    .ChatToolMobilePage {
+      @extend .ChatbotPage;
+      height: 100svh;
+      .mobileToolHeader {
+        width: 100%;
+        height: 7%;
+        gap: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        background-color: dark(container, container-subheader);
+        padding: 12px;
+        border-bottom: 2px solid
+          dark(container, container-subheader-hover-color);
+        .titleContainer {
+          display: flex;
+          flex-direction: row;
+          user-select: none;
+          .textContainer {
+            display: flex;
+            flex-direction: column;
+            overflow: hidden; /* This applies to the container itself, not the text elements */
+            width: 100%; /* Ensure this container has a max width */
+            .titleSpan {
+              font-size: 1.2rem;
+              font-weight: 600;
+              color: rgb(231, 231, 231);
+              overflow: hidden;
+              text-overflow: ellipsis;
+              white-space: nowrap;
+              width: 100%; /* This needs to be explicitly set */
+            }
+            .descriptionSpan {
+              font-size: 0.6rem;
+              font-weight: 500;
+              color: dark(container, container-subheader-color);
+              overflow: hidden;
+              text-overflow: ellipsis;
+              white-space: nowrap;
+              width: 100%; /* This needs to be explicitly set */
+            }
+          }
+        }
+        .showAssistantButton {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 50%;
+          color: dark(container, container-subheader-color);
+          font-size: 27px;
+          width: 27px;
+          position: relative;
+          cursor: pointer;
+          &:hover {
+            color: dark(container, container-subheader-hover-color);
+          }
+          &:active {
+            color: dark(container, container-subheader-color);
+          }
+          &[aria-disabled="true"] {
+            //make th animation to turn the icon left side right
+            animation: assistantExpandRotate 0.3s ease-in-out reverse forwards; /* 'forwards' will keep it at the final state */
+          }
+          &[aria-disabled="false"] {
+            //make th animation to turn the icon right side left
+            animation: assistantExpandRotate 0.3s ease-in-out forwards; /* 'forwards' will keep it at the final state */
+          }
+        }
+        .backSpan {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 50%;
+          color: dark(container, container-subheader-color);
+          font-size: 1.5rem;
+          margin-right: 1rem;
+          width: 1.5rem;
+          position: relative;
+          cursor: pointer;
+          &:hover {
+            background-color: dark(container, container-subheader-hover-color);
+          }
+        }
+        .rightSide {
+          display: flex;
+          flex-direction: row;
+          justify-content: center;
+          align-items: center;
+          gap: 12px;
+          .LoadingIcon {
+            display: flex;
+            flex-direction: row;
+            justify-content: center;
+            align-items: center;
+            gap: 3px;
+            .loader {
+              display: flex;
+              flex-direction: row;
+              justify-content: center;
+              align-items: center;
+              svg {
+                font-size: 1.2rem;
+              }
+              svg path,
+              svg rect {
+                fill: dark(container, container-subheader-color);
+              }
+            }
+            span {
+              font-size: 1rem;
+              color: dark(container, container-subheader-color);
+            }
+          }
+          .function {
+            @extend .showAssistantButton;
+
+            .dropdownMenu {
+              position: absolute;
+              right: 0;
+              top: calc(100% + 1.2rem);
+              background-color: dark(sidebar, 1);
+              border-radius: 8px;
+              pointer-events: none;
+              transform: translateY(-10px);
+              transition: opacity 150ms ease-in-out, transform 150ms ease-in-out;
+              opacity: 0;
+              z-index: 1;
+            }
+            .dropdownMenu_open {
+              opacity: 1;
+              transform: translateY(0);
+              pointer-events: auto;
+            }
+            .dropdownGrid {
+              display: flex;
+              flex-direction: column;
+              .dropdownLinks {
+                gap: 0.25rem;
+                border-bottom: 1px solid clr(neutral, 3c);
+                padding: 0.45rem;
+                .link {
+                  display: flex;
+                  min-width: 260px;
+                  text-decoration: none;
+                  padding-left: 9px;
+                  margin-bottom: 1px;
+                  cursor: pointer;
+                  min-height: 2.6rem;
+                  border-radius: 8px;
+                  font-size: 1rem;
+                  line-height: 2rem;
+                  font-weight: 400;
+                  flex-shrink: 0;
+                  width: 100%;
+                  align-items: center;
+                  color: dark(sidebar, font);
+                  background-color: transparent;
+                  .icon {
+                    font-size: 1.3rem;
+                    margin-right: 1rem;
+                  }
+                  &:hover {
+                    color: dark(sidebar, font-hover);
+                    background-color: dark(sidebar, element-hover);
+                    .icon {
+                      -webkit-animation-name: hvr-icon-hang-sink, hvr-icon-hang;
+                      animation-name: hvr-icon-hang-sink, hvr-icon-hang;
+                      -webkit-animation-duration: 0.3s, 1.5s;
+                      animation-duration: 0.3s, 1.5s;
+                      -webkit-animation-delay: 0s, 0.3s;
+                      animation-delay: 0s, 0.3s;
+                      -webkit-animation-timing-function: ease-out, ease-in-out;
+                      animation-timing-function: ease-out, ease-in-out;
+                      -webkit-animation-iteration-count: 1, infinite;
+                      animation-iteration-count: 1, infinite;
+                      -webkit-animation-fill-mode: forwards;
+                      animation-fill-mode: forwards;
+                      -webkit-animation-direction: normal, alternate;
+                      animation-direction: normal, alternate;
+                    }
+                  }
+                  &:active {
+                    color: dark(sidebar, font-active);
+                    background-color: dark(sidebar, element-active);
+                  }
+                }
+                .active {
+                  color: dark(sidebar, font-active);
+                  background-color: dark(sidebar, element-active);
+                  font-weight: 500;
+                }
+              }
+            }
+            .active {
+              border-radius: 50%;
+              background-color: dark(
+                container,
+                container-subheader-hover-color
+              );
+            }
+          }
+        }
+        .leftSide {
+          display: flex;
+          flex-direction: row;
+          width: 100%;
+          overflow: hidden;
+        }
+      }
+      .memoryMobileContainer {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        width: 100%;
+        position: absolute;
+        overflow: hidden;
+        top: 0;
+        left: 0;
+        background-color: dark(container, container);
+        .sectionContainer {
+          display: flex;
+          flex-direction: row;
+          justify-content: space-between;
+          margin-bottom: 1%;
+          .toolHeader {
+            width: 100%;
+            height: 100%;
+            gap: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background-color: dark(container, container-subheader);
+            padding: 12px;
+            border-bottom: 2px solid
+              dark(container, container-subheader-hover-color);
+              position:relative;
+            .titleContainer {
+              display: flex;
+              flex-direction: row;
+              user-select: none;
+              position: absolute;
+              //center the text 
+              left: 50%;
+              transform: translateX(-50%);
+              .textContainer {
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+                align-items: center;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+                .titleSpan {
+                  font-size: 1.2rem;
+                  font-weight: 600;
+                  color: rgb(231, 231, 231);
+                  text-align: center;
+                  width: fit-content;
+                }
+                .descriptionSpan {
+                  font-size: 0.6rem;
+                  font-weight: 500;
+                  color: dark(container, container-subheader-color);
+                }
+              }
+            }
+            .showAssistantButton {
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              border-radius: 50%;
+              color: dark(container, container-subheader-color);
+              font-size: 27px;
+              width: 27px;
+              position: relative;
+              cursor: pointer;
+              &:hover {
+                color: dark(container, container-subheader-hover-color);
+              }
+              &:active {
+                color: dark(container, container-subheader-color);
+              }
+              &[aria-disabled="true"] {
+                //make th animation to turn the icon left side right
+                animation: assistantExpandRotate 0.3s ease-in-out reverse
+                  forwards; /* 'forwards' will keep it at the final state */
+              }
+              &[aria-disabled="false"] {
+                //make th animation to turn the icon right side left
+                animation: assistantExpandRotate 0.3s ease-in-out forwards; /* 'forwards' will keep it at the final state */
+              }
+            }
+            .backSpan {
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              border-radius: 50%;
+              color: dark(container, container-subheader-color);
+              font-size: 1.5rem;
+              margin-right: 1rem;
+              width: 1.5rem;
+              position: relative;
+              cursor: pointer;
+              &:hover {
+                background-color: dark(
+                  container,
+                  container-subheader-hover-color
+                );
+              }
+            }
+            .rightSide {
+              display: flex;
+              flex-direction: row;
+              justify-content: center;
+              align-items: center;
+              gap: 12px;
+              .LoadingIcon {
+                display: flex;
+                flex-direction: row;
+                justify-content: center;
+                align-items: center;
+                opacity: 0;
+                gap: 3px;
+                .loader {
+                  display: flex;
+                  flex-direction: row;
+                  justify-content: center;
+                  align-items: center;
+                  svg {
+                    font-size: 1.2rem;
+                  }
+                  svg path,
+                  svg rect {
+                    fill: dark(container, container-subheader-color);
+                  }
+                }
+                span {
+                  font-size: 1rem;
+                  color: dark(container, container-subheader-color);
+                }
+              }
+              .showLoading {
+                opacity: 1;
+              }
+            }
+          }
+        }
+        .featureContainer {
+          padding: 12px;
+          overflow: auto;
+          height: 100%;
+          .title {
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: dark(container, container-subheader-color);
+            margin-bottom: 1rem;
+          }
+          .function {
+            display: flex;
+            justify-content: space-around;
+            align-items: center;
+            width: 100%;
+            .icon {
+              font-size: 1.5rem;
+              cursor: pointer;
+              &:hover {
+                color: clr(primary, 2);
+              }
+            }
+            .delete {
+              color: rgb(230, 145, 145);
+              &:hover {
+                color: rgb(234, 108, 108);
+              }
+            }
+            .buttonArea {
+              width: 100%;
+              height: 100%;
+              border-radius: 9px;
+              font-weight: 600;
+              padding: 12px;
+              background-color: dark(button, 2);
+              color: #323131;
+              cursor: pointer;
+              transition: all 0.2s ease-in-out;
+              &:hover {
+                background-color: dark(button, 2-hover);
+              }
+              &:active {
+                background-color: dark(button, 2-active);
+                scale: 0.9;
+              }
+            }
+          }
+          .featureBody {
+            margin-bottom: 1rem;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            .accordion {
+              width: 100%;
+              border-radius: 0.3rem;
+              background-color: dark(container, container-subheader);
+              padding: 12px;
+              .singlePrompt {
+                display: flex;
+                flex-direction: row;
+                justify-content: space-between;
+                width: 100%;
+                transition: all 0.2s ease-in-out;
+                padding: 15px 0;
+
+                .halfSide {
+                  width: 50%;
+                  display: flex;
+                  flex-direction: row;
+                }
+
+                .clickable {
+                  display: flex;
+                  position: relative;
+                  align-items: center;
+                  justify-content: center;
+                  padding: 12px;
+                  width: fit-content;
+                  border-radius: 6px;
+                  cursor: pointer;
+                  background-color: dark(button, 1);
+                  &:hover {
+                    background-color: dark(button, 1-hover);
+                  }
+                }
+
+                .role {
+                  font-size: 1rem;
+                  font-weight: 600;
+                  color: dark(auth, font);
+                  text-align: center;
+                }
+
+                .typingContainer {
+                  width: auto;
+                  flex-grow: 1;
+                  background-color: dark(container, container-input-background);
+                  border-radius: 6px;
+                  margin-left: 9px;
+                  margin-right: 9px;
+                  .typingTextarea {
+                    width: 100%;
+                    padding: 12px;
+                    & > textarea {
+                      width: 100%;
+                      border: none;
+                      resize: none;
+                      font-size: 0.82rem;
+                      border-radius: 4px;
+                      color: white;
+                      font-weight: 500;
+                      background: transparent;
+                      &::placeholder {
+                        color: dark(primary, font);
+                      }
+                    }
+                  }
+                  .dropdownContainer {
+                    width: 100%;
+                    text-align: left;
+                    position: relative;
+                    .dropdownButton {
+                      display: flex;
+                      justify-content: space-between;
+                      align-items: center;
+                      width: 100%;
+                      height: 100%;
+                      padding: 12px;
+                      border: none;
+                      font-size: 0.82rem;
+                      border-radius: 4px;
+                      color: white;
+                      font-weight: 500;
+                      .arrowDown {
+                        &:hover {
+                          color: #fff;
+                          cursor: pointer;
+                        }
+                      }
+                      & > input {
+                        width: 100%;
+                        height: 100%;
+                        border: none;
+                        background-color: transparent;
+                        font-size: 1rem;
+                        font-weight: 500;
+                        color: dark(auth, font);
+
+                        &:focus {
+                          outline: none;
+                        }
+                        &::placeholder {
+                          color: dark(auth, font-placeholder);
+                        }
+                      }
+                      & > svg {
+                        z-index: 2;
+                      }
+                      .inputActive {
+                        &::placeholder {
+                          color: #c0bebe;
+                        }
+                      }
+                    }
+                  }
+                  .dropdownMenu {
+                    width: 100%;
+                    position: absolute;
+                    border-radius: 8px;
+                    opacity: 0;
+                    pointer-events: none;
+                    transform: translateY(-10px);
+                    transition: opacity 150ms ease-in-out,
+                      transform 150ms ease-in-out;
+                    z-index: 999;
+                    background-color: dark(auth, dropdownMenu);
+
+                    max-height: 210px;
+                    overflow-y: scroll;
+                  }
+                  .dropdownMenu_open {
+                    opacity: 1;
+                    transform: translateY(0);
+                    pointer-events: auto;
+                    z-index: 999;
+                  }
+                  .dropdownGrid {
+                    display: flex;
+                    flex-direction: column;
+                    z-index: 999;
+
+                    .dropdownLinks {
+                      gap: 0.25rem;
+                      padding: 0.45rem;
+                      width: 100%;
+                      z-index: 999;
+
+                      .link {
+                        display: flex;
+                        text-decoration: none;
+                        padding-left: 9px;
+                        margin-bottom: 1px;
+                        justify-content: space-between;
+                        cursor: pointer;
+                        min-height: 2.6rem;
+                        border-radius: 8px;
+                        font-size: 1rem;
+                        line-height: 2rem;
+                        font-weight: 400;
+                        flex-shrink: 0;
+                        width: 100%;
+                        align-items: center;
+                        color: dark(auth, font-placeholder);
+                        background-color: transparent;
+                        z-index: 999;
+                        .function {
+                          width: fit-content;
+                          display: flex;
+                          gap: 6px;
+                        }
+                        &:hover {
+                          background-color: dark(auth, dropdown-hover);
+                          color: clr(neutral, 1);
+                        }
+                        .inputBox {
+                          width: 100%;
+                          display: flex;
+                          flex-direction: row;
+                          justify-content: space-between;
+                          align-items: center;
+                          border-radius: 6px;
+                          resize: none;
+                          background-color: dark(button, 1);
+                          color: dark(auth, font);
+                          padding: 0 6px;
+                          &:hover {
+                            background-color: dark(button, 1-hover);
+                          }
+                        }
+                      }
+                      .linkActive {
+                        background-color: dark(auth, dropdown-active);
+                        color: hsl(0, 0%, 100%);
+                      }
+                    }
+                  }
+                }
+                @media screen and (max-width: 1024px) {
+                  flex-direction: column;
+                  gap: 12px;
+
+                  .clickable {
+                    width: 100%;
+                  }
+                  .typingContainer {
+                    margin: 0;
+                    width: 100%;
+                  }
+
+                  .halfSide {
+                    width: 100%;
+                    .clickable {
+                      width: fit-content;
+                    }
+                    .typingContainer {
+                      margin-left: 6px;
+                    }
+                  }
+                }
+              }
+              .hiddenInfo {
+                display: flex;
+                width: 90%;
+                flex-direction: column;
+                align-items: flex-start;
+                .hiddenTitle {
+                  .moreOptionButton {
+                    display: flex;
+                    flex-direction: row;
+                    justify-content: space-between;
+                    align-items: center;
+                    gap: 3px;
+                    width: 100%;
+                    background-color: transparent;
+                    padding: 6px;
+                    cursor: pointer;
+                    border-radius: 6px;
+                    .hiddenTitle {
+                      font-size: 1rem;
+                      font-weight: 500;
+                      color: clr(neutral, 1);
+                    }
+                    .icon {
+                      font-size: 1rem;
+                      color: clr(neutral, 1);
+                    }
+                    &:hover {
+                      background-color: dark(sidebar, element-hover);
+                    }
+                    &:active {
+                      scale: 0.9;
+                    }
+                  }
+                }
+                .hiddenBody {
+                  width: 100%;
+                  .basicInfo {
+                    .promptField {
+                      width: 100%;
+                    }
+                  }
+                }
+              }
+              .previewPrompt {
+                .hint {
+                  width: 100%;
+                  display: flex;
+                  flex-direction: row;
+                  justify-content: space-between;
+                  font-size: 0.8rem;
+                  color: rgb(130, 127, 127);
+                  padding: 0 3px;
+                }
+
+                .switchContainer {
+                  display: flex;
+                  align-items: center;
+                  @include components.Switch();
+                  padding: 6px;
+                }
+              }
+            }
+          }
+        }
+      }
+      .ChatBody .chatbotBodyContainer .chatContainer {
+        .chatFooter {
+          padding: 15px;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          min-width: 70%;
+          width: 100%;
+          .upperContainer {
+            display: flex;
+            flex-direction: row;
+            justify-content: center;
+            align-items: center;
+            width: 100%;
+            gap: 12px;
+            .inputPromptContainer {
+              display: flex;
+              max-width: 480px;
+              width: 100%;
+              box-shadow: 1px 1px 5px 1px rgba(0, 0, 0, 0.2);
+              border-radius: 12px;
+              overflow: hidden;
+              .typingContainer {
+                width: 100%;
+                background-color: dark(container, container-input-background);
+                .typingTextarea {
+                  width: 100%;
+                  padding: 12px;
+                  & > textarea {
+                    width: 100%;
+                    border: none;
+                    resize: none;
+                    font-size: 1rem;
+                    color: white;
+                    background: transparent;
+                    transition: none;
+                    &::placeholder {
+                      color: dark(primary, font);
+                    }
+                  }
+                }
+              }
+              .typingrightSide {
+                width: 15%;
+                background-color: dark(container, container-input-background);
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                .sendButton {
+                  display: flex;
+                  justify-content: center;
+                  align-items: center;
+                  font-size: 1.2rem;
+                  font-weight: 600;
+                  padding: 5.1px;
+                  border-radius: 3px;
+                  cursor: pointer;
+
+                  background-color: dark(assistant, sendButton);
+                  opacity: 1;
+                  pointer-events: auto;
+                  user-select: auto;
+                  transition: all 0.2s ease-in-out;
+                  &:disabled {
+                    opacity: 0;
+                    pointer-events: none;
+                    user-select: none;
+                  }
+                  &:hover {
+                    background-color: dark(button, 2-hover);
+                  }
+                  &:active {
+                    background-color: dark(button, 2-active);
+                  }
+                  .icon {
+                    color: #c1c0c0;
+                  }
+                  .fillicon {
+                    color: dark(assistant, sendButtonIcon);
+                  }
+                }
+              }
+            }
+            .footerPolicy {
+              padding: 6px 6px 0 6px;
+              display: flex;
+              flex-direction: column;
+              align-items: center;
+              justify-content: center;
+              span {
+                width: 100%;
+                font-size: 0.6rem;
+                color: dark(container, container-subheader-color);
+                text-align: center;
+                a {
+                  color: dark(container, container-subheader-color);
+                  text-decoration: none;
+                  cursor: pointer;
+                  &:hover {
+                    color: dark(container, container-subheader-hover-color);
+                    text-decoration: underline;
+                  }
+                  padding-right: 6px;
+                }
+              }
+            }
+            .function {
+              display: flex;
+              flex-direction: row;
+              align-items: center;
+              justify-content: center;
+              .icons {
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                color: dark(container, container-subheader-color);
+                font-size: 1.8rem;
+                position: relative;
+                cursor: pointer;
+                &:active {
+                  scale: 0.9;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    @media screen and (max-width: 1200px) {
+      .ChatbotPage {
+        width: 100%;
+      }
+      .ChatBody .chatbotBodyContainer .chatContainer {
+        width: 80%;
+      }
+    }
+    @media screen and (max-width: 900px) {
+      .businessInfo {
+        .mainInfo {
+          padding-top: 1rem;
+          .title {
+            .name {
+              font-size: 1.8rem;
+            }
+          }
+          .about {
+            .header {
+              font-size: 1rem;
+            }
+            .field {
+              .information {
+                .description {
+                  font-size: 0.8rem;
+                }
+              }
+              .hint {
+                font-size: 0.8rem;
+              }
+            }
+          }
+        }
+      }
+      .ChatBody {
+        .chatbotBodyContainer .chatContainer {
+          width: 100%;
+        }
+        .memoryContainer {
+          width: 50%;
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,557 @@
+@use "../abstracts" as *;
+@use "../components";
+
+@mixin Profile() {
+  .profilePage {
+    width: 100%;
+    height: 100%;
+    min-height: calc(100vh - 7rem);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    text-align: center;
+    color: #fff;
+    .profileContainer {
+      background-color: dark(primary, 2);
+      position: relative;
+      padding: 1rem;
+      width: 100%;
+      height: 100%;
+      max-width: 46rem;
+      border-radius: 0.375rem;
+      border-width: 0px;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1),
+        0 10px 10px -5px rgba(0, 0, 0, 0.04);
+      transition: 0.3s all ease;
+      margin: auto;
+      padding-top: 1.9rem;
+      .icon_container {
+        width: calc(85% - 1rem);
+        height: 100px;
+        position: absolute;
+        top: 0;
+        left: 8%;
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        justify-content: space-between;
+        .leftsideIcon {
+          display: flex;
+          flex-direction: row;
+        }
+        .outtercircle {
+          width: 100px;
+          height: 100px;
+          position: relative;
+          border-radius: 50%;
+          background-color: dark(primary, 2);
+
+          .innercircle {
+            width: 85px;
+            height: 85px;
+            border-radius: 50%;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            .image {
+              width: 85px;
+              height: 85px;
+              border-radius: 50%;
+              position: relative;
+            }
+            .picPlaceholder {
+              background-color: #3f4143;
+
+              .avatar {
+                border-radius: 50%;
+                span {
+                  bottom: 9%;
+                }
+              }
+            }
+            .avatar_hover {
+              width: 0;
+              border-radius: 50%;
+              position: absolute;
+              z-index: 1;
+              background: rgba(0, 0, 0, 0.7);
+              display: flex;
+              align-items: center;
+              cursor: pointer;
+              span {
+                display: none;
+                font-size: 0.9rem;
+                font-weight: bold;
+              }
+            }
+            &:hover {
+              .avatar_hover {
+                width: 85px;
+                height: 85px;
+
+                span {
+                  display: block;
+                }
+              }
+            }
+            .icon {
+              position: absolute;
+              top: 0;
+              right: 0;
+              width: 1.5rem;
+              height: 1.5rem;
+              display:flex;
+              justify-content: center;
+              align-items: center;
+              color: clr(neutral, 3);
+              z-index: 1002;
+              background-color: dark(primary, 1);
+              border-radius: 50%;
+            }
+          }
+        }
+        .username_display {
+          display: flex;
+          flex-direction: column;
+          align-items: flex-start;
+          justify-content: center;
+          margin-left: 1%;
+          margin-top: 1%;
+          .displaylabel {
+            color: clr(neutral, 3);
+            font-weight: 500;
+            font-size: 1rem;
+          }
+          .section {
+            display: flex;
+            flex-direction: row;
+
+            .displaydata {
+              font-weight: 500;
+              font-size: 1.8rem;
+              line-height: 1.5rem;
+              margin-right: 3%;
+            }
+            .editbutton {
+              background-color: transparent;
+              color: clr(primary, 1);
+              margin-top: 1px;
+              height: 26px;
+              cursor: pointer;
+            }
+          }
+        }
+        .ProfileButton {
+          margin-top: 6%;
+          cursor: pointer;
+          transition: all 0.2s ease-in-out;
+          &:hover {
+            background-color: dark(button, 2-hover);
+            color: dark(button, 2-font-hover);
+          }
+        }
+      }
+      .Container_box {
+        padding: 10% 12px 12px 12px;
+        background-color: dark(primary, 1);
+        .container {
+          padding: 10px 7% 7% 7%;
+          border-radius: 6%;
+          position: relative;
+          display: flex;
+          flex-direction: column;
+          .myaccount_container {
+            margin-bottom: 6%;
+            text-align: left;
+
+            .account {
+              margin-bottom: 3%;
+            }
+            .section {
+              display: flex;
+              flex-direction: row;
+              justify-content: space-between;
+              align-items: center;
+              margin-bottom: 6px;
+              .label {
+                color: clr(neutral, 3);
+                font-weight: 500;
+                font-size: 1rem;
+              }
+              .usernamelabel {
+                display: flex;
+                width: 100%;
+                justify-content: space-between;
+                .displaylabel {
+                  font-weight: 500;
+                  font-size: 1rem;
+                  margin-top: auto;
+                  margin-bottom: auto;
+                }
+              }
+              .editbutton {
+                width: 72px;
+                cursor: pointer;
+              }
+            }
+            .mobile_button_container {
+              display: flex;
+              flex-direction: column;
+              align-items: flex-start;
+
+              .label {
+                color: clr(neutral, 3);
+                font-weight: 500;
+                font-size: 1rem;
+              }
+              .mobile_button {
+                display: flex;
+                flex-direction: row;
+                background-color: clr(neutral, 7);
+                width: 100%;
+                height: 42px;
+                align-items: center;
+                border-bottom: 2.1px solid clr(neutral, 5);
+                justify-content: space-between;
+                .label {
+                  margin-left: 3%;
+                }
+                .usernamelabel {
+                  display: flex;
+                  justify-content: flex-end;
+                  align-items: center;
+                  width: 70%;
+                  margin-right: 3%;
+                  gap: 1%;
+                  .displaylabel {
+                    font-weight: 500;
+                    font-size: 1rem;
+                    margin-top: auto;
+                    margin-bottom: auto;
+                    color: white;
+                  }
+                  .editbutton {
+                    color: clr(primary, 1);
+                    margin-top: 1px;
+                    height: 26px;
+                    font-size: 1rem;
+                    margin-left: 1%;
+                  }
+                }
+              }
+            }
+          }
+          .password_container {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            .password {
+              margin-bottom: 3%;
+            }
+            .changepasswordbutton {
+              width: 180px;
+              cursor: pointer;
+            }
+          }
+          @media screen and (max-width: 569px) {
+            margin-top: 21%;
+            height: 100%;
+            padding: 10px;
+            border-radius: 0%;
+          }
+        }
+      }
+      @media screen and (max-width: 569px) {
+        height: 100%;
+        padding: 0;
+        .icon_container {
+          width: 100%;
+          left: 0;
+          justify-content: center;
+        }
+        .Container_box {
+          height: calc(100% - 27%);
+          padding: 0;
+          .container {
+            padding: 0px;
+            margin: 0;
+            .myaccount_container {
+              .account {
+                padding-left: 15px;
+                font-size: 1rem;
+              }
+              padding: 0px;
+              .section {
+                flex-direction: row;
+                justify-content: space-between;
+                align-items: center;
+                height: 42px;
+                padding-left: 15px;
+                padding-right: 15px;
+                .usernamelabel {
+                  width: 70%;
+                  justify-content: flex-end;
+                  align-items: center;
+                  .editbutton {
+                    width: 6%;
+                    margin-left: 3%;
+                    color: clr(primary, 1);
+                  }
+                }
+              }
+            }
+
+            .password_container {
+              display: none;
+            }
+          }
+        }
+      }
+    }
+    .label {
+      color: clr(neutral, 3);
+      font-weight: 500;
+      font-size: 1.5rem;
+    }
+    hr {
+      flex-shrink: 0;
+
+      width: 100%;
+      border: none;
+      height: 1px;
+      margin: 0.5rem 0;
+      background-color: dark(primary, 3);
+    }
+    @media screen and (max-width: 569px) {
+      background-color: clr(neutral, 5);
+    }
+    @media screen and (max-width: 1080px) {
+      justify-content: flex-start;
+      .profileContainer {
+        margin: 0;
+        position: relative;
+        .icon_container {
+          position: absolute;
+          width: calc(100% - 2rem);
+          height: 150px;
+          left: auto;
+          top: auto;
+          padding-left: 12px;
+          padding-right: 12px;
+          .leftsideIcon {
+            flex-direction: column;
+            align-items: center;
+          }
+        }
+        .Container_box {
+          padding-top: 150px;
+          .container {
+            padding-left: 0;
+            padding-right: 0;
+          }
+        }
+      }
+    }
+  }
+  .profileMobilePage {
+    @extend .profilePage;
+    background-color: transparent;
+    justify-content: flex-start;
+    height: 100%;
+    .profileContainer {
+      background-color: transparent;
+      margin: 0;
+      padding: 0;
+      position: relative;
+      .icon_container {
+        position: absolute;
+        height: 150px;
+        width: 100%;
+        left: auto;
+        top: auto;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        .leftsideIcon {
+          flex-direction: column;
+          align-items: center;
+        }
+      }
+      .Container_box {
+        background-color: transparent;
+        padding: 0;
+        padding-left: 2rem;
+        padding-right: 2rem;
+        padding-top: 150px;
+        .container {
+          padding-left: 2rem;
+          padding-right: 2rem;
+          padding: 0;
+          .myaccount_container {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            padding: 12px;
+            background-color: dark(container, container);
+            border-radius: 12px;
+            .name {
+              font-weight: 600;
+              font-size: 1.5rem;
+              margin-bottom: 1rem;
+            }
+            .email {
+              color: clr(neutral, 3);
+              font-weight: 400;
+              font-size: 0.9rem;
+            }
+            .buttonField {
+              width: 100%;
+              display: flex;
+              justify-content: space-around;
+              button {
+                display: flex;
+                flex-direction: row;
+                align-items: center;
+                justify-content: center;
+                padding: 9px 15px 9px 15px;
+                border-radius: 12px;
+                background-color: dark(button, 2);
+                color: dark(button, 2-font);
+                gap: 0.5rem;
+                &:active {
+                  background-color: dark(button, 2-active);
+                }
+                .icon {
+                  font-size: 1.2rem;
+                }
+                span {
+                  font-size: 0.9rem;
+                  font-weight: 500;
+                }
+              }
+              a {
+                text-decoration: none;
+              }
+            }
+            .title {
+              font-weight: 600;
+              font-size: 0.9rem;
+              margin-bottom: 1rem;
+            }
+            .description {
+              font-weight: 400;
+              font-size: 0.81rem;
+              color: clr(neutral, 3);
+              margin-bottom: 1rem;
+            }
+          }
+          .editContainer {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            padding: 12px;
+            background-color: dark(container, container);
+            border-radius: 12px;
+            .headerContainer {
+              width: 100%;
+              text-align: left;
+              padding-bottom: 1rem;
+              border-bottom: 1px solid #ffffff48;
+              .name {
+                font-weight: 600;
+                font-size: 1.5rem;
+              }
+            }
+            .bodyContainer {
+              display: flex;
+              flex-direction: column;
+              align-items: flex-start;
+              width: 100%;
+              padding-top: 12px;
+              gap: 12px;
+              .editInputContainer {
+                display: flex;
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 6px;
+                width: 100%;
+                .editTitle {
+                  font-weight: 500;
+                  font-size: 0.7rem;
+                  color: clr(neutral, 3);
+                }
+                .editInput {
+                  width: 100%;
+                  height: 42px;
+                  background-color: dark(container, container-subheader);
+                  border-radius: 3px;
+                  padding: 6px 12px;
+                  color: white;
+                  font-size: 0.9rem;
+                  font-weight: 400;
+                  resize: none;
+                  border: none;
+                  &:focus {
+                    outline: none;
+                  }
+                  &::placeholder {
+                    color: clr(neutral, 3);
+                  }
+                }
+                .errorinput {
+                  //red border
+                  border: 0.9px solid rgba(255, 0, 0, 0.785);
+                  color: rgba(255, 0, 0, 0.785);
+                }
+                .editAreaInput {
+                  @extend .editInput;
+                  height: fit-content;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    .modal-container {
+      z-index: 1005;
+      .modal {
+        form {
+          .editor_popup {
+            .modal {
+              justify-content: space-between;
+            }
+          }
+        }
+      }
+    }
+    @media screen and (max-width: 400px) {
+      .profileContainer {
+        .Container_box {
+          margin-top: 0;
+          padding-top: 150px;
+          .container {
+            margin-top: 0;
+            .myaccount_container {
+              .buttonField {
+                flex-direction: column;
+                button {
+                  width: 100%;
+                  margin-bottom: 1rem;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  .profileMobileEditPage {
+    padding: 0;
+    @extend .profileMobilePage;
+  }
+}
+
+@include components.Profile();

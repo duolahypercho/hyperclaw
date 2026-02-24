@@ -1,0 +1,42 @@
+@use "../abstracts" as *;
+
+@mixin Logo() {
+  .logoCont {
+    display: flex;
+    height: 100%;
+    align-items: center;
+    cursor: pointer;
+    img {
+      border-radius: 4px;
+      width: auto;
+      height: 1.5rem;
+      margin: 0 0.3rem;
+    }
+    p {
+      font-weight: 600;
+      font-size: 24px;
+      letter-spacing: 0.7px;
+      text-transform: capitalize;
+      color: #b8d4fb;
+      font-family: "Poppins", sans-serif;
+    }
+    @media screen and (max-width: 680px) {
+      img {
+        height: 1.3rem;
+      }
+
+      p {
+        font-size: 18px;
+      }
+    }
+    @media screen and (max-width: 569px) {
+      img {
+        height: 1.3rem;
+      }
+
+      p {
+        font-size: 18px;
+      }
+    }
+  }
+}

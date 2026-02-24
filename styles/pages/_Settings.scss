@@ -1,0 +1,98 @@
+@use "../abstracts" as *;
+
+@mixin Settings() {
+  .settingsPage {
+    padding-right: 21px;
+    .profilePage{
+      background-color: dark(primary, 2);
+      justify-content: flex-start;
+      min-height: auto;
+      .profileContainer{
+        margin: 0;
+        
+      }
+    }
+    .settingScreen{
+      height: calc(100% - 6rem);
+      .settingContainer{
+        height: 100%;
+        flex-direction: column;
+        justify-content: space-between;
+        .body{
+          height: 100%;
+          .section{
+            padding: 10px;
+            border-radius: 10px;
+            .sub-header{
+              padding: 6px;
+              background-color: dark(container,container-subheader);
+              font-size: 1.2rem;
+              color: dark(container,container-subheader-color);
+              font-weight: 400;
+            }
+            .selection{
+              display: flex;
+              flex-direction: column;
+              .settingButton{
+                padding: 6px;
+                transition: background-color 0.3s ease-in-out;
+                cursor: pointer;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                & > span{
+                  font-size: 1.2rem;
+                  margin: 0 12px 0 12px;
+                  color: dark(container,container-selection-color);
+                }
+                &:hover{
+                  background-color: #0000002e;
+                }
+              }
+            }
+          }
+        }
+        .buttonFields{
+          display: flex;
+          justify-content: flex-end;
+          padding: 15px;
+          & > button{
+            cursor: pointer;
+            flex-shrink: 0;
+            font-size: 0.8rem;
+            font-weight: 500;
+            margin-left: 5px;
+            max-height: 2rem;
+            padding: 3px 15px;
+            background-color: dark(button, 2);
+            transition: background-color 0.3s ease-in;
+            color: dark(button, 2-font);
+            border-radius: 35px;
+            width: 15%;
+            height: 36px;
+            &:hover{
+              background-color: dark(button,2-hover);
+            }
+            &:disabled{
+              background-color: rgba(128, 128, 128, 0.345);
+              color: rgb(155, 155, 155);
+              cursor: default !important;
+            }
+          }
+          .removeActive{
+            cursor: pointer;
+            background-color: transparent;
+            color: dark(button, font);
+            transition: background-color 0.3s ease-in;
+            &:hover{
+              background-color:rgba(128, 128, 128, 0.435);
+              color: white;
+            }
+          }
+        }
+      }
+    }
+
+
+  }
+}

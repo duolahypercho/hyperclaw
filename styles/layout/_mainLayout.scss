@@ -1,0 +1,311 @@
+@use "../abstracts" as *;
+@use "../components";
+@use "../pages";
+
+.Layout {
+  overflow: hidden;
+  height: 100vh;
+  width: 100vw;
+  display: flex;
+  flex-direction: column;
+  @include components.navbar();
+  @include components.MobileModule();
+  @include components.videoListContainer();
+  @include components.BottomNav();
+  .mainContainer {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    width: 100%;
+    .appContainer {
+      display: flex;
+      justify-content: space-between;
+      flex-direction: row;
+      width: 100%;
+      height: 100%;
+      @include components.sidebar();
+    }
+    .mainBody {
+      display: flex;
+      flex-direction: row;
+      width: 100%;
+      border: none;
+      transition: all 0.3s ease;
+
+      //pages
+      @include pages.indexPage();
+      @include pages.Explore();
+      @include pages.Settings();
+      @include pages.Search();
+      @include pages.Profile();
+      @include pages.Customize();
+      @include pages.Contacts();
+      @media screen and (max-width: 750px) {
+        width: 100%;
+        padding: 0 10px;
+      }
+      @media screen and (max-width: 500px) {
+        padding: 0;
+      }
+    }
+    .assistantIcon {
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+      bottom: 60px;
+      right: 60px;
+      z-index: 1000;
+      .showAssistantButton {
+        .imageContainer {
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          cursor: pointer;
+          &:hover {
+            img {
+              transform: scale(1.1);
+            }
+          }
+          img {
+            transition: all 0.1s ease;
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+          }
+        }
+      }
+
+      &[aria-disabled="true"] {
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      @media screen and (max-width: 1200px) {
+        display: none;
+      }
+    }
+    .businessBody {
+      @include pages.Business();
+      width: 100%;
+    }
+    .toolBody {
+      @include pages.Tools();
+      width: 100%;
+      @media screen and (max-width: 750px) {
+        height: 100svh;
+        position: absolute;
+        top: 0;
+        right: 0;
+        z-index: 1002;
+        .chatbotHeader {
+          border-radius: 0;
+        }
+      }
+    }
+    .infoBody {
+      width: 100%;
+      border: none;
+      transition: all 0.3s ease;
+      @media screen and (max-width: 1200px) {
+        width: 100%;
+      }
+      @media screen and (max-width: 500px) {
+        padding: 0;
+      }
+    }
+  }
+  .mobileMainContainerWONav {
+    height: 100dvh;
+    position: relative;
+    .mainBody {
+      padding: 0;
+    }
+  }
+  .topLine {
+    height: 100px;
+    width: 100%;
+  }
+  .close {
+    @media screen and (max-width: 1200px) {
+      height: 100vh;
+      overflow: hidden;
+    }
+  }
+  --gap: 3px;
+  --column: 2;
+  --minHeight: 100px;
+  @media screen and (max-width: 600px) {
+    --gap: 3px;
+    --column: 2;
+    --minHeight: 100px;
+  }
+  @media screen and (min-width: 600px) and (max-width: 890px) {
+    --gap: 8px;
+    --column: 3;
+    --minHeight: 170px;
+  }
+  @media screen and (min-width: 890px) and (max-width: 1160px) {
+    --gap: 9px;
+    --column: 4;
+    --minHeight: 175px;
+  }
+  @media screen and (min-width: 1160px) and (max-width: 1800px) {
+    --gap: 14px;
+    --column: 5;
+    --minHeight: 150px;
+  }
+  @media screen and (min-width: 1800px) and (max-width: 2000px) {
+    --gap: 16px;
+    --column: 6;
+  }
+  @media screen and (min-width: 2000px) and (max-width: 2450px) {
+    --gap: 16px;
+    --column: 7;
+    --minHeight: 250px;
+  }
+  @media screen and (min-width: 2450px) {
+    --column: 9;
+    --minHeight: 260px;
+  }
+}
+
+.AssistantLayout {
+  @extend .Layout;
+  @include components.Assistantbar();
+  --gap: 3px;
+  --column: 2;
+  --minHeight: 100px;
+  @media screen and (max-width: 600px) {
+    --gap: 3px;
+    --column: 2;
+    --minHeight: 100px;
+  }
+  @media screen and (min-width: 600px) and (max-width: 890px) {
+    --gap: 8px;
+    --column: 2;
+    --minHeight: 170px;
+  }
+  @media screen and (min-width: 890px) and (max-width: 1200px) {
+    --gap: 9px;
+    --column: 2;
+    --minHeight: 175px;
+  }
+  @media screen and (min-width: 1200px) and (max-width: 1800px) {
+    --gap: 14px;
+    --column: 3;
+    --minHeight: 150px;
+  }
+  @media screen and (min-width: 1800px) and (max-width: 2000px) {
+    --gap: 16px;
+    --column: 4;
+  }
+  @media screen and (min-width: 2000px) and (max-width: 2450px) {
+    --gap: 16px;
+    --column: 4;
+    --minHeight: 250px;
+  }
+  @media screen and (min-width: 2450px) {
+    --column: 5;
+    --minHeight: 260px;
+  }
+  .mainContainer {
+    .appContainer {
+      .sidebarContainer {
+        .closingBody {
+          position: absolute;
+          top: 0;
+          left: 0;
+          width: 100%;
+          z-index: -1;
+          height: 100%;
+          opacity: 100%;
+        }
+        width: 4.6rem;
+        height: 100%;
+        transition: all 0.3s ease;
+        @include components.sidebar();
+        @media screen and (max-width: 750px) {
+          display: none;
+        }
+      }
+    }
+  }
+}
+
+.AssistantMobileLayout {
+  @extend .AssistantLayout;
+  .mainContainer {
+    height: calc(100vh - 4rem);
+  }
+  &[aria-disabled="true"] {
+    .mobileAssistantContainer {
+      width: 100%;
+      height: 100svh;
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .mainBody {
+      width: 0;
+      height: 0;
+      opacity: 0;
+      pointer-events: none;
+    }
+  }
+  &[aria-disabled="false"] {
+    .mobileAssistantContainer {
+      width: 0;
+      height: 0;
+      opacity: 0;
+      pointer-events: none;
+    }
+  }
+}
+
+.overflow {
+  @media screen and (max-width: 1200px) {
+    overflow: hidden;
+    height: 100vh;
+  }
+}
+
+.ProductLayout {
+  background: linear-gradient(
+    180deg,
+    #14203e 0%,
+    #1a284bba 40.93%,
+    #2e3551c0 68.48%,
+    #142142 100%
+  );
+  overscroll-behavior: contain;
+  // position: relative;
+  overflow: hidden auto;
+  height: 100vh;
+  width: 100vw;
+  display: flex;
+  flex-direction: column;
+  @include components.navbar();
+  scrollbar-gutter: stable;
+  .navbar {
+    position: absolute;
+    background-color: transparent;
+    backdrop-filter: blur(0px); /* Blur effect */
+    -webkit-backdrop-filter: blur(0px); /* For Safari compatibility */
+  }
+}
+
+.aiTextAreaHighlight {
+  background-color: hsla(222, 25%, 38%, 0.6);
+}
+
+.animated-text {
+  animation: fadeIn 0.5s forwards;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}

@@ -1,0 +1,747 @@
+@use "../abstracts" as *;
+@use "../components";
+
+@mixin Customize() {
+  %inputField {
+    height: 3rem;
+    padding: 0.25rem;
+    border-radius: 0.5rem;
+    font-size: 1rem !important;
+    border: 2px solid transparent;
+    outline: none;
+    color: dark(auth, font);
+    background-color: dark(container, container) !important;
+
+    transition: 0.3px all ease;
+
+    &:focus {
+      border-color: clr(primary, 9) !important;
+    }
+    &:hover {
+      border-color: clr(primary, 2) !important;
+    }
+  }
+  .CustomizePage {
+    width: 100%;
+    height: calc(100vh - 4.5rem);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    .Customizeheader {
+      height: auto;
+      box-shadow: 10px 10px 8px rgba(90, 89, 89, 0.121); /* Add the box shadow */
+      color: clr(neutral, 1);
+      font-size: 2.5rem;
+      font-weight: 500;
+      padding: 1rem 0px 1rem 1rem;
+      display: flex;
+      align-items: flex-start;
+      flex-direction: column;
+      p {
+        font-size: 0.82rem;
+        font-weight: 500;
+        margin-top: 0.5rem;
+        color: clr(neutral, 2);
+      }
+    }
+    .informationContainer {
+      flex-direction: column;
+      display: flex;
+      justify-content: flex-start;
+      align-items: center;
+      padding: 15px;
+      overflow-y: auto;
+      overflow-x: hidden;
+      .TopArea {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        margin-bottom: 1%;
+        justify-content: space-around;
+        .chatbotPictureField {
+          width: 100%;
+          .chatbotIcon {
+            display: flex;
+            flex-direction: column;
+            // outline: 1px solid lime;
+            overflow: hidden;
+            .inner1 {
+              aspect-ratio: 1/1;
+              position: relative;
+              border-radius: 50%;
+              overflow: hidden;
+              margin-bottom: 2.5px;
+              min-height: var(--minHeight);
+              cursor: pointer;
+              background-color: clr(neutral, 5a);
+              .image,
+              .empty {
+                border: none;
+                outline: none;
+                -webkit-user-drag: none;
+
+                height: 100%;
+                width: stretch;
+                object-fit: cover;
+              }
+              .functionsoverlay {
+                height: 100%;
+                position: absolute;
+                top: 0;
+                right: 0;
+                padding: 10px 10px 0 0;
+                z-index: 14;
+                overflow: hidden;
+                display: none;
+                align-items: flex-end;
+                flex-direction: column;
+                gap: 10px;
+                overflow: hidden;
+                transition: 0.3s all ease;
+                .func {
+                  color: clr(neutral, 0);
+                  background-color: #2d2d2da9;
+                  backdrop-filter: blur(7px);
+                  border-radius: 5px;
+                  display: flex;
+                  align-items: center;
+                  padding: 5px;
+                  line-height: 30px;
+                  height: 30px;
+                  cursor: pointer;
+                  .icon {
+                    line-height: 30px;
+                    flex-shrink: 0;
+                    font-size: 1.3rem;
+                    // margin-left: 10px;
+                  }
+                  p {
+                    font-size: 0.8rem;
+                    width: 0;
+                    visibility: hidden;
+                  }
+
+                  &:hover {
+                    p {
+                      padding: 5px;
+                      width: fit-content;
+                      visibility: visible;
+                    }
+                  }
+                  @media screen and (max-width: 700px) {
+                    padding: 3px;
+                    height: 30px;
+
+                    .icon {
+                      font-size: 1.1rem;
+                    }
+                  }
+                }
+                @media screen and (max-width: 400px) {
+                  display: none;
+                }
+              }
+              .hoverchatbotIconBox {
+                top: 0;
+                position: absolute;
+                width: 100%;
+                height: 100%;
+                background-color: rgba(0, 0, 0, 0.373);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                &:hover {
+                  background-color: rgba(0, 0, 0, 0.472);
+                  cursor: pointer;
+                  .icon {
+                    opacity: 1;
+                  }
+                }
+                .icon {
+                  font-size: 2rem;
+                  color: white;
+                  opacity: 0;
+                  transition: all ease-in 0.2s;
+                }
+                & > span {
+                  font-size: 1rem !important;
+                  font-weight: 500;
+                }
+                & > input {
+                  position: absolute;
+                  width: 100%;
+                  height: 100%;
+                  opacity: 0;
+                  cursor: pointer;
+                }
+              }
+              &:hover {
+                .functionsoverlay {
+                  display: flex;
+                  @media screen and (max-width: 400px) {
+                    display: none;
+                  }
+                }
+              }
+            }
+          }
+        }
+        .statusField {
+          width: 40%;
+          display: flex;
+          flex-direction: column;
+          .field {
+            display: flex;
+            justify-content: center;
+            flex-direction: column;
+            margin-bottom: 0.75rem;
+            color: clr(neutral, 3);
+
+            & > label {
+              margin-bottom: 0.6rem;
+              font-size: 0.9rem;
+              line-height: 1.5rem;
+              font-weight: bold;
+              color: clr(neutral, 3);
+            }
+            & > input,
+            & > textArea {
+              @extend %inputField;
+              border-color: clr(primary, 10);
+              padding-left: 1rem;
+              &::-webkit-calendar-picker-indicator {
+                filter: invert(1);
+              }
+            }
+            & > input::placeholder,
+            & > textArea::placeholder {
+              color: dark(auth, font-placeholder);
+            }
+            & > input:focus,
+            & > textArea:focus {
+              color: dark(auth, focus-font);
+            }
+            .hint {
+              font-size: 0.8rem;
+              color: clr(neutral, 3);
+              margin-top: 0.6rem;
+              margin-left: 0.3rem;
+            }
+            div {
+              position: relative;
+              width: 100%;
+              & > select {
+                @extend %inputField;
+                width: 100%;
+                &::-webkit-calendar-picker-indicator {
+                  filter: invert(1);
+                }
+              }
+              & > button,
+              .dropdownContainer {
+                @extend %inputField;
+                width: 100%;
+                text-align: left;
+                border-color: clr(primary, 10);
+                .dropdownButton {
+                  width: 100%;
+                  height: 100%;
+                  display: flex;
+                  justify-content: space-between;
+                  align-items: center;
+                  padding: 2px 8px;
+
+                  .arrowDown {
+                    &:hover {
+                      color: #fff;
+                      cursor: pointer;
+                    }
+                  }
+                  & > input {
+                    width: 100%;
+                    height: 100%;
+                    border: none;
+                    background-color: transparent;
+                    font-size: 1rem;
+                    font-weight: 500;
+                    color: dark(auth, font);
+
+                    &:focus {
+                      outline: none;
+                    }
+                    &::placeholder {
+                      color: dark(auth, font-placeholder);
+                    }
+                  }
+                  & > svg {
+                    z-index: 2;
+                  }
+                  .inputActive {
+                    &::placeholder {
+                      color: #c0bebe;
+                    }
+                  }
+                }
+              }
+
+              .dropdownMenu {
+                width: 100%;
+                position: absolute;
+                border-radius: 8px;
+                opacity: 0;
+                pointer-events: none;
+                transform: translateY(-10px);
+                transition: opacity 150ms ease-in-out,
+                  transform 150ms ease-in-out;
+                z-index: 999;
+                background-color: dark(auth, dropdownMenu);
+
+                max-height: 210px;
+                overflow-y: scroll;
+              }
+              .dropdownMenu_open {
+                opacity: 1;
+                transform: translateY(0);
+                pointer-events: auto;
+                z-index: 999;
+              }
+              .dropdownGrid {
+                display: flex;
+                flex-direction: column;
+                z-index: 999;
+
+                .dropdownLinks {
+                  gap: 0.25rem;
+                  padding: 0.45rem;
+                  width: 100%;
+                  z-index: 999;
+
+                  .link {
+                    display: flex;
+                    text-decoration: none;
+                    padding-left: 9px;
+                    margin-bottom: 1px;
+                    cursor: pointer;
+                    min-height: 2.6rem;
+                    border-radius: 8px;
+                    font-size: 1rem;
+                    line-height: 2rem;
+                    font-weight: 400;
+                    flex-shrink: 0;
+                    width: 100%;
+                    align-items: center;
+                    color: dark(auth, font-placeholder);
+                    background-color: transparent;
+                    z-index: 999;
+
+                    &:hover {
+                      background-color: dark(auth, dropdown-hover);
+                      color: clr(neutral, 1);
+                    }
+                  }
+                  .linkActive {
+                    background-color: dark(auth, dropdown-active);
+                    color: hsl(0, 0%, 100%);
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      .basicInfo {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        width: 100%;
+        .double {
+          display: flex;
+          flex-direction: row;
+          justify-content: space-around;
+          width: 100%;
+          margin-bottom: 0.75rem;
+          gap: 1rem;
+          .field {
+            justify-content: flex-start;
+          }
+        }
+        .field {
+          width: 40%;
+          display: flex;
+          justify-content: center;
+          flex-direction: column;
+          color: clr(neutral, 3);
+
+          & > label {
+            margin-bottom: 0.6rem;
+            font-size: 0.9rem;
+            line-height: 1.5rem;
+            font-weight: bold;
+            color: clr(neutral, 3);
+          }
+
+          & > input,
+          & > textArea {
+            @extend %inputField;
+            border-color: clr(primary, 10);
+            padding-left: 1rem;
+            &::-webkit-calendar-picker-indicator {
+              filter: invert(1);
+            }
+          }
+
+          & > input::placeholder,
+          & > textArea::placeholder {
+            color: dark(auth, font-placeholder);
+          }
+
+          & > input:focus,
+          & > textArea:focus {
+            color: dark(auth, focus-font);
+          }
+
+          .hint {
+            font-size: 0.8rem;
+            color: rgb(130, 127, 127);
+            margin-top: 0.3rem;
+            margin-left: 0.3rem;
+            text-align: end;
+          }
+
+          div {
+            position: relative;
+            width: 100%;
+            & > select {
+              @extend %inputField;
+              width: 100%;
+              &::-webkit-calendar-picker-indicator {
+                filter: invert(1);
+              }
+            }
+            & > button,
+            .dropdownContainer {
+              @extend %inputField;
+              width: 100%;
+              text-align: left;
+              border-color: clr(primary, 10);
+              .dropdownButton {
+                width: 100%;
+                height: 100%;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                padding: 2px 8px;
+
+                .arrowDown {
+                  &:hover {
+                    color: #fff;
+                    cursor: pointer;
+                  }
+                }
+                & > input {
+                  width: 100%;
+                  height: 100%;
+                  border: none;
+                  background-color: transparent;
+                  font-size: 1rem;
+                  font-weight: 500;
+                  color: dark(auth, font);
+
+                  &:focus {
+                    outline: none;
+                  }
+                  &::placeholder {
+                    color: dark(auth, font-placeholder);
+                  }
+                }
+                & > svg {
+                  z-index: 2;
+                }
+                .inputActive {
+                  // show ecallpse for overflow and only exist in one line
+                  white-space: nowrap; /* Prevents the text from wrapping to a new line */
+                  overflow: hidden; /* Ensures the overflow is hidden */
+                  text-overflow: ellipsis; /* Adds an ellipsis to the end of the text */
+                  width: 100%; /* Or set a fixed width */
+                  &::placeholder {
+                    color: #c0bebe;
+                  }
+                }
+              }
+            }
+
+            .dropdownMenu {
+              width: 100%;
+              position: absolute;
+              border-radius: 8px;
+              opacity: 0;
+              pointer-events: none;
+              transform: translateY(-10px);
+              transition: opacity 150ms ease-in-out, transform 150ms ease-in-out;
+              z-index: 999;
+              background-color: dark(auth, dropdownMenu);
+
+              max-height: 210px;
+              overflow-y: scroll;
+            }
+
+            .dropdownMenu_open {
+              opacity: 1;
+              transform: translateY(0);
+              pointer-events: auto;
+              z-index: 999;
+            }
+
+            .dropdownGrid {
+              display: flex;
+              flex-direction: column;
+              z-index: 999;
+
+              .dropdownLinks {
+                gap: 0.25rem;
+                padding: 0.45rem;
+                width: 100%;
+                z-index: 999;
+
+                .link {
+                  display: flex;
+                  text-decoration: none;
+                  padding-left: 9px;
+                  margin-bottom: 1px;
+                  cursor: pointer;
+                  min-height: 2.6rem;
+                  border-radius: 8px;
+                  font-size: 1rem;
+                  line-height: 2rem;
+                  font-weight: 400;
+                  flex-shrink: 0;
+                  width: 100%;
+                  align-items: center;
+                  white-space: nowrap; /* Prevents the text from wrapping to a new line */
+                  overflow: hidden; /* Ensures the overflow is hidden */
+                  text-overflow: ellipsis; /* Adds an ellipsis to the end of the text */
+                  color: dark(auth, font-placeholder);
+                  background-color: transparent;
+                  z-index: 999;
+
+                  &:hover {
+                    background-color: dark(auth, dropdown-hover);
+                    color: clr(neutral, 1);
+                  }
+                }
+                .linkActive {
+                  background-color: dark(auth, dropdown-active);
+                  color: hsl(0, 0%, 100%);
+                }
+              }
+            }
+          }
+        }
+        .promptField {
+          @extend .field;
+          width: 90%;
+          & > input {
+            padding-left: 16px;
+            padding-right: 16px;
+          }
+          & > textArea {
+            height: 100px !important;
+            resize: none;
+          }
+        }
+        .instruction {
+          & > textArea {
+            resize: vertical;
+            &::-webkit-resizer {
+              background-color: dark(input, 1) !important;
+            }
+          }
+        }
+
+        @include components.MutiSelect();
+      }
+      .Button {
+        width: 100%;
+        display: flex;
+        flex-direction: row;
+        justify-content: space-evenly;
+        align-items: center;
+        text-align: center;
+        .nextButton {
+          display: flex;
+          flex-direction: row;
+          justify-content: space-evenly;
+          align-items: center;
+          text-align: center;
+
+          cursor: pointer;
+          margin-bottom: 3px;
+          padding-left: 2rem;
+          padding-right: 2rem;
+          min-height: 2.8rem;
+          border-radius: 8px;
+          font-size: 1rem;
+          font-weight: 500;
+          color: black;
+          transition: all 0.2s ease-in-out;
+          user-select: none;
+          -webkit-user-select: none;
+          background-color: rgb(143, 220, 143);
+
+          .icon {
+            margin-right: 1rem;
+            font-size: 1rem;
+          }
+          &:hover {
+            background-color: rgb(109, 239, 109);
+          }
+          &:disabled {
+            background-color: rgb(67, 69, 67);
+            color: rgb(255, 255, 255);
+            cursor: not-allowed;
+          }
+        }
+        .dataButton {
+          @extend .nextButton;
+          color: rgba(255, 255, 255, 0.802);
+          background-color: #388deed0;
+          &:hover {
+            background-color: #248aff;
+          }
+
+          .icon {
+            margin-right: 1rem;
+            font-size: 1rem;
+          }
+        }
+        .cancelButton {
+          @extend .nextButton;
+          background-color: rgb(237, 107, 107);
+          color: rgb(255, 255, 255);
+
+          &:hover {
+            background-color: rgb(255, 75, 75);
+          }
+
+          .icon {
+            margin-right: 1rem;
+            font-size: 1.2rem;
+          }
+        }
+        .trainButton {
+          @extend .nextButton;
+          background-color: rgb(216, 220, 110);
+
+          &:hover {
+            background-color: rgb(234, 239, 110);
+          }
+        }
+      }
+    }
+    .buttonFields {
+      display: flex;
+      flex-direction: row;
+      transition: all 0.2s ease-in-out;
+      justify-content: flex-end;
+      padding: 12px;
+      .nextButton {
+        display: flex;
+        flex-direction: row;
+        justify-content: space-evenly;
+        align-items: center;
+        text-align: center;
+        cursor: not-allowed;
+
+        margin-right: 12px;
+        padding-left: 1.2rem;
+        padding-right: 1.2rem;
+        min-height: 2.1rem;
+        border-radius: 8px;
+        font-size: 1rem;
+        font-weight: 500;
+        color: rgb(227, 216, 216);
+        transition: all 0.2s ease-in-out;
+        user-select: none;
+        -webkit-user-select: none;
+        background-color: hsl(140, 6%, 49%);
+      }
+      .resetButton {
+        opacity: 0;
+        pointer-events: none;
+        background-color: transparent;
+        &:hover {
+          //add underline
+          text-decoration: underline;
+          background-color: transparent;
+        }
+      }
+      &[aria-disabled="true"] {
+        .nextButton {
+          background-color: hsl(142, 56%, 32%);
+          color: rgb(227, 216, 216);
+
+          &:hover {
+            background-color: hsla(120, 40%, 32%, 0.642);
+          }
+          cursor: pointer;
+        }
+        .resetButton {
+          opacity: 1;
+          pointer-events: auto;
+          background-color: transparent;
+          &:hover {
+            //add underline
+            text-decoration: underline;
+            background-color: transparent;
+          }
+        }
+      }
+      @media screen and (max-width: 750px) {
+        padding: 0;
+      }
+    }
+    .hiddenInfo {
+      display: flex;
+      width: 90%;
+      flex-direction: column;
+      align-items: flex-start;
+      .hiddenTitle {
+        .moreOptionButton {
+          display: flex;
+          flex-direction: row;
+          justify-content: space-between;
+          align-items: center;
+          gap: 3px;
+          width: 100%;
+          background-color: transparent;
+          padding: 6px;
+          cursor: pointer;
+          border-radius: 6px;
+          .title {
+            font-size: 1rem;
+            font-weight: 500;
+            color: clr(neutral, 1);
+          }
+          .icon {
+            font-size: 1rem;
+            color: clr(neutral, 1);
+          }
+          &:hover {
+            background-color: dark(sidebar, element-hover);
+          }
+          &:active {
+            scale: 0.9;
+          }
+        }
+      }
+      .hiddenBody {
+        width: 100%;
+        .basicInfo {
+          .promptField {
+            width: 100%;
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,250 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# Preceding
+
+- You are an expe Typescript, Next.js, Framer Motion, and Tailwind CSS developer. Which is working on a Next.js project.
+- You are working on an interactive OS like AI operating system for a AI startup called Hypercho
+- You are the combination of steve jobs, elon musk, and mark zuckerberg. Which means you are the best designer, developer, engineer, and most importantly the most creative person and marketing person in the world. Make sure all the design are very unique and creative as well as the copywriting. Make sure the design are very modern and up to date. Our promise is to use the simple and clean design. Keep in mind that we are a startup and we need to be very creative with the design. Make it simple, clean, modern, and elegant. If you can finish in one step then don't make it two.
+- Always Keep it modern, clean and make sure what you are doing always has animation.
+- when you are creating a new component, make sure to create a new folder in the components folder and name it like the component.
+- Keep the color palette consistent.
+- Always think of the different scenarios and edge cases.
+- Make sure always to use the dark mode color palette for now.
+- Use First pricinpal
+
+# TechStack
+
+- Next.js
+- Tailwind 3.4.1 CSS
+- TypeScript
+- Shadcn UI
+- Framer Motion
+- React
+- npm
+- Aceternity UI
+- Lucide Icons
+
+# Project Structure
+
+- components/
+- lib/
+- public/
+- styles/
+- types/
+- utils/
+- pages/
+- Providers/
+- Layouts/
+- src/components/ (contains all the components about shadcn ui)
+- OS (Hypercho Operating System)
+
+# Rules
+
+- All new components should go in /components and be named like example-component.tsx unless otherwise specified
+- All new pages go in /pages
+- use $/ to refer to the root of the project
+- use @/ to refer to the src folder
+
+# Brief Description about the project
+
+- This is a product for Hypercho, an innovative AI startup that helps users transform their ideas into reality. Hypercho's platform provides comprehensive tools and guidance to take entrepreneurs from the initial concept stage (zero) to a fully realized business (one). By leveraging advanced artificial intelligence, the platform analyzes ideas, generates tailored business strategies, identifies market opportunities, and creates actionable roadmaps for success. Hypercho aims to democratize entrepreneurship by making professional-level business development accessible to everyone with a dream.
+
+# Design System
+
+- Brand color: Light blue (hsl(216, 100%, 89%))
+- Dark backgrounds with subtle blue/purple gradients
+- Modern, clean UI with ample whitespace
+- Responsive design for all device sizes
+- Subtle animations for enhanced user experience
+
+# Key Features
+
+- AI-powered idea validation
+- Business plan generation
+- Market analysis tools
+- Personalized roadmap creation
+- Progress tracking dashboard
+- Community feedback integration
+- Expert mentorship connections
+
+# Target Audience
+
+- Entrepreneurs and startup founders
+- Innovators with early-stage ideas
+- Small business owners seeking growth
+- Creative professionals exploring new ventures
+- Tech enthusiasts developing new products
+
+# Brand Voice
+
+- Encouraging and supportive
+- Professional yet approachable
+- Forward-thinking and innovative
+- Clear and concise communication
+- Empowering users to achieve their goals
+
+# Color Theme in tailwind.config.js
+colors: {
+    border: "hsl(var(--border))",
+    input: "hsl(var(--input))",
+    ring: "hsl(var(--ring))",
+    background: "hsl(var(--background))",
+    foreground: "hsl(var(--foreground))",
+    primary: {
+        DEFAULT: "hsl(var(--primary))",
+        foreground: "hsl(var(--primary-foreground))",
+    },
+    secondary: {
+        DEFAULT: "hsl(var(--secondary))",
+        foreground: "hsl(var(--secondary-foreground))",
+    },
+    destructive: {
+        DEFAULT: "hsl(var(--destructive))",
+        foreground: "hsl(var(--destructive-foreground))",
+    },
+    muted: {
+        DEFAULT: "hsl(var(--muted))",
+        foreground: "hsl(var(--muted-foreground))",
+    },
+    accent: {
+        DEFAULT: "hsl(var(--accent))",
+        foreground: "hsl(var(--accent-foreground))",
+    },
+    popover: {
+        DEFAULT: "hsl(var(--popover))",
+        foreground: "hsl(var(--popover-foreground))",
+    },
+    card: {
+        DEFAULT: "hsl(var(--card))",
+        foreground: "hsl(var(--card-foreground))",
+    },
+},
+backgroundColor: {
+    "black-100": "#000319",
+    "black-200": "rgba(17, 25, 40, 0.75)",
+    "black-300": "rgba(255, 255, 255, 0.125)",
+    "white-100": "#BEC1DD",
+    "white-200": "#C1C2D3",
+    background: "hsl(var(--background))",
+    foreground: "hsl(var(--foreground))",
+    primary: {
+        DEFAULT: "hsl(var(--primary))",
+        foreground: "hsl(var(--primary-foreground))",
+    },
+    secondary: {
+        DEFAULT: "hsl(var(--secondary))",
+        foreground: "hsl(var(--secondary-foreground))",
+    },
+    destructive: {
+        DEFAULT: "hsl(var(--destructive))",
+        foreground: "hsl(var(--destructive-foreground))",
+    },
+    muted: {
+        DEFAULT: "hsl(var(--muted))",
+        foreground: "hsl(var(--muted-foreground))",
+    },
+    accent: {
+        DEFAULT: "hsl(var(--accent))",
+        foreground: "hsl(var(--accent-foreground))",
+    },
+    popover: {
+        DEFAULT: "hsl(var(--popover))",
+        foreground: "hsl(var(--popover-foreground))",
+    },
+    card: {
+        DEFAULT: "hsl(var(--card))",
+        foreground: "hsl(var(--card-foreground))",
+    },
+},
+
+Below is the Tailwnd.css
+@tailwind base;
+
+@layer base {
+  :root {
+    /* Neutrals */
+    --background: 216 33% 97%; /* very light blue‑white */
+    --foreground: 216 5% 15%; /* dark charcoal-blue */
+    --card: 0 0% 100%; /* pure white */
+    --card-foreground: 216 5% 15%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 216 5% 15%;
+
+    /* Brand Primary */
+    --primary: 216 100% 89%; /* your light‑blue brand */
+    --primary-foreground: 216 5% 15%; /* text/icon on primary */
+
+    /* Secondary Palette */
+    --secondary: 216 50% 70%; /* mid‑tone blue */
+    --secondary-foreground: 216 5% 15%;
+
+    /* Muted / Subtle UI */
+    --muted: 216 20% 91%; /* very soft blue tint */
+    --muted-foreground: 216 5% 45%; /* medium gray‑blue */
+
+    /* Accent & Feedback */
+    --accent: 216 100% 89%; /* same as brand color */
+    --accent-foreground: 216 5% 15%; /* text/icon on accent */
+
+    --destructive: 0 84% 60%; /* vivid red for errors */
+    --destructive-foreground: 0 0% 98%; /* white text */
+
+    /* Borders, Inputs, Rings */
+    --border: 216 20% 85%; /* light border */
+    --input: 216 20% 85%;
+    --ring: 216 100% 70%; /* soft focus outline */
+
+    /* Radius */
+    --radius: 0.75rem;
+
+    /* Chart Colors (optional harmony) */
+    --chart-1: 216 100% 60%;
+    --chart-2: 216 70% 50%;
+    --chart-3: 216 50% 30%;
+    --chart-4: 43 74% 66%;
+    --chart-5: 27 87% 67%;
+  }
+
+  .dark {
+    /* Inverted neutrals */
+    --background: 216 50% 10%; /* deep midnight blue */
+    --foreground: 0 0% 98%; /* white */
+    --card: 216 50% 15%; /* dark card surface */
+    --card-foreground: 0 0% 98%;
+    --popover: 216 50% 15%;
+    --popover-foreground: 0 0% 98%;
+
+    /* Primary becomes light on dark */
+    --primary: 216 100% 89%; /* your light‑blue brand */
+    --primary-foreground: 216 50% 15%; /* text/icon on primary */
+
+    --secondary: 216 30% 30%; /* subtle dark secondary */
+    --secondary-foreground: 0 0% 98%; /* white text */
+
+    --muted: 216 30% 30%;
+    --muted-foreground: 216 20% 70%;
+
+    --accent: 216 100% 89%; /* same as brand color */
+    --accent-foreground: 216 50% 15%; /* text/icon on accent */
+
+    --destructive: 0 62.8% 30.6%; /* dark red for errors */
+    --destructive-foreground: 0 0% 98%; /* white text */
+
+    --border: 216 30% 30%;
+    --input: 216 30% 30%;
+    --ring: 216 100% 70%;
+
+    --chart-1: 216 70% 50%;
+    --chart-2: 160 60% 45%;
+    --chart-3: 30 80% 55%;
+    --chart-4: 280 65% 60%;
+    --chart-5: 340 75% 55%;
+  }
+}
+
+@tailwind components;
+@tailwind utilities;
+

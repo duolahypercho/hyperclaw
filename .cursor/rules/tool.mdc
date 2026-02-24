@@ -1,0 +1,40 @@
+---
+description: 
+globs: OS/**
+alwaysApply: false
+---
+The goal of OS is to create the AI Operator system that are like the Ironman Jarvis or the anime Doraemon that can do, help, companion with you for your life.
+
+OS folder contains all the Operator System codings
+
+#This will includes 
+
+/OS
+  /Layout
+    /Dialog
+      DialogConfirmation.tsx
+      DialogContext.tsx
+      DialogForm.tsx
+      DialogLayout.tsx
+      DialogSchema.ts
+      index.tsx
+    /Sidebar
+        CollapsibleSection.tsx
+        RowOrderSection.tsx
+        SidebarNavItem.tsx
+        SidebarSchema.ts
+        index.tsx
+    Form.tsx
+    index.tsx
+    RightContentLayout.tsx
+    SidebarTrigger.tsx
+    SideHeader.tsx
+    types.ts                  ← types
+  /Provider
+    OSProv.tsx
+    InteractAppProv.tsx
+  /utiles
+    contextMenu.ts
+  InteractApp.tsx                ← entry point
+
+  [InteractApp.tsx](mdc:OS/InteractApp.tsx)

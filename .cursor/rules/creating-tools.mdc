@@ -1,0 +1,365 @@
+# Creating a New Tool in Hypercho OS
+
+This guide explains how to create a new tool from scratch, following the established patterns in the codebase.
+
+## Overview
+
+A tool in Hypercho OS consists of several components:
+
+1. **Tool Component** - The main UI component (`components/Tool/[ToolName]/index.tsx`)
+2. **Provider** - State management and app schema (`components/Tool/[ToolName]/provider/[toolName]Provider.tsx`)
+3. **Page** - Next.js page wrapper (`pages/Tool/[ToolName].tsx`)
+4. **OS Integration** - Registration in OSProv and VirtualRouter
+5. **Virtual Component** - For instant navigation (`components/Tool/VirtualToolComponents.tsx`)
+
+## Step-by-Step Guide
+
+### 1. Create Tool Component Structure
+
+Create the following directory structure:
+
+```
+components/Tool/[ToolName]/
+├── index.tsx                    # Main tool component
+├── provider/
+│   └── [toolName]Provider.tsx   # State management provider
+└── components/                  # Tool-specific components (optional)
+    └── [ComponentName].tsx
+```
+
+#### Main Tool Component (`index.tsx`)
+
+```tsx
+import React from "react";
+import { InteractApp } from "@OS/InteractApp";
+import { use[ToolName] } from "./provider/[toolName]Provider";
+import [MainComponent] from "./components/[MainComponent]";
+
+const [ToolName] = () => {
+  const { appSchema } = use[ToolName]();
+  return (
+    <InteractApp appSchema={appSchema}>
+      <[MainComponent] />
+    </InteractApp>
+  );
+};
+
+export default [ToolName];
+```
+
+#### Provider (`provider/[toolName]Provider.tsx`)
+
+```tsx
+import {
+  createContext,
+  useContext,
+  ReactNode,
+  useMemo,
+} from "react";
+import { AppSchema, defaultAppSchema } from "@OS/Layout/types";
+
+interface [ToolName]ContextValue {
+  appSchema: AppSchema;
+  // Add other state/functions as needed
+}
+
+const initialState: [ToolName]ContextValue = {
+  appSchema: defaultAppSchema,
+  // Initialize other values
+};
+
+const [ToolName]Context = createContext<[ToolName]ContextValue>(initialState);
+
+export function [ToolName]Provider({ children }: { children: ReactNode }) {
+  const appSchema: AppSchema = useMemo(() => {
+    return {
+      sidebar: {
+        sections: [
+          // Define sidebar sections if needed
+        ],
+      },
+      // Add dialogs, detail panels, etc. as needed
+    };
+  }, []);
+
+  const value: [ToolName]ContextValue = {
+    appSchema,
+    // Add other values
+  };
+
+  return (
+    <[ToolName]Context.Provider value={value}>
+      {children}
+    </[ToolName]Context.Provider>
+  );
+}
+
+export function use[ToolName]() {
+  const context = useContext([ToolName]Context);
+  if (context === undefined) {
+    throw new Error("use[ToolName] must be used within a [ToolName]Provider");
+  }
+  return context;
+}
+```
+
+### 2. Create Next.js Page
+
+Create `pages/Tool/[ToolName].tsx`:
+
+```tsx
+import React from "react";
+import { getLayout } from "../../layouts/MainLayout";
+import { CopanionProvider } from "@OS/Provider/CopanionProv";
+import { SEOSchema } from "@OS/Provider/SEOProv";
+import [ToolName] from "$/components/Tool/[ToolName]";
+import { [ToolName]Provider } from "$/components/Tool/[ToolName]/provider/[toolName]Provider";
+
+const [toolName]SEOSchema: SEOSchema = {
+  title: "[Tool Name] - Copanion OS",
+  description: "[Tool description]",
+  url: "https://www.copanion.hypercho.com/Tool/[ToolName]",
+  image: "https://hypercho.com/hypercho_banner.png",
+  author: "Hypercho",
+  robots: "index,follow",
+  type: "software",
+  themeColor: "#000319",
+  // Add Twitter, OpenGraph, jsonLd as needed
+};
+
+const Index = () => {
+  return (
+    <CopanionProvider seoSchema={[toolName]SEOSchema}>
+      <[ToolName]Provider>
+        <[ToolName] />
+      </[ToolName]Provider>
+    </CopanionProvider>
+  );
+};
+
+Index.getLayout = getLayout;
+export default Index;
+```
+
+### 3. Register in OSProv
+
+#### 3.1 Add to OSSettings Interface
+
+In `OS/Provider/OSProv.tsx`, add to `OSSettings` interface:
+
+```tsx
+export interface OSSettings {
+  // ... existing settings
+  [toolName]: boolean;
+}
+```
+
+#### 3.2 Add to defaultOSSettings
+
+```tsx
+const defaultOSSettings: OSSettings = {
+  // ... existing defaults
+  [toolName]: false,
+};
+```
+
+#### 3.3 Add Context Type (if needed for widget)
+
+If the tool needs to be a draggable widget (like TodoList, Music Player), add:
+
+```tsx
+// In the context types section
+type [ToolName]ContextType = BaseWidgetContextType;
+
+const [ToolName]Context = createContext<[ToolName]ContextType | undefined>(
+  undefined
+);
+```
+
+#### 3.4 Add to ToolAbstracts
+
+```tsx
+const ToolAbstracts = useMemo(() => {
+  return [
+    // ... existing tools
+    {
+      id: "[tool-name]",
+      name: "[Tool Name]",
+      description: "[Tool description]",
+      icon: <[IconComponent] className="w-3.5 h-3.5" />,
+    },
+  ];
+}, []);
+```
+
+#### 3.5 Add to memoizedTools
+
+```tsx
+const memoizedTools = useMemo(
+  () => [
+    // ... existing tools
+    {
+      id: "[tool-name]",
+      name: "[Tool Name]",
+      description: "[Tool description]",
+      icon: <[IconComponent] className="w-3.5 h-3.5" />,
+      onClick: () => {
+        if (activeTool?.id === "[tool-name]") return;
+        createToolClickHandler("/Tool/[ToolName]", "[tool-name]")();
+      },
+      href: "/Tool/[ToolName]",
+    },
+  ],
+  [createToolClickHandler]
+);
+```
+
+#### 3.6 Add Context Provider (if widget)
+
+If it's a widget, add the context provider:
+
+```tsx
+const [toolName]Value: [ToolName]ContextType = useMemo(
+  () => ({
+    showState: memoizedOsSettings.[toolName],
+    isMounted,
+  }),
+  [memoizedOsSettings.[toolName], isMounted]
+);
+
+// In the return statement, add:
+<[ToolName]Context.Provider value={[toolName]Value}>
+  {/* other providers */}
+</[ToolName]Context.Provider>
+```
+
+#### 3.7 Export Hook (if widget)
+
+```tsx
+export const use[ToolName]OS = () => {
+  const context = useContext([ToolName]Context);
+  if (!context) {
+    throw new Error("use[ToolName]OS must be used within an OSProvider");
+  }
+  return context;
+};
+```
+
+### 4. Add to VirtualRouter
+
+#### 4.1 Create Virtual Component
+
+In `components/Tool/VirtualToolComponents.tsx`:
+
+```tsx
+// Add import if needed
+import { [IconComponent] } from "lucide-react"; // or appropriate icon library
+
+// Add virtual component
+export const Virtual[ToolName]: React.FC = () => (
+  <VirtualToolBase
+    toolName="[Tool Name]"
+    description="[Tool description]"
+    icon={<[IconComponent] />}
+  />
+);
+```
+
+#### 4.2 Register in MainLayout
+
+In `layouts/MainLayout.tsx`:
+
+```tsx
+// Add import
+import {
+  // ... existing imports
+  Virtual[ToolName],
+} from "$/components/Tool/VirtualToolComponents";
+
+// Add to virtualRoutes array
+const virtualRoutes = [
+  // ... existing routes
+  {
+    path: "/Tool/[ToolName]",
+    component: Virtual[ToolName],
+    name: "[Tool Name]",
+  },
+];
+```
+
+### 5. Add to STATIC_TOOL_ROUTES
+
+In `OS/Provider/OSProv.tsx`, add to the `STATIC_TOOL_ROUTES` array:
+
+```tsx
+const STATIC_TOOL_ROUTES = [
+  // ... existing routes
+  "/Tool/[ToolName]",
+];
+```
+
+## Complete Example: Statistics Tool
+
+Here's a real example from the Statistics tool:
+
+### File Structure
+
+```
+components/Tool/Statistics/
+├── index.tsx
+├── provider/
+│   └── statisticsProvider.tsx
+└── components/
+    ├── StatisticsContainer.tsx
+    └── ContributionHeatmap.tsx
+```
+
+### Key Points
+
+1. **Naming Convention**: Use PascalCase for component names, camelCase for IDs and variables
+2. **Provider Pattern**: Always use a provider for state management and app schema
+3. **InteractApp**: Wrap main content with `InteractApp` to enable sidebar, dialogs, etc.
+4. **Virtual Router**: Essential for instant navigation - must be registered
+5. **SEO Schema**: Include comprehensive SEO metadata in the page file
+6. **Icon Selection**: Use appropriate icons from `lucide-react` or `react-icons`
+
+## Testing Checklist
+
+- [ ] Tool appears in OS menu
+- [ ] Clicking tool navigates correctly
+- [ ] Virtual component shows during navigation
+- [ ] Page loads with correct layout
+- [ ] Provider context works correctly
+- [ ] App schema (sidebar, dialogs) functions properly
+- [ ] SEO metadata is correct
+- [ ] No console errors
+
+## Common Patterns
+
+### For Widget Tools (Draggable)
+
+- Add to `OSSettings` interface
+- Create context type extending `BaseWidgetContextType`
+- Add context provider in OSProv
+- Export `use[ToolName]OS` hook
+
+### For Page-Only Tools
+
+- Skip widget context setup
+- Focus on page and provider setup
+- Still need VirtualRouter registration
+
+### For Tools with Sidebar
+
+- Define `sidebar.sections` in `appSchema`
+- Use `menuItem` helper for context menus
+- Implement drag-and-drop if needed
+
+## Notes
+
+- Always follow the existing patterns in the codebase
+- Use TypeScript strictly - avoid `any` types
+- Keep components focused and single-responsibility
+- Use memoization for expensive computations
+- Follow the design system (Shadcn UI, Tailwind CSS)
+- Ensure accessibility and responsive design

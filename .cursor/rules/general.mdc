@@ -1,0 +1,202 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# General Development Rules
+
+## Path Aliases & Directory Structure
+
+- `$` refers to the **root** of the project. Use `$` to import anything from the root (e.g., `$components`, `$lib`, `$pages`).
+- `@` refers to the `src/` directory. Use `@` for anything inside `src/` (e.g., `@components`, `@lib`).
+- `$/components` contains **all custom components** for the application.
+- `@/components` (i.e., `src/components`) contains **shadcn/ui components** and other UI primitives.
+- All other folders can be accessed via `$` (root alias).
+
+**Import Examples:**
+```tsx
+// Import a custom component
+import MyCard from '$/components/MyCard'
+
+// Import a shadcn/ui component
+import { Button } from '@/components/ui/button'
+```
+
+## Component Usage
+- Use **shadcn/ui** components (from `@/components`) for all UI primitives and base elements.
+- Build your own custom, reusable components in `$components`.
+- Compose custom components using shadcn/ui primitives for consistency and scalability.
+
+## Best Practices
+- Always use TypeScript for type safety.
+- Prioritize accessibility (a11y) and responsive design.
+- Use Tailwind CSS for styling and maintain the project's color palette.
+- Favor composition over inheritance.
+- Keep components small, focused, and single-responsibility.
+- Use custom hooks to separate business logic from UI.
+- Write scalable, reusable, and professional code.
+- Always think from first principles: break down problems, question assumptions, and build up solutions from fundamentals.
+- Prioritize good user experience (UX): loading states, error handling, and smooth animations.
+
+## Documentation
+- Document all new components and utilities.
+- Update the main `README.md` and add directory-level `README.md` files if needed to clarify structure and usage.
+
+## Testing & Quality
+- Write unit and integration tests for critical logic.
+- Use strict TypeScript settings and avoid `any`.
+- Maintain code readability and consistent naming conventions.
+
+## Security & Performance
+- Sanitize all user input and handle errors gracefully.
+- Optimize for performance: lazy loading, memoization, and code splitting where appropriate.
+
+---
+
+**Summary:**
+- Use `$` for root imports, `@` for `src/` imports.
+- Custom components live in `$components`, shadcn/ui in `@components`.
+- Always use shadcn/ui for UI primitives, and build scalable, reusable, and professional code with a focus on UX and first principles thinking.
+
+## Code Organization and Structure
+
+1. **Component Architecture**
+   - Follow atomic design principles (atoms, molecules, organisms, templates, pages)
+   - Keep components small, focused, and single-responsibility
+   - Use composition over inheritance
+   - Implement proper prop typing with TypeScript
+   - Separate business logic from UI components using custom hooks
+
+2. **File Structure**
+   ```
+   $components/
+     ├── ui/           # Reusable UI components (shadcn/ui)
+     ├── features/     # Feature-specific components
+     ├── layouts/      # Layout components
+     └── shared/       # Shared components across features
+
+   $components/
+     ├── ui/           # Reusable UI components (shadcn/ui)
+     ├── features/     # Feature-specific components
+     ├── layouts/      # Layout components
+     └── shared/       # Shared components across features
+   ```
+
+## UI/UX Guidelines
+
+1. **Component Design**
+   - Use shadcn/ui as the primary component library
+   - Maintain consistent spacing using CSS variables
+   - Implement responsive design using Tailwind's breakpoints
+   - Follow accessibility best practices (ARIA labels, keyboard navigation)
+   - Use semantic HTML elements
+
+2. **User Experience**
+   - Implement loading states for async operations
+   - Provide meaningful error messages
+   - Use skeleton loaders for content loading
+   - Implement proper form validation with immediate feedback
+   - Maintain consistent animations and transitions
+
+## State Management
+
+1. **Data Flow**
+   - Use React Query for server state management
+   - Implement proper caching strategies
+   - Use Zustand for global state management
+   - Keep state as local as possible
+   - Implement proper error boundaries
+
+2. **Performance**
+   - Use React.memo for expensive computations
+   - Implement proper code splitting
+   - Use proper dependency arrays in hooks
+   - Optimize re-renders using useMemo and useCallback
+   - Implement proper lazy loading
+
+## Code Quality
+
+1. **TypeScript**
+   - Use strict type checking
+   - Create proper interfaces and types
+   - Avoid using 'any' type
+   - Use proper type guards
+   - Implement proper error handling types
+
+2. **Testing**
+   - Write unit tests for business logic
+   - Implement integration tests for critical flows
+   - Use proper mocking strategies
+   - Maintain good test coverage
+   - Follow AAA pattern (Arrange, Act, Assert)
+
+## First Principles Thinking
+
+1. **Problem Solving**
+   - Break down complex problems into smaller parts
+   - Question assumptions
+   - Build from the ground up
+   - Consider edge cases
+   - Think about scalability from the start
+
+2. **Architecture**
+   - Design for change
+   - Implement proper separation of concerns
+   - Use dependency injection
+   - Follow SOLID principles
+   - Consider future maintenance
+
+## Best Practices
+
+1. **Code Style**
+   - Use consistent naming conventions
+   - Write self-documenting code
+   - Keep functions pure when possible
+   - Use proper error handling
+   - Implement proper logging
+
+2. **Documentation**
+   - Write clear component documentation
+   - Document complex business logic
+   - Maintain up-to-date README files
+   - Use proper JSDoc comments
+   - Document API endpoints
+
+## Security
+
+1. **Data Protection**
+   - Implement proper authentication
+   - Use proper authorization checks
+   - Sanitize user inputs
+   - Implement proper CORS policies
+   - Use secure communication protocols
+
+2. **Error Handling**
+   - Implement proper error boundaries
+   - Use proper error logging
+   - Provide user-friendly error messages
+   - Handle edge cases gracefully
+   - Implement proper fallbacks
+
+## Performance Optimization
+
+1. **Loading**
+   - Implement proper code splitting
+   - Use proper lazy loading
+   - Optimize bundle size
+   - Use proper caching strategies
+   - Implement proper preloading
+
+2. **Rendering**
+   - Optimize re-renders
+   - Use proper memoization
+   - Implement virtual scrolling for large lists
+   - Use proper image optimization
+   - Implement proper debouncing and throttling
+
+
+
+
+
+
+

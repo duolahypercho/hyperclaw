@@ -1,0 +1,389 @@
+@use "../abstracts" as *;
+@use "./Logo";
+@-webkit-keyframes hvr-icon-hang {
+  0% {
+    -webkit-transform: translateY(6px);
+    transform: translateY(6px);
+  }
+  50% {
+    -webkit-transform: translateY(2px);
+    transform: translateY(2px);
+  }
+  100% {
+    -webkit-transform: translateY(6px);
+    transform: translateY(6px);
+  }
+}
+@keyframes hvr-icon-hang {
+  0% {
+    -webkit-transform: translateY(3px);
+    transform: translateY(3px);
+  }
+  50% {
+    -webkit-transform: translateY(0px);
+    transform: translateY(0px);
+  }
+  100% {
+    -webkit-transform: translateY(3px);
+    transform: translateY(3px);
+  }
+}
+@-webkit-keyframes hvr-icon-hang-sink {
+  100% {
+    -webkit-transform: translateY(3px);
+    transform: translateY(3px);
+  }
+}
+@keyframes hvr-icon-hang-sink {
+  100% {
+    -webkit-transform: translateY(3px);
+    transform: translateY(3px);
+  }
+}
+.hvr-icon-hang {
+  display: inline-block;
+  vertical-align: middle;
+  -webkit-transform: perspective(1px) translateZ(0);
+  transform: perspective(1px) translateZ(0);
+  box-shadow: 0 0 1px rgba(0, 0, 0, 0);
+  -webkit-transition-duration: 0.3s;
+  transition-duration: 0.3s;
+}
+.hvr-icon-hang .hvr-icon {
+  -webkit-transform: translateZ(0);
+  transform: translateZ(0);
+}
+.hvr-icon-hang:hover .hvr-icon,
+.hvr-icon-hang:focus .hvr-icon,
+.hvr-icon-hang:active .hvr-icon {
+  -webkit-animation-name: hvr-icon-hang-sink, hvr-icon-hang;
+  animation-name: hvr-icon-hang-sink, hvr-icon-hang;
+  -webkit-animation-duration: 0.3s, 1.5s;
+  animation-duration: 0.3s, 1.5s;
+  -webkit-animation-delay: 0s, 0.3s;
+  animation-delay: 0s, 0.3s;
+  -webkit-animation-timing-function: ease-out, ease-in-out;
+  animation-timing-function: ease-out, ease-in-out;
+  -webkit-animation-iteration-count: 1, infinite;
+  animation-iteration-count: 1, infinite;
+  -webkit-animation-fill-mode: forwards;
+  animation-fill-mode: forwards;
+  -webkit-animation-direction: normal, alternate;
+  animation-direction: normal, alternate;
+}
+
+@mixin sidebar() {
+  .sidebar {
+    width: 4.6rem;
+    min-width: 4.6rem;
+    max-width: 4.6rem;
+    height: 100%;
+    background-color: dark(sidebar, 1);
+    transition: all 0.3s ease;
+    .sec {
+      ul {
+        list-style-type: none;
+        display: flex;
+        align-items: center;
+        flex-direction: column;
+        li {
+          color: dark(sidebar, font);
+          font-size: 1.5rem;
+          width: 100%;
+          height: 4.5rem;
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
+          align-items: center;
+          cursor: pointer;
+          &:hover {
+            color: dark(sidebar, font-hover);
+            background-color: dark(sidebar, element-hover);
+            .hvr-hang {
+              -webkit-animation-name: hvr-icon-hang-sink, hvr-icon-hang;
+              animation-name: hvr-icon-hang-sink, hvr-icon-hang;
+              -webkit-animation-duration: 0.3s, 1.5s;
+              animation-duration: 0.3s, 1.5s;
+              -webkit-animation-delay: 0s, 0.3s;
+              animation-delay: 0s, 0.3s;
+              -webkit-animation-timing-function: ease-out, ease-in-out;
+              animation-timing-function: ease-out, ease-in-out;
+              -webkit-animation-iteration-count: 1, infinite;
+              animation-iteration-count: 1, infinite;
+              -webkit-animation-fill-mode: forwards;
+              animation-fill-mode: forwards;
+              -webkit-animation-direction: normal, alternate;
+              animation-direction: normal, alternate;
+            }
+          }
+          &:active {
+            color: dark(sidebar, font-active);
+            background-color: dark(sidebar, element-active);
+          }
+          .elementText {
+            font-size: 0.72rem;
+          }
+        }
+        .userIcon {
+          width: 42px;
+          height: 42px;
+          border-radius: 50%;
+
+          overflow: hidden;
+        }
+        .userActiveIcon {
+          @extend .userIcon;
+          border-radius: 30%;
+        }
+        .active {
+          background-color: dark(sidebar, element-active);
+          color: dark(sidebar, font-active);
+          font-weight: 500;
+          &:hover {
+            background-color: dark(sidebar, element-active-hover);
+          }
+          &:active {
+            background-color: dark(sidebar, element-active-active);
+          }
+          .icon {
+            color: dark(sidebar, font-active);
+          }
+        }
+      }
+    }
+    .main {
+      display: none;
+      height: 100%;
+      background-color: dark(sidebar, 1);
+      .ulwrapper {
+        height: calc(100% - 3.5rem);
+        overflow: auto;
+        overflow-x: hidden;
+        .top {
+          display: none;
+          height: 100%;
+          button {
+            background-color: transparent;
+            flex-shrink: 0;
+            border: none;
+            color: clr(neutral, 0);
+            width: 3.2rem;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            font-size: 1.4rem;
+            align-items: center;
+            cursor: pointer;
+          }
+
+          @include Logo.Logo();
+
+          @media screen and (max-width: 1200px) {
+            display: flex;
+            height: 3.5rem;
+          }
+          @media screen and (max-width: 750px) {
+            display: flex;
+            height: 3.5rem;
+          }
+        }
+
+        ul {
+          height: 100%;
+          user-select: none;
+          list-style-type: none;
+          display: flex;
+          align-items: center;
+          flex-direction: column;
+          //main list
+          li {
+            flex-shrink: 0;
+            color: dark(sidebar, font);
+            font-size: 1rem;
+            width: 100%;
+            height: 3rem;
+            padding-left: 1rem;
+            display: flex;
+            align-items: center;
+            white-space: nowrap;
+            cursor: pointer;
+            .icon {
+              font-size: 1.3rem;
+              margin-right: 1.2rem;
+            }
+
+            &:hover {
+              color: dark(sidebar, font-hover);
+              background-color: dark(sidebar, element-hover);
+              .hvr-hang {
+                -webkit-animation-name: hvr-icon-hang-sink, hvr-icon-hang;
+                animation-name: hvr-icon-hang-sink, hvr-icon-hang;
+                -webkit-animation-duration: 0.3s, 1.5s;
+                animation-duration: 0.3s, 1.5s;
+                -webkit-animation-delay: 0s, 0.3s;
+                animation-delay: 0s, 0.3s;
+                -webkit-animation-timing-function: ease-out, ease-in-out;
+                animation-timing-function: ease-out, ease-in-out;
+                -webkit-animation-iteration-count: 1, infinite;
+                animation-iteration-count: 1, infinite;
+                -webkit-animation-fill-mode: forwards;
+                animation-fill-mode: forwards;
+                -webkit-animation-direction: normal, alternate;
+                animation-direction: normal, alternate;
+              }
+            }
+          }
+          //subsription
+          .subs {
+            flex-shrink: 0;
+            color: dark(sidebar, font);
+            font-size: 1rem;
+            width: 100%;
+            height: 3rem;
+            padding-left: 1rem;
+            display: flex;
+            align-items: center;
+            cursor: pointer;
+            .imageCont {
+              cursor: pointer;
+              border-radius: 50%;
+              border: none;
+              height: 30px;
+              width: 30px;
+              flex-shrink: 0;
+              overflow: hidden;
+              margin-right: 1.1rem;
+              transition: border-radius ease-out 0.3s;
+              .image {
+                object-fit: cover;
+                width: 100%;
+                -webkit-user-drag: none;
+                height: 100%;
+              }
+            }
+
+            &:hover {
+              color: dark(sidebar, font-hover);
+              background-color: dark(sidebar, element-hover);
+              .imageCont {
+                border-radius: 35%;
+              }
+            }
+          }
+          //title
+          .listTitle {
+            flex-shrink: 0;
+            width: 100%;
+            padding-left: 1rem;
+            color: dark(sidebar, font-title);
+            font-weight: 600;
+            font-size: 0.9rem;
+            margin: 0.5rem 0;
+            letter-spacing: 0.08rem;
+            text-align: flex-start;
+          }
+          //active state
+          .active {
+            background-color: dark(sidebar, element-active);
+            color: dark(sidebar, font-active);
+            font-weight: 500;
+            .icon {
+              color: dark(sidebar, font-active);
+            }
+          }
+          //line
+          hr {
+            flex-shrink: 0;
+
+            width: 95%;
+            border: none;
+            height: 1px;
+            margin: 0.5rem 0;
+            background-color: transparent;
+          }
+          //for signin
+          .signincont {
+            flex-shrink: 0;
+            width: 100%;
+            height: 3rem;
+            padding-left: 0rem !important;
+
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            left: 0;
+            &:hover {
+              background-color: transparent;
+            }
+          }
+          //   sign in text
+          .signinconttext {
+            width: 80%;
+            margin-bottom: 0.5rem;
+            color: clr(neutral, 0);
+            margin-top: 10px;
+            font-weight: 300;
+            font-size: 1rem;
+          }
+
+          //media query for ul
+          @media screen and (max-width: 1200px) {
+            height: calc(100% - 3.5rem);
+          }
+          @media screen and (max-width: 750px) {
+            height: calc(100% - 3.5rem);
+          }
+        }
+
+        @media screen and (max-width: 1200px) {
+          height: 100%;
+        }
+        @media screen and (max-width: 750px) {
+          height: 100%;
+        }
+      }
+    }
+
+    //css for the empty space that users click which will close the nav
+    .closingBody {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-color: red;
+    }
+    @media screen and (max-width: 1200px) {
+      height: 100%;
+      position: relative;
+      top: 0;
+      left: 0;
+    }
+    @media screen and (max-width: 750px) {
+      height: 100%;
+      position: relative;
+      top: 0;
+      left: 0;
+    }
+    @media screen and (min-width: 1201px) and (min-height: 751px) {
+      .main {
+        margin-top: 6%;
+      }
+    }
+
+    &[aria-disabled="true"] {
+      width: 240px;
+      .sec {
+        display: none;
+      }
+      .main {
+        display: block;
+        border: none;
+      }
+      @media screen and (max-width: 569px) {
+        display: none;
+      }
+    }
+  }
+}

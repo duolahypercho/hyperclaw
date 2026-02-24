@@ -1,0 +1,108 @@
+{
+  "categories": [
+    "All prompts",
+    "Provide value",
+    "Be open & vulnerable",
+    "Engagement",
+    "Weekend",
+    "Evergreen",
+    "Just Happening",
+    "Build in Public",
+    "Personal Growth",
+    "Tech Insights",
+    "Career Advice",
+    "Productivity Tips"
+  ],
+  "prompts": [
+    {
+      "title": "Make a bold, provoking observation",
+      "description": "It might be something that you genuinely think, but taken to its extreme.\n\nBold statements capture people's interest and spark conversations.",
+      "categories": ["All prompts", "Engagement"],
+      "aiInstructions": "Create a thought-provoking statement that challenges common beliefs. Support it with 2-3 specific examples or data points. End with a clear call to action that encourages discussion."
+    },
+    {
+      "title": "Repurpose a frequently asked question",
+      "description": "Take a common question and give it your unique spin.\n\nThis helps others learn from your experience and builds your authority in your field.",
+      "categories": ["All prompts", "Provide value"],
+      "aiInstructions": "Identify a common question in your field. Provide a detailed answer with 2-3 real examples from your experience. Include specific, actionable steps readers can implement immediately."
+    },
+    {
+      "title": "Share a weekend experience or plan",
+      "description": "Share what you're doing or planning for the weekend.\n\nPersonal stories create connections and make your content more relatable.",
+      "categories": ["All prompts", "Weekend", "Involve your audience"],
+      "aiInstructions": "Create a personal weekend story with specific details about activities, feelings, and learnings. Include 2-3 questions that encourage audience interaction and sharing."
+    },
+    {
+      "title": "Share your transformation story",
+      "description": "Tell a story of how you changed or grew.\n\nTransformation stories inspire others and show your journey isn't perfect.",
+      "categories": ["All prompts", "Be open & vulnerable"],
+      "aiInstructions": "Write a personal transformation story with specific before/after states. Include 2-3 key turning points and 3 actionable lessons others can apply to their own journey."
+    },
+    {
+      "title": "Daily plan or routine reveal",
+      "description": "Share your daily schedule and why it works for you.\n\nRoutines show your work style and help others improve their productivity.",
+      "categories": ["All prompts", "Evergreen"],
+      "aiInstructions": "Detail your daily routine with specific time blocks and activities. Explain the purpose of each component and provide 3 practical tips for implementation, including common pitfalls to avoid."
+    },
+    {
+      "title": "Create a step-by-step guide",
+      "description": "Break down a process you know well into simple steps.\n\nClear guides help others learn and establish you as an expert.",
+      "categories": ["All prompts", "Provide value"],
+      "aiInstructions": "Create a clear, sequential guide with 3-5 specific steps. Include one concrete example for each step and 2-3 common mistakes to avoid. End with clear success metrics."
+    },
+    {
+      "title": "Share a recent breakthrough",
+      "description": "Share something you recently learned or achieved.\n\nRecent wins show your current journey and keep your content fresh.",
+      "categories": ["All prompts", "Just Happening"],
+      "aiInstructions": "Write a detailed success story with specific metrics and results. Include 2-3 key challenges faced, how they were overcome, and 3 actionable insights for others to apply."
+    },
+    {
+      "title": "Industry trend analysis",
+      "description": "Share your thoughts on where things are heading.\n\nTrend insights help others prepare for the future and show your expertise.",
+      "categories": ["All prompts", "Build in Public"],
+      "aiInstructions": "Analyze a current trend with 2-3 specific examples or data points. Provide 3 actionable steps for adaptation and 2-3 specific predictions for the next 6-12 months."
+    },
+    {
+      "title": "Share a tech stack revelation",
+      "description": "Show what tools you use and why you chose them.\n\nTech stack insights help others make better tool choices and show your workflow.",
+      "categories": ["All prompts", "Tech Insights", "Build in Public"],
+      "aiInstructions": "Detail your tech stack with specific use cases for each tool. Include 2-3 pros and cons for each tool, 3 key lessons learned, and 2-3 specific improvements you'd make."
+    },
+    {
+      "title": "Career pivot story",
+      "description": "Share how you changed your career path.\n\nCareer stories inspire others to make changes and show it's never too late.",
+      "categories": ["All prompts", "Career Advice", "Personal Growth"],
+      "aiInstructions": "Write a detailed career transition story with specific dates and milestones. Include 3 key challenges faced, how they were overcome, and 3 actionable pieces of advice for others."
+    },
+    {
+      "title": "Productivity system breakdown",
+      "description": "Show how you stay productive and organized.\n\nProductivity systems help others work better and show your work style.",
+      "categories": ["All prompts", "Productivity Tips", "Evergreen"],
+      "aiInstructions": "Detail your productivity system with specific tools and methods. Include 3 concrete examples of how you use each tool, 2-3 common pitfalls, and specific metrics showing your results."
+    },
+    {
+      "title": "Learning journey insights",
+      "description": "Share how you learned something new.\n\nLearning stories show your growth mindset and help others learn faster.",
+      "categories": ["All prompts", "Personal Growth", "Provide value"],
+      "aiInstructions": "Create a detailed learning journey with specific milestones and resources used. Include 3 key challenges faced, how they were overcome, and 3 actionable tips for others starting the same journey."
+    },
+    {
+      "title": "Tech tool comparison",
+      "description": "Compare tools you've used and share your thoughts.\n\nTool comparisons help others make better choices and show your experience.",
+      "categories": ["All prompts", "Tech Insights", "Provide value"],
+      "aiInstructions": "Compare 2-3 tools with specific use cases for each. Include 3 key differences, 2-3 pros and cons for each tool, and clear recommendations based on different scenarios."
+    },
+    {
+      "title": "Remote work tips",
+      "description": "Share how you make remote work successful.\n\nRemote work insights help others work better from home and show your adaptability.",
+      "categories": ["All prompts", "Productivity Tips", "Evergreen"],
+      "aiInstructions": "Detail your remote work setup and routine with specific tools and methods. Include 3 concrete examples of challenges faced, how they were solved, and 3 actionable tips for maintaining productivity."
+    },
+    {
+      "title": "Project post-mortem",
+      "description": "Share what you learned from a completed project.\n\nPost-mortems help others avoid mistakes and show your learning process.",
+      "categories": ["All prompts", "Build in Public", "Tech Insights"],
+      "aiInstructions": "Write a detailed project analysis with specific metrics and outcomes. Include 3 key successes, 3 challenges faced, how they were addressed, and 3 actionable insights for future projects."
+    }
+  ]
+}

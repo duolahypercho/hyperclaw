@@ -1,0 +1,96 @@
+{
+  "name": "Copanion",
+  "version": "0.1.0",
+  "description": "Hypercho Copanion - AI-powered desktop application",
+  "author": "Hypercho",
+  "main": "main.js",
+  "dependencies": {
+    "electron-updater": "^6.1.7"
+  },
+  "devDependencies": {
+    "electron": "^39.2.7",
+    "electron-builder": "^24.13.3",
+    "cross-env": "^7.0.3"
+  },
+  "build": {
+    "appId": "com.hypercho.copanion",
+    "productName": "Copanion",
+    "asar": true,
+    "directories": {
+      "output": "dist-electron"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "app-config.json",
+      "../public/**/*"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "../public/win.ico",
+      "publisherName": "Hypercho",
+      "verifyUpdateCodeSignature": false
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "../public/Logopic.png",
+      "category": "public.app-category.productivity",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
+    "dmg": {
+      "title": "Copanion",
+      "artifactName": "Copanion-MacOS-${version}.${ext}",
+      "contents": [
+        {
+          "x": 380,
+          "y": 280,
+          "type": "link",
+          "path": "/Applications"
+        },
+        {
+          "x": 110,
+          "y": 280,
+          "type": "file"
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "allowElevation": true,
+      "runAfterFinish": true,
+      "artifactName": "Copanion-Setup-Local-${version}.${ext}",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Copanion",
+      "menuCategory": false,
+      "displayLanguageSelector": false,
+      "uninstallDisplayName": "Copanion"
+    }
+  },
+  "scripts": {
+    "electron:build:win:local": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win",
+    "electron:build:win:remote": "node scripts/set-config.js remote && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win",
+    "electron:build:win:portable": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win --config.win.target=portable",
+    "electron:build:mac:local": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --config.mac.target=zip",
+    "electron:build:mac:remote": "node scripts/set-config.js remote && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac",
+    "electron:build:mac:dmg": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --config.mac.target=dmg",
+    "electron:build:mac:zip": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --config.mac.target=zip"
+  }
+}

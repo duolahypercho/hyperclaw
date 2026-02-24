@@ -1,0 +1,79 @@
+{
+  "Type": "Expression",
+  "Parameters": [
+    {
+      "Id": "ParamMouthOpenY",
+      "Value": 0.5
+    },
+    {
+      "Id": "ParamMouthForm",
+      "Value": 0.0
+    },
+    {
+      "Id": "ParamEyeLOpen",
+      "Value": 0.7
+    },
+    {
+      "Id": "ParamEyeROpen",
+      "Value": 0.7
+    },
+    {
+      "Id": "ParamEyeLSmile",
+      "Value": 0.7
+    },
+    {
+      "Id": "ParamEyeRSmile",
+      "Value": 0.7
+    },
+    {
+      "Id": "ParamBrowLY",
+      "Value": -1.5
+    },
+    {
+      "Id": "ParamBrowRY",
+      "Value": -1.5
+    },
+    {
+      "Id": "ParamBrowLAngle",
+      "Value": -2.0
+    },
+    {
+      "Id": "ParamBrowRAngle",
+      "Value": 2.0
+    },
+    {
+      "Id": "ParamAngleX",
+      "Value": 0.0
+    },
+    {
+      "Id": "ParamAngleY",
+      "Value": 0.0
+    },
+    {
+      "Id": "ParamAngleZ",
+      "Value": 0.0
+    },
+    {
+      "Id": "ParamBodyAngleX",
+      "Value": 0.0
+    },
+    {
+      "Id": "ParamBodyAngleY",
+      "Value": 0.0
+    },
+    {
+      "Id": "ParamBodyAngleZ",
+      "Value": 0.0
+    },
+    {
+      "Id": "ParamEyeBallX",
+      "Value": 0.0
+    },
+    {
+      "Id": "ParamEyeBallY",
+      "Value": 0.0
+    }
+  ],
+  "FadeInTime": 0.4,
+  "FadeOutTime": 0.4
+}

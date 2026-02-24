@@ -1,0 +1,967 @@
+@use "../abstracts" as *;
+@use "../components/Sliders" as SliderComponents;
+
+@-webkit-keyframes opacity {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@-webkit-keyframes change {
+  0%,
+  12.66%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  16.66%,
+  29.32% {
+    transform: translate3d(0, -25%, 0);
+  }
+  33.32%,
+  45.98% {
+    transform: translate3d(0, -50%, 0);
+  }
+  49.98%,
+  62.64% {
+    transform: translate3d(0, -75%, 0);
+  }
+  66.64%,
+  79.3% {
+    transform: translate3d(0, -50%, 0);
+  }
+  83.3%,
+  95.96% {
+    transform: translate3d(0, -25%, 0);
+  }
+}
+
+@-o-keyframes opacity {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@-o-keyframes change {
+  0%,
+  12.66%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  16.66%,
+  29.32% {
+    transform: translate3d(0, -25%, 0);
+  }
+  33.32%,
+  45.98% {
+    transform: translate3d(0, -50%, 0);
+  }
+  49.98%,
+  62.64% {
+    transform: translate3d(0, -75%, 0);
+  }
+  66.64%,
+  79.3% {
+    transform: translate3d(0, -50%, 0);
+  }
+  83.3%,
+  95.96% {
+    transform: translate3d(0, -25%, 0);
+  }
+}
+
+@-moz-keyframes opacity {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@-moz-keyframes change {
+  0%,
+  12.66%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  16.66%,
+  29.32% {
+    transform: translate3d(0, -25%, 0);
+  }
+  33.32%,
+  45.98% {
+    transform: translate3d(0, -50%, 0);
+  }
+  49.98%,
+  62.64% {
+    transform: translate3d(0, -75%, 0);
+  }
+  66.64%,
+  79.3% {
+    transform: translate3d(0, -50%, 0);
+  }
+  83.3%,
+  95.96% {
+    transform: translate3d(0, -25%, 0);
+  }
+}
+
+@keyframes opacity {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes change {
+  0%,
+  12.66%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  16.66%,
+  29.32% {
+    transform: translate3d(0, -25%, 0);
+  }
+  33.32%,
+  45.98% {
+    transform: translate3d(0, -50%, 0);
+  }
+  49.98%,
+  62.64% {
+    transform: translate3d(0, -75%, 0);
+  }
+  66.64%,
+  79.3% {
+    transform: translate3d(0, -50%, 0);
+  }
+  83.3%,
+  95.96% {
+    transform: translate3d(0, -25%, 0);
+  }
+}
+/* The typing effect */
+@keyframes typing {
+  from {
+    width: 0;
+  }
+  to {
+    width: 100%;
+  }
+}
+
+/* The typewriter cursor effect */
+@keyframes blink-caret {
+  from,
+  to {
+    border-color: transparent;
+  }
+  50% {
+    border-color: dark(primary, font);
+  }
+}
+@mixin indexPage() {
+  .indexPage {
+    width: 100%;
+    .HomeCategory {
+      margin-bottom: 0.5rem;
+      display: flex;
+      align-items: center;
+      top: 4rem;
+      z-index: 200;
+      transition: 0.3s all ease;
+      position: sticky;
+      position: -webkit-sticky;
+      background-color: transparent;
+      backdrop-filter: blur(6px);
+      padding-left: 2rem;
+      padding-right:2rem;
+      
+      @include SliderComponents.Sliders();
+      @media screen and (max-width: 680px) {
+        padding-left: 0px;
+        padding-right: 0px;
+      }
+      @media screen and (max-width: 500px) {
+        padding-left: 3%;
+        padding-right: 3%;
+      }
+      @media screen and (max-width: 433px) {
+        padding-left: 5px;
+        padding-right: 5px;
+      }
+      
+    }
+    .homeActive {
+      border-color: clr(neutral, 3c);
+      border-style: solid;
+      top: 3.45rem;
+      border-width: 1px 0px 1px 0px;
+    }
+    .videoSection {
+      width: 100%;
+      padding-left: 2rem;
+      padding-right:2rem;
+      border-bottom: none;
+      @media screen and (max-width: 680px) {
+        padding: 0;
+      }
+    }
+  }
+  .homeInfo {
+    width: 100%;
+    display: flex;
+    justify-content: center;
+    flex-direction: column;
+    overflow: hidden;
+    .landingImage {
+      width: 100vw;
+      height: 100svh;
+      position: relative;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+
+      .facadeHover {
+        //to make the facade hover effect
+        position: absolute;
+        width: 700dvh;
+        height: 700dvh;
+        background: linear-gradient(60deg, rgba(0, 0, 0, 0.6), #000);
+        opacity: 0.7;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        flex-direction: column;
+      }
+      .headerLine {
+        position: absolute;
+        //center of the screen
+        width: 90%;
+        height: 90%;
+        z-index: 1;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: flex-start;
+
+        gap: 10px;
+        h1 {
+          font-size: 6em;
+          color: white;
+          font-weight: 500;
+        }
+
+        .startedButton {
+          //started now button
+          padding: 0.9rem 2.1rem;
+          border-radius: 5px;
+          color: white;
+          font-size: 1.5em;
+          font-weight: 600;
+          border: none;
+          cursor: pointer;
+          transition: 0.3s all ease;
+          background-color: dark(button, 1);
+          a {
+            color: dark(button, font);
+            text-decoration: none;
+          }
+          &:hover {
+            background-color: dark(button, 1-hover);
+          }
+          &:active {
+            background-color: dark(button, 1-active);
+          }
+        }
+        .content {
+          display: flex;
+          flex-direction: row;
+          overflow: hidden;
+          font-size: 6em;
+          line-height: 150px;
+          color: #ecf0f1;
+
+          &__container {
+            font-weight: 600;
+            overflow: hidden;
+            height: 150px;
+            position: relative;
+            padding: 0 40px;
+
+            &:before {
+              content: "[";
+              left: 0;
+            }
+
+            &:after {
+              content: "]";
+              right: 0;
+              position: absolute;
+            }
+
+            &:after,
+            &:before {
+              position: absolute;
+              top: 0;
+
+              color: #8d96f9;
+              font-size: 90px;
+              line-height: 150px;
+
+              -webkit-animation-name: opacity;
+              -webkit-animation-duration: 2s;
+              -webkit-animation-iteration-count: infinite;
+              animation-name: opacity;
+              animation-duration: 2s;
+              animation-iteration-count: infinite;
+            }
+
+            &__text {
+              display: inline;
+              float: left;
+              margin: 0;
+              font-weight: 600;
+            }
+
+            &__list {
+              margin-top: 0;
+              text-align: left;
+              list-style: none;
+
+              -webkit-animation-name: change;
+              -webkit-animation-duration: 10s;
+              -webkit-animation-iteration-count: infinite;
+              animation-name: change;
+              animation-duration: 10s;
+              animation-iteration-count: infinite;
+
+              &__item {
+                line-height: 150px;
+                margin: 0;
+                color: clr(primary, 1);
+                font-weight: 600;
+                transition: 0.5s;
+                @media screen and (max-width: 1024px) {
+                  line-height: 100px;
+                }
+                @media screen and (max-width: 750px) {
+                  line-height: 70px;
+                }
+                @media screen and (max-width: 550px) {
+                  line-height: 50px;
+                }
+                @media screen and (max-width: 480px) {
+                  line-height: 60px;
+                }
+              }
+            }
+          }
+        }
+      }
+      .parallax {
+        img {
+          width: 100%;
+          height: 100%;
+          position: absolute;
+          top: 0;
+          left: 0;
+          opacity: 0.5;
+          pointer-events: none;
+          user-select: none;
+          z-index: 0;
+          transform-origin: 10px 100px; /* Set the transform origin to the top-left corner */
+          transform: scale(10); /* Scale the element by 1.5 times */
+        }
+      }
+    }
+    .introductionPage {
+      width: 100vw;
+      position: relative;
+      display: flex;
+      justify-content: space-around;
+      align-items: center;
+      background-color: transparent;
+      flex-direction: column;
+
+      .headerLine {
+        z-index: 1;
+        display: flex;
+        flex-direction: row;
+        width: 90%;
+        gap: 3em;
+        margin-top: 15%;
+
+        //transfrom x axis to make it invisible outside the screen
+        //make t he transform effect
+
+        .imageContainer {
+          width: 50%;
+          height: 60%;
+          #controls {
+            z-index: 2;
+            margin: 20px;
+            position: absolute;
+            top: 0;
+            left: 0;
+            color: white;
+          }
+
+          transform: translateX(150%);
+        }
+      }
+      .active {
+        .imageContainer {
+          transform: translateX(0);
+        }
+        .textContainer {
+          .content {
+            opacity: 1;
+          }
+        }
+        .sectionField {
+          transform: translateY(0) !important;
+          opacity: 1 !important;
+        }
+        .startedButton {
+          transform: translateY(0) !important;
+          opacity: 1 !important;
+        }
+      }
+      .sectionDropdown {
+        width: 90%;
+        margin-top: 15%;
+        z-index: 1;
+        .sectionField {
+          display: flex;
+          flex-direction: column;
+          width: 80%;
+          margin-top: 1rem;
+          gap: 1rem;
+          opacity: 0;
+          transform: translateY(-100%);
+          transition: all 2s ease;
+          .section {
+            //started now button
+            background-color: dark(button, 1-lighter);
+            .headerSection {
+              padding: 0.9rem 2.1rem;
+              border-radius: 5px;
+              color: white;
+              font-size: 1.5em;
+              font-weight: 600;
+              border: none;
+              cursor: pointer;
+              transition: 0.3s all ease;
+              display: flex;
+              flex-direction: row;
+              justify-content: space-between;
+              align-items: center;
+              span {
+                //disable the text selection
+                user-select: none;
+              }
+              &:hover {
+                background-color: dark(button, 1-hover);
+              }
+              &:active {
+                background-color: dark(button, 1-active);
+              }
+              .icon {
+                margin-right: 10px;
+              }
+            }
+            .sectionContent {
+              max-height: 0;
+              padding: 0 2.1rem;
+              overflow: hidden;
+              transition: max-height 0.3s ease-out, padding 0.3s ease-out;
+              display: flex;
+              flex-direction: column;
+              p {
+                font-size: 1em;
+                font-weight: 400;
+                margin-bottom: 1%;
+
+                color: dark(primary, 8);
+                overflow: hidden; /* Ensures the content is not revealed until the animation */
+                span {
+                  font-weight: 600;
+                  color: white;
+                }
+              }
+            }
+            .sectionContentActive {
+              padding: 0.9rem 2.1rem;
+              max-height: 500px; /* or enough height to show your content */
+              transition: max-height 0.5s ease-in, padding 0.5s ease-in;
+            }
+          }
+        }
+      }
+      .textContainer {
+        height: fit-content;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        margin-bottom: 3%;
+        h1 {
+          font-size: 4em;
+          color: white;
+          font-weight: 500;
+        }
+
+        h2 {
+          font-size: 1.8em;
+          font-weight: 500;
+          color: clr(neutral, 2);
+        }
+        .content {
+          transition: all 2s; /* Change properties over 2 seconds */
+          width: 80%;
+          opacity: 0;
+          p {
+            width: fit-content;
+            font-size: 1.4em;
+            color: dark(primary, 3);
+            font-weight: 400;
+            margin-bottom: 1%;
+            letter-spacing: 0.06em; /* Adjust as needed */
+            overflow: hidden; /* Ensures the content is not revealed until the animation */
+          }
+        }
+        .startedButton {
+          //started now button
+          padding: 0.9rem 2.1rem;
+          border-radius: 5px;
+          color: white;
+          font-size: 1.5em;
+          font-weight: 600;
+          border: none;
+          cursor: pointer;
+          transition: 0.6s all ease;
+          background-color: dark(button, 1);
+          width: fit-content;
+          transform: translateY(-100%);
+          opacity: 0;
+          a {
+            color: dark(button, font);
+            text-decoration: none;
+          }
+          &:hover {
+            background-color: dark(button, 1-hover);
+          }
+          &:active {
+            background-color: dark(button, 1-active);
+          }
+        }
+      }
+      .communityHeader {
+        @extend .headerLine;
+        width: 90%;
+        display: flex;
+        justify-content: flex-start;
+        transition: all 0.1s ease-in-out;
+        padding: 3rem;
+        border-radius: 15px;
+        margin-bottom: 3%;
+        h1 {
+          font-size: 2.7em;
+          color: white;
+          font-weight: 500;
+          margin-bottom: 1rem;
+        }
+        h2 {
+          font-size: 1.8em;
+          font-weight: 500;
+          color: clr(neutral, 2);
+        }
+        .textContainer {
+          display: flex;
+          flex-direction: column;
+          justify-content: space-between;
+          gap: 12px;
+          width: 70%;
+          margin-bottom: 0;
+          height: auto;
+        }
+        .imgContainer {
+          width: 30%;
+          img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            border-radius: 15px;
+          }
+        }
+        .startedButton {
+          a {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            .icon {
+              margin-right: 10px;
+            }
+          }
+        }
+      }
+      .communityHeaderActive {
+        background-color: dark(container, container-trans);
+        .textContainer {
+          .content {
+            opacity: 1;
+          }
+          .startedButton {
+            transform: translateY(0);
+            opacity: 1;
+          }
+        }
+      }
+    }
+    //at 1000 px and below need to change the layout
+    @media screen and (max-width: 1024px) {
+      .landingImage {
+        .headerLine {
+          h1 {
+            font-size: 4em;
+          }
+          h2 {
+            font-size: 1em;
+          }
+          .content {
+            font-size: 4em;
+            line-height: 90px;
+            &__container {
+              height: 90px;
+              &:before {
+                font-size: 70px;
+                line-height: 90px;
+              }
+              &:after {
+                font-size: 70px;
+                line-height: 90px;
+              }
+            }
+          }
+        }
+      }
+      .introductionPage {
+        .textContainer {
+          h1 {
+            font-size: 3.5em;
+          }
+          .content {
+            font-size: 1.2em;
+            width: 90%;
+            p {
+              font-size: 1em;
+            }
+          }
+        }
+        .sectionDropdown {
+          .sectionField {
+            width: 100%;
+            .headerSection {
+              span {
+                font-size: 1.2em;
+              }
+            }
+            .section {
+              .sectionContent {
+                p {
+                  font-size: 1.2em;
+                }
+              }
+            }
+          }
+        }
+        .communityHeader {
+          padding: 2rem;
+          h1 {
+            font-size: 1.8em;
+          }
+          .textContainer {
+            width: 80%;
+            .content {
+              p {
+                font-size: 0.7em;
+              }
+            }
+          }
+          .startedButton {
+            a {
+              font-size: 1em;
+            }
+          }
+        }
+      }
+    }
+    @media screen and (max-width: 750px) {
+      .landingImage {
+        .headerLine {
+          h1 {
+            font-size: 3em;
+          }
+          h2 {
+            font-size: 0.9em;
+          }
+          .content {
+            font-size: 3em;
+            line-height: 70px;
+            &__container {
+              height: 70px;
+              &:before {
+                font-size: 50px;
+                line-height: 70px;
+              }
+              &:after {
+                font-size: 50px;
+                line-height: 70px;
+              }
+            }
+          }
+          .startedButton {
+            font-size: 1.2em;
+          }
+        }
+      }
+      .typewritter {
+        margin-top: 10%;
+        font-size: 0.8em;
+      }
+      .introductionPage {
+        .textContainer {
+          h1 {
+            font-size: 3.5em;
+          }
+          .content {
+            font-size: 1em;
+            width: 90%;
+            p {
+              font-size: 1em;
+            }
+          }
+        }
+        .sectionDropdown {
+          .sectionField {
+            width: 100%;
+            .headerSection {
+              span {
+                font-size: 1.2em;
+              }
+            }
+            .section {
+              .sectionContent {
+                p {
+                  font-size: 1.2em;
+                }
+              }
+            }
+          }
+        }
+        .communityHeader {
+          padding: 2rem;
+          h1 {
+            font-size: 1.8em;
+          }
+          .textContainer {
+            width: 100%;
+            .content {
+              p {
+                font-size: 0.8em;
+              }
+            }
+          }
+          .startedButton {
+            a {
+              font-size: 1em;
+            }
+          }
+          .imgContainer {
+            display: none;
+          }
+        }
+      }
+    }
+    @media screen and (max-width: 550px) {
+      .landingImage {
+        .headerLine {
+          h1 {
+            font-size: 2.5em;
+          }
+          h2 {
+            font-size: 0.8em;
+          }
+          .content {
+            font-size: 2.5em;
+            line-height: 50px;
+            &__container {
+              height: 50px;
+              &:before {
+                font-size: 40px;
+                line-height: 50px;
+              }
+              &:after {
+                font-size: 40px;
+                line-height: 50px;
+              }
+            }
+          }
+          .startedButton {
+            font-size: 1em;
+          }
+        }
+      }
+      .typewritter {
+        margin-top: 10%;
+        font-size: 0.7em;
+      }
+    }
+    @media screen and (max-width: 480px) {
+      //mobile
+      .landingImage {
+        .headerLine {
+          justify-content: space-between;
+          align-items: center;
+          h1 {
+            font-size: 3.6em;
+          }
+          h2 {
+            font-size: 0.9em;
+          }
+          .content {
+            font-size: 2.4em;
+            line-height: 60px;
+            &__container {
+              height: 60px;
+              &:before {
+                font-size: 40px;
+                line-height: 60px;
+              }
+              &:after {
+                font-size: 40px;
+                line-height: 60px;
+              }
+            }
+          }
+          .startedButton {
+            font-size: 0.9em;
+          }
+          .contentHeader {
+            margin-top: 40%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            h1 {
+              text-align: center;
+            }
+          }
+          .startedButton {
+            width: 80%;
+            font-size: 1.2em;
+            text-align: center;
+          }
+        }
+      }
+      .introductionPage {
+        .textContainer {
+          h1 {
+            font-size: 1.8em;
+          }
+          .startedButton {
+            padding: 0 1rem 12px 1rem;
+            a {
+              font-size: 0.7em;
+            }
+          }
+          .content {
+            font-size: 1.4em;
+            width: 100%;
+            p {
+              font-size: 0.7em;
+            }
+          }
+        }
+        .sectionField {
+          .section {
+            .headerSection {
+              span {
+                font-size: 0.7em;
+              }
+            }
+            .sectionContent {
+              font-size: 0.7em;
+              span {
+                font-size: 1em;
+              }
+            }
+          }
+        }
+        .communityHeader {
+          padding: 2rem;
+          h1 {
+            font-size: 1.5em;
+          }
+          .textContainer {
+            width: 100%;
+            .content {
+              p {
+                font-size: 0.6em;
+              }
+            }
+          }
+          .startedButton {
+            padding: 12px;
+            a {
+              font-size: 0.7em;
+            }
+          }
+        }
+      }
+      .typewritter {
+        margin-top: 10%;
+        font-size: 0.5em;
+      }
+    }
+    @media screen and (max-width: 430px) {
+      //iphone 14 pro max
+      .landingImage {
+        .headerLine {
+          h2 {
+            font-size: 0.8em;
+          }
+        }
+      }
+    }
+    .typewritter {
+      width: min-content;
+      p {
+        width: fit-content;
+        font-size: 1.4em;
+        color: dark(primary, font-heavier);
+        font-weight: 500;
+        margin-bottom: 1%;
+
+        border-right: 0.15em solid dark(primary, font); /* The typwriter cursor */
+        white-space: nowrap; /* Keeps the content on a single line */
+        letter-spacing: 0.06em; /* Adjust as needed */
+        animation: typing 3.5s steps(30, end),
+          blink-caret 0.5s step-end infinite;
+        overflow: hidden; /* Ensures the content is not revealed until the animation */
+      }
+    }
+  }
+}
