@@ -85,7 +85,8 @@ export const PAN_MARGIN_FRACTION = 0.25
 export const UNDO_STACK_MAX_SIZE = 50
 export const LAYOUT_SAVE_DEBOUNCE_MS = 500
 export const DEFAULT_FLOOR_COLOR: FloorColor = { h: 35, s: 30, b: 15, c: 0 }
-export const DEFAULT_WALL_COLOR: FloorColor = { h: 240, s: 25, b: 0, c: 0 }
+/** Matches the default wall fill #3A3A5C when a wall has no stored color. */
+export const DEFAULT_WALL_COLOR: FloorColor = { h: 240, s: 18, b: -42, c: 0 }
 export const DEFAULT_NEUTRAL_COLOR: FloorColor = { h: 0, s: 0, b: 0, c: 0 }
 
 // ── Notification Sound ──────────────────────────────────────

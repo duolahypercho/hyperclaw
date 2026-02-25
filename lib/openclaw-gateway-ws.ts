@@ -54,7 +54,14 @@ export function probeGatewayWs(
     ws.onclose = (ev: CloseEvent) => {
       const { code, reason } = ev;
       if (!settled) {
-        const r = reason && String(reason).trim() ? String(reason) : `Closed (${code})`;
+        // 1006 = abnormal closure (often connection refused / nothing listening)
+        const connectionRefused =
+          code === 1006 || (reason && /refused|ECONNREFUSED/i.test(String(reason)));
+        const r = connectionRefused
+          ? "Gateway not running. Start the OpenClaw app or run: openclaw gateway run"
+          : reason && String(reason).trim()
+            ? String(reason)
+            : `Closed (${code})`;
         done(false, r);
       }
     };

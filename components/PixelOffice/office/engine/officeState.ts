@@ -53,9 +53,19 @@ export class OfficeState {
     this.walkableTiles = getWalkableTiles(this.tileMap, this.blockedTiles)
   }
 
+  /** Lightweight rebuild: only furniture-related state (blocked tiles, instances, walkable tiles).
+   *  Use for operations that only change furniture (rotation, color) but not tiles or grid size. */
+  rebuildFurnitureOnly(layout: OfficeLayout): void {
+    this.layout = layout
+    this.blockedTiles = getBlockedTiles(layout.furniture)
+    this.rebuildFurnitureInstances()
+    this.walkableTiles = getWalkableTiles(this.tileMap, this.blockedTiles)
+  }
+
   /** Rebuild all derived state from a new layout. Reassigns existing characters.
-   *  @param shift Optional pixel shift to apply when grid expands left/up */
-  rebuildFromLayout(layout: OfficeLayout, shift?: { col: number; row: number }): void {
+   *  @param shift Optional pixel shift to apply when grid expands left/up
+   *  @param skipPathToSeat When true, do not force characters to path back to seats (avoids "flash back" when editing layout) */
+  rebuildFromLayout(layout: OfficeLayout, shift?: { col: number; row: number }, skipPathToSeat?: boolean): void {
     this.layout = layout
     this.tileMap = layoutToTileMap(layout)
     this.seats = layoutToSeats(layout.furniture)
@@ -132,7 +142,8 @@ export class OfficeState {
       this.relocateCharacterToWalkable(ch)
     }
 
-    // Fourth pass: characters with a seat but not at it — path to seat and walk (or sit if already there)
+    // Fourth pass: characters with a seat — if at seat, sync state/dir; if not at seat and !skipPathToSeat, path back.
+    // When skipPathToSeat is true (e.g. user editing layout), we only sync at-seat state so agents don't all "flash back" to desks.
     for (const ch of this.characters.values()) {
       if (!ch.seatId) continue
       const seat = this.seats.get(ch.seatId)
@@ -145,6 +156,7 @@ export class OfficeState {
         ch.moveProgress = 0
         continue
       }
+      if (skipPathToSeat) continue
       const path = this.withOwnSeatUnblocked(ch, () =>
         findPath(ch.tileCol, ch.tileRow, seat.seatCol, seat.seatRow, this.tileMap, this.blockedTiles)
       )
@@ -155,7 +167,6 @@ export class OfficeState {
         ch.frame = 0
         ch.frameTimer = 0
       } else {
-        // No path (e.g. blocked) — sit in place and keep seat assigned for next time
         ch.state = CharacterState.IDLE
         ch.path = []
         ch.moveProgress = 0

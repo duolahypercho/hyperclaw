@@ -336,7 +336,10 @@ export function buildDynamicCatalog(assets: LoadedAssetData): boolean {
 export function getCatalogEntry(type: string): CatalogEntryWithCategory | undefined {
   // Check internal catalog first (includes all variants, e.g., non-front rotations)
   if (internalCatalog) {
-    return internalCatalog.find((e) => e.type === type)
+    const fromInternal = internalCatalog.find((e) => e.type === type)
+    if (fromInternal) return fromInternal
+    // Fallback to static catalog so default types (e.g. bookshelf) still resolve for selection/footprint
+    return FURNITURE_CATALOG.find((e) => e.type === type)
   }
   const catalog = dynamicCatalog || FURNITURE_CATALOG
   return catalog.find((e) => e.type === type)

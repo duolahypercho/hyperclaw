@@ -17,6 +17,31 @@ const { exec, execSync, spawn } = require("child_process");
 
 const isDev = process.env.NODE_ENV === "development";
 
+// #region agent log
+const DEBUG_LOG_DIR = path.join(__dirname, "..", ".cursor");
+const DEBUG_LOG_PATH = path.join(DEBUG_LOG_DIR, "debug-d4447e.log");
+function debugLog(location, message, data, hypothesisId) {
+  const line =
+    JSON.stringify({
+      sessionId: "d4447e",
+      location,
+      message,
+      data: data || {},
+      hypothesisId,
+      timestamp: Date.now(),
+    }) + "\n";
+  try {
+    if (!fs.existsSync(DEBUG_LOG_DIR)) fs.mkdirSync(DEBUG_LOG_DIR, { recursive: true });
+    fs.appendFileSync(DEBUG_LOG_PATH, line, "utf8");
+  } catch (e) {
+    try {
+      const fallback = path.join(app.getPath("userData"), "debug-d4447e.log");
+      fs.appendFileSync(fallback, line, "utf8");
+    } catch (_) {}
+  }
+}
+// #endregion
+
 // Log crashes so we can debug "opens then closes" (run from Terminal to see output)
 function logCrash(label, err) {
   const msg = `${label}: ${err && (err.stack || err.message || err)}\n`;
@@ -83,7 +108,6 @@ try {
     appConfig = JSON.parse(fs.readFileSync(configPath, "utf8"));
   }
 } catch (error) {
-  console.log("Using default config:", error.message);
 }
 
 const isRemoteMode = appConfig.mode === "remote";
@@ -93,7 +117,6 @@ const localUrl = appConfig.localUrl;
 // Ensure remoteUrl has protocol
 if (isRemoteMode && remoteUrl && !remoteUrl.startsWith("http://") && !remoteUrl.startsWith("https://")) {
   remoteUrl = `https://${remoteUrl}`;
-  console.log("Added protocol to remoteUrl:", remoteUrl);
 }
 
 let mainWindow = null;
@@ -346,8 +369,25 @@ function createWindow() {
       validatedURL,
       urlToLoad,
     });
+    // #region agent log
+    debugLog("main.js:did-fail-load", "page failed to load -> will load errorHtml", {
+      errorCode,
+      errorDescription,
+      validatedURL,
+    }, "H2");
+    // #endregion
     const errorHtml = `data:text/html,<html><body style="background:#000319;color:#BEC1DD;font-family:sans-serif;padding:40px;"><h1>Connection Error</h1><p>Failed to load: <b>${validatedURL}</b></p><p>Error: ${errorDescription} (Code: ${errorCode})</p><p>Attempted URL: <b>${urlToLoad}</b></p><p>Mode: ${isRemoteMode ? "Remote" : "Local"}</p></body></html>`;
     mainWindow.loadURL(errorHtml);
+  });
+
+  mainWindow.webContents.on("render-process-gone", (event, details) => {
+    // #region agent log
+    debugLog("main.js:render-process-gone", "renderer process crashed or killed", {
+      reason: details.reason,
+      exitCode: details.exitCode,
+    }, "H2");
+    // #endregion
+    console.error("Renderer process gone:", details);
   });
 
   mainWindow.webContents.on("did-finish-load", () => {
@@ -364,15 +404,50 @@ function createWindow() {
     }
   });
 
-  // Handle external links - open in system browser instead of Electron window
+  // Handle external links - open in system browser instead of Electron window.
+  // For internal URLs: Electron often loads about:blank when window.open() gets a relative URL
+  // (e.g. "/Tool/OpenClaw"), so we create the child window ourselves with an absolute URL
+  // and the same preload so the app and bridge work in the new window.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    // Open external URLs in the system's default browser
-    if (url && !url.startsWith(localUrl) && !url.startsWith(remoteUrl)) {
+    if (!url) return { action: "deny" };
+    if (!url.startsWith(localUrl) && !url.startsWith(remoteUrl)) {
       shell.openExternal(url);
       return { action: "deny" };
     }
-    // Allow internal URLs to open in the same window
-    return { action: "allow" };
+    // If Chromium passed about:blank (e.g. failed to resolve relative URL), we can't know the target
+    if (url === "about:blank" || url.trim() === "") return { action: "allow" };
+    const baseUrl = isRemoteMode ? remoteUrl : localUrl;
+    const absoluteUrl = url.startsWith("http://") || url.startsWith("https://")
+      ? url
+      : (baseUrl.replace(/\/$/, "") + (url.startsWith("/") ? url : "/" + url));
+    const preloadPath = path.join(__dirname, "preload.js");
+    setImmediate(() => {
+      const child = new BrowserWindow({
+        width: 1200,
+        height: 800,
+        minWidth: 800,
+        minHeight: 600,
+        title: "Copanion",
+        frame: false,
+        webPreferences: {
+          nodeIntegration: false,
+          contextIsolation: true,
+          preload: preloadPath,
+          webSecurity: true,
+          backgroundThrottling: false,
+        },
+        show: false,
+      });
+      // #region agent log
+      debugLog("main.js:setWindowOpenHandler child", "child.loadURL", { absoluteUrl }, "H2");
+      // #endregion
+      child.loadURL(absoluteUrl, { userAgent: mainWindow.webContents.getUserAgent() }).catch((err) => {
+        console.error("Child window load failed:", err);
+        child.close();
+      });
+      child.once("ready-to-show", () => child.show());
+    });
+    return { action: "deny" };
   });
 
   // Prevent navigation to external URLs within the Electron window
@@ -392,11 +467,17 @@ function createWindow() {
     }
   });
 
+  // #region agent log
+  debugLog("main.js:createWindow initial", "mainWindow.loadURL(urlToLoad)", { urlToLoad }, "H2");
+  // #endregion
   mainWindow.loadURL(urlToLoad, {
     userAgent: mainWindow.webContents.getUserAgent(),
   }).catch((err) => {
     console.error("Load failed:", err);
     const errorHtml = `data:text/html,<html><body style="background:#000319;color:#BEC1DD;font-family:sans-serif;padding:40px;"><h1>Connection Error</h1><p>Error: ${err.message}</p><p>Attempted URL: <b>${urlToLoad}</b></p><p>Mode: ${isRemoteMode ? "Remote" : "Local"}</p><p>Please check your connection and ensure the server is accessible.</p></body></html>`;
+    // #region agent log
+    debugLog("main.js:createWindow load catch", "mainWindow.loadURL(errorHtml)", { url: errorHtml.slice(0, 80) }, "H2");
+    // #endregion
     mainWindow.loadURL(errorHtml);
   });
 
@@ -690,8 +771,10 @@ function openclawEnv() {
   } catch (_) {}
   return env;
 }
+const CRON_JOBS_PATH = path.join(OPENCLAW_HOME, "cron", "jobs.json");
 const CRON_RUNS_DIR = path.join(OPENCLAW_HOME, "cron", "runs");
 const MAX_RUNS_PER_JOB = 200;
+const ACTIVE_CRON_WINDOW_MS = 10 * 60 * 1000; // 10 mins — last run within this = "working", currentTask shows this task; else show previous (most recent) task
 const OPENCLAW_IGNORE_FILES = ["memory.md", "agents.md", "soul.md", "tools.md", "heartbeat.md", "boostrap.md", "identity.md", "user.md"];
 const OPENCLAW_IGNORE_DIRS = ["browser", "node_modules", "skills", "memory"];
 
@@ -1518,7 +1601,8 @@ function getLogs(lines = 100) {
 
 function getTeam() {
   try {
-    const output = execSync("openclaw agents list", { encoding: "utf-8", timeout: 10000, cwd: OPENCLAW_HOME });
+    const env = openclawEnv();
+    const output = execSync("openclaw agents list", { encoding: "utf-8", timeout: 10000, cwd: OPENCLAW_HOME, env });
     const lines = output.split("\n");
     const agents = [];
     let current = null;
@@ -1555,7 +1639,9 @@ function getTeam() {
       });
     }
     return agents;
-  } catch {
+  } catch (err) {
+    const msg = err && (err.message || err.stderr || String(err));
+    writeToBridgeLog(`getTeam failed: ${msg}`);
     return [];
   }
 }
@@ -1590,7 +1676,8 @@ function parseCronLine(trimmed) {
 
 function getCrons() {
   try {
-    const output = execSync("openclaw cron list", { encoding: "utf-8", timeout: 10000, cwd: OPENCLAW_HOME });
+    const env = openclawEnv();
+    const output = execSync("openclaw cron list", { encoding: "utf-8", timeout: 10000, cwd: OPENCLAW_HOME, env });
     const lines = output.split("\n").filter((l) => l.trim());
     if (lines.length < 2) return [];
     const jobs = [];
@@ -1599,7 +1686,9 @@ function getCrons() {
       if (parsed) jobs.push(parsed);
     }
     return jobs;
-  } catch {
+  } catch (err) {
+    const msg = err && (err.message || err.stderr || String(err));
+    writeToBridgeLog(`getCrons failed: ${msg}`);
     return [];
   }
 }
@@ -1626,6 +1715,63 @@ function getCronRuns(jobIds) {
     } catch {}
   }
   return runsByJobId;
+}
+
+/** Cron job with state for employee status: lastRunAtMs, nextRunAtMs, lastStatus (running/ok/idle). */
+function getCronsWithState() {
+  const now = Date.now();
+  try {
+    if (fs.existsSync(CRON_JOBS_PATH)) {
+      const raw = fs.readFileSync(CRON_JOBS_PATH, "utf-8");
+      const data = JSON.parse(raw);
+      const list = data?.jobs;
+      if (Array.isArray(list) && list.length > 0) {
+        return list.map((job) => {
+          const s = job.state || {};
+          const schedule = job.schedule;
+          let scheduleStr = "";
+          if (schedule?.kind === "cron" && schedule.expr) scheduleStr = schedule.expr;
+          else if (schedule?.kind === "every" && schedule.everyMs != null) {
+            const ms = schedule.everyMs;
+            if (ms % (24 * 60 * 60 * 1000) === 0) scheduleStr = `${ms / (24 * 60 * 60 * 1000)}d`;
+            else if (ms % (60 * 60 * 1000) === 0) scheduleStr = `${ms / (60 * 60 * 1000)}h`;
+            else if (ms % (60 * 1000) === 0) scheduleStr = `${ms / (60 * 1000)}m`;
+            else scheduleStr = `${ms}m`;
+          }
+          return {
+            id: job.id,
+            name: job.name || job.id,
+            schedule: scheduleStr,
+            agentId: job.agentId,
+            nextRunAtMs: s.nextRunAtMs,
+            lastRunAtMs: s.lastRunAtMs,
+            lastStatus: (s.lastStatus || "idle").toLowerCase(),
+          };
+        });
+      }
+    }
+  } catch (err) {
+    writeToBridgeLog(`getCronsWithState (jobs.json) failed: ${err && (err.message || String(err))}`);
+  }
+  const cliCrons = getCrons();
+  const jobIds = cliCrons.map((c) => c.id).filter(Boolean);
+  const runsByJobId = getCronRuns(jobIds);
+  return cliCrons.map((c) => {
+    const runs = runsByJobId[c.id];
+    const lastRun = runs && runs.length > 0 ? runs[runs.length - 1] : null;
+    const lastRunAtMs = lastRun && (lastRun.runAtMs != null || lastRun.runAt != null)
+      ? (lastRun.runAtMs ?? lastRun.runAt)
+      : undefined;
+    return {
+      id: c.id,
+      name: c.name,
+      schedule: c.schedule,
+      agentId: c.agentId,
+      nextRunAtMs: undefined,
+      lastRunAtMs,
+      lastStatus: lastRun?.status === "running" ? "running" : lastRun ? "ok" : "idle",
+    };
+  });
 }
 
 function getConfig() {
@@ -1657,34 +1803,53 @@ function getEvents() {
 }
 
 function getEmployeeStatus() {
+  writeToBridgeLog("get-employee-status (main.js)");
   const team = getTeam();
-  const crons = getCrons();
-  const agentIds = new Set(team.map((a) => a.id.toLowerCase()));
-  const agentNames = new Set(team.map((a) => a.name.toLowerCase()));
-  const singleAgentIsWorking = team.length === 1;
+  if (team.length === 0) writeToBridgeLog("get-employee-status: getTeam returned 0 agents (check getTeam failed above)");
+  const crons = getCronsWithState();
+  const now = Date.now();
+
   const employees = team.map((a) => {
+    const aId = a.id.toLowerCase();
+    const aName = (a.name && a.name.toLowerCase()) || "";
     const assignedCrons = crons.filter((c) => {
       const aid = (c.agentId || "").toLowerCase();
-      return aid && (agentIds.has(aid) || agentNames.has(aid) || a.id.toLowerCase() === aid || a.name.toLowerCase() === aid);
+      return aid && (aid === aId || aid === aName);
     });
-    const status = a.status === "active" ? "working" : assignedCrons.length > 0 ? "working" : singleAgentIsWorking ? "working" : "idle";
-    const currentTask =
-      assignedCrons.length > 0
-        ? assignedCrons.map((c) => c.name).join(", ")
-        : status === "working"
-          ? (a.role || "Orchestrator")
-          : "Idle";
+    const currentWorkingJobs = assignedCrons.filter((c) => {
+      if (c.lastStatus === "running") return true;
+      if (c.lastRunAtMs != null && now - c.lastRunAtMs <= ACTIVE_CRON_WINDOW_MS) return true;
+      return false;
+    });
+    const nextComingCrons = assignedCrons
+      .filter((c) => c.nextRunAtMs != null && c.nextRunAtMs > now)
+      .sort((x, y) => (x.nextRunAtMs || 0) - (y.nextRunAtMs || 0))
+      .map((c) => ({ id: c.id, name: c.name, schedule: c.schedule, nextRunAtMs: c.nextRunAtMs, agentId: c.agentId }));
+    const currentWorkingIds = new Set(currentWorkingJobs.map((c) => c.id));
+    const previousTasks = assignedCrons
+      .filter((c) => c.lastRunAtMs != null && !currentWorkingIds.has(c.id))
+      .sort((x, y) => (y.lastRunAtMs || 0) - (x.lastRunAtMs || 0))
+      .slice(0, 5)
+      .map((c) => ({ id: c.id, name: c.name, schedule: c.schedule, lastRunAtMs: c.lastRunAtMs, agentId: c.agentId }));
+    const status = currentWorkingJobs.length > 0 ? "working" : "idle";
+    let currentTask = "Idle";
+    if (currentWorkingJobs.length > 0) {
+      const byRecency = [...currentWorkingJobs].sort((x, y) => (y.lastRunAtMs || 0) - (x.lastRunAtMs || 0));
+      currentTask = byRecency.map((c) => c.name).join(", ");
+    } else {
+      if (previousTasks.length > 0) currentTask = previousTasks[0].name || "Idle";
+    }
     return {
       id: a.id,
       name: a.name,
       status,
       currentTask: currentTask || "Idle",
+      currentWorkingJobs: currentWorkingJobs.map((c) => ({ id: c.id, name: c.name, schedule: c.schedule, agentId: c.agentId })),
+      previousTasks,
+      nextComingCrons,
     };
   });
-  return {
-    employees,
-    crons: crons.map((c) => ({ id: c.id, name: c.name, schedule: c.schedule, agentId: c.agentId })),
-  };
+  return { employees };
 }
 
 function readHyperClawTasks() {

@@ -2,7 +2,7 @@ import { TileType, MAX_COLS, MAX_ROWS } from '../types'
 import { DEFAULT_NEUTRAL_COLOR } from '../../constants'
 import type { TileType as TileTypeVal, OfficeLayout, PlacedFurniture, FloorColor } from '../types'
 import { getCatalogEntry, getRotatedType, getToggledType } from '../layout/furnitureCatalog'
-import { getPlacementBlockedTiles } from '../layout/layoutSerializer'
+import { getPlacementBlockedTiles, getEffectiveFootprint } from '../layout/layoutSerializer'
 
 /** Paint a single tile with pattern and color. Returns new layout (immutable). */
 export function paintTile(layout: OfficeLayout, col: number, row: number, tileType: TileTypeVal, color?: FloorColor): OfficeLayout {
@@ -31,7 +31,7 @@ export function paintTile(layout: OfficeLayout, col: number, row: number, tileTy
 
 /** Place furniture. Returns new layout (immutable). */
 export function placeFurniture(layout: OfficeLayout, item: PlacedFurniture): OfficeLayout {
-  if (!canPlaceFurniture(layout, item.type, item.col, item.row)) return layout
+  if (!canPlaceFurniture(layout, item.type, item.col, item.row, undefined, item.rotation)) return layout
   return { ...layout, furniture: [...layout.furniture, item] }
 }
 
@@ -46,32 +46,61 @@ export function removeFurniture(layout: OfficeLayout, uid: string): OfficeLayout
 export function moveFurniture(layout: OfficeLayout, uid: string, newCol: number, newRow: number): OfficeLayout {
   const item = layout.furniture.find((f) => f.uid === uid)
   if (!item) return layout
-  if (!canPlaceFurniture(layout, item.type, newCol, newRow, uid)) return layout
+  if (!canPlaceFurniture(layout, item.type, newCol, newRow, uid, item.rotation)) return layout
   return {
     ...layout,
     furniture: layout.furniture.map((f) => (f.uid === uid ? { ...f, col: newCol, row: newRow } : f)),
   }
 }
 
-/** Rotate furniture to the next orientation. Returns new layout (immutable). */
+/** Clamp (col, row) so a footprint (w, h) stays fully inside the grid. */
+function clampPositionToGrid(
+  col: number,
+  row: number,
+  w: number,
+  h: number,
+  cols: number,
+  rows: number
+): { col: number; row: number } {
+  const newCol = Math.max(0, Math.min(cols - w, col))
+  const newRow = Math.max(0, Math.min(rows - h, row))
+  return { col: newCol, row: newRow }
+}
+
+/** Rotate furniture to the next orientation. Returns new layout (immutable). Clamps position so item stays inside grid. */
 export function rotateFurniture(layout: OfficeLayout, uid: string, direction: 'cw' | 'ccw'): OfficeLayout {
   const item = layout.furniture.find((f) => f.uid === uid)
   if (!item) return layout
   const newType = getRotatedType(item.type, direction)
-  if (newType) {
-    return {
-      ...layout,
-      furniture: layout.furniture.map((f) => (f.uid === uid ? { ...f, type: newType } : f)),
+  // Use type-based rotation only when we get a different, valid catalog type (handles replaced/custom furniture)
+  const useTypeRotation = newType && newType !== item.type && getCatalogEntry(newType)
+  let updated: PlacedFurniture
+  if (useTypeRotation) {
+    updated = { ...item, type: newType }
+  } else {
+    const step = direction === 'cw' ? 90 : -90
+    const next = ((item.rotation ?? 0) + step + 360) % 360
+    updated = { ...item, rotation: next as 0 | 90 | 180 | 270 }
+  }
+  // Clamp position so item stays inside grid (only when we have catalog entry for effective footprint)
+  const entry = getCatalogEntry(updated.type)
+  if (entry) {
+    const { w: effW, h: effH } = getEffectiveFootprint(updated, entry)
+    const { col: clampedCol, row: clampedRow } = clampPositionToGrid(
+      updated.col,
+      updated.row,
+      effW,
+      effH,
+      layout.cols,
+      layout.rows
+    )
+    if (clampedCol !== updated.col || clampedRow !== updated.row) {
+      updated = { ...updated, col: clampedCol, row: clampedRow }
     }
   }
-  // No rotation group (e.g. static catalog): use numeric rotation 0→90→180→270→0
-  const step = direction === 'cw' ? 90 : -90
-  const next = ((item.rotation ?? 0) + step + 360) % 360
   return {
     ...layout,
-    furniture: layout.furniture.map((f) =>
-      f.uid === uid ? { ...f, rotation: next as 0 | 90 | 180 | 270 } : f
-    ),
+    furniture: layout.furniture.map((f) => (f.uid === uid ? updated : f)),
   }
 }
 
@@ -97,41 +126,43 @@ export function getWallPlacementRow(type: string, row: number): number {
 /** Check if furniture can be placed at (col, row) without overlapping. */
 export function canPlaceFurniture(
   layout: OfficeLayout,
-  type: string, // FurnitureType enum or asset ID
+  type: string,
   col: number,
   row: number,
   excludeUid?: string,
+  rotation?: number,
 ): boolean {
   const entry = getCatalogEntry(type)
   if (!entry) return false
 
-  // Check bounds — wall items may extend above the map (top rows hang above the wall)
+  const rotNorm = rotation != null ? ((rotation % 360) + 360) % 360 : 0
+  const fpW = (rotNorm === 90 || rotNorm === 270) ? entry.footprintH : entry.footprintW
+  const fpH = (rotNorm === 90 || rotNorm === 270) ? entry.footprintW : entry.footprintH
+
   if (entry.canPlaceOnWalls) {
-    const bottomRow = row + entry.footprintH - 1
-    if (col < 0 || col + entry.footprintW > layout.cols || bottomRow < 0 || bottomRow >= layout.rows) {
+    const bottomRow = row + fpH - 1
+    if (col < 0 || col + fpW > layout.cols || bottomRow < 0 || bottomRow >= layout.rows) {
       return false
     }
   } else {
-    if (col < 0 || row < 0 || col + entry.footprintW > layout.cols || row + entry.footprintH > layout.rows) {
+    if (col < 0 || row < 0 || col + fpW > layout.cols || row + fpH > layout.rows) {
       return false
     }
   }
 
-  // Wall/VOID placement check (background rows skip this check)
   const bgRows = entry.backgroundTiles || 0
-  for (let dr = 0; dr < entry.footprintH; dr++) {
+  for (let dr = 0; dr < fpH; dr++) {
     if (dr < bgRows) continue
-    if (row + dr < 0) continue // row above map (wall items extending upward)
-    // Wall items: only the bottom row must be on wall tiles; upper rows can overlap VOID/anything
-    if (entry.canPlaceOnWalls && dr < entry.footprintH - 1) continue
-    for (let dc = 0; dc < entry.footprintW; dc++) {
+    if (row + dr < 0) continue
+    if (entry.canPlaceOnWalls && dr < fpH - 1) continue
+    for (let dc = 0; dc < fpW; dc++) {
       const idx = (row + dr) * layout.cols + (col + dc)
       const tileVal = layout.tiles[idx]
       if (entry.canPlaceOnWalls) {
         if (tileVal !== TileType.WALL) return false
       } else {
-        if (tileVal === TileType.VOID) return false // Cannot place on VOID
-        if (tileVal === TileType.WALL) return false // Normal items cannot overlap walls
+        if (tileVal === TileType.VOID) return false
+        if (tileVal === TileType.WALL) return false
       }
     }
   }
@@ -139,7 +170,7 @@ export function canPlaceFurniture(
   // Build occupied set excluding the item being moved, skipping background tile rows
   const occupied = getPlacementBlockedTiles(layout.furniture, excludeUid)
 
-  // If this item can be placed on surfaces, build set of desk tiles to exclude from collision
+  // If this item can be placed on surfaces, build set of desk tiles to exclude from collision (use effective footprint for rotated desks)
   let deskTiles: Set<string> | null = null
   if (entry.canPlaceOnSurfaces) {
     deskTiles = new Set<string>()
@@ -147,20 +178,20 @@ export function canPlaceFurniture(
       if (item.uid === excludeUid) continue
       const itemEntry = getCatalogEntry(item.type)
       if (!itemEntry || !itemEntry.isDesk) continue
-      for (let dr = 0; dr < itemEntry.footprintH; dr++) {
-        for (let dc = 0; dc < itemEntry.footprintW; dc++) {
+      const { w: effW, h: effH } = getEffectiveFootprint(item, itemEntry)
+      for (let dr = 0; dr < effH; dr++) {
+        for (let dc = 0; dc < effW; dc++) {
           deskTiles.add(`${item.col + dc},${item.row + dr}`)
         }
       }
     }
   }
 
-  // Check overlap — also skip the NEW item's own background rows
   const newBgRows = entry.backgroundTiles || 0
-  for (let dr = 0; dr < entry.footprintH; dr++) {
-    if (dr < newBgRows) continue // new item's background rows can overlap existing items
-    if (row + dr < 0) continue // row above map (wall items extending upward)
-    for (let dc = 0; dc < entry.footprintW; dc++) {
+  for (let dr = 0; dr < fpH; dr++) {
+    if (dr < newBgRows) continue
+    if (row + dr < 0) continue
+    for (let dc = 0; dc < fpW; dc++) {
       const key = `${col + dc},${row + dr}`
       if (occupied.has(key) && !(deskTiles?.has(key))) return false
     }

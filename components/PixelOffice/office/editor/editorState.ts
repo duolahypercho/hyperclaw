@@ -1,6 +1,6 @@
 import { EditTool, TileType } from '../types'
 import type { TileType as TileTypeVal, OfficeLayout, FloorColor } from '../types'
-import { UNDO_STACK_MAX_SIZE, DEFAULT_FLOOR_COLOR, DEFAULT_WALL_COLOR } from '../../constants'
+import { UNDO_STACK_MAX_SIZE, DEFAULT_FLOOR_COLOR } from '../../constants'
 
 export class EditorState {
   isEditMode = false
@@ -11,8 +11,8 @@ export class EditorState {
   // Floor color settings (applied to new tiles when painting)
   floorColor: FloorColor = { ...DEFAULT_FLOOR_COLOR }
 
-  // Wall color settings (applied to new wall tiles when painting)
-  wallColor: FloorColor = { ...DEFAULT_WALL_COLOR }
+  // Wall color settings (null = use default non-colorized rendering)
+  wallColor: FloorColor | null = null
 
   // Tracks toggle direction during wall drag (true=adding walls, false=removing, null=undecided)
   wallDragAdding: boolean | null = null

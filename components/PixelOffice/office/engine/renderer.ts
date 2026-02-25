@@ -107,7 +107,7 @@ export function renderScene(
 ): void {
   const drawables: ZDrawable[] = []
 
-  // Furniture
+  // Furniture — rotate around top-left so the drawn bbox matches the selection rectangle (col, row, effW, effH)
   for (const f of furniture) {
     const cached = getCachedSprite(f.sprite, zoom)
     const fx = offsetX + f.x * zoom
@@ -117,12 +117,10 @@ export function renderScene(
       zY: f.zY,
       draw: (c) => {
         if (rot !== 0) {
-          const cx = fx + cached.width / 2
-          const cy = fy + cached.height / 2
           c.save()
-          c.translate(cx, cy)
+          c.translate(fx, fy)
           c.rotate((rot * Math.PI) / 180)
-          c.drawImage(cached, -cached.width / 2, -cached.height / 2)
+          c.drawImage(cached, 0, 0)
           c.restore()
         } else {
           c.drawImage(cached, fx, fy)
@@ -337,27 +335,35 @@ export function renderGhostPreview(
   offsetY: number,
   zoom: number,
   rotationDeg?: number,
+  effW?: number,
+  effH?: number,
 ): void {
   const cached = getCachedSprite(sprite, zoom)
-  const x = offsetX + col * TILE_SIZE * zoom
-  const y = offsetY + row * TILE_SIZE * zoom
   const rot = rotationDeg ?? 0
+  const rotNorm = ((rot % 360) + 360) % 360
+  const ew = effW ?? 1
+  const eh = effH ?? 1
+
+  let anchorCol = col, anchorRow = row
+  if (rotNorm === 90) { anchorCol = col + ew; anchorRow = row }
+  else if (rotNorm === 180) { anchorCol = col + ew; anchorRow = row + eh }
+  else if (rotNorm === 270) { anchorCol = col; anchorRow = row + eh }
+
+  const x = offsetX + anchorCol * TILE_SIZE * zoom
+  const y = offsetY + anchorRow * TILE_SIZE * zoom
   ctx.save()
   ctx.globalAlpha = GHOST_PREVIEW_SPRITE_ALPHA
   if (rot !== 0) {
-    const cx = x + cached.width / 2
-    const cy = y + cached.height / 2
-    ctx.translate(cx, cy)
+    ctx.translate(x, y)
     ctx.rotate((rot * Math.PI) / 180)
-    ctx.drawImage(cached, -cached.width / 2, -cached.height / 2)
+    ctx.drawImage(cached, 0, 0)
   } else {
     ctx.drawImage(cached, x, y)
   }
-  // Tint overlay (same rect as sprite)
   ctx.globalAlpha = GHOST_PREVIEW_TINT_ALPHA
   ctx.fillStyle = valid ? GHOST_VALID_TINT : GHOST_INVALID_TINT
   if (rot !== 0) {
-    ctx.fillRect(-cached.width / 2, -cached.height / 2, cached.width, cached.height)
+    ctx.fillRect(0, 0, cached.width, cached.height)
   } else {
     ctx.fillRect(x, y, cached.width, cached.height)
   }
@@ -526,8 +532,10 @@ export interface EditorRenderState {
   ghostCol: number
   ghostRow: number
   ghostValid: boolean
-  /** Rotation in degrees (0, 90, 180, 270) for placement ghost. */
+  /** Rotation in degrees (0, 90, 180, 270) for placement/drag ghost. */
   ghostRotationDeg?: number
+  ghostEffW?: number
+  ghostEffH?: number
   selectedCol: number
   selectedRow: number
   selectedW: number
@@ -616,7 +624,7 @@ export function renderFrame(
       renderGhostBorder(ctx, offsetX, offsetY, zoom, cols, rows, editor.ghostBorderHoverCol, editor.ghostBorderHoverRow)
     }
     if (editor.ghostSprite && editor.ghostCol >= 0) {
-      renderGhostPreview(ctx, editor.ghostSprite, editor.ghostCol, editor.ghostRow, editor.ghostValid, offsetX, offsetY, zoom, editor.ghostRotationDeg)
+      renderGhostPreview(ctx, editor.ghostSprite, editor.ghostCol, editor.ghostRow, editor.ghostValid, offsetX, offsetY, zoom, editor.ghostRotationDeg, editor.ghostEffW, editor.ghostEffH)
     }
     if (editor.hasSelection) {
       renderSelectionHighlight(ctx, editor.selectedCol, editor.selectedRow, editor.selectedW, editor.selectedH, offsetX, offsetY, zoom)

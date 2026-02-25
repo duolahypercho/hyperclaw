@@ -99,9 +99,6 @@ import {
   generateOrderValues,
 } from "../utils";
 import { useDebouncedReorder } from "../hooks";
-import { useTodoListCopanionReadable } from "../hooks/useTodoListCopanionReadable";
-import { useTodoListCopanionActions } from "../hooks/useTodoListCopanionActions";
-import { useTodoListProactive } from "../hooks/useTodoListProactive";
 import { useRouter } from "next/router";
 import { useCopanionReadable } from "$/OS/AI/core";
 import { encode } from "@toon-format/toon";
@@ -519,34 +516,6 @@ export function TodoListProvider({ children, inMiniMode }: Props) {
           const updatedTasks = prevTasks.map((task) =>
             task._id === id ? { ...task, status } : task
           );
-
-          // Detect when user starts working on a task (for pomodoro/music integration)
-          if (isNowInProgress && !wasInProgress) {
-            proactiveSetters.setJustStartedWorking({
-              taskId: id,
-              timestamp: Date.now(),
-            });
-          }
-
-          // Detect completion events and set state for useProactive
-          if (isNowCompleted && !wasCompleted) {
-            // Scenario 5: Check if all tasks are now completed
-            const activeTasks = updatedTasks.filter(
-              (t) => t.status !== "completed"
-            );
-            if (activeTasks.length === 0 && updatedTasks.length > 0) {
-              proactiveSetters.setJustCompletedAllTasks({
-                taskCount: updatedTasks.length,
-                timestamp: Date.now(),
-              });
-            } else {
-              // Scenario 4: Task just completed
-              proactiveSetters.setNewlyCompletedTask({
-                taskId: id,
-                timestamp: Date.now(),
-              });
-            }
-          }
 
           return updatedTasks;
         });
@@ -2132,26 +2101,7 @@ export function TodoListProvider({ children, inMiniMode }: Props) {
     [tasks.length, currentTab, handleApiError, toast]
   );
 
-  // Setup copanion actions
-  useTodoListCopanionActions({
-    tasks,
-    lists,
-    inProgressTask,
-    suggestStepLoading,
-    handleAddTask,
-    handleEditTask,
-    handleCreateList,
-    handleSuggestStep,
-    getTodoAPI,
-    handleAddNextStep,
-  });
-
-  // These hooks must be called after handleAddTask and handleEditTask are defined
-  useTodoListCopanionReadable({ tasks, loading });
-
-  // Get proactive setters for use in handleStatusChange
-  const proactiveSetters = useTodoListProactive({ tasks, loading });
-
+  
   useEffect(() => {
     loadInitialData();
   }, [loadInitialData]);

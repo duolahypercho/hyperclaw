@@ -57,6 +57,9 @@ export const useAuthGuard = (options: UseAuthGuardOptions = {}) => {
 
   useEffect(() => {
     if (shouldRedirect()) {
+      // #region agent log
+      if (typeof fetch !== "undefined") fetch("http://127.0.0.1:7697/ingest/5b487555-6c93-439c-bf5f-6251fb6e26ec", { method: "POST", headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "d4447e" }, body: JSON.stringify({ sessionId: "d4447e", location: "useAuthGuard.ts:useEffect redirect", message: "auth redirect", data: { pathname, redirectTo, status }, hypothesisId: "H5", timestamp: Date.now() }) }).catch(() => {});
+      // #endregion
       setIsRedirecting(true);
       push(redirectTo);
     }

@@ -47,13 +47,16 @@ interface EditorToolbarProps {
   selectedFurnitureUid: string | null
   selectedFurnitureColor: FloorColor | null
   floorColor: FloorColor
-  wallColor: FloorColor
+  wallColor: FloorColor | null
   onToolChange: (tool: EditTool) => void
   onTileTypeChange: (type: TileTypeVal) => void
   onFloorColorChange: (color: FloorColor) => void
-  onWallColorChange: (color: FloorColor) => void
+  onWallColorChange: (color: FloorColor | null) => void
   onSelectedFurnitureColorChange: (color: FloorColor | null) => void
   onFurnitureTypeChange: (type: string) => void
+  /** When true, show Rotate button and call this when clicked (e.g. when selection is rotatable). */
+  showRotateButton?: boolean
+  onRotateSelected?: () => void
   loadedAssets?: LoadedAssetData
 }
 
@@ -161,12 +164,15 @@ export function EditorToolbar({
   onWallColorChange,
   onSelectedFurnitureColorChange,
   onFurnitureTypeChange,
+  showRotateButton,
+  onRotateSelected,
   loadedAssets,
 }: EditorToolbarProps) {
   const [activeCategory, setActiveCategory] = useState<FurnitureCategory>('desks')
   const [showColor, setShowColor] = useState(false)
   const [showWallColor, setShowWallColor] = useState(false)
   const [showFurnitureColor, setShowFurnitureColor] = useState(false)
+  const [eyedropperSource, setEyedropperSource] = useState<'floor' | 'wall'>('floor')
 
   // Build dynamic catalog from loaded assets
   useEffect(() => {
@@ -195,9 +201,10 @@ export function EditorToolbar({
     onFloorColorChange({ ...floorColor, [key]: value })
   }, [floorColor, onFloorColorChange])
 
+  const effectiveWallColor = wallColor ?? { h: 0, s: 0, b: 0, c: 0 }
   const handleWallColorChange = useCallback((key: keyof FloorColor, value: number) => {
-    onWallColorChange({ ...wallColor, [key]: value })
-  }, [wallColor, onWallColorChange])
+    onWallColorChange({ ...effectiveWallColor, [key]: value })
+  }, [effectiveWallColor, onWallColorChange])
 
   // For selected furniture: use existing color or default
   const effectiveColor = selectedFurnitureColor ?? DEFAULT_FURNITURE_COLOR
@@ -213,10 +220,11 @@ export function EditorToolbar({
 
   const thumbSize = 36 // 2x for items
 
-  const isFloorActive = activeTool === EditTool.TILE_PAINT || activeTool === EditTool.EYEDROPPER
-  const isWallActive = activeTool === EditTool.WALL_PAINT
+  const isFloorActive = activeTool === EditTool.TILE_PAINT || (activeTool === EditTool.EYEDROPPER && eyedropperSource === 'floor')
+  const isWallActive = activeTool === EditTool.WALL_PAINT || (activeTool === EditTool.EYEDROPPER && eyedropperSource === 'wall')
   const isEraseActive = activeTool === EditTool.ERASE
   const isFurnitureActive = activeTool === EditTool.FURNITURE_PLACE || activeTool === EditTool.FURNITURE_PICK
+  const currentTool = activeTool
 
   return (
     <div
@@ -266,6 +274,15 @@ export function EditorToolbar({
         >
           Furniture
         </button>
+        {showRotateButton && onRotateSelected && (
+          <button
+            style={btnStyle}
+            onClick={onRotateSelected}
+            title="Rotate selected item (R)"
+          >
+            Rotate (R)
+          </button>
+        )}
       </div>
 
       {/* Sub-panel: Floor tiles — stacked bottom-to-top via column-reverse */}
@@ -281,8 +298,8 @@ export function EditorToolbar({
               Color
             </button>
             <button
-              style={activeTool === EditTool.EYEDROPPER ? activeBtnStyle : btnStyle}
-              onClick={() => onToolChange(EditTool.EYEDROPPER)}
+              style={(activeTool === EditTool.EYEDROPPER && eyedropperSource === 'floor') ? activeBtnStyle : btnStyle}
+              onClick={() => { setEyedropperSource('floor'); onToolChange(EditTool.EYEDROPPER) }}
               title="Pick floor pattern + color from existing tile"
             >
               Pick
@@ -341,7 +358,7 @@ export function EditorToolbar({
       {/* Sub-panel: Wall — stacked bottom-to-top via column-reverse */}
       {isWallActive && (
         <div style={{ display: 'flex', flexDirection: 'column-reverse', gap: 6 }}>
-          {/* Color toggle — just above tool row */}
+          {/* Color toggle + Pick — just above tool row (parity with floor) */}
           <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
             <button
               style={showWallColor ? activeBtnStyle : btnStyle}
@@ -349,6 +366,13 @@ export function EditorToolbar({
               title="Adjust wall color"
             >
               Color
+            </button>
+            <button
+              style={(currentTool === EditTool.EYEDROPPER && eyedropperSource === 'wall') ? activeBtnStyle : btnStyle}
+              onClick={() => { setEyedropperSource('wall'); onToolChange(EditTool.EYEDROPPER) }}
+              title="Pick wall color from existing wall (then click a wall)"
+            >
+              Pick
             </button>
           </div>
 
@@ -363,10 +387,10 @@ export function EditorToolbar({
               border: '2px solid #4a4a6a',
               borderRadius: 0,
             }}>
-              <ColorSlider label="H" value={wallColor.h} min={0} max={360} onChange={(v) => handleWallColorChange('h', v)} />
-              <ColorSlider label="S" value={wallColor.s} min={0} max={100} onChange={(v) => handleWallColorChange('s', v)} />
-              <ColorSlider label="B" value={wallColor.b} min={-100} max={100} onChange={(v) => handleWallColorChange('b', v)} />
-              <ColorSlider label="C" value={wallColor.c} min={-100} max={100} onChange={(v) => handleWallColorChange('c', v)} />
+              <ColorSlider label="H" value={effectiveWallColor.h} min={0} max={360} onChange={(v) => handleWallColorChange('h', v)} />
+              <ColorSlider label="S" value={effectiveWallColor.s} min={0} max={100} onChange={(v) => handleWallColorChange('s', v)} />
+              <ColorSlider label="B" value={effectiveWallColor.b} min={-100} max={100} onChange={(v) => handleWallColorChange('b', v)} />
+              <ColorSlider label="C" value={effectiveWallColor.c} min={-100} max={100} onChange={(v) => handleWallColorChange('c', v)} />
             </div>
           )}
 

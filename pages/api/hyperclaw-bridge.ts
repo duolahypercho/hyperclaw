@@ -137,6 +137,26 @@ function stripAnsi(text: string): string {
   return text.replace(/\x1b\[[0-9;]*m/g, "").replace(/\x1b\]8;[^;]*;[^\\]*\\/g, "");
 }
 
+/** When Next.js runs the API, PATH may not include openclaw (pnpm/Homebrew/nvm). Extend it like Electron main.js. */
+function openclawEnv(): NodeJS.ProcessEnv {
+  const base = process.env.PATH ?? "";
+  const candidates = [
+    path.join(os.homedir(), "Library/pnpm"),
+    path.join(os.homedir(), ".local/share/pnpm"),
+    path.join(os.homedir(), ".local/bin"),
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    path.join(os.homedir(), ".nvm/versions/node/current/bin"),
+    path.join(os.homedir(), ".nvm/current/bin"),
+  ];
+  const extra = candidates.filter((p) => p && fs.existsSync(p));
+  const newPath = [...extra, base].filter(Boolean).join(path.delimiter);
+  const configPath = path.join(OPENCLAW_DIR, "openclaw.json");
+  const env: NodeJS.ProcessEnv = { ...process.env, FORCE_COLOR: "0", PATH: newPath };
+  if (fs.existsSync(configPath)) env.OPENCLAW_CONFIG_PATH = configPath;
+  return env;
+}
+
 type TeamAgent = { id: string; name: string; status: string; role?: string; lastActive?: string };
 
 /**
@@ -144,8 +164,10 @@ type TeamAgent = { id: string; name: string; status: string; role?: string; last
  * Tries --json first; then parses plain output (strips ANSI, allows a-z, A-Z, 0-9, _, ., - for ids).
  */
 function getTeamFromCli(): TeamAgent[] {
+  const env = openclawEnv();
+  const execOpts = { encoding: "utf-8" as const, timeout: 10000, cwd: OPENCLAW_DIR, env };
   try {
-    const jsonOutput = execSync("openclaw agents list --json", { encoding: "utf-8", timeout: 10000 });
+    const jsonOutput = execSync("openclaw agents list --json", execOpts);
     const parsed = JSON.parse(jsonOutput) as { id: string; identity?: { name?: string }; default?: boolean }[] | unknown;
     if (Array.isArray(parsed) && parsed.length > 0) {
       return parsed.map((a) => ({
@@ -166,7 +188,7 @@ function getTeamFromCli(): TeamAgent[] {
     // fall through to plain parsing
   }
   try {
-    const output = execSync("openclaw agents list", { encoding: "utf-8", timeout: 10000 });
+    const output = execSync("openclaw agents list", execOpts);
     const raw = stripAnsi(output);
     const lines = raw.split("\n");
     const agents: TeamAgent[] = [];
@@ -281,6 +303,7 @@ interface ParsedCronJob {
   agentId?: string;
   status?: string;
   nextRun?: number;
+  lastRunAtMs?: number;
   lastStatus?: string;
 }
 
@@ -322,6 +345,7 @@ function getCronsFromJson(): ParsedCronJob[] {
         agentId: job.agentId,
         status: job.enabled !== false ? "active" : "disabled",
         nextRun: job.state?.nextRunAtMs,
+        lastRunAtMs: job.state?.lastRunAtMs,
         lastStatus: job.state?.lastStatus,
       };
     });
@@ -369,7 +393,8 @@ function getCrons(): ParsedCronJob[] {
   const fromJson = getCronsFromJson();
   if (fromJson.length > 0) return fromJson;
   try {
-    const output = execSync("openclaw cron list", { encoding: "utf-8", timeout: 10000 });
+    const env = openclawEnv();
+    const output = execSync("openclaw cron list", { encoding: "utf-8", timeout: 10000, cwd: OPENCLAW_DIR, env });
     const lines = output.split("\n").filter((l) => l.trim());
     if (lines.length < 2) return [];
     const jobs: ParsedCronJob[] = [];
@@ -930,34 +955,52 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.json({ runsByJobId: getCronRuns(ids) });
     }
     case "get-employee-status": {
+      const ACTIVE_CRON_WINDOW_MS = 10 * 60 * 1000;
       const team = getTeam() as { id: string; name: string; status: string; role?: string }[];
-      const crons = getCrons();
-      const agentIds = new Set(team.map((a) => a.id.toLowerCase()));
-      const agentNames = new Set(team.map((a) => a.name.toLowerCase()));
-      const singleAgentIsWorking = team.length === 1;
+      const crons = getCrons() as ParsedCronJob[];
+      const now = Date.now();
       const employees = team.map((a) => {
+        const aId = a.id.toLowerCase();
+        const aName = (a.name && a.name.toLowerCase()) || "";
         const assignedCrons = crons.filter((c) => {
           const aid = (c.agentId ?? "").toLowerCase();
-          return aid && (agentIds.has(aid) || agentNames.has(aid) || a.id.toLowerCase() === aid || a.name.toLowerCase() === aid);
+          return aid && (aid === aId || aid === aName);
         });
-        const status = a.status === "active" ? "working" : assignedCrons.length > 0 ? "working" : singleAgentIsWorking ? "working" : "idle";
-        const currentTask =
-          assignedCrons.length > 0
-            ? assignedCrons.map((c) => c.name).join(", ")
-            : status === "working"
-              ? (a.role ?? "Orchestrator")
-              : "Idle";
+        const currentWorkingJobs = assignedCrons.filter((c) => {
+          const lastStatus = (c.lastStatus || "idle").toLowerCase();
+          if (lastStatus === "running") return true;
+          if (c.lastRunAtMs != null && now - c.lastRunAtMs <= ACTIVE_CRON_WINDOW_MS) return true;
+          return false;
+        });
+        const nextComingCrons = assignedCrons
+          .filter((c) => c.nextRun != null && c.nextRun > now)
+          .sort((x, y) => (x.nextRun ?? 0) - (y.nextRun ?? 0))
+          .map((c) => ({ id: c.id, name: c.name, schedule: c.schedule, nextRunAtMs: c.nextRun, agentId: c.agentId }));
+        const currentWorkingIds = new Set(currentWorkingJobs.map((c) => c.id));
+        const previousTasks = assignedCrons
+          .filter((c) => c.lastRunAtMs != null && !currentWorkingIds.has(c.id))
+          .sort((x, y) => (y.lastRunAtMs ?? 0) - (x.lastRunAtMs ?? 0))
+          .slice(0, 5)
+          .map((c) => ({ id: c.id, name: c.name, schedule: c.schedule, lastRunAtMs: c.lastRunAtMs!, agentId: c.agentId }));
+        const status = currentWorkingJobs.length > 0 ? "working" : "idle";
+        let currentTask = "Idle";
+        if (currentWorkingJobs.length > 0) {
+          const byRecency = [...currentWorkingJobs].sort((x, y) => (y.lastRunAtMs ?? 0) - (x.lastRunAtMs ?? 0));
+          currentTask = byRecency.map((c) => c.name).join(", ");
+        } else {
+          if (previousTasks.length > 0) currentTask = previousTasks[0].name || "Idle";
+        }
         return {
           id: a.id,
           name: a.name,
           status,
           currentTask: currentTask || "Idle",
+          currentWorkingJobs: currentWorkingJobs.map((c) => ({ id: c.id, name: c.name, schedule: c.schedule, agentId: c.agentId })),
+          previousTasks,
+          nextComingCrons,
         };
       });
-      return res.json({
-        employees,
-        crons: crons.map((c) => ({ id: c.id, name: c.name, schedule: c.schedule, agentId: c.agentId })),
-      });
+      return res.json({ employees });
     }
     case "get-config": {
       return res.json(getConfig());

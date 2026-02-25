@@ -7,6 +7,7 @@ import type { OfficeLayout, EditTool as EditToolType, TileType as TileTypeVal, F
 import { paintTile, placeFurniture, removeFurniture, moveFurniture, rotateFurniture, toggleFurnitureState, canPlaceFurniture, getWallPlacementRow, expandLayout } from '../office/editor/editorActions'
 import type { ExpandDirection } from '../office/editor/editorActions'
 import { getCatalogEntry, getRotatedType, getToggledType } from '../office/layout/furnitureCatalog'
+import { getEffectiveFootprint } from '../office/layout/layoutSerializer'
 import { defaultZoom } from '../office/toolUtils'
 import { vscode } from '../vscodeApi'
 import { LAYOUT_SAVE_DEBOUNCE_MS, ZOOM_MIN, ZOOM_MAX } from '../constants'
@@ -23,7 +24,7 @@ export interface EditorActions {
   handleToolChange: (tool: EditToolType) => void
   handleTileTypeChange: (type: TileTypeVal) => void
   handleFloorColorChange: (color: FloorColor) => void
-  handleWallColorChange: (color: FloorColor) => void
+  handleWallColorChange: (color: FloorColor | null) => void
   handleSelectedFurnitureColorChange: (color: FloorColor | null) => void
   handleFurnitureTypeChange: (type: string) => void // FurnitureType enum or asset ID
   handleDeleteSelected: () => void
@@ -51,6 +52,10 @@ export function useEditorActions(
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const panRef = useRef({ x: 0, y: 0 })
   const lastSavedLayoutRef = useRef<OfficeLayout | null>(null)
+  const lastRotateTimeRef = useRef(0)
+  const lastRotateUidRef = useRef<string | null>(null)
+  const ROTATE_THROTTLE_MS = 100
+  const ROTATE_COALESCE_MS = 800
 
   // Called when layout is loaded to set the initial checkpoint for undo/redo
   const setLastSavedLayout = useCallback((layout: OfficeLayout) => {
@@ -72,7 +77,7 @@ export function useEditorActions(
     editorState.clearRedo()
     editorState.isDirty = true
     setIsDirty(true)
-    os.rebuildFromLayout(newLayout)
+    os.rebuildFromLayout(newLayout, undefined, true)
     saveLayout(newLayout)
     setEditorTick((n) => n + 1)
   }, [getOfficeState, editorState, saveLayout])
@@ -97,7 +102,6 @@ export function useEditorActions(
         editorState.clearSelection()
         editorState.clearGhost()
         editorState.clearDrag()
-        wallColorEditActiveRef.current = false
       }
       return next
     })
@@ -114,7 +118,6 @@ export function useEditorActions(
     editorState.clearGhost()
     editorState.clearDrag()
     colorEditUidRef.current = null
-    wallColorEditActiveRef.current = false
     setEditorTick((n) => n + 1)
   }, [editorState])
 
@@ -128,39 +131,10 @@ export function useEditorActions(
     setEditorTick((n) => n + 1)
   }, [editorState])
 
-  // Track whether we've already pushed undo for the current wall color editing session
-  const wallColorEditActiveRef = useRef(false)
-
-  const handleWallColorChange = useCallback((color: FloorColor) => {
+  const handleWallColorChange = useCallback((color: FloorColor | null) => {
     editorState.wallColor = color
-
-    // Update all existing wall tiles to the new color
-    const os = getOfficeState()
-    const layout = os.getLayout()
-    const existingColors = layout.tileColors || new Array(layout.tiles.length).fill(null)
-    const newColors = [...existingColors]
-    let changed = false
-    for (let i = 0; i < layout.tiles.length; i++) {
-      if (layout.tiles[i] === TileType.WALL) {
-        newColors[i] = { ...color }
-        changed = true
-      }
-    }
-    if (changed) {
-      // Push undo only once per editing session (first slider touch)
-      if (!wallColorEditActiveRef.current) {
-        editorState.pushUndo(layout)
-        editorState.clearRedo()
-        wallColorEditActiveRef.current = true
-      }
-      const newLayout = { ...layout, tileColors: newColors }
-      editorState.isDirty = true
-      setIsDirty(true)
-      os.rebuildFromLayout(newLayout)
-      saveLayout(newLayout)
-    }
     setEditorTick((n) => n + 1)
-  }, [editorState, getOfficeState, saveLayout])
+  }, [editorState])
 
   // Track which uid we've already pushed undo for during color editing
   // so dragging sliders doesn't create N undo entries
@@ -187,7 +161,7 @@ export function useEditorActions(
 
     editorState.isDirty = true
     setIsDirty(true)
-    os.rebuildFromLayout(newLayout)
+    os.rebuildFromLayout(newLayout, undefined, true)
     saveLayout(newLayout)
     setEditorTick((n) => n + 1)
   }, [getOfficeState, editorState, saveLayout])
@@ -227,15 +201,31 @@ export function useEditorActions(
       setEditorTick((n) => n + 1)
       return
     }
-    // Otherwise rotate the selected placed furniture
     const uid = editorState.selectedFurnitureUid
     if (!uid) return
+    const now = Date.now()
+    if (now - lastRotateTimeRef.current < ROTATE_THROTTLE_MS) return
+
     const os = getOfficeState()
-    const newLayout = rotateFurniture(os.getLayout(), uid, 'cw')
-    if (newLayout !== os.getLayout()) {
-      applyEdit(newLayout)
+    const currentLayout = os.getLayout()
+    const newLayout = rotateFurniture(currentLayout, uid, 'cw')
+    if (newLayout === currentLayout) return
+
+    // Coalesce consecutive rotations on the same item into a single undo entry
+    const isCoalesce = lastRotateUidRef.current === uid && (now - lastRotateTimeRef.current) < ROTATE_COALESCE_MS
+    lastRotateTimeRef.current = now
+    lastRotateUidRef.current = uid
+
+    if (!isCoalesce) {
+      editorState.pushUndo(currentLayout)
+      editorState.clearRedo()
     }
-  }, [getOfficeState, editorState, applyEdit])
+    editorState.isDirty = true
+    setIsDirty(true)
+    os.rebuildFurnitureOnly(newLayout)
+    saveLayout(newLayout)
+    setEditorTick((n) => n + 1)
+  }, [getOfficeState, editorState, saveLayout])
 
   const handleToggleState = useCallback(() => {
     // If in furniture placement mode, toggle the selected type's state
@@ -263,7 +253,7 @@ export function useEditorActions(
     const os = getOfficeState()
     // Push current layout to redo stack before restoring
     editorState.pushRedo(os.getLayout())
-    os.rebuildFromLayout(prev)
+    os.rebuildFromLayout(prev, undefined, true)
     saveLayout(prev)
     editorState.isDirty = true
     setIsDirty(true)
@@ -276,7 +266,7 @@ export function useEditorActions(
     const os = getOfficeState()
     // Push current layout to undo stack before restoring
     editorState.pushUndo(os.getLayout())
-    os.rebuildFromLayout(next)
+    os.rebuildFromLayout(next, undefined, true)
     saveLayout(next)
     editorState.isDirty = true
     setIsDirty(true)
@@ -371,7 +361,7 @@ export function useEditorActions(
         effectiveCol = expansion.col
         effectiveRow = expansion.row
         // Rebuild from expanded layout first, shifting character positions
-        os.rebuildFromLayout(layout, expansion.shift)
+        os.rebuildFromLayout(layout, expansion.shift, true)
       }
     }
 
@@ -384,14 +374,19 @@ export function useEditorActions(
       const idx = effectiveRow * layout.cols + effectiveCol
       const isWall = layout.tiles[idx] === TileType.WALL
 
-      // First tile of drag sets direction
+      if (editorState.wallDragAdding === null && isWall) {
+        const color = layout.tileColors?.[idx]
+        editorState.wallColor = color ? { ...color } : null
+        setEditorTick((n) => n + 1)
+        return
+      }
+
       if (editorState.wallDragAdding === null) {
         editorState.wallDragAdding = !isWall
       }
 
       if (editorState.wallDragAdding) {
-        // Add wall with color
-        const newLayout = paintTile(layout, effectiveCol, effectiveRow, TileType.WALL, editorState.wallColor)
+        const newLayout = paintTile(layout, effectiveCol, effectiveRow, TileType.WALL, editorState.wallColor ?? undefined)
         if (newLayout !== layout) {
           applyEdit(newLayout)
         }
@@ -415,17 +410,17 @@ export function useEditorActions(
     } else if (editorState.activeTool === EditTool.FURNITURE_PLACE) {
       const type = editorState.selectedFurnitureType
       if (type === '') {
-        // No item selected — act like SELECT (find furniture hit)
         const hit = layout.furniture.find((f) => {
           const entry = getCatalogEntry(f.type)
           if (!entry) return false
-          return col >= f.col && col < f.col + entry.footprintW && row >= f.row && row < f.row + entry.footprintH
+          const { w: effW, h: effH } = getEffectiveFootprint(f, entry)
+          return col >= f.col && col < f.col + effW && row >= f.row && row < f.row + effH
         })
         editorState.selectedFurnitureUid = hit ? hit.uid : null
         setEditorTick((n) => n + 1)
       } else {
         const placementRow = getWallPlacementRow(type, row)
-        if (!canPlaceFurniture(layout, type, col, placementRow)) return
+        if (!canPlaceFurniture(layout, type, col, placementRow, undefined, editorState.ghostRotation)) return
         const uid = `f-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
         const placed: PlacedFurniture = { uid, type, col, row: placementRow }
         if (editorState.pickedFurnitureColor) {
@@ -440,11 +435,11 @@ export function useEditorActions(
         }
       }
     } else if (editorState.activeTool === EditTool.FURNITURE_PICK) {
-      // Find furniture at clicked tile, copy its type and color for placement
       const hit = layout.furniture.find((f) => {
         const entry = getCatalogEntry(f.type)
         if (!entry) return false
-        return col >= f.col && col < f.col + entry.footprintW && row >= f.row && row < f.row + entry.footprintH
+        const { w: effW, h: effH } = getEffectiveFootprint(f, entry)
+        return col >= f.col && col < f.col + effW && row >= f.row && row < f.row + effH
       })
       if (hit) {
         editorState.selectedFurnitureType = hit.type
@@ -463,11 +458,8 @@ export function useEditorActions(
         }
         editorState.activeTool = EditTool.TILE_PAINT
       } else if (tile === TileType.WALL) {
-        // Pick wall color and switch to wall tool
         const color = layout.tileColors?.[idx]
-        if (color) {
-          editorState.wallColor = { ...color }
-        }
+        editorState.wallColor = color ? { ...color } : null
         editorState.activeTool = EditTool.WALL_PAINT
       }
       setEditorTick((n) => n + 1)
@@ -475,7 +467,8 @@ export function useEditorActions(
       const hit = layout.furniture.find((f) => {
         const entry = getCatalogEntry(f.type)
         if (!entry) return false
-        return col >= f.col && col < f.col + entry.footprintW && row >= f.row && row < f.row + entry.footprintH
+        const { w: effW, h: effH } = getEffectiveFootprint(f, entry)
+        return col >= f.col && col < f.col + effW && row >= f.row && row < f.row + effH
       })
       editorState.selectedFurnitureUid = hit ? hit.uid : null
       setEditorTick((n) => n + 1)

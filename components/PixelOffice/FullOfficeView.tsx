@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useState, useRef, useCallback, useMemo, useEffect } from "react";
-import { OfficeState } from "./office/engine/officeState";
 import { OfficeCanvas } from "./office/components/OfficeCanvas";
 import { ToolOverlay } from "./office/components/ToolOverlay";
 import { EditorToolbar } from "./office/editor/EditorToolbar";
@@ -20,17 +19,7 @@ import { loadSoundPreference } from "./HyperclawSettingsModal";
 import { setSoundEnabled } from "./notificationSound";
 import { vscode } from "./vscodeApi";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
-
-const LAYOUT_STORAGE_KEY = "pixel-office-layout";
-
-const officeStateRef = { current: null as OfficeState | null };
-
-function getOfficeState(): OfficeState {
-  if (!officeStateRef.current) {
-    officeStateRef.current = new OfficeState();
-  }
-  return officeStateRef.current;
-}
+import { getOfficeState, LAYOUT_STORAGE_KEY } from "./officeStateSingleton";
 
 const actionBarBtnStyle: React.CSSProperties = {
   padding: "4px 10px",
@@ -123,7 +112,13 @@ function EditActionBar({
   );
 }
 
-export function FullOfficeView() {
+export interface FullOfficeViewProps {
+  /** When true, hide toolbars/zoom/edit UI for embedding in dashboard widget. */
+  embedMode?: boolean;
+}
+
+export function FullOfficeView(props: FullOfficeViewProps = {}) {
+  const { embedMode = false } = props;
   const editorState = useMemo(() => new EditorState(), []);
   const editor = useEditorActions(getOfficeState, editorState);
 
@@ -133,7 +128,7 @@ export function FullOfficeView() {
 
   const handleApplyLayout = useCallback((layout: import("./office/types").OfficeLayout) => {
     const os = getOfficeState();
-    os.rebuildFromLayout(layout);
+    os.rebuildFromLayout(layout, undefined, true);
     try {
       localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(layout));
     } catch {}
@@ -180,12 +175,29 @@ export function FullOfficeView() {
     editor.handleToggleEditMode
   );
 
-  const handleCloseAgent = useCallback((_id: number) => {}, []);
+  const handleCloseAgent = useCallback((_id: number) => {
+    setSelectedAgentId(null);
+    getOfficeState().selectedAgentId = null;
+    getOfficeState().cameraFollowId = null;
+  }, []);
   const handleClick = useCallback((agentId: number | null) => {
     setSelectedAgentId(agentId);
   }, []);
 
   const selectedAgentInfo = selectedAgentId != null ? getAgentByCharacterId(selectedAgentId) : null;
+
+  const agentNames = useMemo(() => {
+    const m: Record<number, string> = {};
+    agents.forEach((charId) => {
+      const info = getAgentByCharacterId(charId);
+      m[charId] = info?.name ?? info?.id ?? String(charId);
+    });
+    subagentCharacters.forEach((s) => {
+      m[s.id] = s.label;
+    });
+    return m;
+  }, [agents, subagentCharacters, getAgentByCharacterId]);
+
   const handleCloseAgentInfo = useCallback(() => {
     setSelectedAgentId(null);
     getOfficeState().selectedAgentId = null;
@@ -267,7 +279,9 @@ export function FullOfficeView() {
         }}
       />
 
-      <ZoomControls zoom={editor.zoom} onZoomChange={editor.handleZoomChange} />
+      {!embedMode && (
+        <ZoomControls zoom={editor.zoom} onZoomChange={editor.handleZoomChange} />
+      )}
 
       {selectedAgentId != null && (
         <AgentInfoPanel
@@ -287,21 +301,23 @@ export function FullOfficeView() {
         }}
       />
 
-      <PixelOfficeToolbar
-        isEditMode={editor.isEditMode}
-        onToggleEditMode={editor.handleToggleEditMode}
-        isDebugMode={isDebugMode}
-        onToggleDebugMode={handleToggleDebugMode}
-        getLayout={() => getOfficeState().getLayout()}
-        onApplyLayout={handleApplyLayout}
-        agentCount={agents.length}
-      />
+      {!embedMode && (
+        <PixelOfficeToolbar
+          isEditMode={editor.isEditMode}
+          onToggleEditMode={editor.handleToggleEditMode}
+          isDebugMode={isDebugMode}
+          onToggleDebugMode={handleToggleDebugMode}
+          getLayout={() => getOfficeState().getLayout()}
+          onApplyLayout={handleApplyLayout}
+          agentCount={agents.length}
+        />
+      )}
 
-      {editor.isEditMode && editor.isDirty && (
+      {!embedMode && editor.isEditMode && editor.isDirty && (
         <EditActionBar editor={editor} editorState={editorState} />
       )}
 
-      {showRotateHint && (
+      {!embedMode && showRotateHint && (
         <div
           style={{
             position: "absolute",
@@ -324,7 +340,7 @@ export function FullOfficeView() {
         </div>
       )}
 
-      {editor.isEditMode &&
+      {!embedMode && editor.isEditMode &&
         (() => {
           const selUid = editorState.selectedFurnitureUid;
           const selColor = selUid
@@ -345,6 +361,8 @@ export function FullOfficeView() {
               onWallColorChange={editor.handleWallColorChange}
               onSelectedFurnitureColorChange={editor.handleSelectedFurnitureColorChange}
               onFurnitureTypeChange={editor.handleFurnitureTypeChange}
+              showRotateButton={showRotateHint}
+              onRotateSelected={editor.handleRotateSelected}
               loadedAssets={loadedAssets}
             />
           );
@@ -355,13 +373,14 @@ export function FullOfficeView() {
         agents={agents}
         agentTools={agentTools}
         subagentCharacters={subagentCharacters}
+        agentNames={agentNames}
         containerRef={containerRef}
         zoom={editor.zoom}
         panRef={editor.panRef}
         onCloseAgent={handleCloseAgent}
       />
 
-      {isDebugMode && (
+      {!embedMode && isDebugMode && (
         <DebugView
           agents={agents}
           selectedAgent={selectedAgentId}

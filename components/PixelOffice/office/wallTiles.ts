@@ -11,7 +11,7 @@
 
 import type { SpriteData, TileType as TileTypeVal, FloorColor, FurnitureInstance } from './types'
 import { TileType, TILE_SIZE } from './types'
-import { getColorizedSprite } from './colorize'
+import { getColorizedSprite, PATTERN_LIGHTNESS_MIN, PATTERN_LIGHTNESS_MAX } from './colorize'
 
 /** 16 wall sprites indexed by bitmask (0-15) */
 let wallSprites: SpriteData[] | null = null
@@ -126,23 +126,22 @@ export function getWallInstances(
  */
 export function wallColorToHex(color: FloorColor): string {
   const { h, s, b, c } = color
-  // Start with 50% gray (wall base)
   let lightness = 0.5
 
-  // Apply contrast
   if (c !== 0) {
     const factor = (100 + c) / 100
     lightness = 0.5 + (lightness - 0.5) * factor
   }
 
-  // Apply brightness
   if (b !== 0) {
     lightness = lightness + b / 200
   }
 
   lightness = Math.max(0, Math.min(1, lightness))
 
-  // HSL to hex (same as colorize.ts hslToHex)
+  // Match colorizeSprite's remapping so base fill aligns with sprite colors
+  lightness = PATTERN_LIGHTNESS_MIN + lightness * (PATTERN_LIGHTNESS_MAX - PATTERN_LIGHTNESS_MIN)
+
   const satFrac = s / 100
   const ch = (1 - Math.abs(2 * lightness - 1)) * satFrac
   const hp = h / 60

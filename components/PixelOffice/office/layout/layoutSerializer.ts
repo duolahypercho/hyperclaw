@@ -3,6 +3,17 @@ import type { TileType as TileTypeVal, OfficeLayout, PlacedFurniture, Seat, Furn
 import { getCatalogEntry } from './furnitureCatalog'
 import { getColorizedSprite } from '../colorize'
 
+/** Effective footprint (width, height) for a placed item. When rotation is 90° or 270°, W and H are swapped so 3x1 becomes 1x3. */
+export function getEffectiveFootprint(
+  item: PlacedFurniture,
+  entry: { footprintW: number; footprintH: number }
+): { w: number; h: number } {
+  const rot = Number(item.rotation) || 0
+  const rotNorm = ((rot % 360) + 360) % 360
+  if (rotNorm === 90 || rotNorm === 270) return { w: entry.footprintH, h: entry.footprintW }
+  return { w: entry.footprintW, h: entry.footprintH }
+}
+
 /** Convert flat tile array from layout into 2D grid */
 export function layoutToTileMap(layout: OfficeLayout): TileTypeVal[][] {
   const map: TileTypeVal[][] = []
@@ -23,12 +34,13 @@ export function layoutToFurnitureInstances(furniture: PlacedFurniture[]): Furnit
   for (const item of furniture) {
     const entry = getCatalogEntry(item.type)
     if (!entry || !entry.isDesk) continue
+    const { w: effW, h: effH } = getEffectiveFootprint(item, entry)
     const deskZY = item.row * TILE_SIZE + entry.sprite.length
     const cutouts = entry.cutoutTiles
       ? new Set(entry.cutoutTiles.map(({ dc, dr }) => `${dc},${dr}`))
       : null
-    for (let dr = 0; dr < entry.footprintH; dr++) {
-      for (let dc = 0; dc < entry.footprintW; dc++) {
+    for (let dr = 0; dr < effH; dr++) {
+      for (let dc = 0; dc < effW; dc++) {
         if (cutouts?.has(`${dc},${dr}`)) continue
         const key = `${item.col + dc},${item.row + dr}`
         const prev = deskZByTile.get(key)
@@ -41,61 +53,73 @@ export function layoutToFurnitureInstances(furniture: PlacedFurniture[]): Furnit
   for (const item of furniture) {
     const entry = getCatalogEntry(item.type)
     if (!entry) continue
-    const x = item.col * TILE_SIZE
-    const y = item.row * TILE_SIZE
-    const spriteH = entry.sprite.length
-    let zY = y + spriteH
 
-    // Chair z-sorting: ensure characters sitting on chairs render correctly
+    // Compute draw anchor so the rotated sprite's bbox starts at (col, row).
+    // Layout stores (col, row) as top-left of the effective footprint.
+    const rotDeg = item.rotation ?? 0
+    const rotNorm = ((rotDeg % 360) + 360) % 360
+    const { w: effW, h: effH } = getEffectiveFootprint(item, entry)
+    let x: number, y: number
+    if (rotNorm === 90) {
+      x = (item.col + effW) * TILE_SIZE
+      y = item.row * TILE_SIZE
+    } else if (rotNorm === 180) {
+      x = (item.col + effW) * TILE_SIZE
+      y = (item.row + effH) * TILE_SIZE
+    } else if (rotNorm === 270) {
+      x = item.col * TILE_SIZE
+      y = (item.row + effH) * TILE_SIZE
+    } else {
+      x = item.col * TILE_SIZE
+      y = item.row * TILE_SIZE
+    }
+
+    const spriteH = entry.sprite.length
+    let zY = item.row * TILE_SIZE + spriteH
+
     if (entry.category === 'chairs') {
       if (entry.orientation === 'back') {
-        // Back-facing chairs render IN FRONT of the seated character
-        // (the chair back visually occludes the character behind it)
         zY = (item.row + 1) * TILE_SIZE + 1
       } else {
-        // All other chairs: cap zY to first row bottom so characters
-        // at any seat tile render in front of the chair
         zY = (item.row + 1) * TILE_SIZE
       }
     }
 
-    // Surface items render in front of the desk they sit on
     if (entry.canPlaceOnSurfaces) {
-      for (let dr = 0; dr < entry.footprintH; dr++) {
-        for (let dc = 0; dc < entry.footprintW; dc++) {
+      for (let dr = 0; dr < effH; dr++) {
+        for (let dc = 0; dc < effW; dc++) {
           const deskZ = deskZByTile.get(`${item.col + dc},${item.row + dr}`)
           if (deskZ !== undefined && deskZ + 0.5 > zY) zY = deskZ + 0.5
         }
       }
     }
 
-    // Colorize sprite if this furniture has a color override
     let sprite = entry.sprite
     if (item.color) {
       const { h, s, b: bv, c: cv } = item.color
       sprite = getColorizedSprite(`furn-${item.type}-${h}-${s}-${bv}-${cv}-${item.color.colorize ? 1 : 0}`, entry.sprite, item.color)
     }
 
-    const rotationDeg = item.rotation ?? 0
-    instances.push({ sprite, x, y, zY, rotationDeg: rotationDeg !== 0 ? rotationDeg : undefined })
+    instances.push({ sprite, x, y, zY, rotationDeg: rotNorm !== 0 ? rotNorm : undefined })
   }
   return instances
 }
 
 /** Get all tiles blocked by furniture footprints, optionally excluding a set of tiles.
- *  Skips backgroundTiles rows and cutoutTiles so characters can walk/stand in gaps (e.g. U-table). */
+ *  Skips backgroundTiles rows and cutoutTiles. Uses effective footprint (3x1 → 1x3 when rotated 90/270). */
 export function getBlockedTiles(furniture: PlacedFurniture[], excludeTiles?: Set<string>): Set<string> {
   const tiles = new Set<string>()
   for (const item of furniture) {
     const entry = getCatalogEntry(item.type)
     if (!entry) continue
+    const { w: effW, h: effH } = getEffectiveFootprint(item, entry)
     const bgRows = entry.backgroundTiles || 0
     const cutouts = entry.cutoutTiles
       ? new Set(entry.cutoutTiles.map(({ dc, dr }) => `${dc},${dr}`))
       : null
-    for (let dr = 0; dr < entry.footprintH; dr++) {
+    for (let dr = 0; dr < effH; dr++) {
       if (dr < bgRows) continue
-      for (let dc = 0; dc < entry.footprintW; dc++) {
+      for (let dc = 0; dc < effW; dc++) {
         if (cutouts?.has(`${dc},${dr}`)) continue
         const key = `${item.col + dc},${item.row + dr}`
         if (excludeTiles && excludeTiles.has(key)) continue
@@ -106,7 +130,7 @@ export function getBlockedTiles(furniture: PlacedFurniture[], excludeTiles?: Set
   return tiles
 }
 
-/** Get tiles blocked for placement purposes — skips backgroundTiles rows and cutoutTiles per item */
+/** Get tiles blocked for placement purposes — skips backgroundTiles rows and cutoutTiles. Uses effective footprint for rotation. */
 export function getPlacementBlockedTiles(furniture: PlacedFurniture[], excludeUid?: string): Set<string> {
   const tiles = new Set<string>()
   const cutoutSet = (entry: { cutoutTiles?: Array<{ dc: number; dr: number }> }) => {
@@ -117,11 +141,12 @@ export function getPlacementBlockedTiles(furniture: PlacedFurniture[], excludeUi
     if (item.uid === excludeUid) continue
     const entry = getCatalogEntry(item.type)
     if (!entry) continue
+    const { w: effW, h: effH } = getEffectiveFootprint(item, entry)
     const bgRows = entry.backgroundTiles || 0
     const cutouts = cutoutSet(entry)
-    for (let dr = 0; dr < entry.footprintH; dr++) {
+    for (let dr = 0; dr < effH; dr++) {
       if (dr < bgRows) continue
-      for (let dc = 0; dc < entry.footprintW; dc++) {
+      for (let dc = 0; dc < effW; dc++) {
         if (cutouts?.has(`${dc},${dr}`)) continue
         tiles.add(`${item.col + dc},${item.row + dr}`)
       }
@@ -157,16 +182,17 @@ function rotationToFacing(rotation: number): Direction {
 export function layoutToSeats(furniture: PlacedFurniture[]): Map<string, Seat> {
   const seats = new Map<string, Seat>()
 
-  // Build set of all desk tiles (exclude cutouts so chair in U-table gap is adjacent, not on desk)
+  // Build set of all desk tiles (exclude cutouts so chair in U-table gap is adjacent, not on desk). Use effective footprint for rotation.
   const deskTiles = new Set<string>()
   for (const item of furniture) {
     const entry = getCatalogEntry(item.type)
     if (!entry || !entry.isDesk) continue
+    const { w: effW, h: effH } = getEffectiveFootprint(item, entry)
     const cutouts = entry.cutoutTiles
       ? new Set(entry.cutoutTiles.map(({ dc, dr }) => `${dc},${dr}`))
       : null
-    for (let dr = 0; dr < entry.footprintH; dr++) {
-      for (let dc = 0; dc < entry.footprintW; dc++) {
+    for (let dr = 0; dr < effH; dr++) {
+      for (let dc = 0; dc < effW; dc++) {
         if (cutouts?.has(`${dc},${dr}`)) continue
         deskTiles.add(`${item.col + dc},${item.row + dr}`)
       }
@@ -180,15 +206,16 @@ export function layoutToSeats(furniture: PlacedFurniture[]): Map<string, Seat> {
     { dc: 1, dr: 0, facing: Direction.RIGHT },   // desk is right of chair → face RIGHT
   ]
 
-  // For each chair, every footprint tile becomes a seat.
+  // For each chair, every footprint tile becomes a seat. Use effective footprint for rotated chairs.
   // Multi-tile chairs (e.g. 2-tile couches) produce multiple seats.
   for (const item of furniture) {
     const entry = getCatalogEntry(item.type)
     if (!entry || entry.category !== 'chairs') continue
 
+    const { w: effW, h: effH } = getEffectiveFootprint(item, entry)
     let seatCount = 0
-    for (let dr = 0; dr < entry.footprintH; dr++) {
-      for (let dc = 0; dc < entry.footprintW; dc++) {
+    for (let dr = 0; dr < effH; dr++) {
+      for (let dc = 0; dc < effW; dc++) {
         const tileCol = item.col + dc
         const tileRow = item.row + dr
 

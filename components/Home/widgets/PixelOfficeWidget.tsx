@@ -11,17 +11,14 @@ import {
   ExternalLink,
   Loader2,
   Building2,
-  Briefcase,
-  Coffee,
+  Users,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
-import { PixelOfficeProvider, usePixelOffice } from "$/components/PixelOffice";
+import { PixelOfficeProvider, usePixelOffice, FullOfficeView } from "$/components/PixelOffice";
 import { useOS } from "@OS/Provider/OSProv";
 import { useFocusMode } from "./hooks/useFocusMode";
-import type { AgentStatus } from "$/components/PixelOffice/types";
 
 export const PixelOfficeCustomHeader: React.FC<CustomProps> = ({
   widget,
@@ -52,7 +49,8 @@ export const PixelOfficeCustomHeader: React.FC<CustomProps> = ({
           {widget.title}
         </h3>
         {!loading && agents.length > 0 && (
-          <span className="text-xs text-muted-foreground">
+          <span className="text-xs text-muted-foreground flex items-center gap-1">
+            <Users className="w-3 h-3" />
             {agents.length} agent{agents.length !== 1 ? "s" : ""}
           </span>
         )}
@@ -97,24 +95,9 @@ export const PixelOfficeCustomHeader: React.FC<CustomProps> = ({
   );
 };
 
-function StatusDot({ status }: { status: AgentStatus }) {
-  return (
-    <span
-      className={cn(
-        "shrink-0 w-1.5 h-1.5 rounded-full",
-        status === "working"
-          ? "bg-emerald-500"
-          : "bg-muted-foreground"
-      )}
-      title={status === "working" ? "Working" : "Idle"}
-      aria-hidden
-    />
-  );
-}
-
 const PixelOfficeWidgetContent = memo((props: CustomProps) => {
   const { isFocusModeActive } = useFocusMode();
-  const { agents, statuses, currentTasks, loading, error, refresh } = usePixelOffice();
+  const { agents, loading, error, refresh } = usePixelOffice();
 
   return (
     <motion.div
@@ -133,7 +116,7 @@ const PixelOfficeWidgetContent = memo((props: CustomProps) => {
       >
         <PixelOfficeCustomHeader {...props} />
 
-        <div className="flex-1 overflow-hidden flex flex-col min-h-0 px-2 pb-2">
+        <div className="flex-1 overflow-hidden flex flex-col min-h-0">
           {error ? (
             <div className="flex-1 flex flex-col items-center justify-center gap-2 py-6 px-3">
               <p className="text-sm text-destructive font-mono text-center">
@@ -161,9 +144,18 @@ const PixelOfficeWidgetContent = memo((props: CustomProps) => {
             </div>
           ) : agents.length === 0 ? (
             <div className="flex-1 flex flex-col items-center justify-center gap-3 py-6 px-3">
-              <Building2 className="w-8 h-8 text-muted-foreground/50" />
+              <div className="relative">
+                <Building2 className="w-8 h-8 text-muted-foreground/50" />
+                <span
+                  className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-sm bg-primary/40 border border-primary/60"
+                  aria-hidden
+                />
+              </div>
               <p className="text-sm text-muted-foreground text-center">
                 No agents in office yet.
+              </p>
+              <p className="text-[11px] text-muted-foreground/80 text-center max-w-[200px]">
+                Open the full pixel office to see your AI team.
               </p>
               <Button
                 variant="outline"
@@ -176,72 +168,21 @@ const PixelOfficeWidgetContent = memo((props: CustomProps) => {
               </Button>
             </div>
           ) : (
-            <>
-              <ScrollArea className="flex-1 min-h-0">
-                <ul className="space-y-1 pr-2 py-1">
-                  {agents.map((agent, i) => {
-                    const status = statuses[agent.id] ?? "idle";
-                    const currentTask = currentTasks[agent.id];
-                    return (
-                      <motion.li
-                        key={agent.id}
-                        initial={{ opacity: 0, y: 4 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ delay: i * 0.03 }}
-                        className={cn(
-                          "flex items-center gap-2 px-2 py-1.5 rounded-md border-l-2 border-transparent",
-                          "hover:bg-muted/30 transition-colors",
-                          status === "working" && "border-primary/50 bg-primary/5"
-                        )}
-                      >
-                        <StatusDot status={status} />
-                        <div className="min-w-0 flex-1 flex flex-col gap-0.5">
-                          <span className="text-xs font-medium text-foreground truncate">
-                            {agent.name}
-                            {agent.isBoss && (
-                              <span className="text-muted-foreground ml-1 text-[10px]">
-                                (lead)
-                              </span>
-                            )}
-                          </span>
-                          {currentTask && (
-                            <span className="text-[11px] text-muted-foreground truncate flex items-center gap-1">
-                              {status === "working" ? (
-                                <Briefcase className="w-2.5 h-2.5 shrink-0" />
-                              ) : (
-                                <Coffee className="w-2.5 h-2.5 shrink-0" />
-                              )}
-                              {currentTask}
-                            </span>
-                          )}
-                        </div>
-                        <span
-                          className={cn(
-                            "text-[10px] shrink-0 px-1.5 py-0.5 rounded font-medium border",
-                            status === "working"
-                              ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30"
-                              : "bg-muted/80 text-muted-foreground border-border"
-                          )}
-                        >
-                          {status === "working" ? "Working" : "Idle"}
-                        </span>
-                      </motion.li>
-                    );
-                  })}
-                </ul>
-              </ScrollArea>
-              <div className="pt-1.5 border-t border-border/50 flex justify-end">
+            <div className="flex-1 min-h-0 w-full flex flex-col rounded-b-md overflow-hidden bg-black-100 relative">
+              {/* Same FullOfficeView as Tool/PixelOffice; layout is shared via officeStateSingleton so edits on the full page appear here and vice versa. */}
+              <FullOfficeView embedMode />
+              <div className="absolute bottom-2 right-2 z-[60]">
                 <Button
-                  variant="ghost"
+                  variant="secondary"
                   size="sm"
-                  className="h-6 text-xs gap-1"
+                  className="h-6 text-[10px] opacity-90 shadow-md"
                   onClick={() => window.open("/Tool/PixelOffice", "_blank")}
                 >
-                  <ExternalLink className="w-3 h-3" />
-                  Open full office
+                  <ExternalLink className="w-2.5 h-2.5 mr-1" />
+                  Full office
                 </Button>
               </div>
-            </>
+            </div>
           )}
         </div>
       </Card>

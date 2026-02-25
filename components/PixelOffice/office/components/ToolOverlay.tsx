@@ -10,34 +10,12 @@ interface ToolOverlayProps {
   agents: number[]
   agentTools: Record<number, ToolActivity[]>
   subagentCharacters: SubagentCharacter[]
+  /** Character id -> display name (agent name only shown in overlay) */
+  agentNames: Record<number, string>
   containerRef: React.RefObject<HTMLDivElement | null>
   zoom: number
   panRef: React.RefObject<{ x: number; y: number }>
   onCloseAgent: (id: number) => void
-}
-
-/** Derive a short human-readable activity string from tools/status */
-function getActivityText(
-  agentId: number,
-  agentTools: Record<number, ToolActivity[]>,
-  isActive: boolean,
-): string {
-  const tools = agentTools[agentId]
-  if (tools && tools.length > 0) {
-    // Find the latest non-done tool
-    const activeTool = [...tools].reverse().find((t) => !t.done)
-    if (activeTool) {
-      if (activeTool.permissionWait) return 'Needs approval'
-      return activeTool.status
-    }
-    // All tools done but agent still active (mid-turn) — keep showing last tool status
-    if (isActive) {
-      const lastTool = tools[tools.length - 1]
-      if (lastTool) return lastTool.status
-    }
-  }
-
-  return 'Idle'
 }
 
 export function ToolOverlay({
@@ -45,6 +23,7 @@ export function ToolOverlay({
   agents,
   agentTools,
   subagentCharacters,
+  agentNames,
   containerRef,
   zoom,
   panRef,
@@ -98,19 +77,12 @@ export function ToolOverlay({
         const screenX = (deviceOffsetX + ch.x * zoom) / dpr
         const screenY = (deviceOffsetY + (ch.y + sittingOffset - TOOL_OVERLAY_VERTICAL_OFFSET) * zoom) / dpr
 
-        // Get activity text
+        // Display: agent name only (subagents show "Needs approval" when waiting)
         const subHasPermission = isSub && ch.bubbleType === 'permission'
-        let activityText: string
-        if (isSub) {
-          if (subHasPermission) {
-            activityText = 'Needs approval'
-          } else {
-            const sub = subagentCharacters.find((s) => s.id === id)
-            activityText = sub ? sub.label : 'Subtask'
-          }
-        } else {
-          activityText = getActivityText(id, agentTools, ch.isActive)
-        }
+        const displayText =
+          isSub && subHasPermission
+            ? 'Needs approval'
+            : (agentNames[id] ?? (isSub ? 'Subtask' : 'Agent'))
 
         // Determine dot color
         const tools = agentTools[id]
@@ -177,7 +149,7 @@ export function ToolOverlay({
                   textOverflow: 'ellipsis',
                 }}
               >
-                {activityText}
+                {displayText}
               </span>
               {isSelected && !isSub && (
                 <button

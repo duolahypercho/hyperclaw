@@ -7,10 +7,10 @@ import { createDefaultLayout, deserializeLayout, migrateLayoutColors } from "./o
 import { getPresetById } from "./layoutPresets";
 import { useOfficeEngine } from "./officeEngineConfig";
 import { usePixelOffice } from "./provider/pixelOfficeProvider";
+import type { EmployeeCronJob, EmployeePreviousTask } from "./provider/pixelOfficeProvider";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
 import type { SubagentCharacter } from "./office/types";
-
-const LAYOUT_STORAGE_KEY = "pixel-office-layout";
+import { LAYOUT_STORAGE_KEY } from "./officeStateSingleton";
 
 export type { SubagentCharacter };
 
@@ -37,6 +37,12 @@ export interface AgentInfo {
   name: string;
   status: string;
   currentTask?: string;
+  /** Jobs that ran within 10 mins (working). */
+  currentWorkingJobs?: { id: string; name: string; schedule: string; agentId?: string }[];
+  /** Jobs that ran before (outside 10 min), for "X ago" display. */
+  previousTasks?: EmployeePreviousTask[];
+  /** Upcoming jobs with nextRunAtMs for "in X" display. */
+  nextComingCrons?: EmployeeCronJob[];
 }
 
 export interface HyperclawOfficeState {
@@ -66,9 +72,9 @@ function buildEngineConfig(): import("./officeEngineConfig").OfficeEngineConfig 
       }
       try {
         const saved = typeof localStorage !== "undefined" && localStorage.getItem(LAYOUT_STORAGE_KEY);
-        return (saved && deserializeLayout(saved)) || getPresetById("workstations") || createDefaultLayout();
+        return (saved && deserializeLayout(saved)) || getPresetById("cody-office") || createDefaultLayout();
       } catch {
-        return getPresetById("workstations") || createDefaultLayout();
+        return getPresetById("cody-office") || createDefaultLayout();
       }
     },
   };
@@ -78,7 +84,14 @@ export function useHyperclawOffice(
   getOfficeState: () => OfficeState,
   onLayoutLoaded?: (layout: OfficeLayout) => void
 ): HyperclawOfficeState {
-  const { agents: bridgeAgents, statuses: bridgeStatuses, currentTasks: bridgeCurrentTasks } = usePixelOffice();
+  const {
+    agents: bridgeAgents,
+    statuses: bridgeStatuses,
+    currentTasks: bridgeCurrentTasks,
+    currentWorkingJobsByAgent,
+    previousTasksByAgent,
+    nextComingCronsByAgent,
+  } = usePixelOffice();
   const config = useMemo(() => buildEngineConfig(), []);
   const { layoutReady } = useOfficeEngine(getOfficeState, config, onLayoutLoaded);
   const [agents, setAgents] = useState<number[]>([]);
@@ -150,9 +163,12 @@ export function useHyperclawOffice(
         name: agent.name || agent.id,
         status: bridgeStatuses[agent.id] ?? "idle",
         currentTask: bridgeCurrentTasks[agent.id],
+        currentWorkingJobs: currentWorkingJobsByAgent[agent.id],
+        previousTasks: previousTasksByAgent[agent.id],
+        nextComingCrons: nextComingCronsByAgent[agent.id],
       };
     },
-    [bridgeAgents, bridgeStatuses, bridgeCurrentTasks]
+    [bridgeAgents, bridgeStatuses, bridgeCurrentTasks, currentWorkingJobsByAgent, previousTasksByAgent, nextComingCronsByAgent]
   );
 
   return {

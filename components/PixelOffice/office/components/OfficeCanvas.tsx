@@ -7,6 +7,7 @@ import { renderFrame } from '../engine/renderer'
 import { TILE_SIZE, EditTool } from '../types'
 import { CAMERA_FOLLOW_LERP, CAMERA_FOLLOW_SNAP_THRESHOLD, ZOOM_MIN, ZOOM_MAX, ZOOM_SCROLL_THRESHOLD, PAN_MARGIN_FRACTION } from '../../constants'
 import { getCatalogEntry, isRotatable } from '../layout/furnitureCatalog'
+import { getEffectiveFootprint } from '../layout/layoutSerializer'
 import { canPlaceFurniture, getWallPlacementRow } from '../editor/editorActions'
 import { unlockAudio } from '../../notificationSound'
 
@@ -143,6 +144,10 @@ export function OfficeCanvas({ officeState, onClick, isEditMode, editorState, on
             const entry = getCatalogEntry(es.selectedFurnitureType)
             if (entry) {
               const placementRow = getWallPlacementRow(es.selectedFurnitureType, es.ghostRow)
+              const rot = es.ghostRotation
+              const rotNorm = ((rot % 360) + 360) % 360
+              const gEffW = (rotNorm === 90 || rotNorm === 270) ? entry.footprintH : entry.footprintW
+              const gEffH = (rotNorm === 90 || rotNorm === 270) ? entry.footprintW : entry.footprintH
               editorRender.ghostSprite = entry.sprite
               editorRender.ghostRow = placementRow
               editorRender.ghostValid = canPlaceFurniture(
@@ -150,8 +155,14 @@ export function OfficeCanvas({ officeState, onClick, isEditMode, editorState, on
                 es.selectedFurnitureType,
                 es.ghostCol,
                 placementRow,
+                undefined,
+                rot,
               )
-              if (es.ghostRotation !== 0) editorRender.ghostRotationDeg = es.ghostRotation
+              if (rot !== 0) {
+                editorRender.ghostRotationDeg = rot
+                editorRender.ghostEffW = gEffW
+                editorRender.ghostEffH = gEffH
+              }
             }
           }
 
@@ -163,6 +174,8 @@ export function OfficeCanvas({ officeState, onClick, isEditMode, editorState, on
               if (entry) {
                 const ghostCol = es.ghostCol - es.dragOffsetCol
                 const ghostRow = es.ghostRow - es.dragOffsetRow
+                const { w: effW, h: effH } = getEffectiveFootprint(draggedItem, entry)
+                const rot = draggedItem.rotation ?? 0
                 editorRender.ghostSprite = entry.sprite
                 editorRender.ghostCol = ghostCol
                 editorRender.ghostRow = ghostRow
@@ -172,22 +185,30 @@ export function OfficeCanvas({ officeState, onClick, isEditMode, editorState, on
                   ghostCol,
                   ghostRow,
                   es.dragUid,
+                  draggedItem.rotation,
                 )
+                if (rot !== 0) {
+                  editorRender.ghostRotationDeg = rot
+                  editorRender.ghostEffW = effW
+                  editorRender.ghostEffH = effH
+                }
               }
             }
           }
 
-          // Selection highlight
+          // Selection highlight: use rotated hit rect when item is rotated so the box matches where the sprite is drawn
           if (es.selectedFurnitureUid && !es.isDragMoving) {
-            const item = os.getLayout().furniture.find((f) => f.uid === es.selectedFurnitureUid)
+            const layout = os.getLayout()
+            const item = layout.furniture.find((f) => f.uid === es.selectedFurnitureUid)
             if (item) {
               const entry = getCatalogEntry(item.type)
               if (entry) {
+                const { w: effW, h: effH } = getEffectiveFootprint(item, entry)
                 editorRender.hasSelection = true
                 editorRender.selectedCol = item.col
                 editorRender.selectedRow = item.row
-                editorRender.selectedW = entry.footprintW
-                editorRender.selectedH = entry.footprintH
+                editorRender.selectedW = effW
+                editorRender.selectedH = effH
                 editorRender.isRotatable = isRotatable(item.type)
               }
             }
@@ -382,22 +403,32 @@ export function OfficeCanvas({ officeState, onClick, isEditMode, editorState, on
             if (pos && (hitTestDeleteButton(pos.deviceX, pos.deviceY) || hitTestRotateButton(pos.deviceX, pos.deviceY))) {
               canvas.style.cursor = 'pointer'
             } else if (editorState.activeTool === EditTool.FURNITURE_PICK && tile) {
-              // Pick mode: show pointer over furniture, crosshair elsewhere
+              // Pick mode: show pointer over furniture (use drawn position so hit-test matches where sprite is drawn)
               const layout = officeState.getLayout()
-              const hitFurniture = layout.furniture.find((f) => {
+              let pickIdx = -1
+              for (let i = 0; i < layout.furniture.length; i++) {
+                const f = layout.furniture[i]!
                 const entry = getCatalogEntry(f.type)
-                if (!entry) return false
-                return tile.col >= f.col && tile.col < f.col + entry.footprintW && tile.row >= f.row && tile.row < f.row + entry.footprintH
-              })
-              canvas.style.cursor = hitFurniture ? 'pointer' : 'crosshair'
+                if (!entry) continue
+                const { w: effW, h: effH } = getEffectiveFootprint(f, entry)
+                if (tile.col >= f.col && tile.col < f.col + effW && tile.row >= f.row && tile.row < f.row + effH) {
+                  pickIdx = i
+                  break
+                }
+              }
+              canvas.style.cursor = pickIdx >= 0 ? 'pointer' : 'crosshair'
             } else if ((editorState.activeTool === EditTool.SELECT || (editorState.activeTool === EditTool.FURNITURE_PLACE && editorState.selectedFurnitureType === '')) && tile) {
-              // Check if hovering over furniture
               const layout = officeState.getLayout()
-              const hitFurniture = layout.furniture.find((f) => {
+              let hitFurniture = null as (typeof layout.furniture)[0] | null
+              for (let i = 0; i < layout.furniture.length; i++) {
+                const f = layout.furniture[i]!
                 const entry = getCatalogEntry(f.type)
-                if (!entry) return false
-                return tile.col >= f.col && tile.col < f.col + entry.footprintW && tile.row >= f.row && tile.row < f.row + entry.footprintH
-              })
+                if (!entry) continue
+                const { w: effW, h: effH } = getEffectiveFootprint(f, entry)
+                if (tile.col >= f.col && tile.col < f.col + effW && tile.row >= f.row && tile.row < f.row + effH) {
+                  if (!hitFurniture || entry.canPlaceOnSurfaces) hitFurniture = f
+                }
+              }
               canvas.style.cursor = hitFurniture ? 'grab' : 'crosshair'
             } else {
               canvas.style.cursor = 'crosshair'
@@ -489,6 +520,9 @@ export function OfficeCanvas({ officeState, onClick, isEditMode, editorState, on
 
       if (!isEditMode) return
 
+      // Focus canvas so keyboard shortcuts (e.g. R to rotate) work
+      canvasRef.current?.focus()
+
       // Check rotate/delete button hit first
       const pos = screenToWorld(e.clientX, e.clientY)
       if (pos && hitTestRotateButton(pos.deviceX, pos.deviceY)) {
@@ -507,17 +541,17 @@ export function OfficeCanvas({ officeState, onClick, isEditMode, editorState, on
         (editorState.activeTool === EditTool.FURNITURE_PLACE && editorState.selectedFurnitureType === '')
       if (actAsSelect && tile) {
         const layout = officeState.getLayout()
-        // Find all furniture at clicked tile, prefer surface items (on top of desks)
-        let hitFurniture = null as typeof layout.furniture[0] | null
-        for (const f of layout.furniture) {
+        let hitFurniture = null as (typeof layout.furniture)[0] | null
+        for (let i = 0; i < layout.furniture.length; i++) {
+          const f = layout.furniture[i]!
           const entry = getCatalogEntry(f.type)
           if (!entry) continue
-          if (tile.col >= f.col && tile.col < f.col + entry.footprintW && tile.row >= f.row && tile.row < f.row + entry.footprintH) {
+          const { w: effW, h: effH } = getEffectiveFootprint(f, entry)
+          if (tile.col >= f.col && tile.col < f.col + effW && tile.row >= f.row && tile.row < f.row + effH) {
             if (!hitFurniture || entry.canPlaceOnSurfaces) hitFurniture = f
           }
         }
         if (hitFurniture) {
-          // Start drag — record offset from furniture's top-left
           editorState.startDrag(
             hitFurniture.uid,
             tile.col,
@@ -572,6 +606,7 @@ export function OfficeCanvas({ officeState, onClick, isEditMode, editorState, on
               ghostCol,
               ghostRow,
               editorState.dragUid,
+              draggedItem.rotation,
             )
             if (valid) {
               onDragMove(editorState.dragUid, ghostCol, ghostRow)
@@ -745,6 +780,7 @@ export function OfficeCanvas({ officeState, onClick, isEditMode, editorState, on
     >
       <canvas
         ref={canvasRef}
+        tabIndex={isEditMode ? 0 : -1}
         onMouseMove={handleMouseMove}
         onMouseDown={handleMouseDown}
         onMouseUp={handleMouseUp}
@@ -752,7 +788,7 @@ export function OfficeCanvas({ officeState, onClick, isEditMode, editorState, on
         onAuxClick={handleAuxClick}
         onMouseLeave={handleMouseLeave}
         onContextMenu={handleContextMenu}
-        style={{ display: 'block' }}
+        style={{ display: 'block', outline: 'none' }}
       />
     </div>
   )

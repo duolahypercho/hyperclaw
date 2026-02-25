@@ -322,6 +322,11 @@ function SendMessagePanel() {
   const [media, setMedia] = React.useState("");
   const [result, setResult] = React.useState<{ success: boolean; data?: string; error?: string } | null>(null);
   const [sending, setSending] = React.useState(false);
+  // #region agent log
+  React.useEffect(() => {
+    if (typeof fetch !== "undefined") fetch("http://127.0.0.1:7697/ingest/5b487555-6c93-439c-bf5f-6251fb6e26ec", { method: "POST", headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "d4447e" }, body: JSON.stringify({ sessionId: "d4447e", location: "OpenClaw/index.tsx:SendMessagePanel mount", message: "SendMessagePanel mounted", data: {}, hypothesisId: "H1", timestamp: Date.now() }) }).catch(() => {});
+  }, []);
+  // #endregion
 
   if (installed === false) {
     return (

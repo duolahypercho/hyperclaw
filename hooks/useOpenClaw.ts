@@ -87,9 +87,18 @@ function getApi(): OpenClawAPI {
   return httpFallback;
 }
 
+// Module-level single-flight: only one refresh across all useOpenClaw instances (prevents concurrent IPC burst)
+let globalRefreshInProgress = false;
+// Cooldown after a refresh completes: avoid starting another refresh immediately (second run was crashing renderer)
+const REFRESH_COOLDOWN_MS = 8000;
+let lastRefreshEndAt = 0;
+// Cache install result so we skip checkInstalled() on subsequent refreshes (second checkInstalled was crashing renderer)
+let cachedInstalled: boolean | null = null;
+
 export function useOpenClaw(autoRefreshMs = 0) {
   const [state, setState] = useState<OpenClawState>(initialState);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const refreshInProgressRef = useRef(false);
 
   const setPartial = useCallback(
     (patch: Partial<OpenClawState>) =>
@@ -97,11 +106,17 @@ export function useOpenClaw(autoRefreshMs = 0) {
     []
   );
 
-  const checkInstalled = useCallback(async () => {
-    const api = getApi();
-    const res: OpenClawInstallCheck = await api.checkInstalled();
-    setPartial({ installed: res.installed, version: res.version });
-    return res.installed;
+  const checkInstalled = useCallback(async (): Promise<boolean> => {
+    try {
+      const api = getApi();
+      const res: OpenClawInstallCheck = await api.checkInstalled();
+      setPartial({ installed: res.installed, version: res.version });
+      return res.installed ?? false;
+    } catch (e) {
+      console.warn("[useOpenClaw] checkInstalled failed:", e);
+      setPartial({ installed: false, version: null });
+      return false;
+    }
   }, [setPartial]);
 
   const fetchStatus = useCallback(async () => {
@@ -241,25 +256,78 @@ export function useOpenClaw(autoRefreshMs = 0) {
   }, [setPartial, state.errors]);
 
   const refreshAll = useCallback(async () => {
+    if (refreshInProgressRef.current || globalRefreshInProgress) return;
+    if (Date.now() - lastRefreshEndAt < REFRESH_COOLDOWN_MS) return;
+    refreshInProgressRef.current = true;
+    globalRefreshInProgress = true;
     setPartial({ loading: true });
-    const isInstalled = await checkInstalled();
-    // Always run gateway health so we can show "installed" when gateway is reachable even if CLI check failed (e.g. PATH)
-    await Promise.all([
-      fetchGatewayHealth(),
-      ...(isInstalled
-        ? [fetchStatus(), fetchCronList(), fetchCronListJson(), fetchAgents()]
-        : [fetchStatus()]),
-    ]);
-    setPartial({ loading: false });
+    // #region agent log
+    if (typeof fetch !== "undefined") fetch("http://127.0.0.1:7697/ingest/5b487555-6c93-439c-bf5f-6251fb6e26ec", { method: "POST", headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "d4447e" }, body: JSON.stringify({ sessionId: "d4447e", location: "useOpenClaw.ts:refreshAll", message: "refreshAll start", data: {}, hypothesisId: "H1", timestamp: Date.now() }) }).catch(() => {});
+    // #endregion
+    try {
+      let isInstalled: boolean;
+      if (cachedInstalled !== null) {
+        isInstalled = cachedInstalled;
+        // #region agent log
+        if (typeof fetch !== "undefined") fetch("http://127.0.0.1:7697/ingest/5b487555-6c93-439c-bf5f-6251fb6e26ec", { method: "POST", headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "d4447e" }, body: JSON.stringify({ sessionId: "d4447e", location: "useOpenClaw.ts:refreshAll after checkInstalled (cached)", message: "refreshAll after checkInstalled (cached)", data: { isInstalled }, hypothesisId: "H1", timestamp: Date.now() }) }).catch(() => {});
+        // #endregion
+      } else {
+        isInstalled = await checkInstalled();
+        cachedInstalled = isInstalled;
+        // #region agent log
+        if (typeof fetch !== "undefined") fetch("http://127.0.0.1:7697/ingest/5b487555-6c93-439c-bf5f-6251fb6e26ec", { method: "POST", headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "d4447e" }, body: JSON.stringify({ sessionId: "d4447e", location: "useOpenClaw.ts:refreshAll after checkInstalled", message: "refreshAll after checkInstalled", data: { isInstalled }, hypothesisId: "H1", timestamp: Date.now() }) }).catch(() => {});
+        // #endregion
+      }
+      // Run gateway health first (isolate crash: WebSocket probe vs other IPC)
+      await fetchGatewayHealth();
+      // #region agent log
+      if (typeof fetch !== "undefined") fetch("http://127.0.0.1:7697/ingest/5b487555-6c93-439c-bf5f-6251fb6e26ec", { method: "POST", headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "d4447e" }, body: JSON.stringify({ sessionId: "d4447e", location: "useOpenClaw.ts:refreshAll after fetchGatewayHealth", message: "refreshAll after fetchGatewayHealth", data: {}, hypothesisId: "H1", timestamp: Date.now() }) }).catch(() => {});
+      // #endregion
+      if (isInstalled) {
+        await fetchStatus();
+        if (typeof fetch !== "undefined") fetch("http://127.0.0.1:7697/ingest/5b487555-6c93-439c-bf5f-6251fb6e26ec", { method: "POST", headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "d4447e" }, body: JSON.stringify({ sessionId: "d4447e", location: "useOpenClaw.ts:refreshAll after fetchStatus", message: "after fetchStatus", data: {}, hypothesisId: "H1", timestamp: Date.now() }) }).catch(() => {});
+        await fetchCronList();
+        if (typeof fetch !== "undefined") fetch("http://127.0.0.1:7697/ingest/5b487555-6c93-439c-bf5f-6251fb6e26ec", { method: "POST", headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "d4447e" }, body: JSON.stringify({ sessionId: "d4447e", location: "useOpenClaw.ts:refreshAll after fetchCronList", message: "after fetchCronList", data: {}, hypothesisId: "H1", timestamp: Date.now() }) }).catch(() => {});
+        await fetchCronListJson();
+        if (typeof fetch !== "undefined") fetch("http://127.0.0.1:7697/ingest/5b487555-6c93-439c-bf5f-6251fb6e26ec", { method: "POST", headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "d4447e" }, body: JSON.stringify({ sessionId: "d4447e", location: "useOpenClaw.ts:refreshAll after fetchCronListJson", message: "after fetchCronListJson", data: {}, hypothesisId: "H1", timestamp: Date.now() }) }).catch(() => {});
+        await fetchAgents();
+        if (typeof fetch !== "undefined") fetch("http://127.0.0.1:7697/ingest/5b487555-6c93-439c-bf5f-6251fb6e26ec", { method: "POST", headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "d4447e" }, body: JSON.stringify({ sessionId: "d4447e", location: "useOpenClaw.ts:refreshAll after fetchAgents", message: "after fetchAgents", data: {}, hypothesisId: "H1", timestamp: Date.now() }) }).catch(() => {});
+      } else {
+        await fetchStatus();
+      }
+      // #region agent log
+      if (typeof fetch !== "undefined") fetch("http://127.0.0.1:7697/ingest/5b487555-6c93-439c-bf5f-6251fb6e26ec", { method: "POST", headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "d4447e" }, body: JSON.stringify({ sessionId: "d4447e", location: "useOpenClaw.ts:refreshAll after Promise.all", message: "refreshAll after Promise.all", data: {}, hypothesisId: "H1", timestamp: Date.now() }) }).catch(() => {});
+      // #endregion
+    } catch (err) {
+      // #region agent log
+      if (typeof fetch !== "undefined") fetch("http://127.0.0.1:7697/ingest/5b487555-6c93-439c-bf5f-6251fb6e26ec", { method: "POST", headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "d4447e" }, body: JSON.stringify({ sessionId: "d4447e", location: "useOpenClaw.ts:refreshAll catch", message: "refreshAll catch", data: { err: String(err) }, hypothesisId: "H1", timestamp: Date.now() }) }).catch(() => {});
+      // #endregion
+      // Prevent unhandled rejection from crashing the renderer (e.g. IPC disconnect in Electron)
+      console.warn("[useOpenClaw] refreshAll failed:", err);
+      setPartial({ installed: false, loading: false });
+      return;
+    } finally {
+      lastRefreshEndAt = Date.now();
+      refreshInProgressRef.current = false;
+      globalRefreshInProgress = false;
+      // #region agent log
+      if (typeof fetch !== "undefined") fetch("http://127.0.0.1:7697/ingest/5b487555-6c93-439c-bf5f-6251fb6e26ec", { method: "POST", headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "d4447e" }, body: JSON.stringify({ sessionId: "d4447e", location: "useOpenClaw.ts:refreshAll finally", message: "refreshAll end", data: {}, hypothesisId: "H1", timestamp: Date.now() }) }).catch(() => {});
+      // #endregion
+      setPartial({ loading: false });
+    }
   }, [checkInstalled, fetchStatus, fetchGatewayHealth, fetchCronList, fetchCronListJson, fetchAgents, setPartial]);
 
   useEffect(() => {
-    refreshAll();
+    refreshAll().catch((err) => {
+      console.warn("[useOpenClaw] initial refresh failed:", err);
+    });
   }, []);  // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (autoRefreshMs > 0 && state.installed) {
-      intervalRef.current = setInterval(refreshAll, autoRefreshMs);
+      intervalRef.current = setInterval(() => {
+        refreshAll().catch((err) => console.warn("[useOpenClaw] interval refresh failed:", err));
+      }, autoRefreshMs);
       return () => {
         if (intervalRef.current) clearInterval(intervalRef.current);
       };

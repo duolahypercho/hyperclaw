@@ -1,6 +1,6 @@
 import type { OfficeLayout, FloorColor, PlacedFurniture, TileType as TileTypeVal } from "./office/types";
 import { TileType, FurnitureType } from "./office/types";
-import { DEFAULT_COLS, DEFAULT_ROWS, MAX_COLS, MAX_ROWS } from "./constants";
+import { MAX_ROWS } from "./constants";
 
 const W = TileType.WALL;
 const F1 = TileType.FLOOR_1;
@@ -252,6 +252,31 @@ const MAX_WORKSTATIONS = 24;
 /** Extra row at bottom for shared utility (cooler, printer, trash, bulletin board) */
 const WORKSTATION_UTILITY_ROW = 1;
 
+// ── Cody Office: image-inspired — boss office, open-plan workspace, lounge, kitchenette, conference ──
+const CODY_AGENTS = 20;
+const CODY_COLS = 42;
+const CODY_ROWS = 30;
+const BOSS_C0 = 1;
+const BOSS_C1 = 10;
+const BOSS_R0 = 1;
+const BOSS_R1 = 6;
+const CORR_COL = 11;
+const CORR_ROW_TOP = 7;
+const CORR_ROW_BOTTOM = 8;
+const OPEN_C0 = 1;
+const OPEN_C1 = 18;
+const OPEN_R0 = 9;
+const OPEN_R1 = 20;
+const RIGHT_C0 = 20;
+const RIGHT_C1 = 40;
+const LOUNGE_R0 = 1;
+const LOUNGE_R1 = 10;
+const KITCHEN_R0 = 12;
+const KITCHEN_R1 = 18;
+const CONF_R0 = 20;
+const CONF_R1 = 29;
+const CORR_COL_RIGHT = 19;
+
 /**
  * Enhanced workstations: one desk per agent with lamp + plant per station,
  * shared utility row (cooler, printer, trash, bulletin board), and floor variety (main area cream, aisle wood, utility carpet).
@@ -306,6 +331,144 @@ export function createWorkstationsLayout(maxAgents: number): OfficeLayout {
     { uid: "ws-shared-bulletin", type: FurnitureType.BULLETIN_BOARD, col: 17, row: utilRow },
     { uid: "ws-shared-macbook", type: FurnitureType.MACBOOK_PRO, col: 15, row: utilRow },
     { uid: "ws-shared-macmini", type: FurnitureType.MAC_MINI, col: 16, row: utilRow }
+  );
+
+  return { version: 1, cols, rows, tiles, tileColors, furniture };
+}
+
+/** Open-plan desk positions: 6 desks row 1, 5 desks row 2 (11 total). */
+const OPEN_DESK_POSITIONS: [number, number][] = [
+  [2, 10], [5, 10], [8, 10], [11, 10], [14, 10], [17, 10],
+  [3, 15], [6, 15], [9, 15], [12, 15], [15, 15],
+];
+
+/** Lounge armchair positions (2). */
+const LOUNGE_CHAIR_POSITIONS: [number, number][] = [[22, 4], [28, 4]];
+
+/** Conference table chair positions (6 around table): 3 top, 3 bottom. */
+const CONF_CHAIR_POSITIONS: [number, number][] = [
+  [28, 22], [30, 22], [32, 22],
+  [28, 25], [30, 25], [32, 25],
+];
+
+/**
+ * Seat (col, row) for agent i.
+ * 0 = boss, 1–11 = open plan desks, 12–13 = lounge armchairs, 14–19 = conference chairs.
+ */
+function codySeatPosition(i: number): [number, number] {
+  if (i === 0) return [BOSS_C0 + Math.floor((BOSS_C1 - BOSS_C0 - 2) / 2), BOSS_R0 + Math.floor((BOSS_R1 - BOSS_R0 - 2) / 2)];
+  if (i >= 1 && i <= 11) return OPEN_DESK_POSITIONS[i - 1];
+  if (i >= 12 && i <= 13) return LOUNGE_CHAIR_POSITIONS[i - 12];
+  if (i >= 14 && i <= 19) return CONF_CHAIR_POSITIONS[i - 14];
+  return OPEN_DESK_POSITIONS[0];
+}
+
+/**
+ * Cody Office — image-inspired: boss office, open-plan workspace (monitor/keyboard/mouse, printer),
+ * lounge (fireplace vibe: bookshelf, clock, armchairs, coffee table, plants, lamps), kitchenette
+ * (coolers, shelves, vending), conference room (large table, rug, 6 chairs). Walls and doorways throughout.
+ */
+export function createCodyOfficeLayout(): OfficeLayout {
+  const N = CODY_AGENTS;
+  const cols = CODY_COLS;
+  const rows = CODY_ROWS;
+
+  const { tiles, tileColors } = fillTiles(cols, rows, (c, r) => {
+    if (r === 0 || r === rows - 1) return { tile: W, color: null };
+    if (c === 0 || c === cols - 1) return { tile: W, color: null };
+    if (c === CORR_COL && r >= CORR_ROW_TOP) return { tile: F4, color: HALLWAY };
+    if (c === CORR_COL_RIGHT) return { tile: F4, color: HALLWAY };
+    if (r >= CORR_ROW_TOP && r <= CORR_ROW_BOTTOM) {
+      if (c >= BOSS_C0 && c <= BOSS_C1) return c >= 5 && c <= 6 ? { tile: F4, color: DOORWAY } : { tile: W, color: null };
+      if (c >= CORR_COL && c <= OPEN_C1) return { tile: F4, color: HALLWAY };
+      if (c >= RIGHT_C0) return { tile: F4, color: HALLWAY };
+    }
+    if (r === OPEN_R1 + 1 && c >= OPEN_C0 && c <= OPEN_C1) return c >= 9 && c <= 10 ? { tile: F4, color: DOORWAY } : { tile: W, color: null };
+    if (r === KITCHEN_R0 - 1 && c >= RIGHT_C0 && c <= RIGHT_C1) return c >= 25 && c <= 26 ? { tile: F4, color: DOORWAY } : { tile: W, color: null };
+    if (r === CONF_R0 - 1 && c >= RIGHT_C0 && c <= RIGHT_C1) return c >= 29 && c <= 30 ? { tile: F4, color: DOORWAY } : { tile: W, color: null };
+    if (c >= BOSS_C0 && c <= BOSS_C1 && r >= BOSS_R0 && r <= BOSS_R1) return { tile: F2, color: BROWN };
+    if (c >= OPEN_C0 && c <= OPEN_C1 && r >= OPEN_R0 && r <= OPEN_R1) return { tile: F1, color: CREAM };
+    if (c >= RIGHT_C0 && c <= RIGHT_C1 && r >= LOUNGE_R0 && r <= LOUNGE_R1) return { tile: F3, color: CARPET };
+    if (c >= RIGHT_C0 && c <= RIGHT_C1 && r >= KITCHEN_R0 && r <= KITCHEN_R1) return { tile: F5, color: BEIGE };
+    if (c >= RIGHT_C0 && c <= RIGHT_C1 && r >= CONF_R0 && r <= CONF_R1) return { tile: F2, color: BROWN };
+    return { tile: F1, color: CREAM };
+  });
+
+  const furniture: PlacedFurniture[] = [];
+
+  for (let i = 0; i < N; i++) {
+    const [cx, cy] = codySeatPosition(i);
+    const prefix = `cody-${i}`;
+    const isBoss = i === 0;
+    const isLounge = i >= 12 && i <= 13;
+    const isConference = i >= 14 && i <= 19;
+
+    if (isLounge) {
+      furniture.push({ uid: `${prefix}-chair`, type: FurnitureType.ARMCHAIR, col: cx, row: cy });
+      continue;
+    }
+    if (isConference) {
+      furniture.push({ uid: `${prefix}-chair`, type: FurnitureType.CHAIR, col: cx, row: cy });
+      continue;
+    }
+    const monitorType = i === 0 ? FurnitureType.MONITOR_APPS : i === 1 ? FurnitureType.MONITOR_LOBSTER : FurnitureType.MONITOR;
+    furniture.push(
+      { uid: `${prefix}-chair`, type: FurnitureType.CHAIR, col: cx, row: cy },
+      { uid: `${prefix}-desk`, type: FurnitureType.DESK, col: cx, row: cy + 1 },
+      { uid: `${prefix}-monitor`, type: monitorType, col: cx, row: cy + 1 },
+      { uid: `${prefix}-keyboard`, type: FurnitureType.KEYBOARD, col: cx + 1, row: cy + 1 },
+      { uid: `${prefix}-pc`, type: FurnitureType.PC, col: cx, row: cy + 2 },
+      { uid: `${prefix}-mouse`, type: FurnitureType.MOUSE, col: cx + 1, row: cy + 2 },
+      { uid: `${prefix}-coffee`, type: FurnitureType.COFFEE_CUP, col: cx + 1, row: cy + 1 },
+      { uid: `${prefix}-lamp`, type: FurnitureType.LAMP, col: cx + 2, row: cy + 1 },
+      { uid: `${prefix}-plant`, type: FurnitureType.PLANT, col: cx + 2, row: cy + 2 }
+    );
+  }
+
+  const mid = (a: number, b: number) => Math.floor((a + b) / 2);
+
+  furniture.push(
+    { uid: "cody-boss-shelf-1", type: FurnitureType.BOOKSHELF, col: BOSS_C0, row: BOSS_R0 },
+    { uid: "cody-boss-shelf-2", type: FurnitureType.BOOKSHELF, col: BOSS_C1 - 1, row: BOSS_R0 },
+    { uid: "cody-boss-plant-1", type: FurnitureType.PLANT, col: BOSS_C0, row: BOSS_R1 - 1 },
+    { uid: "cody-boss-plant-2", type: FurnitureType.PLANT, col: BOSS_C1 - 1, row: BOSS_R1 - 1 },
+    { uid: "cody-boss-lamp", type: FurnitureType.LAMP, col: mid(BOSS_C0, BOSS_C1), row: BOSS_R0 }
+  );
+
+  furniture.push(
+    { uid: "cody-open-printer", type: FurnitureType.PRINTER, col: mid(OPEN_C0, OPEN_C1) - 1, row: OPEN_R0 + 2 },
+    { uid: "cody-open-lamp-1", type: FurnitureType.LAMP, col: OPEN_C0, row: OPEN_R0 },
+    { uid: "cody-open-lamp-2", type: FurnitureType.LAMP, col: OPEN_C1 - 1, row: OPEN_R0 },
+    { uid: "cody-open-plant-1", type: FurnitureType.PLANT, col: OPEN_C0, row: OPEN_R1 - 1 },
+    { uid: "cody-open-plant-2", type: FurnitureType.PLANT, col: OPEN_C1 - 1, row: OPEN_R1 - 1 }
+  );
+
+  furniture.push(
+    { uid: "cody-lounge-shelf", type: FurnitureType.BOOKSHELF, col: RIGHT_C0, row: LOUNGE_R0 },
+    { uid: "cody-lounge-clock", type: FurnitureType.CLOCK, col: mid(RIGHT_C0, RIGHT_C1), row: LOUNGE_R0 },
+    { uid: "cody-lounge-table", type: FurnitureType.TABLE_3X2, col: mid(RIGHT_C0, RIGHT_C1) - 1, row: LOUNGE_R1 - 3 },
+    { uid: "cody-lounge-plant-1", type: FurnitureType.PLANT, col: RIGHT_C1 - 1, row: LOUNGE_R0 + 2 },
+    { uid: "cody-lounge-plant-2", type: FurnitureType.PLANT, col: RIGHT_C0 + 2, row: LOUNGE_R1 - 1 },
+    { uid: "cody-lounge-lamp-1", type: FurnitureType.LAMP, col: RIGHT_C0, row: LOUNGE_R0 + 3 },
+    { uid: "cody-lounge-lamp-2", type: FurnitureType.LAMP, col: RIGHT_C1 - 1, row: LOUNGE_R0 + 3 }
+  );
+
+  furniture.push(
+    { uid: "cody-kitchen-cooler-1", type: FurnitureType.COOLER, col: RIGHT_C0 + 1, row: KITCHEN_R0 },
+    { uid: "cody-kitchen-cooler-2", type: FurnitureType.COOLER, col: RIGHT_C0 + 4, row: KITCHEN_R0 },
+    { uid: "cody-kitchen-shelf-1", type: FurnitureType.SHELF, col: RIGHT_C0 + 2, row: KITCHEN_R0 },
+    { uid: "cody-kitchen-shelf-2", type: FurnitureType.SHELF, col: RIGHT_C1 - 2, row: KITCHEN_R0 },
+    { uid: "cody-kitchen-plant", type: FurnitureType.PLANT, col: RIGHT_C1 - 1, row: KITCHEN_R1 - 1 },
+    { uid: "cody-kitchen-clock", type: FurnitureType.CLOCK, col: mid(RIGHT_C0, RIGHT_C1), row: KITCHEN_R0 }
+  );
+
+  const confTableC = 29;
+  const confTableR = 23;
+  furniture.push(
+    { uid: "cody-conf-table", type: FurnitureType.TABLE_3X2, col: confTableC, row: confTableR },
+    { uid: "cody-conf-rug", type: FurnitureType.RUG, col: confTableC + 1, row: confTableR },
+    { uid: "cody-conf-plant", type: FurnitureType.PLANT, col: RIGHT_C1 - 1, row: CONF_R1 - 1 },
+    { uid: "cody-conf-trash", type: FurnitureType.TRASH_BIN, col: RIGHT_C0, row: CONF_R1 - 1 }
   );
 
   return { version: 1, cols, rows, tiles, tileColors, furniture };
@@ -403,6 +566,11 @@ export interface LayoutPreset {
 
 export const LAYOUT_PRESETS: LayoutPreset[] = [
   {
+    id: "cody-office",
+    name: "Cody Office (20 agents)",
+    layout: createCodyOfficeLayout(),
+  },
+  {
     id: "workstations",
     name: "Workstations (one desk per agent)",
     layout: createWorkstationsLayout(MAX_WORKSTATIONS),
@@ -416,172 +584,6 @@ export const LAYOUT_PRESETS: LayoutPreset[] = [
     id: "cozy",
     name: "Cozy Office",
     layout: createCozyOfficeLayout(2),
-  },
-  {
-    id: "open-plan",
-    name: "Open Plan",
-    layout: (() => {
-      const cols = 22;
-      const rows = 12;
-      const { tiles, tileColors } = fillTiles(cols, rows, (c, r) => {
-        if (r === 0 || r === rows - 1) return { tile: W, color: null };
-        if (c === 0 || c === cols - 1) return { tile: W, color: null };
-        if (c === 11 && r >= 5 && r <= 7) return { tile: F4, color: DOORWAY };
-        if (c === 11) return { tile: W, color: null };
-        if (c >= 2 && c <= 9 && r >= 2 && r <= 9) return { tile: F2, color: BROWN };
-        if (c >= 13 && c <= 20 && r >= 2 && r <= 9) return { tile: F1, color: TEAL };
-        return { tile: F5, color: CREAM };
-      });
-      const furniture: PlacedFurniture[] = [
-        { uid: "desk-1", type: FurnitureType.DESK, col: 3, row: 3 },
-        { uid: "desk-2", type: FurnitureType.DESK, col: 6, row: 3 },
-        { uid: "desk-3", type: FurnitureType.DESK, col: 14, row: 3 },
-        { uid: "desk-4", type: FurnitureType.DESK, col: 17, row: 3 },
-        { uid: "bookshelf-1", type: FurnitureType.BOOKSHELF, col: 1, row: 5 },
-        { uid: "bookshelf-2", type: FurnitureType.BOOKSHELF, col: 20, row: 5 },
-        { uid: "plant-1", type: FurnitureType.PLANT, col: 1, row: 1 },
-        { uid: "plant-2", type: FurnitureType.PLANT, col: 20, row: 1 },
-        { uid: "plant-3", type: FurnitureType.PLANT, col: 10, row: 2 },
-        { uid: "cooler", type: FurnitureType.COOLER, col: 19, row: 7 },
-        { uid: "whiteboard", type: FurnitureType.WHITEBOARD, col: 14, row: 0 },
-        { uid: "lamp-1", type: FurnitureType.LAMP, col: 2, row: 3 },
-        { uid: "lamp-2", type: FurnitureType.LAMP, col: 5, row: 4 },
-        { uid: "lamp-3", type: FurnitureType.LAMP, col: 13, row: 3 },
-        { uid: "lamp-4", type: FurnitureType.LAMP, col: 18, row: 4 },
-        { uid: "pc-1", type: FurnitureType.PC, col: 4, row: 2 },
-        { uid: "pc-2", type: FurnitureType.PC, col: 15, row: 2 },
-        { uid: "chair-1", type: FurnitureType.CHAIR, col: 3, row: 2 },
-        { uid: "chair-2", type: FurnitureType.CHAIR, col: 4, row: 5 },
-        { uid: "chair-3", type: FurnitureType.CHAIR, col: 6, row: 2 },
-        { uid: "chair-4", type: FurnitureType.CHAIR, col: 7, row: 5 },
-        { uid: "chair-5", type: FurnitureType.CHAIR, col: 14, row: 2 },
-        { uid: "chair-6", type: FurnitureType.CHAIR, col: 15, row: 5 },
-        { uid: "chair-7", type: FurnitureType.CHAIR, col: 17, row: 2 },
-        { uid: "chair-8", type: FurnitureType.CHAIR, col: 18, row: 5 },
-      ];
-      return { version: 1, cols, rows, tiles, tileColors, furniture };
-    })(),
-  },
-  {
-    id: "minimal",
-    name: "Minimal",
-    layout: (() => {
-      const cols = DEFAULT_COLS;
-      const rows = DEFAULT_ROWS;
-      const { tiles, tileColors } = fillTiles(cols, rows, (c, r) => {
-        if (r === 0 || r === rows - 1) return { tile: W, color: null };
-        if (c === 0 || c === cols - 1) return { tile: W, color: null };
-        if (c === 10 && r >= 4 && r <= 6) return { tile: F4, color: DOORWAY };
-        if (c === 10) return { tile: W, color: null };
-        return { tile: F1, color: CREAM };
-      });
-      const furniture: PlacedFurniture[] = [
-        { uid: "desk-1", type: FurnitureType.DESK, col: 5, row: 4 },
-        { uid: "desk-2", type: FurnitureType.DESK, col: 13, row: 4 },
-        { uid: "plant-1", type: FurnitureType.PLANT, col: 2, row: 2 },
-        { uid: "plant-2", type: FurnitureType.PLANT, col: 17, row: 2 },
-        { uid: "plant-3", type: FurnitureType.PLANT, col: 9, row: 5 },
-        { uid: "whiteboard", type: FurnitureType.WHITEBOARD, col: 14, row: 0 },
-        { uid: "lamp-1", type: FurnitureType.LAMP, col: 4, row: 3 },
-        { uid: "lamp-2", type: FurnitureType.LAMP, col: 14, row: 5 },
-        { uid: "bookshelf-1", type: FurnitureType.BOOKSHELF, col: 1, row: 6 },
-        { uid: "chair-1", type: FurnitureType.CHAIR, col: 5, row: 3 },
-        { uid: "chair-2", type: FurnitureType.CHAIR, col: 6, row: 6 },
-        { uid: "chair-3", type: FurnitureType.CHAIR, col: 13, row: 3 },
-        { uid: "chair-4", type: FurnitureType.CHAIR, col: 14, row: 6 },
-      ];
-      return { version: 1, cols, rows, tiles, tileColors, furniture };
-    })(),
-  },
-  {
-    id: "playground",
-    name: "Playground Office",
-    layout: (() => {
-      const cols = 24;
-      const rows = 16;
-      const { tiles, tileColors } = fillTiles(cols, rows, (c, r) => {
-        if (r === 0 || r === rows - 1) return { tile: W, color: null };
-        if (c === 0 || c === cols - 1) return { tile: W, color: null };
-        // Vertical divider between left and right (with doorways)
-        if (c === 11) {
-          if ((r >= 3 && r <= 4) || (r >= 9 && r <= 10)) return { tile: F4, color: DOORWAY };
-          return { tile: W, color: null };
-        }
-        // Horizontal divider between break and meeting (with doorway)
-        if (r === 7) {
-          if (c >= 16 && c <= 18) return { tile: F4, color: DOORWAY };
-          if (c >= 12 && c <= 22) return { tile: W, color: null };
-        }
-        // Left room: main workspace (playground) — brown floor
-        if (c >= 1 && c <= 10 && r >= 1 && r <= 14) return { tile: F2, color: BROWN };
-        // Top-right: break room — cream
-        if (c >= 12 && c <= 22 && r >= 1 && r <= 6) return { tile: F1, color: CREAM };
-        // Bottom-right: meeting room — teal
-        if (c >= 12 && c <= 22 && r >= 8 && r <= 14) return { tile: F2, color: TEAL };
-        return { tile: W, color: null };
-      });
-      const furniture: PlacedFurniture[] = [
-        // —— Main workspace: chair above desk per person, face user; PC on desk in front ——
-        { uid: "pw-desk-1", type: FurnitureType.DESK, col: 2, row: 3 },
-        { uid: "pw-desk-2", type: FurnitureType.DESK, col: 5, row: 3 },
-        { uid: "pw-desk-3", type: FurnitureType.DESK, col: 2, row: 7 },
-        { uid: "pw-desk-4", type: FurnitureType.DESK, col: 5, row: 7 },
-        { uid: "pw-chair-1", type: FurnitureType.CHAIR, col: 3, row: 2 },
-        { uid: "pw-chair-2", type: FurnitureType.CHAIR, col: 6, row: 2 },
-        { uid: "pw-chair-3", type: FurnitureType.CHAIR, col: 3, row: 6 },
-        { uid: "pw-chair-4", type: FurnitureType.CHAIR, col: 6, row: 6 },
-        { uid: "pw-shelf-1", type: FurnitureType.BOOKSHELF, col: 1, row: 1 },
-        { uid: "pw-shelf-2", type: FurnitureType.BOOKSHELF, col: 1, row: 5 },
-        { uid: "pw-plant-1", type: FurnitureType.PLANT, col: 8, row: 3 },
-        { uid: "pw-plant-2", type: FurnitureType.PLANT, col: 8, row: 7 },
-        { uid: "pw-lamp-1", type: FurnitureType.LAMP, col: 2, row: 2 },
-        { uid: "pw-lamp-2", type: FurnitureType.LAMP, col: 5, row: 2 },
-        { uid: "pw-pc-1", type: FurnitureType.PC, col: 3, row: 3 },
-        { uid: "pw-pc-2", type: FurnitureType.PC, col: 6, row: 3 },
-        { uid: "pw-pc-3", type: FurnitureType.PC, col: 3, row: 7 },
-        { uid: "pw-pc-4", type: FurnitureType.PC, col: 6, row: 7 },
-        { uid: "pw-monitor-1", type: FurnitureType.MONITOR, col: 2, row: 3 },
-        { uid: "pw-monitor-2", type: FurnitureType.MONITOR, col: 5, row: 3 },
-        { uid: "pw-monitor-3", type: FurnitureType.MONITOR, col: 2, row: 7 },
-        { uid: "pw-monitor-4", type: FurnitureType.MONITOR, col: 5, row: 7 },
-        { uid: "pw-keyboard-1", type: FurnitureType.KEYBOARD, col: 2, row: 4 },
-        { uid: "pw-keyboard-2", type: FurnitureType.KEYBOARD, col: 5, row: 4 },
-        { uid: "pw-keyboard-3", type: FurnitureType.KEYBOARD, col: 2, row: 8 },
-        { uid: "pw-keyboard-4", type: FurnitureType.KEYBOARD, col: 5, row: 8 },
-        { uid: "pw-mouse-1", type: FurnitureType.MOUSE, col: 3, row: 4 },
-        { uid: "pw-mouse-2", type: FurnitureType.MOUSE, col: 6, row: 4 },
-        { uid: "pw-mouse-3", type: FurnitureType.MOUSE, col: 3, row: 8 },
-        { uid: "pw-mouse-4", type: FurnitureType.MOUSE, col: 6, row: 8 },
-        { uid: "pw-coffee-1", type: FurnitureType.COFFEE_CUP, col: 3, row: 3 },
-        { uid: "pw-coffee-2", type: FurnitureType.COFFEE_CUP, col: 6, row: 3 },
-        { uid: "pw-coffee-3", type: FurnitureType.COFFEE_CUP, col: 3, row: 7 },
-        { uid: "pw-coffee-4", type: FurnitureType.COFFEE_CUP, col: 6, row: 7 },
-        // —— Break room (top-right) ——
-        { uid: "br-cooler", type: FurnitureType.COOLER, col: 13, row: 2 },
-        { uid: "br-chair-1", type: FurnitureType.CHAIR, col: 16, row: 3 },
-        { uid: "br-chair-2", type: FurnitureType.CHAIR, col: 19, row: 3 },
-        { uid: "br-plant", type: FurnitureType.PLANT, col: 21, row: 2 },
-        // —— Meeting room: table with chairs above so both face user; laptop/PC per seat on table ——
-        { uid: "mt-table", type: FurnitureType.DESK, col: 15, row: 10 },
-        { uid: "mt-chair-1", type: FurnitureType.CHAIR, col: 15, row: 9 },
-        { uid: "mt-chair-2", type: FurnitureType.CHAIR, col: 16, row: 9 },
-        { uid: "mt-pc-1", type: FurnitureType.PC, col: 16, row: 10 },
-        { uid: "mt-pc-2", type: FurnitureType.PC, col: 16, row: 11 },
-        { uid: "mt-monitor-1", type: FurnitureType.MONITOR, col: 15, row: 10 },
-        { uid: "mt-monitor-2", type: FurnitureType.MONITOR, col: 16, row: 10 },
-        { uid: "mt-keyboard-1", type: FurnitureType.KEYBOARD, col: 15, row: 11 },
-        { uid: "mt-keyboard-2", type: FurnitureType.KEYBOARD, col: 15, row: 11 },
-        { uid: "mt-mouse-1", type: FurnitureType.MOUSE, col: 16, row: 11 },
-        { uid: "mt-mouse-2", type: FurnitureType.MOUSE, col: 16, row: 11 },
-        { uid: "mt-coffee-1", type: FurnitureType.COFFEE_CUP, col: 16, row: 10 },
-        { uid: "mt-coffee-2", type: FurnitureType.COFFEE_CUP, col: 15, row: 11 },
-        { uid: "mt-shelf", type: FurnitureType.BOOKSHELF, col: 12, row: 10 },
-        { uid: "mt-plant-1", type: FurnitureType.PLANT, col: 20, row: 9 },
-        { uid: "mt-plant-2", type: FurnitureType.PLANT, col: 20, row: 11 },
-        { uid: "mt-whiteboard", type: FurnitureType.WHITEBOARD, col: 18, row: 8 },
-      ];
-      return { version: 1, cols, rows, tiles, tileColors, furniture };
-    })(),
   },
 ];
 

@@ -30,8 +30,8 @@ export function clearColorizeCache(): void {
 }
 
 /** Min/max output lightness so patterns always stay visible (strong spread = pattern never looks solid). */
-const PATTERN_LIGHTNESS_MIN = 0.18
-const PATTERN_LIGHTNESS_MAX = 0.92
+export const PATTERN_LIGHTNESS_MIN = 0.18
+export const PATTERN_LIGHTNESS_MAX = 0.92
 
 /**
  * Colorize a sprite using HSL transformation.
