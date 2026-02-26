@@ -4,9 +4,10 @@ import { getCachedSprite, getOutlineSprite } from '../sprites/spriteCache'
 import { getCharacterSprites, BUBBLE_PERMISSION_SPRITE, BUBBLE_WAITING_SPRITE } from '../sprites/spriteData'
 import { getCharacterSprite } from './characters'
 import { renderMatrixEffect } from './matrixEffect'
-import { getColorizedFloorSprite, hasFloorSprites, WALL_COLOR } from '../floorTiles'
+import { getColorizedFloorSprite, getColorizedMVFloorSprite, hasFloorSprites, isMVMode, getFloorPatternCount, WALL_COLOR } from '../floorTiles'
 import { hasWallSprites, getWallInstances, wallColorToHex } from '../wallTiles'
 import {
+  Z_ROW_SCALE,
   CHARACTER_SITTING_OFFSET_PX,
   CHARACTER_Z_SORT_OFFSET,
   OUTLINE_Z_SORT_OFFSET,
@@ -53,9 +54,11 @@ export function renderTileGrid(
 ): void {
   const s = TILE_SIZE * zoom
   const useSpriteFloors = hasFloorSprites()
+  const mvFloorMode = isMVMode()
   const tmRows = tileMap.length
   const tmCols = tmRows > 0 ? tileMap[0].length : 0
   const layoutCols = cols ?? tmCols
+  const patternCount = getFloorPatternCount()
 
   // Floor tiles + wall base color
   for (let r = 0; r < tmRows; r++) {
@@ -78,12 +81,23 @@ export function renderTileGrid(
         continue
       }
 
-      // Floor tile: get colorized sprite (normalize tile to 1–12 so pattern is never wrong e.g. from string in JSON)
+      // Floor tile: get colorized sprite (pattern index 1-based from layout)
       const colorIdx = r * layoutCols + c
       const color = tileColors?.[colorIdx] ?? { h: 0, s: 0, b: 0, c: 0 }
-      const patternIndex = Math.max(1, Math.min(12, Number(tile) || 1))
-      const sprite = getColorizedFloorSprite(patternIndex, color)
-      const cached = getCachedSprite(sprite, zoom)
+      const patternIndex = Math.max(1, Math.min(patternCount, Number(tile) || 1))
+
+      let sprite: SpriteData
+      if (mvFloorMode) {
+        // MV mode: use pattern index so tileset replaces legacy floors (FLOOR_1 = first tile, etc.)
+        const tileIndex = Math.min(patternIndex - 1, patternCount - 1)
+        sprite = getColorizedMVFloorSprite(tileIndex, color)
+      } else {
+        sprite = getColorizedFloorSprite(patternIndex, color)
+      }
+      // Scale floor cache to cell size so 32×32 MV tiles fit the 16px grid (no zoomed-in crop)
+      const spriteSize = sprite.length
+      const effectiveZoom = spriteSize > 0 ? (zoom * TILE_SIZE) / spriteSize : zoom
+      const cached = getCachedSprite(sprite, effectiveZoom)
       ctx.drawImage(cached, 0, 0, cached.width, cached.height, offsetX + c * s, offsetY + r * s, s, s)
     }
   }
@@ -140,10 +154,9 @@ export function renderScene(
     const drawX = Math.round(offsetX + ch.x * zoom - cached.width / 2)
     const drawY = Math.round(offsetY + (ch.y + sittingOffset) * zoom - cached.height)
 
-    // Sort characters by bottom of their tile (not center) so they render
-    // in front of same-row furniture (e.g. chairs) but behind furniture
-    // at lower rows (e.g. desks, bookshelves that occlude from below).
-    const charZY = ch.y + TILE_SIZE / 2 + CHARACTER_Z_SORT_OFFSET
+    // Use same row-dominant scale as furniture so characters sort correctly: in front of same/upper rows, behind lower rows.
+    const charRow = Math.floor(ch.y / TILE_SIZE)
+    const charZY = (charRow + 0.5) * Z_ROW_SCALE + CHARACTER_Z_SORT_OFFSET
 
     // Matrix spawn/despawn effect — skip outline, use per-pixel rendering
     if (ch.matrixEffect) {
@@ -157,6 +170,30 @@ export function renderScene(
           renderMatrixEffect(c, mCh, mSpriteData, mDrawX, mDrawY, zoom)
         },
       })
+      // Chair back on top of character when seated in a hasChairBack chair
+      if (ch.seatId) {
+        const chairBack = furniture.find((f) => f.uid === ch.seatId && f.hasChairBack)
+        if (chairBack) {
+          const chairCached = getCachedSprite(chairBack.sprite, zoom)
+          const chairFx = offsetX + chairBack.x * zoom
+          const chairFy = offsetY + chairBack.y * zoom
+          const chairRot = chairBack.rotationDeg ?? 0
+          drawables.push({
+            zY: charZY + 0.5,
+            draw: (c) => {
+              if (chairRot !== 0) {
+                c.save()
+                c.translate(chairFx, chairFy)
+                c.rotate((chairRot * Math.PI) / 180)
+                c.drawImage(chairCached, 0, 0)
+                c.restore()
+              } else {
+                c.drawImage(chairCached, chairFx, chairFy)
+              }
+            },
+          })
+        }
+      }
       continue
     }
 
@@ -186,6 +223,31 @@ export function renderScene(
         c.drawImage(cached, drawX, drawY)
       },
     })
+
+    // Chair back: when seated in a chair with hasChairBack, draw chair on top of character
+    if (ch.seatId) {
+      const chairBack = furniture.find((f) => f.uid === ch.seatId && f.hasChairBack)
+      if (chairBack) {
+        const chairCached = getCachedSprite(chairBack.sprite, zoom)
+        const chairFx = offsetX + chairBack.x * zoom
+        const chairFy = offsetY + chairBack.y * zoom
+        const chairRot = chairBack.rotationDeg ?? 0
+        drawables.push({
+          zY: charZY + 0.5,
+          draw: (c) => {
+            if (chairRot !== 0) {
+              c.save()
+              c.translate(chairFx, chairFy)
+              c.rotate((chairRot * Math.PI) / 180)
+              c.drawImage(chairCached, 0, 0)
+              c.restore()
+            } else {
+              c.drawImage(chairCached, chairFx, chairFy)
+            }
+          },
+        })
+      }
+    }
   }
 
   // Sort by Y (lower = in front = drawn later)

@@ -42,10 +42,33 @@ export function removeFurniture(layout: OfficeLayout, uid: string): OfficeLayout
   return { ...layout, furniture: filtered }
 }
 
-/** Move furniture to new position. Returns new layout (immutable). */
+/** Move furniture to new position. Returns new layout (immutable). If the target position overlaps with furniture of the same type that is a desk, they will be merged. */
 export function moveFurniture(layout: OfficeLayout, uid: string, newCol: number, newRow: number): OfficeLayout {
   const item = layout.furniture.find((f) => f.uid === uid)
   if (!item) return layout
+  
+  // Check if moving onto another furniture of same type (for merging desks)
+  const targetItem = layout.furniture.find((f) => {
+    if (f.uid === uid) return false
+    if (f.type !== item.type) return false
+    const entry = getCatalogEntry(f.type)
+    if (!entry || !entry.isDesk) return false
+    // Check if the footprints overlap
+    const { w: effW, h: effH } = getEffectiveFootprint(item, entry)
+    const { w: targetW, h: targetH } = getEffectiveFootprint(f, entry)
+    // Check for overlap
+    const overlapX = item.col < f.col + targetW && item.col + effW > f.col
+    const overlapY = item.row < f.row + targetH && item.row + effH > f.row
+    return overlapX && overlapY
+  })
+  
+  // If found a merge target (same type desk), remove the moved item and keep the target
+  if (targetItem) {
+    // Remove the dragged item, keep the target
+    const filtered = layout.furniture.filter((f) => f.uid !== uid)
+    return { ...layout, furniture: filtered }
+  }
+  
   if (!canPlaceFurniture(layout, item.type, newCol, newRow, uid, item.rotation)) return layout
   return {
     ...layout,
@@ -170,9 +193,9 @@ export function canPlaceFurniture(
   // Build occupied set excluding the item being moved, skipping background tile rows
   const occupied = getPlacementBlockedTiles(layout.furniture, excludeUid)
 
-  // If this item can be placed on surfaces, build set of desk tiles to exclude from collision (use effective footprint for rotated desks)
+  // If this item can be placed on surfaces or overlap desks (e.g. chairs at table), build set of desk tiles to exclude from collision
   let deskTiles: Set<string> | null = null
-  if (entry.canPlaceOnSurfaces) {
+  if (entry.canPlaceOnSurfaces || entry.canOverlapDesks) {
     deskTiles = new Set<string>()
     for (const item of layout.furniture) {
       if (item.uid === excludeUid) continue

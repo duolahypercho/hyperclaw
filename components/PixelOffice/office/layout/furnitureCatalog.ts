@@ -70,13 +70,16 @@ export interface LoadedAssetData {
     orientation?: string  // 'front' | 'back' | 'left' | 'right'
     state?: string        // 'on' | 'off'
     canPlaceOnSurfaces?: boolean
+    canOverlapDesks?: boolean
     backgroundTiles?: number
     canPlaceOnWalls?: boolean
+    hasChairBack?: boolean
+    doesNotBlockPlacement?: boolean
   }>
   sprites: Record<string, SpriteData>
 }
 
-export type FurnitureCategory = 'desks' | 'chairs' | 'storage' | 'decor' | 'electronics' | 'wall' | 'misc'
+export type FurnitureCategory = 'desks' | 'chairs' | 'storage' | 'decor' | 'electronics' | 'wall' | 'awards' | 'misc'
 
 export interface CatalogEntryWithCategory extends FurnitureCatalogEntry {
   category: FurnitureCategory
@@ -99,17 +102,17 @@ export const FURNITURE_CATALOG: CatalogEntryWithCategory[] = [
   { type: FurnitureType.DESK_SINGLE,       label: 'Single desk',       footprintW: 1, footprintH: 1, sprite: DESK_SINGLE_SPRITE,       isDesk: true,  category: 'desks' },
   { type: FurnitureType.DESK_SINGLE_SLEEK, label: 'Single sleek desk', footprintW: 1, footprintH: 1, sprite: DESK_SINGLE_SLEEK_SPRITE, isDesk: true,  category: 'desks' },
   { type: FurnitureType.DESK_SINGLE_GLASS,  label: 'Single glass desk', footprintW: 1, footprintH: 1, sprite: DESK_SINGLE_GLASS_SPRITE,  isDesk: true,  category: 'desks' },
-  // ── Chairs ──
-  { type: FurnitureType.CHAIR,          label: 'Chair',          footprintW: 1, footprintH: 1, sprite: CHAIR_SPRITE,           isDesk: false, category: 'chairs' },
-  { type: FurnitureType.ARMCHAIR,        label: 'Armchair',       footprintW: 1, footprintH: 1, sprite: ARMCHAIR_SPRITE,       isDesk: false, category: 'chairs' },
-  { type: FurnitureType.STOOL,          label: 'Stool',          footprintW: 1, footprintH: 1, sprite: STOOL_SPRITE,           isDesk: false, category: 'chairs' },
-  { type: FurnitureType.CHAIR_MODERN,   label: 'Modern chair',   footprintW: 1, footprintH: 1, sprite: CHAIR_MODERN_SPRITE,   isDesk: false, category: 'chairs' },
-  { type: FurnitureType.LOUNGE_CHAIR,   label: 'Lounge chair',  footprintW: 1, footprintH: 1, sprite: LOUNGE_CHAIR_SPRITE,   isDesk: false, category: 'chairs' },
-  { type: FurnitureType.SOFA,           label: 'Sofa',          footprintW: 2, footprintH: 1, sprite: SOFA_SPRITE,           isDesk: false, category: 'chairs' },
+  // ── Chairs (can overlap desk tiles so they sit flush at table edge) ──
+  { type: FurnitureType.CHAIR,          label: 'Chair',          footprintW: 1, footprintH: 1, sprite: CHAIR_SPRITE,           isDesk: false, category: 'chairs', canOverlapDesks: true },
+  { type: FurnitureType.ARMCHAIR,        label: 'Armchair',       footprintW: 1, footprintH: 1, sprite: ARMCHAIR_SPRITE,       isDesk: false, category: 'chairs', canOverlapDesks: true },
+  { type: FurnitureType.STOOL,          label: 'Stool',          footprintW: 1, footprintH: 1, sprite: STOOL_SPRITE,           isDesk: false, category: 'chairs', canOverlapDesks: true },
+  { type: FurnitureType.CHAIR_MODERN,   label: 'Modern chair',   footprintW: 1, footprintH: 1, sprite: CHAIR_MODERN_SPRITE,   isDesk: false, category: 'chairs', canOverlapDesks: true },
+  { type: FurnitureType.LOUNGE_CHAIR,   label: 'Lounge chair',  footprintW: 1, footprintH: 1, sprite: LOUNGE_CHAIR_SPRITE,   isDesk: false, category: 'chairs', canOverlapDesks: true },
+  { type: FurnitureType.SOFA,           label: 'Sofa',          footprintW: 2, footprintH: 1, sprite: SOFA_SPRITE,           isDesk: false, category: 'chairs', canOverlapDesks: true },
   // ── Chairs for single desks ──
-  { type: FurnitureType.CHAIR_SINGLE,   label: 'Single desk chair',  footprintW: 1, footprintH: 1, sprite: CHAIR_SINGLE_SPRITE,   isDesk: false, category: 'chairs' },
-  { type: FurnitureType.CHAIR_SLEEK,    label: 'Sleek chair',         footprintW: 1, footprintH: 1, sprite: CHAIR_SLEEK_SPRITE,    isDesk: false, category: 'chairs' },
-  { type: FurnitureType.CHAIR_GLASS,    label: 'Glass desk chair',   footprintW: 1, footprintH: 1, sprite: CHAIR_GLASS_SPRITE,    isDesk: false, category: 'chairs' },
+  { type: FurnitureType.CHAIR_SINGLE,   label: 'Single desk chair',  footprintW: 1, footprintH: 1, sprite: CHAIR_SINGLE_SPRITE,   isDesk: false, category: 'chairs', canOverlapDesks: true },
+  { type: FurnitureType.CHAIR_SLEEK,    label: 'Sleek chair',         footprintW: 1, footprintH: 1, sprite: CHAIR_SLEEK_SPRITE,    isDesk: false, category: 'chairs', canOverlapDesks: true },
+  { type: FurnitureType.CHAIR_GLASS,    label: 'Glass desk chair',   footprintW: 1, footprintH: 1, sprite: CHAIR_GLASS_SPRITE,    isDesk: false, category: 'chairs', canOverlapDesks: true },
   // ── Storage ──
   { type: FurnitureType.BOOKSHELF,     label: 'Bookshelf',      footprintW: 1, footprintH: 2, sprite: BOOKSHELF_SPRITE,      isDesk: false, category: 'storage' },
   { type: FurnitureType.FILING_CABINET, label: 'Filing cabinet', footprintW: 1, footprintH: 2, sprite: FILING_CABINET_SPRITE, isDesk: false, category: 'storage' },
@@ -200,8 +203,11 @@ export function buildDynamicCatalog(assets: LoadedAssetData): boolean {
       category: asset.category as FurnitureCategory,
       ...(asset.orientation ? { orientation: asset.orientation } : {}),
       ...(asset.canPlaceOnSurfaces ? { canPlaceOnSurfaces: true } : {}),
+      ...(asset.canOverlapDesks ? { canOverlapDesks: true } : {}),
       ...(asset.backgroundTiles ? { backgroundTiles: asset.backgroundTiles } : {}),
       ...(asset.canPlaceOnWalls ? { canPlaceOnWalls: true } : {}),
+      ...(asset.hasChairBack ? { hasChairBack: true } : {}),
+      ...(asset.doesNotBlockPlacement ? { doesNotBlockPlacement: true } : {}),
     }
   }).filter((e): e is CatalogEntryWithCategory => e !== null)
 
@@ -328,8 +334,6 @@ export function buildDynamicCatalog(assets: LoadedAssetData): boolean {
     .filter((c): c is FurnitureCategory => !!c)
     .sort()
 
-  const rotGroupCount = new Set(Array.from(rotationGroups.values())).size
-  console.log(`✓ Built dynamic catalog with ${allEntries.length} assets (${visibleEntries.length} visible, ${rotGroupCount} rotation groups, ${stateGroups.size / 2} state pairs)`)
   return true
 }
 
@@ -366,6 +370,7 @@ export const FURNITURE_CATEGORIES: Array<{ id: FurnitureCategory; label: string 
   { id: 'electronics', label: 'Tech' },
   { id: 'decor', label: 'Decor' },
   { id: 'wall', label: 'Wall' },
+  { id: 'awards', label: 'Awards' },
   { id: 'misc', label: 'Misc' },
 ]
 

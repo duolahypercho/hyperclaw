@@ -10,7 +10,7 @@ import { usePixelOffice } from "./provider/pixelOfficeProvider";
 import type { EmployeeCronJob, EmployeePreviousTask } from "./provider/pixelOfficeProvider";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
 import type { SubagentCharacter } from "./office/types";
-import { LAYOUT_STORAGE_KEY } from "./officeStateSingleton";
+import { LAYOUT_STORAGE_KEY, DEFAULT_LAYOUT_STORAGE_KEY, HAS_USER_LAYOUT_KEY } from "./officeStateSingleton";
 
 export type { SubagentCharacter };
 
@@ -65,16 +65,31 @@ function buildEngineConfig(): import("./officeEngineConfig").OfficeEngineConfig 
       if (typeof window !== "undefined" && (window as unknown as { electronAPI?: { hyperClawBridge?: { invoke?: unknown } } }).electronAPI?.hyperClawBridge?.invoke) {
         try {
           const r = (await bridgeInvoke("read-office-layout")) as { success?: boolean; layout?: OfficeLayout };
-          if (r?.success && r.layout) return migrateLayoutColors(r.layout);
+          if (r?.success && r.layout) {
+            if (typeof localStorage !== "undefined") localStorage.setItem(HAS_USER_LAYOUT_KEY, "1");
+            return migrateLayoutColors(r.layout);
+          }
         } catch {
           // fallback to preset
         }
       }
       try {
         const saved = typeof localStorage !== "undefined" && localStorage.getItem(LAYOUT_STORAGE_KEY);
-        return (saved && deserializeLayout(saved)) || getPresetById("cody-office") || createDefaultLayout();
+        if (saved) {
+          const layout = deserializeLayout(saved);
+          if (layout) {
+            if (typeof localStorage !== "undefined") localStorage.setItem(HAS_USER_LAYOUT_KEY, "1");
+            return layout;
+          }
+        }
+        const defaultSaved = typeof localStorage !== "undefined" && localStorage.getItem(DEFAULT_LAYOUT_STORAGE_KEY);
+        if (defaultSaved) {
+          const layout = deserializeLayout(defaultSaved);
+          if (layout) return layout;
+        }
+        return getPresetById("default") || createDefaultLayout();
       } catch {
-        return getPresetById("cody-office") || createDefaultLayout();
+        return getPresetById("default") || createDefaultLayout();
       }
     },
   };

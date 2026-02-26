@@ -10,7 +10,7 @@
  */
 
 import type { SpriteData, TileType as TileTypeVal, FloorColor, FurnitureInstance } from './types'
-import { TileType, TILE_SIZE } from './types'
+import { TileType, TILE_SIZE, Z_ROW_SCALE } from './types'
 import { getColorizedSprite, PATTERN_LIGHTNESS_MIN, PATTERN_LIGHTNESS_MAX } from './colorize'
 
 /** 16 wall sprites indexed by bitmask (0-15) */
@@ -113,7 +113,7 @@ export function getWallInstances(
         sprite: wallInfo.sprite,
         x: c * TILE_SIZE,
         y: r * TILE_SIZE + wallInfo.offsetY,
-        zY: (r + 1) * TILE_SIZE,
+        zY: r * Z_ROW_SCALE + wallInfo.sprite.length,
       })
     }
   }

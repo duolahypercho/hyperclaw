@@ -1,4 +1,4 @@
-import { TileType, FurnitureType, DEFAULT_COLS, DEFAULT_ROWS, TILE_SIZE, Direction } from '../types'
+import { TileType, FurnitureType, DEFAULT_COLS, DEFAULT_ROWS, TILE_SIZE, Z_ROW_SCALE, Direction } from '../types'
 import type { TileType as TileTypeVal, OfficeLayout, PlacedFurniture, Seat, FurnitureInstance, FloorColor } from '../types'
 import { getCatalogEntry } from './furnitureCatalog'
 import { getColorizedSprite } from '../colorize'
@@ -29,13 +29,13 @@ export function layoutToTileMap(layout: OfficeLayout): TileTypeVal[][] {
 
 /** Convert placed furniture into renderable FurnitureInstance[] */
 export function layoutToFurnitureInstances(furniture: PlacedFurniture[]): FurnitureInstance[] {
-  // Pre-compute desk zY per tile so surface items can sort in front of desks (skip cutouts)
+  // Pre-compute desk zY per tile so surface items can sort in front of desks (skip cutouts). Use row-dominant scale so lower-on-screen draws in front.
   const deskZByTile = new Map<string, number>()
   for (const item of furniture) {
     const entry = getCatalogEntry(item.type)
     if (!entry || !entry.isDesk) continue
     const { w: effW, h: effH } = getEffectiveFootprint(item, entry)
-    const deskZY = item.row * TILE_SIZE + entry.sprite.length
+    const deskZY = item.row * Z_ROW_SCALE + entry.sprite.length
     const cutouts = entry.cutoutTiles
       ? new Set(entry.cutoutTiles.map(({ dc, dr }) => `${dc},${dr}`))
       : null
@@ -75,13 +75,15 @@ export function layoutToFurnitureInstances(furniture: PlacedFurniture[]): Furnit
     }
 
     const spriteH = entry.sprite.length
-    let zY = item.row * TILE_SIZE + spriteH
+    // Row-dominant z-order: higher row (lower on screen) = higher zY = drawn in front. Prevents chairs below desks from appearing "inside" the desk.
+    let zY = item.row * Z_ROW_SCALE + spriteH
 
     if (entry.category === 'chairs') {
+      // Chairs draw in front of same-row furniture (e.g. desk surface); small offset breaks tie.
       if (entry.orientation === 'back') {
-        zY = (item.row + 1) * TILE_SIZE + 1
+        zY = item.row * Z_ROW_SCALE + spriteH + 1
       } else {
-        zY = (item.row + 1) * TILE_SIZE
+        zY = item.row * Z_ROW_SCALE + spriteH + 0.5
       }
     }
 
@@ -94,13 +96,29 @@ export function layoutToFurnitureInstances(furniture: PlacedFurniture[]): Furnit
       }
     }
 
+    // Wall-mounted items (awards, picture frames, etc.) must draw in front of all wall tiles they occupy.
+    // Use the bottom row of the item so zY is in front of every wall in that range (placement uses top row but item spans item.row … item.row+effH-1).
+    if (entry.canPlaceOnWalls) {
+      const bottomRow = item.row + effH - 1
+      const wallFrontZ = bottomRow * Z_ROW_SCALE + Z_ROW_SCALE - 1
+      if (wallFrontZ > zY) zY = wallFrontZ
+    }
+
     let sprite = entry.sprite
     if (item.color) {
       const { h, s, b: bv, c: cv } = item.color
       sprite = getColorizedSprite(`furn-${item.type}-${h}-${s}-${bv}-${cv}-${item.color.colorize ? 1 : 0}`, entry.sprite, item.color)
     }
 
-    instances.push({ sprite, x, y, zY, rotationDeg: rotNorm !== 0 ? rotNorm : undefined })
+    instances.push({
+      sprite,
+      x,
+      y,
+      zY,
+      rotationDeg: rotNorm !== 0 ? rotNorm : undefined,
+      uid: item.uid,
+      ...(entry.hasChairBack ? { hasChairBack: true } : {}),
+    })
   }
   return instances
 }
@@ -141,6 +159,7 @@ export function getPlacementBlockedTiles(furniture: PlacedFurniture[], excludeUi
     if (item.uid === excludeUid) continue
     const entry = getCatalogEntry(item.type)
     if (!entry) continue
+    if (entry.doesNotBlockPlacement) continue
     const { w: effW, h: effH } = getEffectiveFootprint(item, entry)
     const bgRows = entry.backgroundTiles || 0
     const cutouts = cutoutSet(entry)

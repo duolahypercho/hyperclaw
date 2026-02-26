@@ -338,6 +338,16 @@ function getCronsFromJson(): ParsedCronJob[] {
       let scheduleStr = "";
       if (schedule?.kind === "cron" && schedule.expr) scheduleStr = schedule.expr;
       else if (schedule?.kind === "every" && schedule.everyMs != null) scheduleStr = formatEverySchedule(schedule.everyMs);
+      // Prefer jobs.json state; fall back to most recent run from runs/{jobId}.jsonl
+      let lastRunAtMs = job.state?.lastRunAtMs;
+      let lastStatus = job.state?.lastStatus;
+      if (lastRunAtMs == null && job.id) {
+        const lastRun = getLastRunForJob(job.id);
+        if (lastRun) {
+          lastRunAtMs = lastRun.runAtMs;
+          lastStatus = lastRun.status;
+        }
+      }
       return {
         id: job.id,
         name: job.name || job.id,
@@ -345,8 +355,8 @@ function getCronsFromJson(): ParsedCronJob[] {
         agentId: job.agentId,
         status: job.enabled !== false ? "active" : "disabled",
         nextRun: job.state?.nextRunAtMs,
-        lastRunAtMs: job.state?.lastRunAtMs,
-        lastStatus: job.state?.lastStatus,
+        lastRunAtMs,
+        lastStatus,
       };
     });
   } catch {
@@ -389,23 +399,9 @@ function parseCronLine(line: string): ParsedCronJob | null {
   return { id, name: name || id, schedule, agentId };
 }
 
+/** Read cron list from ~/.openclaw/cron/jobs.json only (no CLI). */
 function getCrons(): ParsedCronJob[] {
-  const fromJson = getCronsFromJson();
-  if (fromJson.length > 0) return fromJson;
-  try {
-    const env = openclawEnv();
-    const output = execSync("openclaw cron list", { encoding: "utf-8", timeout: 10000, cwd: OPENCLAW_DIR, env });
-    const lines = output.split("\n").filter((l) => l.trim());
-    if (lines.length < 2) return [];
-    const jobs: ParsedCronJob[] = [];
-    for (const line of lines.slice(1)) {
-      const parsed = parseCronLine(line);
-      if (parsed) jobs.push(parsed);
-    }
-    return jobs;
-  } catch {
-    return [];
-  }
+  return getCronsFromJson();
 }
 
 /** Shape of one line in ~/.openclaw/cron/runs/{jobId}.jsonl */
@@ -453,6 +449,83 @@ function getCronRuns(jobIds: string[]): Record<string, CronRunLine[]> {
     }
   }
   return runsByJobId;
+}
+
+/**
+ * Get paginated runs for a single job (newest first). Returns { runs, hasMore }.
+ */
+function getCronRunsForJob(
+  jobId: string,
+  limit = 10,
+  offset = 0
+): { runs: CronRunLine[]; hasMore: boolean } {
+  if (!jobId || typeof jobId !== "string" || /\.\.|[\\/]/.test(jobId) || jobId.length > 64) {
+    return { runs: [], hasMore: false };
+  }
+  if (!fs.existsSync(CRON_RUNS_DIR)) return { runs: [], hasMore: false };
+  const filePath = path.join(CRON_RUNS_DIR, `${jobId}.jsonl`);
+  if (!fs.existsSync(filePath)) return { runs: [], hasMore: false };
+  try {
+    const content = fs.readFileSync(filePath, "utf-8");
+    const lines = content.split("\n").filter((l) => l.trim());
+    const all: CronRunLine[] = [];
+    for (const line of lines) {
+      try {
+        const obj = JSON.parse(line) as CronRunLine;
+        if (obj.runAtMs != null) all.push(obj);
+      } catch {
+        // skip invalid line
+      }
+    }
+    const newestFirst = all.slice().reverse();
+    const total = newestFirst.length;
+    const page = newestFirst.slice(offset, offset + limit);
+    return { runs: page, hasMore: offset + limit < total };
+  } catch {
+    return { runs: [], hasMore: false };
+  }
+}
+
+/** Get the most recent run for a job (for lastRunAtMs/lastStatus when jobs.json has none). */
+function getLastRunForJob(jobId: string): { runAtMs: number; status: string } | null {
+  const result = getCronRunsForJob(jobId, 1, 0);
+  const run = result.runs?.[0];
+  if (!run || run.runAtMs == null) return null;
+  return {
+    runAtMs: run.runAtMs,
+    status: (run.status && String(run.status).toLowerCase()) || "idle",
+  };
+}
+
+/**
+ * Get full run record for one cron run (entire JSON line) for "Show more" / full log.
+ */
+function getCronRunDetail(
+  jobId: string,
+  runAtMs: number
+): CronRunLine & Record<string, unknown> | null {
+  if (!jobId || typeof jobId !== "string" || /\.\.|[\\/]/.test(jobId) || jobId.length > 64) {
+    return null;
+  }
+  if (runAtMs == null || typeof runAtMs !== "number") return null;
+  if (!fs.existsSync(CRON_RUNS_DIR)) return null;
+  const filePath = path.join(CRON_RUNS_DIR, `${jobId}.jsonl`);
+  if (!fs.existsSync(filePath)) return null;
+  try {
+    const content = fs.readFileSync(filePath, "utf-8");
+    const lines = content.split("\n").filter((l) => l.trim());
+    for (const line of lines) {
+      try {
+        const obj = JSON.parse(line) as CronRunLine & Record<string, unknown>;
+        if (obj.runAtMs === runAtMs) return obj;
+      } catch {
+        // skip invalid line
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return null;
 }
 
 function getConfig() {
@@ -638,6 +711,274 @@ function getOpenClawWorkspaceLabels(): Record<string, string> {
     // ignore
   }
   return labels;
+}
+
+/** Token usage record from a session (flexible field names). OpenClaw uses object keyed by session id with updatedAt, inputTokens, outputTokens, totalTokens. */
+interface SessionTokenRecord {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  total_tokens?: number;
+  usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number; input_tokens?: number; output_tokens?: number; total_tokens?: number };
+  createdAt?: string;
+  timestamp?: number | string;
+  date?: string;
+  updatedAt?: number | string;
+}
+
+/** Aggregated usage returned by get-openclaw-usage. */
+export interface OpenClawUsageResult {
+  byDay: { date: string; inputTokens: number; outputTokens: number; totalTokens: number }[];
+  totals: { inputTokens: number; outputTokens: number; totalTokens: number };
+  byAgent: { agentId: string; inputTokens: number; outputTokens: number; totalTokens: number }[];
+  hint?: string;
+  debug?: { files: { path: string; agentId: string; records: number; totalTokens: number }[] };
+}
+
+function toNum(v: unknown): number {
+  if (typeof v === "number" && !Number.isNaN(v)) return Math.max(0, Math.floor(v));
+  if (typeof v === "string") return Math.max(0, Math.floor(parseInt(v, 10)) || 0);
+  return 0;
+}
+
+/** Read token counts from a record; supports camelCase, snake_case, and nested usage. */
+function getTokenCounts(r: SessionTokenRecord): { input: number; output: number; total: number } {
+  const u = r.usage && typeof r.usage === "object" ? r.usage : (r as Record<string, unknown>);
+  const input = toNum((u as SessionTokenRecord).inputTokens ?? (u as SessionTokenRecord).input_tokens ?? r.inputTokens ?? r.input_tokens);
+  const output = toNum((u as SessionTokenRecord).outputTokens ?? (u as SessionTokenRecord).output_tokens ?? r.outputTokens ?? r.output_tokens);
+  const totalRaw = toNum((u as SessionTokenRecord).totalTokens ?? (u as SessionTokenRecord).total_tokens ?? r.totalTokens ?? r.total_tokens);
+  return { input, output, total: totalRaw || input + output };
+}
+
+function toDateKey(record: SessionTokenRecord): string | null {
+  const raw = record.updatedAt ?? record.createdAt ?? record.date ?? record.timestamp;
+  if (typeof raw === "string") {
+    const d = new Date(raw);
+    return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+  }
+  if (typeof raw === "number" && raw > 0) {
+    return new Date(raw).toISOString().slice(0, 10);
+  }
+  return null;
+}
+
+function hasSessionTokenFields(r: unknown): r is SessionTokenRecord {
+  if (!r || typeof r !== "object") return false;
+  const o = r as Record<string, unknown>;
+  return (
+    o.inputTokens !== undefined ||
+    o.outputTokens !== undefined ||
+    o.totalTokens !== undefined ||
+    o.input_tokens !== undefined ||
+    o.output_tokens !== undefined ||
+    o.total_tokens !== undefined ||
+    Boolean(o.usage && typeof o.usage === "object")
+  );
+}
+
+/** Extract session records. Supports: array of records, { sessions: [] }, { data: [] }, single record, and OpenClaw format: root object keyed by session id (e.g. "agent:aegis:cron:...") with values like { inputTokens, outputTokens, totalTokens, updatedAt }. */
+function extractRecords(data: unknown): SessionTokenRecord[] {
+  if (!data || typeof data !== "object") return [];
+  const obj = data as Record<string, unknown>;
+  if (Array.isArray(data)) {
+    return data.filter((x) => x && typeof x === "object") as SessionTokenRecord[];
+  }
+  if (Array.isArray(obj.sessions)) {
+    return obj.sessions.filter((x: unknown) => x && typeof x === "object") as SessionTokenRecord[];
+  }
+  if (Array.isArray(obj.data)) {
+    return obj.data.filter((x: unknown) => x && typeof x === "object") as SessionTokenRecord[];
+  }
+  if (hasSessionTokenFields(obj)) {
+    return [obj as SessionTokenRecord];
+  }
+  const values = Object.values(obj).filter((x) => x != null && typeof x === "object") as SessionTokenRecord[];
+  if (values.length === 1 && Array.isArray(values[0])) {
+    return (values[0] as unknown as SessionTokenRecord[]).filter((x) => x && typeof x === "object");
+  }
+  // OpenClaw sessions.json: root is { "sessionKey1": { inputTokens, outputTokens, totalTokens, updatedAt }, ... } — take every value that has token fields
+  const out: SessionTokenRecord[] = [];
+  for (const v of values) {
+    if (!v || typeof v !== "object") continue;
+    if (hasSessionTokenFields(v)) {
+      out.push(v as SessionTokenRecord);
+    } else {
+      const nested = extractRecords(v);
+      if (nested.length) out.push(...nested);
+    }
+  }
+  return out.length ? out : values;
+}
+
+/** Add all .json files in a sessions directory so we don't miss date-partitioned or rotated session files. */
+function addAllSessionFilesInDir(
+  out: { path: string; agentId: string }[],
+  sessionsDir: string,
+  agentId: string
+): void {
+  if (!fs.existsSync(sessionsDir) || !fs.statSync(sessionsDir).isDirectory()) return;
+  try {
+    const entries = fs.readdirSync(sessionsDir, { withFileTypes: true });
+    for (const e of entries) {
+      if (!e.isFile() || !e.name.toLowerCase().endsWith(".json")) continue;
+      const fullPath = path.join(sessionsDir, e.name);
+      out.push({ path: fullPath, agentId });
+    }
+  } catch {
+    // ignore
+  }
+}
+
+/** Recursively find every sessions dir under baseDir and add all *.json from it. agentId = path relative to baseDir (e.g. "folder" or "folder/sub"). */
+function walkAndCollectSessions(
+  out: { path: string; agentId: string }[],
+  baseDir: string,
+  relativePath: string
+): void {
+  if (!fs.existsSync(baseDir) || !fs.statSync(baseDir).isDirectory()) return;
+  try {
+    const entries = fs.readdirSync(baseDir, { withFileTypes: true });
+    const sessionsDir = path.join(baseDir, "sessions");
+    if (fs.existsSync(sessionsDir) && fs.statSync(sessionsDir).isDirectory()) {
+      const agentId = relativePath || path.basename(baseDir) || "agent";
+      addAllSessionFilesInDir(out, sessionsDir, agentId);
+    }
+    for (const e of entries) {
+      if (!e.isDirectory() || e.name === "sessions") continue;
+      const childPath = path.join(baseDir, e.name);
+      const nextRelative = relativePath ? `${relativePath}/${e.name}` : e.name;
+      walkAndCollectSessions(out, childPath, nextRelative);
+    }
+  } catch {
+    // ignore
+  }
+}
+
+/** Collect session file paths from a given openclaw root. Recursively scans agents and workspace so every sessions dir (sessions.json and other .json) at any depth is included. */
+function collectSessionsPaths(openclawRoot: string): { path: string; agentId: string }[] {
+  const out: { path: string; agentId: string }[] = [];
+  const globalSessionsDir = path.join(openclawRoot, "sessions");
+  addAllSessionFilesInDir(out, globalSessionsDir, "_global");
+
+  const agentsDir = path.join(openclawRoot, "agents");
+  if (fs.existsSync(agentsDir) && fs.statSync(agentsDir).isDirectory()) {
+    try {
+      const dirs = fs.readdirSync(agentsDir, { withFileTypes: true });
+      for (const d of dirs) {
+        if (!d.isDirectory()) continue;
+        const folderPath = path.join(agentsDir, d.name);
+        walkAndCollectSessions(out, folderPath, d.name);
+      }
+    } catch {
+      // ignore
+    }
+  }
+  const workspaceDir = path.join(openclawRoot, "workspace");
+  if (fs.existsSync(workspaceDir) && fs.statSync(workspaceDir).isDirectory()) {
+    try {
+      const dirs = fs.readdirSync(workspaceDir, { withFileTypes: true });
+      for (const d of dirs) {
+        if (!d.isDirectory()) continue;
+        const folderPath = path.join(workspaceDir, d.name);
+        walkAndCollectSessions(out, folderPath, d.name);
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return out;
+}
+
+/** Scan ~/.openclaw (and ~/openclaw) for sessions/sessions.json and agents/workspace subdirs, aggregate token usage. */
+function getOpenClawUsage(): OpenClawUsageResult {
+  const byDayMap = new Map<string, { inputTokens: number; outputTokens: number; totalTokens: number }>();
+  const byAgentMap = new Map<string, { inputTokens: number; outputTokens: number; totalTokens: number }>();
+  const debugFiles: { path: string; agentId: string; records: number; totalTokens: number }[] = [];
+  let totalInput = 0;
+  let totalOutput = 0;
+  let totalTotal = 0;
+
+  const sessionsPaths: { path: string; agentId: string }[] = [];
+  if (fs.existsSync(OPENCLAW_DIR)) {
+    sessionsPaths.push(...collectSessionsPaths(OPENCLAW_DIR));
+  }
+  if (fs.existsSync(OPENCLAW_DIR_ALT)) {
+    const altPaths = collectSessionsPaths(OPENCLAW_DIR_ALT);
+    for (const p of altPaths) {
+      if (!sessionsPaths.some((s) => s.path === p.path)) sessionsPaths.push(p);
+    }
+  }
+
+  if (sessionsPaths.length === 0) {
+    return {
+      byDay: [],
+      totals: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+      byAgent: [],
+      hint: `No session files found at ${OPENCLAW_DIR} or ${OPENCLAW_DIR_ALT}. In the browser, usage is read from the server's filesystem—use the desktop app (Electron) or run locally (npm run dev) so the app can read ~/.openclaw.`,
+    };
+  }
+
+  for (const { path: filePath, agentId } of sessionsPaths) {
+    let raw: unknown;
+    let fileDateKey: string | null = null;
+    try {
+      const stat = fs.statSync(filePath);
+      fileDateKey = stat.mtime.toISOString().slice(0, 10);
+      raw = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    } catch {
+      continue;
+    }
+    const records = extractRecords(raw);
+    const agentTotals = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+    for (const r of records) {
+      const { input, output, total } = getTokenCounts(r);
+      const dateKey = toDateKey(r) ?? fileDateKey;
+      agentTotals.inputTokens += input;
+      agentTotals.outputTokens += output;
+      agentTotals.totalTokens += total;
+      totalInput += input;
+      totalOutput += output;
+      totalTotal += total;
+      if (dateKey) {
+        const existing = byDayMap.get(dateKey) ?? { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+        existing.inputTokens += input;
+        existing.outputTokens += output;
+        existing.totalTokens += total;
+        byDayMap.set(dateKey, existing);
+      }
+    }
+    if (agentTotals.inputTokens > 0 || agentTotals.outputTokens > 0 || agentTotals.totalTokens > 0) {
+      const existing = byAgentMap.get(agentId) ?? { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+      existing.inputTokens += agentTotals.inputTokens;
+      existing.outputTokens += agentTotals.outputTokens;
+      existing.totalTokens += agentTotals.totalTokens;
+      byAgentMap.set(agentId, existing);
+    }
+    debugFiles.push({
+      path: filePath,
+      agentId,
+      records: records.length,
+      totalTokens: agentTotals.totalTokens,
+    });
+  }
+
+  const byDay = Array.from(byDayMap.entries())
+    .map(([date, v]) => ({ date, ...v }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const byAgent = Array.from(byAgentMap.entries()).map(([agentId, v]) => ({ agentId, ...v }));
+
+  const result: OpenClawUsageResult = {
+    byDay,
+    totals: { inputTokens: totalInput, outputTokens: totalOutput, totalTokens: totalTotal },
+    byAgent,
+    debug: { files: debugFiles },
+  };
+  if (totalTotal === 0 && sessionsPaths.length > 0) {
+    result.hint = "Session files were found but contained no token records. Ensure each file is a JSON array of objects with inputTokens, outputTokens, totalTokens, and optional createdAt or timestamp.";
+  }
+  return result;
 }
 
 /** Recursively list all .md files under ~/.openclaw. Returns relative paths from OPENCLAW_DIR. */
@@ -866,7 +1207,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
   ensureDir();
 
-  const { action, task, id, patch, command, date, lines, jobIds, relativePath, content: docContent, todoData, query } = req.body;
+  const { action, task, id, patch, command, date, lines, jobIds, jobId: singleJobId, runAtMs, limit: runsLimit, offset: runsOffset, relativePath, content: docContent, todoData, query } = req.body;
 
   switch (action) {
     case "trigger-process-commands": {
@@ -954,6 +1295,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const ids = Array.isArray(jobIds) ? (jobIds as string[]) : getCrons().map((c) => c.id);
       return res.json({ runsByJobId: getCronRuns(ids) });
     }
+    case "get-cron-runs-for-job": {
+      const jid = singleJobId as string | undefined;
+      const lim = typeof runsLimit === "number" && runsLimit > 0 ? Math.min(runsLimit, 100) : 10;
+      const off = typeof runsOffset === "number" && runsOffset >= 0 ? runsOffset : 0;
+      return res.json(getCronRunsForJob(jid ?? "", lim, off));
+    }
+    case "get-cron-run-detail": {
+      const jid = singleJobId as string | undefined;
+      const runAt = typeof runAtMs === "number" ? runAtMs : undefined;
+      const detail = jid != null && runAt != null ? getCronRunDetail(jid, runAt) : null;
+      if (detail == null) return res.status(404).json({ error: "Run not found" });
+      return res.json(detail);
+    }
     case "get-employee-status": {
       const ACTIVE_CRON_WINDOW_MS = 10 * 60 * 1000;
       const team = getTeam() as { id: string; name: string; status: string; role?: string }[];
@@ -1022,6 +1376,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     case "list-openclaw-memory": {
       const sources = listOpenClawMemorySources();
       return res.json({ success: true, data: sources });
+    }
+    case "get-openclaw-usage": {
+      const usage = getOpenClawUsage();
+      return res.json({ success: true, data: usage });
     }
     case "search-openclaw-memory-content": {
       const paths = searchOpenClawMemoryContent(query ?? "");

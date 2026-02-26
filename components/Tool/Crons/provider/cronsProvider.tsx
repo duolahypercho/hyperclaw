@@ -20,7 +20,6 @@ import {
   parseCronJobs,
   parseRelativeTime,
   fetchCronsFromBridge,
-  fetchCronRunsFromBridge,
   getStatusColor,
   getAgentColor,
 } from "../utils";
@@ -85,6 +84,11 @@ export function CronsProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  // Load cron list from file (via bridge) immediately on mount so the list appears without waiting for useOpenClaw
+  useEffect(() => {
+    fetchBridgeCrons();
+  }, [fetchBridgeCrons]);
+
   useEffect(() => {
     if (installed === false) fetchBridgeCrons();
   }, [installed, fetchBridgeCrons]);
@@ -99,32 +103,25 @@ export function CronsProvider({ children }: { children: ReactNode }) {
       agentId: p.agent,
       state: { nextRunAtMs: undefined, lastStatus: p.status },
     })) as OpenClawCronJobJson[];
-  const jobsForList = installed ? openClawJobs : bridgeCrons.length ? bridgeCrons : openClawJobs;
+  // Prefer bridge list so the list appears as soon as get-crons returns (one file read). Don't wait for useOpenClaw.
+  const rawJobs = bridgeCrons.length ? bridgeCrons : openClawJobs;
+  // Sort by next run ascending (closest incoming first); jobs without nextRunAtMs go last
+  const jobsForList = useMemo(() => {
+    return [...rawJobs].sort((a, b) => {
+      const nextA = a.state?.nextRunAtMs ?? Number.POSITIVE_INFINITY;
+      const nextB = b.state?.nextRunAtMs ?? Number.POSITIVE_INFINITY;
+      return nextA - nextB;
+    });
+  }, [rawJobs]);
   const bridgeOnly = !installed && bridgeCrons.length > 0;
   const showEmptyState = !installed && bridgeCrons.length === 0 && !bridgeLoading;
 
-  const jobIdsKey = useMemo(
-    () => jobsForList.map((j) => j.id).filter(Boolean).sort().join(","),
-    [jobsForList]
-  );
-  useEffect(() => {
-    const ids = jobIdsKey ? jobIdsKey.split(",") : [];
-    if (ids.length === 0) return;
-    let cancelled = false;
-    fetchCronRunsFromBridge(ids).then((data) => {
-      if (!cancelled) setRunsByJobId(data);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [jobIdsKey]);
+  // No bulk run fetch on mount — list uses job.state (lastRunAtMs, lastStatus). Run history loads on demand when user opens a job detail.
 
   const refresh = useCallback(() => {
     if (installed) refreshAll();
     else fetchBridgeCrons();
-    const ids = jobsForList.map((j) => j.id).filter(Boolean);
-    if (ids.length) fetchCronRunsFromBridge(ids).then(setRunsByJobId);
-  }, [installed, refreshAll, fetchBridgeCrons, jobsForList]);
+  }, [installed, refreshAll, fetchBridgeCrons]);
 
   const handleToggleEnabled = useCallback(
     async (job: OpenClawCronJobJson) => {

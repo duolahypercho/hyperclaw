@@ -55,13 +55,13 @@ function RunDetailDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md gap-4 sm:rounded-lg max-h-[85vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle className="text-base font-semibold pr-8">{job.name}</DialogTitle>
-          <DialogDescription>
-            Scheduled {format(slot.start, "EEEE, MMM d")} · {timeRange}
+      <DialogContent className="max-w-md gap-5 sm:rounded-xl max-h-[85vh] overflow-y-auto">
+        <DialogHeader className="space-y-1.5">
+          <DialogTitle className="text-base font-semibold pr-8 leading-snug">{job.name}</DialogTitle>
+          <DialogDescription className="text-sm">
+            {format(slot.start, "EEEE, MMM d")} · {timeRange}
             {scheduleStr ? (
-              <span className="block mt-1 text-[11px] text-muted-foreground/80">
+              <span className="block mt-1.5 text-xs text-muted-foreground/90">
                 Schedule: {scheduleStr}
               </span>
             ) : null}
@@ -206,7 +206,7 @@ export function DaySchedulePanel({
         key={rowKey}
         type="button"
         onClick={() => setSelectedEntry({ job, slot, run: run ?? null })}
-        className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left hover:bg-muted/60 transition-colors cursor-pointer border-0 rounded-none"
+        className="flex w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-muted/50 transition-colors cursor-pointer border-0 rounded-none focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
       >
         <div className={`w-2.5 h-2.5 rounded-[3px] shrink-0 ${palette.bg}`} />
         {StatusIcon && (
@@ -242,24 +242,26 @@ export function DaySchedulePanel({
       <motion.div
         initial={{ opacity: 0, y: 6 }}
         animate={{ opacity: 1, y: 0 }}
-        className="mt-3 rounded-lg border border-solid border-border overflow-hidden"
+        transition={{ duration: 0.2 }}
+        className="mt-4 rounded-xl border border-border/60 overflow-hidden bg-card/50"
       >
-        <div className="px-3 py-2 border-b border-l-0 border-r-0 border-t-0 border-solid border-border flex items-center gap-2 bg-muted/10">
+        <div className="px-4 py-2.5 border-b border-border/40 flex items-center gap-3 bg-muted/10">
           <span
-            className={`w-6 h-6 flex items-center justify-center rounded-full text-[11px] font-bold ${
-              isTodaySelected ? "bg-red-500 text-white" : "bg-muted text-foreground"
+            className={`w-7 h-7 flex items-center justify-center rounded-lg text-xs font-semibold ${
+              isTodaySelected ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
             }`}
           >
             {format(day, "d")}
           </span>
-          <span className="text-sm font-medium">{format(day, "EEEE, MMMM d")}</span>
-          <span className="ml-auto text-[11px] text-muted-foreground">
-            {slots.length} event{slots.length !== 1 ? "s" : ""}
+          <span className="text-sm font-medium text-foreground">{format(day, "EEEE, MMMM d")}</span>
+          <span className="ml-auto text-xs text-muted-foreground tabular-nums">
+            {slots.length} run{slots.length !== 1 ? "s" : ""}
           </span>
         </div>
         {slots.length === 0 ? (
-          <div className="px-3 py-5 text-center text-sm text-muted-foreground/50">
-            No scheduled jobs for this day
+          <div className="px-4 py-8 text-center">
+            <p className="text-sm font-medium text-foreground/80">No runs scheduled</p>
+            <p className="text-xs text-muted-foreground mt-1">No cron jobs are set to run on this day.</p>
           </div>
         ) : (
           <div className="flex flex-col gap-0 ">

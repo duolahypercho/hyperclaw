@@ -83,12 +83,13 @@ export function WeeklyView() {
     setSelectedDate(t);
   };
 
-  if (loading || bridgeLoading) {
+  if ((loading || bridgeLoading) && jobsForList.length === 0) {
     return (
-      <div className="h-full flex items-center justify-center p-8">
-        <div className="animate-pulse w-full max-w-4xl grid grid-cols-7 gap-2">
+      <div className="h-full flex flex-col p-4">
+        <div className="flex justify-end gap-1 mb-4 h-8 rounded-lg bg-muted/20 w-32 shrink-0" />
+        <div className="animate-pulse w-full max-w-4xl grid grid-cols-7 gap-px rounded-lg overflow-hidden border border-border/20">
           {Array.from({ length: 7 }).map((_, i) => (
-            <div key={i} className="h-48 bg-muted/30 rounded-lg" />
+            <div key={i} className="h-44 bg-muted/30" />
           ))}
         </div>
       </div>
@@ -97,16 +98,32 @@ export function WeeklyView() {
 
   return (
     <div className="flex flex-col h-full w-full bg-background">
-      {/* Navigation — same as month */}
-      <div className="flex items-center justify-end gap-1 px-4 py-2 shrink-0 border-b border-border/20">
-        <Button variant="ghost" size="icon" onClick={prevWeek} className="h-7 w-7 rounded-full">
-          <ChevronLeft className="h-3.5 w-3.5" />
+      <div className="flex items-center justify-end gap-1 px-4 py-2.5 shrink-0 border-b border-border/20">
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={prevWeek}
+          className="h-8 w-8 rounded-lg"
+          aria-label="Previous week"
+        >
+          <ChevronLeft className="h-4 w-4" />
         </Button>
-        <Button variant="ghost" size="sm" onClick={goToday} className="h-7 px-2.5 text-xs rounded-full">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={goToday}
+          className="h-8 px-3 text-xs rounded-lg font-medium"
+        >
           Today
         </Button>
-        <Button variant="ghost" size="icon" onClick={nextWeek} className="h-7 w-7 rounded-full">
-          <ChevronRight className="h-3.5 w-3.5" />
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={nextWeek}
+          className="h-8 w-8 rounded-lg"
+          aria-label="Next week"
+        >
+          <ChevronRight className="h-4 w-4" />
         </Button>
       </div>
 
@@ -179,6 +196,17 @@ export function WeeklyView() {
               );
             })}
           </div>
+
+          {jobsForList.length === 0 && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="mt-4 py-8 text-center rounded-xl border border-dashed border-border/50 bg-muted/10"
+            >
+              <p className="text-sm font-medium text-foreground">No cron jobs</p>
+              <p className="text-xs text-muted-foreground mt-1">Create jobs with OpenClaw CLI to see them on the calendar.</p>
+            </motion.div>
+          )}
 
           {/* Day schedule for selected day or today — always show one when in this week */}
           {(() => {

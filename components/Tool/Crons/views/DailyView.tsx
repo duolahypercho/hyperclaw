@@ -125,7 +125,7 @@ export function DailyView() {
 
   const nowTop = (nowMinutes / 60) * ROW_HEIGHT;
 
-  if (loading || bridgeLoading) {
+  if ((loading || bridgeLoading) && jobsForList.length === 0) {
     return (
       <div className="h-full flex items-center justify-center p-8">
         <div className="animate-pulse w-full max-w-2xl space-y-2">

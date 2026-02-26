@@ -102,15 +102,17 @@ export function MonthlyView() {
     setSelectedDate(t);
   };
 
-  if (loading || bridgeLoading) {
+  if ((loading || bridgeLoading) && jobsForList.length === 0) {
     return (
-      <div className="h-full flex items-center justify-center p-8">
-        <div className="animate-pulse flex flex-col gap-4 w-full max-w-4xl">
-          <div className="grid grid-cols-7 gap-1">
-            {Array.from({ length: 35 }).map((_, i) => (
-              <div key={i} className="aspect-square bg-muted/40 rounded-lg" />
-            ))}
-          </div>
+      <div className="h-full flex flex-col p-4">
+        <div className="flex items-center justify-between mb-4">
+          <div className="h-5 w-32 bg-muted/30 rounded animate-pulse" />
+          <div className="flex gap-1 h-8 w-28 bg-muted/20 rounded-lg" />
+        </div>
+        <div className="animate-pulse grid grid-cols-7 gap-px rounded-lg overflow-hidden border border-border/20">
+          {Array.from({ length: 35 }).map((_, i) => (
+            <div key={i} className="aspect-[1.2] bg-muted/30 min-h-[4rem]" />
+          ))}
         </div>
       </div>
     );
@@ -119,20 +121,31 @@ export function MonthlyView() {
   return (
     <ScrollArea className="h-full w-full">
       <div className="p-4">
-        {/* Navigation */}
         <div className="flex items-center justify-between gap-2 mb-3">
           <h2 className="text-sm font-semibold text-foreground tabular-nums">
             {format(viewMonth, "MMMM yyyy")}
           </h2>
           <div className="flex items-center gap-1">
-            <Button variant="ghost" size="icon" onClick={prevMonth} className="h-7 w-7 rounded-full">
-              <ChevronLeft className="h-3.5 w-3.5" />
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={prevMonth}
+              className="h-8 w-8 rounded-lg"
+              aria-label="Previous month"
+            >
+              <ChevronLeft className="h-4 w-4" />
             </Button>
-            <Button variant="ghost" size="sm" onClick={goToday} className="h-7 px-2.5 text-xs rounded-full">
+            <Button variant="ghost" size="sm" onClick={goToday} className="h-8 px-3 text-xs rounded-lg font-medium">
               Today
             </Button>
-            <Button variant="ghost" size="icon" onClick={nextMonth} className="h-7 w-7 rounded-full">
-              <ChevronRight className="h-3.5 w-3.5" />
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={nextMonth}
+              className="h-8 w-8 rounded-lg"
+              aria-label="Next month"
+            >
+              <ChevronRight className="h-4 w-4" />
             </Button>
           </div>
         </div>
@@ -220,6 +233,17 @@ export function MonthlyView() {
             );
           })}
         </div>
+
+        {jobsForList.length === 0 && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="mt-4 py-8 text-center rounded-xl border border-dashed border-border/50 bg-muted/10"
+          >
+            <p className="text-sm font-medium text-foreground">No cron jobs</p>
+            <p className="text-xs text-muted-foreground mt-1">Create jobs with OpenClaw CLI to see them on the calendar.</p>
+          </motion.div>
+        )}
 
         {/* Day schedule for selected day or today — always show one when in this month */}
         {(() => {

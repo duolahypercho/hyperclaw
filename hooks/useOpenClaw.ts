@@ -1,11 +1,15 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
-import { gatewayHttpToWs, probeGatewayWs } from "$/lib/openclaw-gateway-ws";
+import {
+  buildGatewayWsUrl,
+  connectGatewayWs,
+  getGatewayConnectionState,
+  subscribeGatewayConnection,
+} from "$/lib/openclaw-gateway-ws";
 import type {
   OpenClawCommandResult,
   OpenClawInstallCheck,
-  OpenClawAgent,
-  OpenClawAgentListResult,
+  OpenClawRegistryAgent,
   OpenClawAPI,
   OpenClawCronJobJson,
   OpenClawGatewayHealthResult,
@@ -21,7 +25,7 @@ interface OpenClawState {
   gatewayHealthError: string | null;
   cronJobs: string | null;
   cronJobsJson: OpenClawCronJobJson[] | null;
-  agents: OpenClawAgent[];
+  agents: OpenClawRegistryAgent[];
   logs: string | null;
   loading: boolean;
   errors: Record<string, string | null>;
@@ -131,20 +135,19 @@ export function useOpenClaw(autoRefreshMs = 0) {
 
   const fetchGatewayHealth = useCallback(async () => {
     const api = getApi();
-    // In Electron: try renderer WebSocket first (ws://127.0.0.1:port), then fall back to CLI
+    // In Electron: use persistent gateway WebSocket (stays open, no repeated pings)
     if (typeof window !== "undefined" && window.electronAPI?.openClaw?.getGatewayConnectUrl) {
       try {
-        const { gatewayUrl } = await window.electronAPI.openClaw.getGatewayConnectUrl();
-        const wsUrl = gatewayHttpToWs(gatewayUrl || "http://127.0.0.1:18789");
-        const probe = await probeGatewayWs(wsUrl, 5000);
-        if (probe.healthy) {
-          setPartial({
-            gatewayHealthy: true,
-            gatewayHealthError: null,
-            installed: true,
-          });
-          return;
-        }
+        const { gatewayUrl, token } = await window.electronAPI.openClaw.getGatewayConnectUrl();
+        const wsUrl = buildGatewayWsUrl(gatewayUrl || "http://127.0.0.1:18789", token);
+        connectGatewayWs(wsUrl, { token });
+        const { connected, error } = getGatewayConnectionState();
+        setPartial({
+          gatewayHealthy: connected,
+          gatewayHealthError: connected ? null : (error ?? "Not connected"),
+          ...(connected ? { installed: true as boolean } : {}),
+        });
+        return;
       } catch {
         /* fall through to CLI */
       }
@@ -181,8 +184,13 @@ export function useOpenClaw(autoRefreshMs = 0) {
   const fetchCronListJson = useCallback(async () => {
     const api = getApi();
     const res = await api.getCronListJson();
-    if (res.success && res.data?.jobs) {
-      setPartial({ cronJobsJson: res.data.jobs, errors: { ...state.errors, cron: null } });
+    // Backend normalizes to data.jobs; accept array or data.jobs for resilience
+    const jobs =
+      res.success && res.data
+        ? (Array.isArray(res.data) ? res.data : res.data.jobs)
+        : null;
+    if (jobs && Array.isArray(jobs)) {
+      setPartial({ cronJobsJson: jobs, errors: { ...state.errors, cron: null } });
     } else {
       setPartial({
         cronJobsJson: null,
@@ -202,10 +210,29 @@ export function useOpenClaw(autoRefreshMs = 0) {
   }, []);
 
   const fetchAgents = useCallback(async () => {
+    // Use same source as Agents page: list-agents (openclaw agents list / openclaw.json)
+    try {
+      const res = (await bridgeInvoke("list-agents", {})) as {
+        success?: boolean;
+        data?: OpenClawRegistryAgent[];
+      };
+      if (res?.success && Array.isArray(res.data)) {
+        setPartial({ agents: res.data, errors: { ...state.errors, agents: null } });
+        return;
+      }
+    } catch {
+      /* fall through to getAgentList fallback */
+    }
+    // Fallback: workspace subdirs (different source, map to registry shape)
     const api = getApi();
-    const res: OpenClawAgentListResult = await api.getAgentList();
+    const res = await api.getAgentList();
     if (res.success && res.data) {
-      setPartial({ agents: res.data, errors: { ...state.errors, agents: null } });
+      const mapped: OpenClawRegistryAgent[] = res.data.map((a) => ({
+        id: a.name,
+        name: a.name,
+        status: "idle",
+      }));
+      setPartial({ agents: mapped, errors: { ...state.errors, agents: null } });
     } else {
       setPartial({ errors: { ...state.errors, agents: res.error ?? "Unknown error" } });
     }
@@ -261,67 +288,97 @@ export function useOpenClaw(autoRefreshMs = 0) {
     refreshInProgressRef.current = true;
     globalRefreshInProgress = true;
     setPartial({ loading: true });
-    // #region agent log
-    if (typeof fetch !== "undefined") fetch("http://127.0.0.1:7697/ingest/5b487555-6c93-439c-bf5f-6251fb6e26ec", { method: "POST", headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "d4447e" }, body: JSON.stringify({ sessionId: "d4447e", location: "useOpenClaw.ts:refreshAll", message: "refreshAll start", data: {}, hypothesisId: "H1", timestamp: Date.now() }) }).catch(() => {});
-    // #endregion
+    const errMsg = (e: unknown) => (e instanceof Error ? e.message : "Failed");
+
     try {
+      // 1) Load cron data first (file-based, fast) and show list immediately
+      const api = getApi();
+      const [cronListRes, cronJsonRes] = await Promise.all([
+        api.getCronList().catch((e) => ({ success: false as const, error: errMsg(e) })),
+        api.getCronListJson().catch((e) => ({ success: false as const, error: errMsg(e), data: undefined })),
+      ]);
+      if (cronListRes.success && cronListRes.data != null) {
+        setPartial({ cronJobs: cronListRes.data, errors: { ...state.errors, cron: null } });
+      } else if (!cronListRes.success) {
+        setPartial({ errors: { ...state.errors, cron: cronListRes.error ?? "Unknown error" } });
+      }
+      const jobs =
+        cronJsonRes.success && cronJsonRes.data
+          ? (Array.isArray(cronJsonRes.data) ? cronJsonRes.data : cronJsonRes.data.jobs)
+          : null;
+      if (jobs && Array.isArray(jobs)) {
+        setPartial({ cronJobsJson: jobs, errors: { ...state.errors, cron: null } });
+      } else if (!cronJsonRes.success) {
+        setPartial({ cronJobsJson: null, errors: { ...state.errors, cron: cronJsonRes.error ?? "Unknown error" } });
+      }
+      setPartial({ loading: false });
+      lastRefreshEndAt = Date.now();
+      refreshInProgressRef.current = false;
+      globalRefreshInProgress = false;
+
+      // 2) Run install check, gateway, status, agents in background (don't block UI)
       let isInstalled: boolean;
       if (cachedInstalled !== null) {
         isInstalled = cachedInstalled;
-        // #region agent log
-        if (typeof fetch !== "undefined") fetch("http://127.0.0.1:7697/ingest/5b487555-6c93-439c-bf5f-6251fb6e26ec", { method: "POST", headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "d4447e" }, body: JSON.stringify({ sessionId: "d4447e", location: "useOpenClaw.ts:refreshAll after checkInstalled (cached)", message: "refreshAll after checkInstalled (cached)", data: { isInstalled }, hypothesisId: "H1", timestamp: Date.now() }) }).catch(() => {});
-        // #endregion
       } else {
-        isInstalled = await checkInstalled();
-        cachedInstalled = isInstalled;
-        // #region agent log
-        if (typeof fetch !== "undefined") fetch("http://127.0.0.1:7697/ingest/5b487555-6c93-439c-bf5f-6251fb6e26ec", { method: "POST", headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "d4447e" }, body: JSON.stringify({ sessionId: "d4447e", location: "useOpenClaw.ts:refreshAll after checkInstalled", message: "refreshAll after checkInstalled", data: { isInstalled }, hypothesisId: "H1", timestamp: Date.now() }) }).catch(() => {});
-        // #endregion
+        try {
+          isInstalled = await checkInstalled();
+          cachedInstalled = isInstalled;
+        } catch {
+          isInstalled = false;
+          cachedInstalled = false;
+          setPartial({ installed: false });
+          return;
+        }
       }
-      // Run gateway health first (isolate crash: WebSocket probe vs other IPC)
+      setPartial({ installed: isInstalled });
       await fetchGatewayHealth();
-      // #region agent log
-      if (typeof fetch !== "undefined") fetch("http://127.0.0.1:7697/ingest/5b487555-6c93-439c-bf5f-6251fb6e26ec", { method: "POST", headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "d4447e" }, body: JSON.stringify({ sessionId: "d4447e", location: "useOpenClaw.ts:refreshAll after fetchGatewayHealth", message: "refreshAll after fetchGatewayHealth", data: {}, hypothesisId: "H1", timestamp: Date.now() }) }).catch(() => {});
-      // #endregion
       if (isInstalled) {
-        await fetchStatus();
-        if (typeof fetch !== "undefined") fetch("http://127.0.0.1:7697/ingest/5b487555-6c93-439c-bf5f-6251fb6e26ec", { method: "POST", headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "d4447e" }, body: JSON.stringify({ sessionId: "d4447e", location: "useOpenClaw.ts:refreshAll after fetchStatus", message: "after fetchStatus", data: {}, hypothesisId: "H1", timestamp: Date.now() }) }).catch(() => {});
-        await fetchCronList();
-        if (typeof fetch !== "undefined") fetch("http://127.0.0.1:7697/ingest/5b487555-6c93-439c-bf5f-6251fb6e26ec", { method: "POST", headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "d4447e" }, body: JSON.stringify({ sessionId: "d4447e", location: "useOpenClaw.ts:refreshAll after fetchCronList", message: "after fetchCronList", data: {}, hypothesisId: "H1", timestamp: Date.now() }) }).catch(() => {});
-        await fetchCronListJson();
-        if (typeof fetch !== "undefined") fetch("http://127.0.0.1:7697/ingest/5b487555-6c93-439c-bf5f-6251fb6e26ec", { method: "POST", headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "d4447e" }, body: JSON.stringify({ sessionId: "d4447e", location: "useOpenClaw.ts:refreshAll after fetchCronListJson", message: "after fetchCronListJson", data: {}, hypothesisId: "H1", timestamp: Date.now() }) }).catch(() => {});
-        await fetchAgents();
-        if (typeof fetch !== "undefined") fetch("http://127.0.0.1:7697/ingest/5b487555-6c93-439c-bf5f-6251fb6e26ec", { method: "POST", headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "d4447e" }, body: JSON.stringify({ sessionId: "d4447e", location: "useOpenClaw.ts:refreshAll after fetchAgents", message: "after fetchAgents", data: {}, hypothesisId: "H1", timestamp: Date.now() }) }).catch(() => {});
+        const [statusSettled, agentsSettled] = await Promise.allSettled([fetchStatus(), fetchAgents()]);
+        if (statusSettled.status === "rejected") {
+          console.warn("[useOpenClaw] fetchStatus failed:", statusSettled.reason);
+          setState((prev) => ({ ...prev, errors: { ...prev.errors, status: errMsg(statusSettled.reason) } }));
+        }
+        if (agentsSettled.status === "rejected") {
+          console.warn("[useOpenClaw] fetchAgents failed:", agentsSettled.reason);
+          setState((prev) => ({ ...prev, errors: { ...prev.errors, agents: errMsg(agentsSettled.reason) } }));
+        }
       } else {
-        await fetchStatus();
+        try {
+          await fetchStatus();
+        } catch (e) {
+          setState((prev) => ({ ...prev, errors: { ...prev.errors, status: e instanceof Error ? e.message : "Failed" } }));
+        }
       }
-      // #region agent log
-      if (typeof fetch !== "undefined") fetch("http://127.0.0.1:7697/ingest/5b487555-6c93-439c-bf5f-6251fb6e26ec", { method: "POST", headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "d4447e" }, body: JSON.stringify({ sessionId: "d4447e", location: "useOpenClaw.ts:refreshAll after Promise.all", message: "refreshAll after Promise.all", data: {}, hypothesisId: "H1", timestamp: Date.now() }) }).catch(() => {});
-      // #endregion
     } catch (err) {
-      // #region agent log
-      if (typeof fetch !== "undefined") fetch("http://127.0.0.1:7697/ingest/5b487555-6c93-439c-bf5f-6251fb6e26ec", { method: "POST", headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "d4447e" }, body: JSON.stringify({ sessionId: "d4447e", location: "useOpenClaw.ts:refreshAll catch", message: "refreshAll catch", data: { err: String(err) }, hypothesisId: "H1", timestamp: Date.now() }) }).catch(() => {});
-      // #endregion
-      // Prevent unhandled rejection from crashing the renderer (e.g. IPC disconnect in Electron)
       console.warn("[useOpenClaw] refreshAll failed:", err);
       setPartial({ installed: false, loading: false });
-      return;
     } finally {
       lastRefreshEndAt = Date.now();
       refreshInProgressRef.current = false;
       globalRefreshInProgress = false;
-      // #region agent log
-      if (typeof fetch !== "undefined") fetch("http://127.0.0.1:7697/ingest/5b487555-6c93-439c-bf5f-6251fb6e26ec", { method: "POST", headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "d4447e" }, body: JSON.stringify({ sessionId: "d4447e", location: "useOpenClaw.ts:refreshAll finally", message: "refreshAll end", data: {}, hypothesisId: "H1", timestamp: Date.now() }) }).catch(() => {});
-      // #endregion
-      setPartial({ loading: false });
+      setState((prev) => ({ ...prev, loading: false }));
     }
-  }, [checkInstalled, fetchStatus, fetchGatewayHealth, fetchCronList, fetchCronListJson, fetchAgents, setPartial]);
+  }, [checkInstalled, fetchStatus, fetchGatewayHealth, fetchCronList, fetchCronListJson, fetchAgents, setPartial, state.errors]);
 
   useEffect(() => {
     refreshAll().catch((err) => {
       console.warn("[useOpenClaw] initial refresh failed:", err);
     });
   }, []);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Sync UI with persistent gateway WebSocket state (Electron: one connection, no repeated pings)
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.electronAPI?.openClaw?.getGatewayConnectUrl) return;
+    const unsub = subscribeGatewayConnection(() => {
+      const { connected, error } = getGatewayConnectionState();
+      setPartial({
+        gatewayHealthy: connected,
+        gatewayHealthError: connected ? null : (error ?? "Not connected"),
+      });
+    });
+    return unsub;
+  }, [setPartial]);
 
   useEffect(() => {
     if (autoRefreshMs > 0 && state.installed) {

@@ -3,7 +3,7 @@
 import React, { useState, useRef } from "react";
 import type { OfficeLayout } from "./office/types";
 import { isSoundEnabled, setSoundEnabled } from "./notificationSound";
-import { LAYOUT_PRESETS, getPresetById, createCozyOfficeLayout } from "./layoutPresets";
+import { LAYOUT_PRESETS, getPresetById } from "./layoutPresets";
 import { deserializeLayout } from "./office/layout/layoutSerializer";
 
 const LAYOUT_STORAGE_KEY = "pixel-office-layout";
@@ -44,6 +44,10 @@ interface HyperclawSettingsModalProps {
   onToggleDebugMode: () => void;
   getLayout: () => OfficeLayout;
   onApplyLayout: (layout: OfficeLayout) => void;
+  /** If provided, called before replacing layout (preset/import). Return false to cancel. */
+  confirmBeforeReplaceLayout?: () => boolean | Promise<boolean>;
+  /** Restore the layout that was replaced by the last preset/import. */
+  onRestorePrevious?: () => void;
   /** Used to size Cozy Office (one room per agent). */
   agentCount?: number;
 }
@@ -55,6 +59,8 @@ export function HyperclawSettingsModal({
   onToggleDebugMode,
   getLayout,
   onApplyLayout,
+  confirmBeforeReplaceLayout,
+  onRestorePrevious,
   agentCount = 2,
 }: HyperclawSettingsModalProps) {
   const [hovered, setHovered] = useState<string | null>(null);
@@ -90,11 +96,13 @@ export function HyperclawSettingsModal({
     e.target.value = "";
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       try {
         const text = reader.result as string;
         const layout = deserializeLayout(text);
         if (layout) {
+          const ok = confirmBeforeReplaceLayout ? await Promise.resolve(confirmBeforeReplaceLayout()) : true;
+          if (!ok) return;
           onApplyLayout(layout);
           if (typeof localStorage !== "undefined") {
             localStorage.setItem(LAYOUT_STORAGE_KEY, text);
@@ -109,20 +117,18 @@ export function HyperclawSettingsModal({
     reader.readAsText(file);
   };
 
-  const handlePresetChange = (id: string) => {
+  const handlePresetChange = async (id: string) => {
+    const layout = getPresetById(id);
+    if (!layout) return;
+    const ok = confirmBeforeReplaceLayout ? await Promise.resolve(confirmBeforeReplaceLayout()) : true;
+    if (!ok) return;
     setPresetId(id);
-    const layout =
-      id === "cozy"
-        ? createCozyOfficeLayout(agentCount)
-        : getPresetById(id);
-    if (layout) {
-      onApplyLayout(layout);
-      try {
-        localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(layout));
-        localStorage.setItem(PRESET_STORAGE_KEY, id);
-      } catch {}
-      onClose();
-    }
+    onApplyLayout(layout);
+    try {
+      localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(layout));
+      localStorage.setItem(PRESET_STORAGE_KEY, id);
+    } catch {}
+    onClose();
   };
 
   const handleSoundToggle = () => {
@@ -202,6 +208,18 @@ export function HyperclawSettingsModal({
         </div>
 
         <div style={{ padding: "4px 10px", marginBottom: 4 }}>
+          {onRestorePrevious && (
+            <button
+              type="button"
+              onClick={() => {
+                onRestorePrevious();
+                onClose();
+              }}
+              style={{ ...menuItemBase, marginBottom: 8, width: "100%" }}
+            >
+              Restore previous layout
+            </button>
+          )}
           <label
             style={{
               display: "block",

@@ -13,6 +13,7 @@ import {
   LayoutGrid,
   FileText,
   Bot,
+  BarChart3,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
@@ -498,6 +499,14 @@ export const VirtualAgents: React.FC = () => (
     toolName="Agents"
     description="List agents and edit agent files (memory.md, soul.md, etc.)"
     icon={<Bot />}
+  />
+);
+
+export const VirtualUsage: React.FC = () => (
+  <VirtualToolBase
+    toolName="Token Usage"
+    description="View token usage from OpenClaw agents and sessions"
+    icon={<BarChart3 />}
   />
 );
 

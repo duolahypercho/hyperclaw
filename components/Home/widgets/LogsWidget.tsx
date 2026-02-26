@@ -19,7 +19,7 @@ import { cn } from "@/lib/utils";
 const LINES_REQUEST = 200;
 const AUTO_REFRESH_MS = 5000;
 
-export type LogEntry = { time?: string; level?: string; message?: string };
+export type LogEntry = { time?: string; level?: string; message?: string; tags?: string[] };
 
 async function fetchLogsFromBridge(lines: number): Promise<{ data: LogEntry[] | string; error?: string }> {
   const json = await bridgeInvoke("get-logs", { lines });
@@ -47,16 +47,33 @@ function dotColor(level: string): string {
   return "bg-emerald-500";
 }
 
-/** Tag badge color for gateway-style [tag] (reload, ws, hooks/..., agents/...). */
+/** Tag badge color for gateway-style [tag] (reload, ws, discord, hooks/..., agents/..., cron:...). */
 function tagBadgeClass(tag: string): string {
   const t = (tag ?? "").toLowerCase();
   if (t === "ws") return "bg-primary/20 text-primary border border-primary/30";
+  if (t === "discord") return "bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 border border-indigo-500/30";
+  if (t.startsWith("cron")) return "bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-500/30";
   if (t.startsWith("reload")) return "bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-500/30";
   if (t.startsWith("hooks")) return "bg-violet-500/20 text-violet-600 dark:text-violet-400 border border-violet-500/30";
   if (t.startsWith("agents")) return "bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30";
+  if (t === "gateway") return "bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30";
   if (t === "error") return "bg-destructive/20 text-destructive border border-destructive/30";
   if (t === "warn" || t === "warning") return "bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-500/30";
   return "bg-muted/80 text-muted-foreground border border-border";
+}
+
+/** True if level is used as a tag (e.g. ws, gateway, discord) rather than log level. */
+const LOG_LEVELS = new Set(["INFO", "WARN", "WARNING", "ERROR", "DEBUG"]);
+function isTagLikeLevel(level: string): boolean {
+  const u = (level ?? "").toUpperCase();
+  return level != null && level !== "" && !LOG_LEVELS.has(u);
+}
+
+/** Tags to show for an entry: from entry.tags or [level] when level is tag-like. */
+function getDisplayTags(e: LogEntry): string[] {
+  if (e.tags && e.tags.length > 0) return e.tags;
+  const level = (e.level ?? "").trim();
+  return isTagLikeLevel(level) ? [level] : [];
 }
 
 /** Expand JSON messages so all fields (subsystem, module, storePath, etc.) are visible. */
@@ -445,58 +462,71 @@ const LogsWidgetContent = memo((props: CustomProps) => {
           ) : (
             <>
               <ScrollArea className="flex-1 min-w-0 rounded-md border border-border/50 bg-background/40 overflow-x-hidden">
-                <div className="p-2 min-h-0 min-w-0 overflow-hidden">
+                <div className="p-2 min-h-0 min-w-0 w-full overflow-hidden">
                   {isStringFallback ? (
                     <pre className="text-xs whitespace-pre-wrap break-all text-muted-foreground max-w-full">
                       {logs}
                     </pre>
                   ) : entries.length > 0 ? (
-                    <ul className="text-xs min-w-0 overflow-hidden divide-y divide-border/50">
-                      {entries.map((e, i) => (
-                        <li
-                          key={i}
-                          className={cn(
-                            "flex items-start gap-2 py-2 px-2 min-w-0 overflow-hidden group border-b border-solid border-t-0 border-l-0 border-r-0 border-border/50",
-                            isErrorLogEntry(e) && "bg-destructive/5 border-l-2 border-l-destructive"
-                          )}
-                        >
-                          <span
+                    <ul className="text-xs min-w-0 w-full overflow-hidden divide-y divide-border/50">
+                      {entries.map((e, i) => {
+                        const displayTags = getDisplayTags(e);
+                        const logLevelForDot = isTagLikeLevel(e.level ?? "") ? "INFO" : (e.level ?? "INFO");
+                        return (
+                          <li
+                            key={i}
                             className={cn(
-                              "shrink-0 w-1.5 h-1.5 rounded-full mt-1.5",
-                              isErrorLogEntry(e) ? "bg-destructive" : dotColor(e.level ?? "INFO")
-                            )}
-                            aria-hidden
-                          />
-                          <div className="flex flex-col items-start gap-1 mr-1">
-                          <span
-                            className="text-muted-foreground shrink-0 tabular-nums whitespace-nowrap w-16"
-                            title={e.time ?? undefined}
-                          >
-                            {formatTime(e.time)}
-                          </span>
-                          <span
-                            className={cn(
-                              "shrink-0 px-1.5 py-0.5 rounded text-xs font-normal border",
-                              tagBadgeClass(e.level ?? "info")
-                            )}
-                            title={e.level ?? undefined}
-                          >
-                            {e.level ?? "info"}
-                          </span>
-
-                          </div>
-                          <span
-                            className={cn(
-                              "min-w-0 flex-1 overflow-hidden break-words leading-relaxed",
-                              isErrorLogEntry(e) ? "text-destructive" : "text-foreground/90"
+                              "flex items-start gap-2 py-2 px-2 min-w-0 overflow-hidden group border-b border-solid border-t-0 border-l-0 border-r-0 border-border/50",
+                              isErrorLogEntry(e) && "bg-destructive/5 border-l-2 border-l-destructive"
                             )}
                           >
-                            {(e.level ?? "").toUpperCase() === "INFO" && looksLikeMarkdown(e.message ?? "")
-                              ? renderMessageWithMarkdown(e.message ?? "")
-                              : formatMessageContent(e.message ?? "")}
-                          </span>
-                        </li>
-                      ))}
+                            <span
+                              className={cn(
+                                "shrink-0 w-1.5 h-1.5 rounded-full mt-1.5",
+                                isErrorLogEntry(e) ? "bg-destructive" : dotColor(logLevelForDot)
+                              )}
+                              aria-hidden
+                            />
+                            <div className="flex flex-col gap-1 min-w-0 flex-1 overflow-hidden">
+                            {displayTags.length > 0 && (
+                                <div className="flex flex-wrap gap-1 mt-0.5">
+                                  {displayTags.map((tag, j) => (
+                                    <span
+                                      key={j}
+                                      className={cn(
+                                        "inline-block max-w-[180px] truncate px-1.5 py-0.5 rounded text-xs font-normal border shrink-0",
+                                        tagBadgeClass(tag)
+                                      )}
+                                      title={tag}
+                                    >
+                                      {tag}
+                                    </span>
+                                  ))}
+                                </div>
+                                )}
+                              <div className="flex items-start gap-2 min-w-0">
+                                <span
+                                  className="text-muted-foreground shrink-0 tabular-nums whitespace-nowrap"
+                                  title={e.time ?? undefined}
+                                >
+                                  {formatTime(e.time)}
+                                </span>
+                                <span
+                                  className={cn(
+                                    "min-w-0 flex-1 overflow-hidden break-words leading-relaxed",
+                                    isErrorLogEntry(e) ? "text-destructive" : "text-foreground/90"
+                                  )}
+                                  title={e.message ?? undefined}
+                                >
+                                  {(e.level ?? "").toUpperCase() === "INFO" && looksLikeMarkdown(e.message ?? "")
+                                    ? renderMessageWithMarkdown(e.message ?? "")
+                                    : formatMessageContent(e.message ?? "")}
+                                </span>
+                              </div> 
+                            </div>
+                          </li>
+                        );
+                      })}
                     </ul>
                   ) : (
                     <p className="text-muted-foreground text-sm py-4 text-center">

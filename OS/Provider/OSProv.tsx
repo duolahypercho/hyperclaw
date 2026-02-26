@@ -19,6 +19,7 @@ import {
   LayoutGrid,
   FileText,
   Bot,
+  BarChart3,
 } from "lucide-react";
 import { useRouter } from "next/router";
 import { Button } from "@/components/ui/button";
@@ -181,8 +182,6 @@ interface OSProviderProps {
 // Static tool definitions outside component to prevent recreation
 const STATIC_TOOL_ROUTES = [
   "/Tool/TodoList",
-  "/Tool/Aurum",
-  "/Tool/OpenClaw",
   "/Tool/Crons",
   "/Tool/Memory",
   "/Tool/Agents",
@@ -326,6 +325,12 @@ export const OSProvider: React.FC<OSProviderProps> = ({ children }) => {
         description: "Browse markdown docs from your OpenClaw workspace",
         icon: <FileText className="w-3.5 h-3.5" />,
       },
+      {
+        id: "usage",
+        name: "Token Usage",
+        description: "View token usage from OpenClaw agents and sessions",
+        icon: <BarChart3 className="w-3.5 h-3.5" />,
+      },
     ];
   }, []);
 
@@ -342,17 +347,6 @@ export const OSProvider: React.FC<OSProviderProps> = ({ children }) => {
           createToolClickHandler("/Tool/TodoList", "todo-list")();
         },
         href: "/Tool/TodoList",
-      },
-      {
-        id: "openclaw",
-        name: "OpenClaw",
-        description: "Browse and edit your OpenClaw workspace",
-        icon: <FolderOpen className="w-3.5 h-3.5" />,
-        onClick: () => {
-          if (activeTool?.id === "openclaw") return;
-          createToolClickHandler("/Tool/OpenClaw", "openclaw")();
-        },
-        href: "/Tool/OpenClaw",
       },
       {
         id: "crons",
@@ -408,6 +402,17 @@ export const OSProvider: React.FC<OSProviderProps> = ({ children }) => {
           createToolClickHandler("/Tool/Docs", "docs")();
         },
         href: "/Tool/Docs",
+      },
+      {
+        id: "usage",
+        name: "Token Usage",
+        description: "View token usage from OpenClaw agents and sessions",
+        icon: <BarChart3 className="w-3.5 h-3.5" />,
+        onClick: () => {
+          if (activeTool?.id === "usage") return;
+          createToolClickHandler("/Tool/Usage", "usage")();
+        },
+        href: "/Tool/Usage",
       },
       {
         id: "settings",

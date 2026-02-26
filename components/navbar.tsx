@@ -221,8 +221,8 @@ const Navbar = () => {
         <div className="w-px bg-border mx-1" />
 
         <div data-guidance="navbar-tools" className="flex flex-row gap-1 items-center">
-        {tools.map((item) => (
-          !item.hidden && <div key={item.id} className="relative flex items-center">
+        {tools.filter((item) => !item.hidden).map((item) => (
+          <div key={item.id} className="relative flex items-center">
             <HyperchoTooltip value={item.name} side="right">
               <Button
                 onClick={() => {
@@ -244,8 +244,8 @@ const Navbar = () => {
                 transition={{ type: "spring", stiffness: 500, damping: 30 }}
               />
             )}
-            </div>
-          ))}
+          </div>
+        ))}
         </div>
       </div>
 

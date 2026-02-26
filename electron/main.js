@@ -14,6 +14,8 @@ const fs = require("fs");
 const https = require("https");
 const http = require("http");
 const { exec, execSync, spawn } = require("child_process");
+const crypto = require("crypto");
+const { subtle } = require("node:crypto").webcrypto;
 
 const isDev = process.env.NODE_ENV === "development";
 
@@ -741,6 +743,98 @@ const os = require("os");
 const OPENCLAW_HOME = path.join(os.homedir(), ".openclaw");
 const OPENCLAW_CONFIG_PATH = path.join(OPENCLAW_HOME, "openclaw.json");
 
+const OPENCLAW_IDENTITY_PATH = path.join(OPENCLAW_HOME, "identity", "device.json");
+
+// Read device identity
+// Update getDeviceIdentity to also get device token from paired.json
+
+const PAIRED_DEVICES_PATH = path.join(OPENCLAW_HOME, "devices", "paired.json");
+
+function getDeviceIdentity() {
+  try {
+    if (!fs.existsSync(OPENCLAW_IDENTITY_PATH)) {
+      return { error: "Device identity not found" };
+    }
+    const raw = fs.readFileSync(OPENCLAW_IDENTITY_PATH, "utf-8");
+    const identity = JSON.parse(raw);
+    
+    // Also read paired devices to get device token
+    let deviceToken = null;
+    if (fs.existsSync(PAIRED_DEVICES_PATH)) {
+      try {
+        const pairedRaw = fs.readFileSync(PAIRED_DEVICES_PATH, "utf-8");
+        const pairedDevices = JSON.parse(pairedRaw);
+        const deviceEntry = pairedDevices[identity.deviceId];
+        if (deviceEntry?.tokens?.operator?.token) {
+          deviceToken = deviceEntry.tokens.operator.token;
+        }
+      } catch (e) {
+        // Ignore errors reading paired devices
+      }
+    }
+    
+    return {
+      deviceId: identity.deviceId,
+      publicKeyPem: identity.publicKeyPem,
+      privateKeyPem: identity.privateKeyPem,
+      deviceToken: deviceToken,
+      error: null
+    };
+  } catch (err) {
+    return { error: err.message };
+  }
+}
+function publicKeyPemToBase64Url(pem) {
+  const base64Content = pem
+    .replace('-----BEGIN PUBLIC KEY-----', '')
+    .replace('-----END PUBLIC KEY-----', '')
+    .replace(/\n/g, '');
+  const der = Buffer.from(base64Content, 'base64');
+  const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
+  const raw = der.subarray(ED25519_SPKI_PREFIX.length);
+  return raw.toString('base64').replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/g, '');
+}
+
+// Build payload
+function buildDeviceAuthPayload(params) {
+  const scopes = params.scopes ? params.scopes.join(",") : "";
+  const token = params.token ?? "";
+  return [
+    "v2",
+    params.deviceId,
+    params.clientId,
+    params.clientMode,
+    params.role || "operator",
+    scopes,
+    String(params.signedAtMs),
+    token,
+    params.nonce,
+  ].join("|");
+}
+
+// Sign payload
+async function signDevicePayload(privateKeyPem, payload) {
+  const pemContents = privateKeyPem
+    .replace('-----BEGIN PRIVATE KEY-----', '')
+    .replace('-----END PRIVATE KEY-----', '')
+    .replace(/\n/g, '');
+  const binaryDer = Buffer.from(pemContents, 'base64');
+  const key = await subtle.importKey(
+    'pkcs8',
+    binaryDer,
+    { name: 'Ed25519' },
+    false,
+    ['sign']
+  );
+  const encoder = new TextEncoder();
+  const signature = await subtle.sign(
+    'Ed25519',
+    key,
+    encoder.encode(payload)
+  );
+  return Buffer.from(signature).toString('base64').replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/g, '');
+}
+
 // When Electron is launched from Dock/GUI, PATH is often minimal and misses openclaw (pnpm/Homebrew/nvm).
 // Prepend common install locations so spawn("openclaw", ...) finds the binary.
 function openclawEnv() {
@@ -1147,7 +1241,11 @@ ipcMain.handle("openclaw:get-gateway-connect-url", async () => {
     try {
       config = JSON.parse(raw);
     } catch {
-      raw = raw.replace(/\/\/[^\n]*/g, "").replace(/\/\*[\s\S]*?\*\//g, "");
+      // OpenClaw config may be JSON5 (comments, trailing commas)
+      raw = raw
+        .replace(/\/\/[^\n]*/g, "")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/,(\s*[}\]])/g, "$1");
       try {
         config = JSON.parse(raw);
       } catch {
@@ -1155,7 +1253,12 @@ ipcMain.handle("openclaw:get-gateway-connect-url", async () => {
       }
     }
     const port = config?.gateway?.port ?? 18789;
-    const token = config?.gateway?.auth?.token ?? null;
+    // Token: config first, then env (OpenClaw uses OPENCLAW_GATEWAY_PASSWORD for token mode)
+    const token =
+      config?.gateway?.auth?.token ??
+      process.env.OPENCLAW_GATEWAY_PASSWORD ??
+      process.env.OPENCLAW_GATEWAY_TOKEN ??
+      null;
     const gatewayUrl = `http://127.0.0.1:${port}`;
     return { gatewayUrl, token, error: null };
   } catch (err) {
@@ -1167,6 +1270,60 @@ ipcMain.handle("openclaw:get-gateway-connect-url", async () => {
   }
 });
 
+
+// IPC handlers for device identity
+ipcMain.handle("openclaw:get-device-identity", async () => {
+  return getDeviceIdentity();
+});
+
+ipcMain.handle("openclaw:sign-connect-challenge", async (event, params) => {
+  try {
+    const identity = getDeviceIdentity();
+    if (identity.error) {
+      return { error: identity.error };
+    }
+    
+    const { deviceId, publicKeyPem, privateKeyPem, deviceToken } = identity;
+    console.log("[DEBUG] Device token from identity:", deviceToken);
+    const { clientId, clientMode, role, scopes, token, nonce } = params;
+    
+    const signedAtMs = Date.now();
+    const payload = buildDeviceAuthPayload({
+      deviceId,
+      clientId: clientId || "gateway-client",
+      clientMode: clientMode || "backend",
+      role: role || "operator",
+      scopes: scopes || ["operator.read", "operator.write"],
+      signedAtMs: signedAtMs,
+      token,
+      nonce,
+    });
+    
+    const signature = await signDevicePayload(privateKeyPem, payload);
+    
+    return {
+      device: {
+        id: deviceId,
+        publicKey: publicKeyPemToBase64Url(publicKeyPem),
+        signature: signature,
+        signedAt: signedAtMs,
+        nonce: nonce,
+      },
+      client: {
+        id: clientId || "gateway-client",
+        version: "1.0",
+        platform: "darwin",
+        mode: clientMode || "backend",
+      },
+      role: role || "operator",
+      scopes: scopes || ["operator.read", "operator.write"],
+      deviceToken: deviceToken,
+      error: null,
+    };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
 ipcMain.handle("openclaw:message-send", async (event, p) => {
   if (!p || typeof p.target !== "string" || !p.target.trim()) {
     return { success: false, error: "target is required" };
@@ -1717,9 +1874,77 @@ function getCronRuns(jobIds) {
   return runsByJobId;
 }
 
-/** Cron job with state for employee status: lastRunAtMs, nextRunAtMs, lastStatus (running/ok/idle). */
+/** Get paginated runs for a single job (newest first). Returns { runs, hasMore }. */
+function getCronRunsForJob(jobId, limit = 10, offset = 0) {
+  if (!jobId || typeof jobId !== "string" || /\.\.|[\\/]/.test(jobId) || jobId.length > 64) {
+    return { runs: [], hasMore: false };
+  }
+  if (!fs.existsSync(CRON_RUNS_DIR)) return { runs: [], hasMore: false };
+  const filePath = path.join(CRON_RUNS_DIR, `${jobId}.jsonl`);
+  if (!fs.existsSync(filePath)) return { runs: [], hasMore: false };
+  try {
+    const content = fs.readFileSync(filePath, "utf-8");
+    const lines = content.split("\n").filter((l) => l.trim());
+    const all = [];
+    for (const line of lines) {
+      try {
+        const obj = JSON.parse(line);
+        if (obj.runAtMs != null) all.push(obj);
+      } catch {}
+    }
+    const newestFirst = all.slice().reverse();
+    const total = newestFirst.length;
+    const page = newestFirst.slice(offset, offset + limit);
+    return { runs: page, hasMore: offset + limit < total };
+  } catch {
+    return { runs: [], hasMore: false };
+  }
+}
+
+/** Get full run record for one cron run (entire JSON line) for "Show more" / full log. */
+function getCronRunDetail(jobId, runAtMs) {
+  if (!jobId || typeof jobId !== "string" || /\.\.|[\\/]/.test(jobId) || jobId.length > 64) return null;
+  if (runAtMs == null || typeof runAtMs !== "number") return null;
+  if (!fs.existsSync(CRON_RUNS_DIR)) return null;
+  const filePath = path.join(CRON_RUNS_DIR, `${jobId}.jsonl`);
+  if (!fs.existsSync(filePath)) return null;
+  try {
+    const content = fs.readFileSync(filePath, "utf-8");
+    const lines = content.split("\n").filter((l) => l.trim());
+    for (const line of lines) {
+      try {
+        const obj = JSON.parse(line);
+        if (obj.runAtMs === runAtMs) return obj;
+      } catch {}
+    }
+  } catch {}
+  return null;
+}
+
+/** Get the most recent run for a job (for lastRunAtMs/lastStatus when jobs.json has none). */
+function getLastRunForJob(jobId) {
+  if (!jobId || typeof jobId !== "string" || !fs.existsSync(CRON_RUNS_DIR)) return null;
+  const filePath = path.join(CRON_RUNS_DIR, `${jobId}.jsonl`);
+  if (!fs.existsSync(filePath)) return null;
+  try {
+    const content = fs.readFileSync(filePath, "utf-8");
+    const lines = content.split("\n").filter((l) => l.trim());
+    if (lines.length === 0) return null;
+    const lastLine = lines[lines.length - 1];
+    const obj = JSON.parse(lastLine);
+    const runAtMs = obj.runAtMs ?? obj.runAt;
+    if (runAtMs == null) return null;
+    return {
+      runAtMs,
+      status: (obj.status && String(obj.status).toLowerCase()) || "idle",
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Cron job with state for Crons tool/widget: lastRunAtMs, nextRunAtMs, lastStatus, enabled. */
 function getCronsWithState() {
-  const now = Date.now();
   try {
     if (fs.existsSync(CRON_JOBS_PATH)) {
       const raw = fs.readFileSync(CRON_JOBS_PATH, "utf-8");
@@ -1728,6 +1953,15 @@ function getCronsWithState() {
       if (Array.isArray(list) && list.length > 0) {
         return list.map((job) => {
           const s = job.state || {};
+          let lastRunAtMs = s.lastRunAtMs;
+          let lastStatus = (s.lastStatus || "idle").toLowerCase();
+          if (lastRunAtMs == null && job.id) {
+            const lastRun = getLastRunForJob(job.id);
+            if (lastRun) {
+              lastRunAtMs = lastRun.runAtMs;
+              lastStatus = lastRun.status;
+            }
+          }
           const schedule = job.schedule;
           let scheduleStr = "";
           if (schedule?.kind === "cron" && schedule.expr) scheduleStr = schedule.expr;
@@ -1743,9 +1977,10 @@ function getCronsWithState() {
             name: job.name || job.id,
             schedule: scheduleStr,
             agentId: job.agentId,
+            enabled: job.enabled !== false,
             nextRunAtMs: s.nextRunAtMs,
-            lastRunAtMs: s.lastRunAtMs,
-            lastStatus: (s.lastStatus || "idle").toLowerCase(),
+            lastRunAtMs,
+            lastStatus,
           };
         });
       }
@@ -1767,6 +2002,7 @@ function getCronsWithState() {
       name: c.name,
       schedule: c.schedule,
       agentId: c.agentId,
+      enabled: true,
       nextRunAtMs: undefined,
       lastRunAtMs,
       lastStatus: lastRun?.status === "running" ? "running" : lastRun ? "ok" : "idle",
@@ -1888,7 +2124,7 @@ function logBridge(action, err) {
   } catch (_) {}
 }
 
-ipcMain.handle("hyperclaw:bridge-invoke", async (event, { action, task, id, patch, command, date, lines, startDate, endDate, jobIds, todoData, relativePath, content: docContent, layout: officeLayout, seats: officeSeats }) => {
+ipcMain.handle("hyperclaw:bridge-invoke", async (event, { action, task, id, patch, command, date, lines, startDate, endDate, jobIds, jobId, limit, offset, runAtMs, todoData, relativePath, content: docContent, layout: officeLayout, seats: officeSeats }) => {
   logBridge(action);
   ensureHyperClawDir();
   switch (action) {
@@ -2001,10 +2237,23 @@ ipcMain.handle("hyperclaw:bridge-invoke", async (event, { action, task, id, patc
     case "get-team":
       return getTeam();
     case "get-crons":
-      return getCrons();
+      return getCronsWithState();
     case "get-cron-runs": {
       const ids = Array.isArray(jobIds) ? jobIds : getCrons().map((c) => c.id);
       return { runsByJobId: getCronRuns(ids) };
+    }
+    case "get-cron-runs-for-job": {
+      const jid = jobId != null ? String(jobId) : "";
+      const lim = typeof limit === "number" && limit > 0 ? Math.min(limit, 100) : 10;
+      const off = typeof offset === "number" && offset >= 0 ? offset : 0;
+      return getCronRunsForJob(jid, lim, off);
+    }
+    case "get-cron-run-detail": {
+      const jid = jobId != null ? String(jobId) : "";
+      const runAt = typeof runAtMs === "number" ? runAtMs : null;
+      const detail = jid && runAt != null ? getCronRunDetail(jid, runAt) : null;
+      if (detail == null) return { error: "Run not found" };
+      return detail;
     }
     case "get-employee-status":
       return getEmployeeStatus();

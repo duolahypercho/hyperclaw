@@ -16,7 +16,6 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { NextPage } from "next/types";
 import { OSProvider } from "@OS/Provider/OSProv";
 import { GeistSans } from "geist/font/sans";
-import Live2DScripts from "$/components/Live2DScripts";
 import { UpdateNotification } from "$/components/UpdateNotification";
 import { GuidanceProvider } from "$/components/Guidance";
 import { useEffect } from "react";
@@ -58,8 +57,6 @@ function MyApp({ Component, pageProps }: any) {
                     </InterimProvider>
                   </ServiceProvider>
                 </UserProvider>
-                {/* 2. Scripts and utilities last - after content is rendered */}
-                <Live2DScripts />
                 <Analytics />
                 <Toaster />
                 <UpdateNotification />

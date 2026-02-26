@@ -6,7 +6,8 @@ import { ToolOverlay } from "./office/components/ToolOverlay";
 import { EditorToolbar } from "./office/editor/EditorToolbar";
 import { EditorState } from "./office/editor/editorState";
 import { EditTool } from "./office/types";
-import { isRotatable } from "./office/layout/furnitureCatalog";
+import { isRotatable, LoadedAssetData, buildDynamicCatalog } from "./office/layout/furnitureCatalog";
+import { loadModernOfficeFurniture } from "./officeAssetLoader";
 import { PULSE_ANIMATION_DURATION_SEC } from "./constants";
 import { useEditorActions } from "./hooks/useEditorActions";
 import { useEditorKeyboard } from "./hooks/useEditorKeyboard";
@@ -19,7 +20,9 @@ import { loadSoundPreference } from "./HyperclawSettingsModal";
 import { setSoundEnabled } from "./notificationSound";
 import { vscode } from "./vscodeApi";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
-import { getOfficeState, LAYOUT_STORAGE_KEY } from "./officeStateSingleton";
+import { getOfficeState, LAYOUT_STORAGE_KEY, DEFAULT_LAYOUT_STORAGE_KEY, pushLayoutToHistory, getLayoutHistory, HAS_USER_LAYOUT_KEY } from "./officeStateSingleton";
+import { deserializeLayout, createDefaultLayout, serializeLayout, migrateLayoutColors } from "./office/layout/layoutSerializer";
+import { getPresetById, LAYOUT_PRESETS } from "./layoutPresets";
 
 const actionBarBtnStyle: React.CSSProperties = {
   padding: "4px 10px",
@@ -40,11 +43,18 @@ const actionBarBtnDisabled: React.CSSProperties = {
 function EditActionBar({
   editor,
   editorState: es,
+  onSaveAsDefault,
+  onResetToDefault,
+  onRestorePrevious,
 }: {
   editor: ReturnType<typeof useEditorActions>;
   editorState: EditorState;
+  onSaveAsDefault?: () => void;
+  onResetToDefault?: () => void;
+  onRestorePrevious?: () => void;
 }) {
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [showResetToDefaultConfirm, setShowResetToDefaultConfirm] = useState(false);
   const undoDisabled = es.undoStack.length === 0;
   const redoDisabled = es.redoStack.length === 0;
 
@@ -83,6 +93,15 @@ function EditActionBar({
       <button style={actionBarBtnStyle} onClick={editor.handleSave} title="Save layout">
         Save
       </button>
+      {onSaveAsDefault && (
+        <button
+          style={actionBarBtnStyle}
+          onClick={onSaveAsDefault}
+          title="Save current layout as the default (used when no layout is saved)"
+        >
+          Save as default
+        </button>
+      )}
       {!showResetConfirm ? (
         <button
           style={actionBarBtnStyle}
@@ -108,6 +127,41 @@ function EditActionBar({
           </button>
         </div>
       )}
+      {onRestorePrevious && (
+        <button
+          style={actionBarBtnStyle}
+          onClick={onRestorePrevious}
+          title="Restore the layout you had before the last change (preset/import)"
+        >
+          Restore previous
+        </button>
+      )}
+      {onResetToDefault && !showResetToDefaultConfirm && (
+        <button
+          style={actionBarBtnStyle}
+          onClick={() => setShowResetToDefaultConfirm(true)}
+          title="Load the default layout (replaces current)"
+        >
+          Reset to default
+        </button>
+      )}
+      {showResetToDefaultConfirm && onResetToDefault && (
+        <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+          <span style={{ fontSize: "22px", color: "var(--pixel-reset-text)" }}>Load default layout?</span>
+          <button
+            style={{ ...actionBarBtnStyle, background: "var(--pixel-danger-bg)", color: "#fff" }}
+            onClick={() => {
+              setShowResetToDefaultConfirm(false);
+              onResetToDefault();
+            }}
+          >
+            Yes
+          </button>
+          <button style={actionBarBtnStyle} onClick={() => setShowResetToDefaultConfirm(false)}>
+            No
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -128,11 +182,48 @@ export function FullOfficeView(props: FullOfficeViewProps = {}) {
 
   const handleApplyLayout = useCallback((layout: import("./office/types").OfficeLayout) => {
     const os = getOfficeState();
+    const current = os.getLayout();
+    if (current?.cols != null && current?.rows != null) {
+      pushLayoutToHistory(serializeLayout(current));
+    }
     os.rebuildFromLayout(layout, undefined, true);
     try {
       localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(layout));
+      localStorage.setItem(HAS_USER_LAYOUT_KEY, "1");
+    } catch {}
+    vscode.postMessage({ type: "saveLayout", layout });
+  }, []);
+
+  const handleSaveAsDefault = useCallback(() => {
+    try {
+      const layout = getOfficeState().getLayout();
+      localStorage.setItem(DEFAULT_LAYOUT_STORAGE_KEY, JSON.stringify(layout));
     } catch {}
   }, []);
+
+  const handleResetToDefault = useCallback(() => {
+    const raw = typeof localStorage !== "undefined" ? localStorage.getItem(DEFAULT_LAYOUT_STORAGE_KEY) : null;
+    const layout = (raw && deserializeLayout(raw)) || getPresetById("default") || createDefaultLayout();
+    if (layout) handleApplyLayout(layout);
+  }, [handleApplyLayout]);
+
+  const handleRestorePrevious = useCallback(async () => {
+    const w = typeof window !== "undefined" ? (window as unknown as { electronAPI?: { hyperClawBridge?: { invoke?: unknown } } }) : null;
+    const isElectron = Boolean(w?.electronAPI?.hyperClawBridge?.invoke);
+    let layout: import("./office/types").OfficeLayout | null = null;
+    if (isElectron) {
+      try {
+        const r = (await bridgeInvoke("read-previous-office-layout", {})) as { success?: boolean; layout?: import("./office/types").OfficeLayout };
+        if (r?.success && r.layout) layout = migrateLayoutColors(r.layout);
+      } catch {}
+    } else {
+      const history = getLayoutHistory();
+      const raw = history[0];
+      layout = raw ? deserializeLayout(raw) : null;
+    }
+    if (layout) handleApplyLayout(layout);
+    else if (typeof window !== "undefined") window.alert("No previous layout to restore.");
+  }, [handleApplyLayout]);
 
   const isEditDirty = useCallback(
     () => editor.isEditMode && editor.isDirty,
@@ -153,6 +244,8 @@ export function FullOfficeView(props: FullOfficeViewProps = {}) {
 
   const [selectedAgentId, setSelectedAgentId] = useState<number | null>(null);
   const [isDebugMode, setIsDebugMode] = useState(false);
+  const [modernOfficeAssets, setModernOfficeAssets] = useState<LoadedAssetData | undefined>();
+  const [showTemplatePicker, setShowTemplatePicker] = useState(false);
   const handleToggleDebugMode = useCallback(() => setIsDebugMode((prev) => !prev), []);
   const handleSelectAgent = useCallback((id: number) => setSelectedAgentId(id), []);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -162,6 +255,34 @@ export function FullOfficeView(props: FullOfficeViewProps = {}) {
     getOfficeState().selectedAgentId = selectedAgentId;
     getOfficeState().cameraFollowId = selectedAgentId;
   }, [selectedAgentId]);
+
+  useEffect(() => {
+    if (layoutReady && typeof localStorage !== "undefined" && !localStorage.getItem(HAS_USER_LAYOUT_KEY)) {
+      setShowTemplatePicker(true);
+    }
+  }, [layoutReady]);
+
+  // Load modern office furniture sprites and build dynamic catalog so layout furniture (e.g. modern_office_*) resolves.
+  // The engine applies the initial layout before assets load, so getCatalogEntry() skips those items. Once the catalog
+  // is built, we rebuild the layout so layoutToFurnitureInstances runs again and furniture appears.
+  useEffect(() => {
+    const loadAssets = async () => {
+      try {
+        const assets = await loadModernOfficeFurniture('/pixel-office');
+        setModernOfficeAssets(assets);
+        if (buildDynamicCatalog(assets)) {
+          const os = getOfficeState();
+          const layout = os.getLayout();
+          if (layout?.furniture?.length) {
+            os.rebuildFurnitureOnly(layout);
+          }
+        }
+      } catch (err) {
+        console.error('[FullOfficeView] Failed to load modern office furniture:', err);
+      }
+    };
+    loadAssets();
+  }, []);
 
   useEditorKeyboard(
     editor.isEditMode,
@@ -248,6 +369,64 @@ export function FullOfficeView(props: FullOfficeViewProps = {}) {
       className="pixel-office-root"
       style={{ width: "100%", height: "100%", position: "relative", overflow: "hidden" }}
     >
+      {showTemplatePicker && (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            zIndex: 100,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            background: "rgba(0,0,0,0.7)",
+          }}
+          onClick={(e) => e.target === e.currentTarget && setShowTemplatePicker(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: "var(--pixel-bg)",
+              border: "2px solid var(--pixel-border)",
+              borderRadius: 0,
+              padding: "24px",
+              minWidth: 280,
+              boxShadow: "var(--pixel-shadow)",
+            }}
+          >
+            <h2 style={{ fontSize: "24px", color: "var(--pixel-text)", margin: "0 0 16px", textAlign: "center" }}>
+              Choose a template
+            </h2>
+            <p style={{ fontSize: "18px", color: "var(--pixel-text-dim)", margin: "0 0 20px", textAlign: "center" }}>
+              Start from a template. Your layout auto-saves as you edit.
+            </p>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {LAYOUT_PRESETS.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  style={{
+                    padding: "12px 16px",
+                    fontSize: "20px",
+                    background: "var(--pixel-btn-bg)",
+                    color: "var(--pixel-text)",
+                    border: "2px solid var(--pixel-border)",
+                    borderRadius: 0,
+                    cursor: "pointer",
+                    textAlign: "left",
+                  }}
+                  onClick={() => {
+                    handleApplyLayout(p.layout);
+                    setShowTemplatePicker(false);
+                  }}
+                >
+                  {p.name}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       <style>{`
         @keyframes pixel-agents-pulse {
           0%, 100% { opacity: 1; }
@@ -309,12 +488,24 @@ export function FullOfficeView(props: FullOfficeViewProps = {}) {
           onToggleDebugMode={handleToggleDebugMode}
           getLayout={() => getOfficeState().getLayout()}
           onApplyLayout={handleApplyLayout}
+          confirmBeforeReplaceLayout={() =>
+            window.confirm(
+              "Replace your current layout? You can restore it anytime with \"Restore previous\" in the editor toolbar or in Settings."
+            )
+          }
+          onRestorePrevious={handleRestorePrevious}
           agentCount={agents.length}
         />
       )}
 
       {!embedMode && editor.isEditMode && editor.isDirty && (
-        <EditActionBar editor={editor} editorState={editorState} />
+        <EditActionBar
+          editor={editor}
+          editorState={editorState}
+          onSaveAsDefault={handleSaveAsDefault}
+          onResetToDefault={handleResetToDefault}
+          onRestorePrevious={handleRestorePrevious}
+        />
       )}
 
       {!embedMode && showRotateHint && (
@@ -363,7 +554,7 @@ export function FullOfficeView(props: FullOfficeViewProps = {}) {
               onFurnitureTypeChange={editor.handleFurnitureTypeChange}
               showRotateButton={showRotateHint}
               onRotateSelected={editor.handleRotateSelected}
-              loadedAssets={loadedAssets}
+              loadedAssets={modernOfficeAssets}
             />
           );
         })()}

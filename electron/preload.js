@@ -58,6 +58,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
     getGatewayHealth: () => ipcRenderer.invoke("openclaw:gateway-health"),
     sendMessage: (params) => ipcRenderer.invoke("openclaw:message-send", params),
     getGatewayConnectUrl: () => ipcRenderer.invoke("openclaw:get-gateway-connect-url"),
+    getDeviceIdentity: () => ipcRenderer.invoke("openclaw:get-device-identity"),
+    signConnectChallenge: (params) => ipcRenderer.invoke("openclaw:sign-connect-challenge", params),
     getCronList: () => ipcRenderer.invoke("openclaw:cron-list"),
     getCronListJson: () => ipcRenderer.invoke("openclaw:cron-list-json"),
     getAgentList: () => ipcRenderer.invoke("openclaw:agent-list"),

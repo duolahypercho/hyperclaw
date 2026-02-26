@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { EditTool } from '../types'
-import type { TileType as TileTypeVal, FloorColor } from '../types'
+import type { TileType as TileTypeVal, FloorColor, SpriteData } from '../types'
 import { getCatalogByCategory, buildDynamicCatalog, getActiveCategories } from '../layout/furnitureCatalog'
 import type { FurnitureCategory, LoadedAssetData } from '../layout/furnitureCatalog'
 import { getCachedSprite } from '../sprites/spriteCache'
-import { getColorizedFloorSprite, getFloorPatternCount, hasFloorSprites, getFloorPatternName } from '../floorTiles'
+import { getColorizedFloorSprite, getColorizedMVFloorSprite, getFloorPatternCount, hasFloorSprites, getFloorPatternName, isMVMode } from '../floorTiles'
 
 const btnStyle: React.CSSProperties = {
   padding: '3px 8px',
@@ -71,6 +71,8 @@ function FloorPatternPreview({ patternIndex, color, selected, onClick }: {
   const displaySize = 32
   const tileZoom = 2
   const patternName = getFloorPatternName(patternIndex)
+  const mvMode = isMVMode()
+  const mvCols = 24 // MV tileset has 24 columns
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -89,7 +91,14 @@ function FloorPatternPreview({ patternIndex, color, selected, onClick }: {
     }
 
     try {
-      const sprite = getColorizedFloorSprite(patternIndex, color)
+      let sprite: SpriteData
+      if (mvMode) {
+        // MV mode: use position-based tile index
+        const tileIndex = patternIndex - 1 // Convert 1-based to 0-based
+        sprite = getColorizedMVFloorSprite(tileIndex, color)
+      } else {
+        sprite = getColorizedFloorSprite(patternIndex, color)
+      }
       const cached = getCachedSprite(sprite, tileZoom)
       const w = cached.width || displaySize
       const h = cached.height || displaySize
@@ -98,7 +107,7 @@ function FloorPatternPreview({ patternIndex, color, selected, onClick }: {
       ctx.fillStyle = '#444'
       ctx.fillRect(0, 0, displaySize, displaySize)
     }
-  }, [patternIndex, color])
+  }, [patternIndex, color, mvMode])
 
   return (
     <button
@@ -174,26 +183,24 @@ export function EditorToolbar({
   const [showFurnitureColor, setShowFurnitureColor] = useState(false)
   const [eyedropperSource, setEyedropperSource] = useState<'floor' | 'wall'>('floor')
 
-  // Build dynamic catalog from loaded assets
+  // Build dynamic catalog from loaded assets only when assets reference changes (avoid re-run on every parent re-render)
+  const lastBuiltAssetsRef = useRef<LoadedAssetData | null>(null)
   useEffect(() => {
-    if (loadedAssets) {
-      try {
-        console.log(`[EditorToolbar] Building dynamic catalog with ${loadedAssets.catalog.length} assets...`)
-        const success = buildDynamicCatalog(loadedAssets)
-        console.log(`[EditorToolbar] Catalog build result: ${success}`)
-
-        // Reset to first available category if current doesn't exist
-        const activeCategories = getActiveCategories()
-        if (activeCategories.length > 0) {
-          const firstCat = activeCategories[0]?.id
-          if (firstCat) {
-            console.log(`[EditorToolbar] Setting active category to: ${firstCat}`)
-            setActiveCategory(firstCat)
-          }
+    if (!loadedAssets?.catalog?.length) return
+    if (lastBuiltAssetsRef.current === loadedAssets) return
+    lastBuiltAssetsRef.current = loadedAssets
+    try {
+      const success = buildDynamicCatalog(loadedAssets)
+      if (!success) return
+      const activeCategories = getActiveCategories()
+      if (activeCategories.length > 0) {
+        const firstCat = activeCategories[0]?.id
+        if (firstCat) {
+          setActiveCategory((prev) => (prev === firstCat ? prev : firstCat))
         }
-      } catch (err) {
-        console.error(`[EditorToolbar] Error building dynamic catalog:`, err)
       }
+    } catch (err) {
+      console.error(`[EditorToolbar] Error building dynamic catalog:`, err)
     }
   }, [loadedAssets])
 

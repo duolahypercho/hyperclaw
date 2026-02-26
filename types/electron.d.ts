@@ -32,11 +32,21 @@ export interface OpenClawInstallCheck {
   version: string | null;
 }
 
+/** Workspace-folder agent (from ~/.openclaw/workspace subdirs). Used by getAgentList() fallback. */
 export interface OpenClawAgent {
   name: string;
   hasSoul: boolean;
   hasMemory: boolean;
   soulContent: string | null;
+}
+
+/** Registry agent (from openclaw agents list / openclaw.json). Same as list-agents in hyperclaw-bridge. */
+export interface OpenClawRegistryAgent {
+  id: string;
+  name: string;
+  status: string;
+  role?: string;
+  lastActive?: string;
 }
 
 export interface OpenClawAgentListResult {
@@ -45,13 +55,30 @@ export interface OpenClawAgentListResult {
   error?: string;
 }
 
+/** Job shape from `openclaw cron list --json --all` (top-level array or data.jobs). */
 export interface OpenClawCronJobJson {
   id: string;
   name: string;
   enabled: boolean;
   agentId?: string;
-  schedule?: { kind: string; expr?: string; tz?: string; everyMs?: number };
-  state?: { nextRunAtMs?: number; lastRunAtMs?: number; lastStatus?: string };
+  schedule?: {
+    kind: string;
+    expr?: string;
+    tz?: string;
+    everyMs?: number;
+    staggerMs?: number;
+  };
+  state?: {
+    nextRunAtMs?: number;
+    lastRunAtMs?: number;
+    lastStatus?: string;
+    lastRunStatus?: string;
+    lastDurationMs?: number;
+    lastError?: string;
+    consecutiveErrors?: number;
+  };
+  /** Optional; CLI may include createdAtMs, updatedAtMs, payload, delivery, etc. */
+  [key: string]: unknown;
 }
 
 /** One line from ~/.openclaw/cron/runs/{jobId}.jsonl */
@@ -66,6 +93,19 @@ export interface CronRunRecord {
   summary?: string;
   error?: string;
   sessionId?: string;
+}
+
+/** Token usage aggregated from ~/.openclaw session files. */
+export interface OpenClawUsageResult {
+  byDay: { date: string; inputTokens: number; outputTokens: number; totalTokens: number }[];
+  totals: { inputTokens: number; outputTokens: number; totalTokens: number };
+  byAgent: { agentId: string; inputTokens: number; outputTokens: number; totalTokens: number }[];
+  /** Shown when no data (e.g. no session files found, or wrong runtime). */
+  hint?: string;
+  /** Debug: files scanned and records/tokens per file (for verifying aggregation). */
+  debug?: {
+    files: { path: string; agentId: string; records: number; totalTokens: number }[];
+  };
 }
 
 export interface OpenClawCronListJsonResult {
@@ -97,6 +137,8 @@ export interface OpenClawMessageSendResult {
 
 export interface OpenClawGatewayConnectUrlResult {
   gatewayUrl: string;
+  /** Port from ~/.openclaw/openclaw.json gateway.port (default 18789) */
+  port: number;
   token: string | null;
   error: string | null;
 }

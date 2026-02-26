@@ -1,5 +1,6 @@
 export {
   TILE_SIZE,
+  Z_ROW_SCALE,
   DEFAULT_COLS,
   DEFAULT_ROWS,
   MAX_COLS,
@@ -79,6 +80,10 @@ export interface FurnitureInstance {
   zY: number
   /** Rotation in degrees (0, 90, 180, 270) for drawing. */
   rotationDeg?: number
+  /** Placed furniture uid (for matching seats to chair-back draw order). */
+  uid?: string
+  /** If true, draw this chair again on top of the character when someone is seated. */
+  hasChairBack?: boolean
 }
 
 export interface SubagentCharacter {
@@ -187,12 +192,18 @@ export interface FurnitureCatalogEntry {
   orientation?: string
   /** Whether this item can be placed on top of desk/table surfaces */
   canPlaceOnSurfaces?: boolean
+  /** Whether this item can be placed on desk/table tiles (overlap), e.g. chairs at table edge */
+  canOverlapDesks?: boolean
   /** Number of tile rows from the top of the footprint that are "background" (allow placement, still block walking). Default 0. */
   backgroundTiles?: number
   /** Whether this item can be placed on wall tiles */
   canPlaceOnWalls?: boolean
   /** Tiles (dc, dr) relative to top-left that are NOT blocked — e.g. U-table gap for chair. */
   cutoutTiles?: Array<{ dc: number; dr: number }>
+  /** If true, chair has a visible back; render chair on top of character when seated. */
+  hasChairBack?: boolean
+  /** If true, this furniture does not block placement (e.g. glass enclosures); other items can be placed on the same tiles. */
+  doesNotBlockPlacement?: boolean
 }
 
 export interface PlacedFurniture {

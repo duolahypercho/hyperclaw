@@ -10,35 +10,23 @@ import {
   ExternalLink,
   Loader2,
   Server,
-  CheckCircle2,
-  XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { useCrons } from "$/components/Tool/Crons/provider/cronsProvider";
 import { CronsProvider } from "$/components/Tool/Crons/provider/cronsProvider";
+import { CronJobDetailDialog } from "$/components/Tool/Crons/CronJobDetailDialog";
 import { useOS } from "@OS/Provider/OSProv";
 import { useFocusMode } from "./hooks/useFocusMode";
-import { formatDistanceToNow, format } from "date-fns";
+import { formatDistanceToNow } from "date-fns";
 import {
   getJobNextRunDate,
   getJobPalette,
   getStatusColor,
-  formatDurationMs,
 } from "$/components/Tool/Crons/utils";
 import type { OpenClawCronJobJson } from "$/types/electron";
-import type { CronRunRecord } from "$/types/electron";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 
 export const CronsCustomHeader: React.FC<CustomProps> = ({
   widget,
@@ -46,7 +34,7 @@ export const CronsCustomHeader: React.FC<CustomProps> = ({
   onMaximize,
   isEditMode,
 }) => {
-  const { jobsForList, loading, bridgeLoading, refresh } = useCrons();
+  const { jobsForList, bridgeLoading, refresh } = useCrons();
   const { toolAbstracts } = useOS();
 
   const cronsTool = useMemo(
@@ -54,24 +42,27 @@ export const CronsCustomHeader: React.FC<CustomProps> = ({
     [toolAbstracts]
   );
 
-  const isLoading = loading || bridgeLoading;
+  const isLoading = bridgeLoading && jobsForList.length === 0;
 
   return (
-    <div className="flex items-center justify-between px-3 py-2">
-      <div className="flex items-center gap-2">
+    <div className="flex items-center justify-between gap-2 px-3 py-2 min-h-0">
+      <div className="flex items-center gap-2 min-w-0 flex-1 overflow-hidden">
         {isEditMode && (
-          <div className="cursor-move h-7 w-7 flex items-center justify-center">
+          <div className="cursor-move h-7 w-7 flex shrink-0 items-center justify-center">
             <GripVertical className="w-3.5 h-3.5 text-muted-foreground" />
           </div>
         )}
-        <div className="text-primary">
+        <div className="text-primary shrink-0">
           {cronsTool?.icon || <Clock className="w-3.5 h-3.5" />}
         </div>
-        <h3 className="text-xs font-normal text-foreground truncate">
+        <h3
+          className="text-xs font-normal text-foreground truncate min-w-0"
+          title={widget.title}
+        >
           {widget.title}
         </h3>
         {!isLoading && jobsForList.length > 0 && (
-          <span className="text-xs text-muted-foreground">
+          <span className="text-xs text-muted-foreground shrink-0">
             {jobsForList.length} job{jobsForList.length !== 1 ? "s" : ""}
           </span>
         )}
@@ -116,111 +107,11 @@ export const CronsCustomHeader: React.FC<CustomProps> = ({
   );
 };
 
-/** Dialog showing run history (logs) for a single job, same style as Tool/Crons. */
-function JobLogsDialog({
-  job,
-  runs,
-  open,
-  onOpenChange,
-}: {
-  job: OpenClawCronJobJson | null;
-  runs: CronRunRecord[];
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}) {
-  if (!job) return null;
-  const sortedRuns = useMemo(
-    () => [...runs].sort((a, b) => b.runAtMs - a.runAtMs),
-    [runs]
-  );
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg w-[calc(100vw-2rem)] max-h-[85vh] overflow-hidden flex flex-col gap-4 p-6">
-        <DialogHeader className="flex-shrink-0">
-          <DialogTitle className="text-base font-semibold pr-8 truncate">
-            {job.name}
-          </DialogTitle>
-          <DialogDescription>
-            Run history · {sortedRuns.length} run{sortedRuns.length !== 1 ? "s" : ""}
-          </DialogDescription>
-        </DialogHeader>
-        <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex flex-col">
-          <div className="space-y-3 pb-4 min-w-0">
-            {sortedRuns.length === 0 ? (
-              <p className="text-xs text-muted-foreground py-4 text-center">
-                No runs recorded yet
-              </p>
-            ) : (
-              sortedRuns.map((run, idx) => (
-                <div
-                  key={`${run.runAtMs}-${idx}`}
-                  className={cn(
-                    "rounded-lg border border-solid p-3 text-sm min-w-0 overflow-hidden",
-                    run.status === "ok"
-                      ? "border-emerald-500/30 bg-emerald-500/5"
-                      : "border-destructive/30 bg-destructive/5"
-                  )}
-                >
-                  <div className="flex items-center gap-2 flex-wrap">
-                    {run.status === "ok" ? (
-                      <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
-                    ) : (
-                      <XCircle className="h-4 w-4 text-destructive shrink-0" />
-                    )}
-                    <span className="text-xs font-normal tabular-nums">
-                      {format(new Date(run.runAtMs), "h:mm:ss a, MMM d")}
-                    </span>
-                    <span className="text-xs text-muted-foreground">
-                      · {formatDistanceToNow(new Date(run.runAtMs), { addSuffix: true })}
-                    </span>
-                    {run.durationMs != null && (
-                      <span className="text-xs text-muted-foreground">
-                        · Runtime: {formatDurationMs(run.durationMs)}
-                      </span>
-                    )}
-                  </div>
-                  {run.summary && (
-                    <div className="my-2 min-w-0 overflow-hidden">
-                      <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">
-                        Summary
-                      </p>
-                      <div className="text-foreground rounded-md bg-muted/40 p-2 text-sm leading-relaxed prose prose-invert prose-p:my-1 prose-ul:my-1 prose-li:my-0 max-w-full overflow-x-auto break-words [&>*]:break-words [&_pre]:whitespace-pre-wrap [&_pre]:break-all">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                          {run.summary}
-                        </ReactMarkdown>
-                      </div>
-                    </div>
-                  )}
-                  {run.status === "error" && run.error && (
-                    <div className="min-w-0 overflow-hidden">
-                      <p className="text-xs font-semibold uppercase tracking-wider text-destructive/80 mb-1">
-                        Error
-                      </p>
-                      <div className="text-destructive/90 rounded-md bg-destructive/10 p-2 text-sm leading-relaxed prose prose-invert prose-p:my-1 max-w-full overflow-x-auto break-words [&>*]:break-words [&_pre]:whitespace-pre-wrap [&_pre]:break-all">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                          {run.error}
-                        </ReactMarkdown>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 const CronsWidgetContent = memo((props: CustomProps) => {
   const { isFocusModeActive } = useFocusMode();
   const {
     jobsForList,
     parsedCronJobs,
-    runsByJobId,
-    loading,
     bridgeLoading,
     showEmptyState,
     fetchBridgeCrons,
@@ -228,22 +119,17 @@ const CronsWidgetContent = memo((props: CustomProps) => {
   } = useCrons();
 
   const [selectedJob, setSelectedJob] = useState<OpenClawCronJobJson | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
 
-  const sortedJobs = useMemo(() => {
-    return [...jobsForList].sort((a, b) => {
-      const runsA = runsByJobId[a.id];
-      const runsB = runsByJobId[b.id];
-      const lastA = runsA?.length ? Math.max(...runsA.map((r) => r.runAtMs)) : 0;
-      const lastB = runsB?.length ? Math.max(...runsB.map((r) => r.runAtMs)) : 0;
-      return lastB - lastA;
-    });
-  }, [jobsForList, runsByJobId]);
+  // Jobs are already sorted by next run (soonest first) from the provider
+  const sortedJobs = jobsForList;
 
   const handleJobClick = useCallback((job: OpenClawCronJobJson) => {
     setSelectedJob(job);
+    setDetailOpen(true);
   }, []);
 
-  const isLoading = loading || bridgeLoading;
+  const isLoading = bridgeLoading && jobsForList.length === 0;
 
   return (
     <motion.div
@@ -297,17 +183,21 @@ const CronsWidgetContent = memo((props: CustomProps) => {
             </div>
           ) : (
             <>
-              <ScrollArea className="flex-1 min-h-0">
-                <div className="space-y-1 pr-2">
+              <div className="flex-1 min-h-0 overflow-y-auto customScrollbar2">
+                <div className="space-y-1">
                   {sortedJobs.length === 0 ? (
                     <p className="text-xs text-muted-foreground py-4 text-center">
                       No cron jobs
                     </p>
                   ) : (
-                    sortedJobs.slice(0, 12).map((job, i) => {
+                    sortedJobs.map((job, i) => {
                       const nextRun = getJobNextRunDate(job, parsedCronJobs);
                       const nextRunStr = nextRun
                         ? formatDistanceToNow(nextRun, { addSuffix: true })
+                        : "—";
+                      const lastRunMs = job.state?.lastRunAtMs;
+                      const lastRunStr = lastRunMs
+                        ? formatDistanceToNow(new Date(lastRunMs), { addSuffix: true })
                         : "—";
                       const status = job.state?.lastStatus ?? "idle";
                       const palette = getJobPalette(job.id);
@@ -340,12 +230,15 @@ const CronsWidgetContent = memo((props: CustomProps) => {
                               getStatusColor(status)
                             )}
                           />
-                          <div className="flex-1 min-w-0">
-                            <p className="text-xs font-normal text-foreground truncate">
+                          <div className="flex-1 min-w-0 overflow-hidden">
+                            <p
+                              className="text-xs font-normal text-foreground truncate min-w-0"
+                              title={job.name}
+                            >
                               {job.name}
                             </p>
                             <p className="text-[11px] text-muted-foreground truncate">
-                              {nextRunStr}
+                              Next {nextRunStr} · Last {lastRunStr}
                             </p>
                           </div>
                         </motion.div>
@@ -353,12 +246,14 @@ const CronsWidgetContent = memo((props: CustomProps) => {
                     })
                   )}
                 </div>
-              </ScrollArea>
-              <JobLogsDialog
+              </div>
+              <CronJobDetailDialog
                 job={selectedJob}
-                runs={selectedJob ? runsByJobId[selectedJob.id] ?? [] : []}
-                open={!!selectedJob}
-                onOpenChange={(open) => !open && setSelectedJob(null)}
+                open={detailOpen}
+                onOpenChange={(open) => {
+                  setDetailOpen(open);
+                  if (!open) setSelectedJob(null);
+                }}
               />
             </>
           )}

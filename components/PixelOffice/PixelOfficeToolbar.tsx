@@ -43,6 +43,10 @@ interface PixelOfficeToolbarProps {
   onToggleDebugMode: () => void;
   getLayout: () => OfficeLayout;
   onApplyLayout: (layout: OfficeLayout) => void;
+  /** If provided, called before replacing layout (preset/import). Return false to cancel. */
+  confirmBeforeReplaceLayout?: () => boolean | Promise<boolean>;
+  /** Restore the layout that was replaced by the last preset/import. */
+  onRestorePrevious?: () => void;
   /** Used by Cozy Office preset (one room per agent). */
   agentCount?: number;
 }
@@ -54,6 +58,8 @@ export function PixelOfficeToolbar({
   onToggleDebugMode,
   getLayout,
   onApplyLayout,
+  confirmBeforeReplaceLayout,
+  onRestorePrevious,
   agentCount = 2,
 }: PixelOfficeToolbarProps) {
   const router = useRouter();
@@ -124,6 +130,8 @@ export function PixelOfficeToolbar({
           onToggleDebugMode={onToggleDebugMode}
           getLayout={getLayout}
           onApplyLayout={onApplyLayout}
+          confirmBeforeReplaceLayout={confirmBeforeReplaceLayout}
+          onRestorePrevious={onRestorePrevious}
           agentCount={agentCount}
         />
       </div>

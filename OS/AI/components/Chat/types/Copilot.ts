@@ -1,7 +1,6 @@
 import React from "react";
 import { Message } from "@OS/AI/shared";
 import { SystemMessageFunction } from "@OS/AI/types";
-import { CharacterState } from "@OS/AI/components/models/CopanionInterfaceProvider";
 import {
   OnStopGeneration,
   OnReloadMessages,
@@ -118,9 +117,7 @@ export interface CopilotChatProps {
   /**
    * Children to render.
    */
-  children?:
-    | ((props: { characterState: CharacterState }) => React.ReactNode)
-    | null;
+  children?: React.ReactNode;
 
   hideStopButton?: boolean;
 

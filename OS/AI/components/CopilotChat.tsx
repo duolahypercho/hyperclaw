@@ -45,7 +45,6 @@ import { useCopanionContext } from "@OS/AI/core/context/copanion-context";
 import HistoryDropdown from "$/components/HistoryDropdown";
 import { AllowedFileTypes, useService } from "$/Providers/ServiceProv";
 import { toolRegistry, UnifiedToolState } from "@OS/AI/components/ToolRegistry";
-import { CharacterState } from "@OS/AI/components/models/CopanionInterfaceProvider";
 import { InputContainer } from "./InputContainer";
 import createMarkdownComponents from "@OS/AI/components/createMarkdownComponents";
 import {
@@ -553,7 +552,6 @@ export const CopilotChat = ({
   const { personality } = useAssistant();
   const { toast } = useToast();
   const { uploadFileToCloud, deleteFileFromCloud } = useService();
-  const [characterState, setCharacterState] = useState<CharacterState>("idle");
   const { runtimeClient, conversationId } = useCopanionContext();
 
   // Dynamic height calculation for scroll reference
@@ -1217,25 +1215,6 @@ export const CopilotChat = ({
     return messages[messages.length - 1];
   }, [messages.length]);
 
-  useEffect(() => {
-    if (!children) return;
-
-    if (isLoading) {
-      // Check if the last message is empty (no content or only whitespace)
-      if (!lastMessage?.content?.trim()) {
-        setCharacterState("thinking");
-        return;
-      }
-
-      // If the message has content, set to talking state
-      setCharacterState("talking");
-
-      return;
-    }
-
-    setCharacterState("idle");
-  }, [lastMessage, isLoading, messages]);
-
   // Scroll to bottom functionality
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const scrollToBottom = useCallback((smooth = true) => {
@@ -1383,8 +1362,6 @@ export const CopilotChat = ({
         </CardHeader>
 
         <div className={cn("flex flex-col w-full flex-1 p-0 overflow-hidden")}>
-          {children && children({ characterState })}
-
           <div className="flex flex-col w-full flex-1 p-0 overflow-hidden relative">
             {/* Messages Area */}
             <CardContent

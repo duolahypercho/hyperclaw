@@ -1,4 +1,5 @@
 const LAYOUT_STORAGE_KEY = "pixel-office-layout";
+const HAS_USER_LAYOUT_KEY = "pixel-office-has-user-layout";
 
 function isElectron(): boolean {
   if (typeof window === "undefined") return false;
@@ -22,6 +23,7 @@ export const vscode = {
       }
       try {
         localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(m.layout));
+        localStorage.setItem(HAS_USER_LAYOUT_KEY, "1");
       } catch {
         // ignore
       }

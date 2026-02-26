@@ -14,8 +14,11 @@ export interface BridgeCron {
   schedule: string;
   status?: string;
   nextRun?: number | string;
+  nextRunAtMs?: number;
   agentId?: string;
+  lastRunAtMs?: number;
   lastStatus?: string;
+  enabled?: boolean;
 }
 
 /** Normalize "every 30 min" / "30m" / "30" to a string we can parse as interval. */
@@ -53,24 +56,29 @@ function parseEveryStep(scheduleStr: string): number | null {
 }
 
 export function mapBridgeCronsToJobs(bridgeCrons: BridgeCron[]): OpenClawCronJobJson[] {
-  return bridgeCrons.map((c) => ({
-    id: c.id,
-    name: c.name,
-    enabled: c.status !== "disabled",
-    agentId: c.agentId ?? "main",
-    schedule: c.schedule
-      ? { kind: inferScheduleKind(c.schedule), expr: c.schedule }
-      : undefined,
-    state: {
-      nextRunAtMs:
-        typeof c.nextRun === "number"
-          ? c.nextRun
-          : typeof c.nextRun === "string"
-            ? new Date(c.nextRun).getTime()
-            : undefined,
-      lastStatus: c.lastStatus ?? (c.status === "active" ? "ok" : c.status === "disabled" ? "idle" : "idle"),
-    },
-  }));
+  return bridgeCrons.map((c) => {
+    const nextRunMs =
+      c.nextRunAtMs ??
+      (typeof c.nextRun === "number"
+        ? c.nextRun
+        : typeof c.nextRun === "string"
+          ? new Date(c.nextRun).getTime()
+          : undefined);
+    return {
+      id: c.id,
+      name: c.name,
+      enabled: c.enabled ?? (c.status !== "disabled"),
+      agentId: c.agentId ?? "main",
+      schedule: c.schedule
+        ? { kind: inferScheduleKind(c.schedule), expr: c.schedule }
+        : undefined,
+      state: {
+        nextRunAtMs: nextRunMs,
+        lastRunAtMs: c.lastRunAtMs,
+        lastStatus: c.lastStatus ?? (c.status === "active" ? "ok" : c.status === "disabled" ? "idle" : "idle"),
+      },
+    };
+  });
 }
 
 export async function fetchCronsFromBridge(): Promise<OpenClawCronJobJson[]> {
@@ -79,7 +87,7 @@ export async function fetchCronsFromBridge(): Promise<OpenClawCronJobJson[]> {
   return mapBridgeCronsToJobs(data as BridgeCron[]);
 }
 
-/** Fetch run history from ~/.openclaw/cron/runs/{jobId}.jsonl via bridge. */
+/** Fetch run history from ~/.openclaw/cron/runs/{jobId}.jsonl via bridge (bulk; used by calendar etc.). */
 export async function fetchCronRunsFromBridge(
   jobIds: string[]
 ): Promise<Record<string, CronRunRecord[]>> {
@@ -88,6 +96,37 @@ export async function fetchCronRunsFromBridge(
   const out = data as { runsByJobId?: Record<string, CronRunRecord[]> };
   if (!out?.runsByJobId || typeof out.runsByJobId !== "object") return {};
   return out.runsByJobId;
+}
+
+/** Fetch paginated runs for a single job (newest first). Used when user opens job detail. */
+export async function fetchCronRunsForJob(
+  jobId: string,
+  limit = 10,
+  offset = 0
+): Promise<{ runs: CronRunRecord[]; hasMore: boolean }> {
+  if (!jobId) return { runs: [], hasMore: false };
+  const data = await bridgeInvoke("get-cron-runs-for-job", { jobId, limit, offset });
+  const out = data as { runs?: CronRunRecord[]; hasMore?: boolean };
+  return {
+    runs: Array.isArray(out?.runs) ? out.runs : [],
+    hasMore: Boolean(out?.hasMore),
+  };
+}
+
+/** Full run record (entire JSON line) for "Show more" / full session log. */
+export type CronRunDetail = CronRunRecord & Record<string, unknown>;
+
+/** Fetch full run detail for one cron run (full error, summary, and any log fields). */
+export async function fetchCronRunDetail(
+  jobId: string,
+  runAtMs: number
+): Promise<CronRunDetail | null> {
+  if (!jobId || runAtMs == null) return null;
+  const data = await bridgeInvoke("get-cron-run-detail", { jobId, runAtMs });
+  // Backend returns { error: "Run not found" } when missing; a valid run record also has "error" for the run's message
+  if (data && typeof data === "object" && "error" in data && !("runAtMs" in data)) return null;
+  if (data && typeof data === "object" && (data as { error?: string }).error === "Run not found") return null;
+  return data as CronRunDetail;
 }
 
 /** Match a run to a slot: runAtMs within ~2 min before slot start or before slot end. */

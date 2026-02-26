@@ -3,11 +3,11 @@
 import { useState, useEffect, useRef } from "react";
 import type { OfficeState } from "./office/engine/officeState";
 import type { OfficeLayout } from "./office/types";
-import { setFloorSprites } from "./office/floorTiles";
+import { setFloorSprites, setMVFloorSprites } from "./office/floorTiles";
 import { clearColorizeCache } from "./office/colorize";
 import { setWallSprites } from "./office/wallTiles";
 import { setCharacterTemplates } from "./office/sprites/spriteData";
-import { loadWallSprites, loadFloorSprites, loadCharacterSheets } from "./officeAssetLoader";
+import { loadWallSprites, loadFloorSprites, loadCharacterSheets, loadMVFloorSprites } from "./officeAssetLoader";
 
 /**
  * Host-agnostic config for the Pixel Office engine.
@@ -58,20 +58,28 @@ export function useOfficeEngine(
 
       // Load each asset set independently so missing walls.png doesn't block characters/floors
       try {
-        const [wallSprites, floorSprites, charSheets] = await Promise.all([
-          loadWallSprites(config.assetBasePath).catch((e) => {
-            console.warn("[PixelOffice] Walls load failed:", e);
-            return [];
-          }),
-          loadFloorSprites(config.assetBasePath).catch(() => []),
+        // First try to load MV tilesets (new RPG Maker format)
+        const [mvFloorSprites, charSheets] = await Promise.all([
+          loadMVFloorSprites(config.assetBasePath).catch(() => []),
           loadCharacterSheets(config.assetBasePath).catch((e) => {
             console.warn("[PixelOffice] Character sheets load failed:", e);
             return [];
           }),
         ]);
+
+        // Use MV tilesets if available, otherwise fall back to legacy
+        if (mvFloorSprites.length > 0) {
+          setMVFloorSprites(mvFloorSprites);
+        } else {
+          // Fall back to legacy floors.png
+          const floorSprites = await loadFloorSprites(config.assetBasePath).catch(() => []);
+          if (floorSprites.length > 0) setFloorSprites(floorSprites);
+        }
+
+        const wallSprites = await loadWallSprites(config.assetBasePath).catch(() => []);
         if (wallSprites.length > 0) setWallSprites(wallSprites);
-        if (floorSprites.length > 0) setFloorSprites(floorSprites);
-        if (charSheets.length > 0) setCharacterTemplates(charSheets);
+
+        if (charSheets && charSheets.length > 0) setCharacterTemplates(charSheets);
       } catch (e) {
         console.warn("[PixelOffice] Asset load failed:", e);
       }

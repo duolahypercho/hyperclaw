@@ -448,15 +448,23 @@ export function OfficeCanvas({ officeState, onClick, isEditMode, editorState, on
         let cursor = 'default'
         if (hitId !== null) {
           cursor = 'pointer'
-        } else if (officeState.selectedAgentId !== null && tile) {
-          // Check if hovering over a clickable seat (available or own)
+        } else if (tile) {
+          // Check if hovering over a clickable seat
           const seatId = officeState.getSeatAtTile(tile.col, tile.row)
           if (seatId) {
             const seat = officeState.seats.get(seatId)
             if (seat) {
-              const selectedCh = officeState.characters.get(officeState.selectedAgentId)
-              if (!seat.assigned || (selectedCh && selectedCh.seatId === seatId)) {
-                cursor = 'pointer'
+              // If agent is selected, check if seat is available or own
+              if (officeState.selectedAgentId !== null) {
+                const selectedCh = officeState.characters.get(officeState.selectedAgentId)
+                if (!seat.assigned || (selectedCh && selectedCh.seatId === seatId)) {
+                  cursor = 'pointer'
+                }
+              } else {
+                // No agent selected - show pointer for available seats
+                if (!seat.assigned) {
+                  cursor = 'pointer'
+                }
               }
             }
           }
@@ -659,16 +667,17 @@ export function OfficeCanvas({ officeState, onClick, isEditMode, editorState, on
         return
       }
 
-      // No agent hit — check seat click while agent is selected
-      if (officeState.selectedAgentId !== null) {
-        const selectedCh = officeState.characters.get(officeState.selectedAgentId)
-        // Skip seat reassignment for sub-agents
-        if (selectedCh && !selectedCh.isSubagent) {
-          const tile = screenToTile(e.clientX, e.clientY)
-          if (tile) {
-            const seatId = officeState.getSeatAtTile(tile.col, tile.row)
-            if (seatId) {
-              const seat = officeState.seats.get(seatId)
+      // No agent hit — check seat click
+      const tile = screenToTile(e.clientX, e.clientY)
+      if (tile) {
+        const seatId = officeState.getSeatAtTile(tile.col, tile.row)
+        if (seatId) {
+          const seat = officeState.seats.get(seatId)
+          // If agent is already selected, handle seat reassignment
+          if (officeState.selectedAgentId !== null) {
+            const selectedCh = officeState.characters.get(officeState.selectedAgentId)
+            // Skip seat reassignment for sub-agents
+            if (selectedCh && !selectedCh.isSubagent) {
               if (seat && selectedCh) {
                 if (selectedCh.seatId === seatId) {
                   officeState.sendToSeat(officeState.selectedAgentId)
@@ -676,7 +685,7 @@ export function OfficeCanvas({ officeState, onClick, isEditMode, editorState, on
                   officeState.cameraFollowId = null
                   onClick(null)
                   return
-                } else                 if (!seat.assigned) {
+                } else if (!seat.assigned) {
                   officeState.reassignSeat(officeState.selectedAgentId, seatId)
                   officeState.selectedAgentId = null
                   officeState.cameraFollowId = null
@@ -691,12 +700,37 @@ export function OfficeCanvas({ officeState, onClick, isEditMode, editorState, on
                 }
               }
             }
+            officeState.selectedAgentId = null
+            officeState.cameraFollowId = null
+            onClick(null)
+            return
+          }
+          // No agent selected — find first available unassigned agent and assign to seat
+          if (seat && !seat.assigned) {
+            for (const ch of officeState.characters.values()) {
+              if (ch.isSubagent) continue
+              if (!ch.seatId) {
+                // Found an agent without a seat - assign them to this one
+                officeState.reassignSeat(ch.id, seatId)
+                officeState.selectedAgentId = ch.id
+                officeState.cameraFollowId = ch.id
+                const seats: Record<number, { palette: number; seatId: string | null }> = {}
+                for (const char of officeState.characters.values()) {
+                  if (char.isSubagent) continue
+                  seats[char.id] = { palette: char.palette, seatId: char.seatId }
+                }
+                onSaveAgentSeats?.(seats)
+                onClick(ch.id)
+                return
+              }
+            }
           }
         }
-        officeState.selectedAgentId = null
-        officeState.cameraFollowId = null
-        onClick(null)
       }
+      // Clicked on empty space - deselect
+      officeState.selectedAgentId = null
+      officeState.cameraFollowId = null
+      onClick(null)
     },
     [officeState, onClick, screenToWorld, screenToTile, isEditMode, onSaveAgentSeats],
   )

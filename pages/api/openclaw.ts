@@ -6,6 +6,20 @@ import os from "os";
 
 const OPENCLAW_HOME = path.join(os.homedir(), ".openclaw");
 const OPENCLAW_CONFIG_PATH = path.join(OPENCLAW_HOME, "openclaw.json");
+const CRON_JOBS_PATH = path.join(OPENCLAW_HOME, "cron", "jobs.json");
+
+/** Fast path: read jobs from ~/.openclaw/cron/jobs.json. Returns null if file missing or invalid. */
+function readCronJobsFromFile(): unknown[] | null {
+  try {
+    if (!fs.existsSync(CRON_JOBS_PATH)) return null;
+    const raw = fs.readFileSync(CRON_JOBS_PATH, "utf-8");
+    const parsed = JSON.parse(raw) as { jobs?: unknown[] };
+    const jobs = Array.isArray(parsed) ? parsed : (parsed?.jobs ?? []);
+    return Array.isArray(jobs) ? jobs : null;
+  } catch {
+    return null;
+  }
+}
 
 function runCommand(command: string, timeoutMs = 15000): Promise<{ stdout: string; stderr: string }> {
   const env: NodeJS.ProcessEnv = { ...process.env, FORCE_COLOR: "0" };
@@ -79,13 +93,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const result = await runCommand("--version", 5000);
           return res.json({ installed: true, version: result.stdout });
         } catch {
-          // Fallback: consider installed if "openclaw cron list" works (CLI may not support --version or PATH differs)
-          try {
-            await runCommand("cron list", 10000);
+          if (fs.existsSync(CRON_JOBS_PATH)) {
             return res.json({ installed: true, version: null });
-          } catch {
-            return res.json({ installed: false, version: null });
           }
+          return res.json({ installed: false, version: null });
         }
       }
 
@@ -109,14 +120,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       case "cron-list": {
-        const result = await runCommand("cron list");
-        return res.json({ success: true, data: result.stdout });
+        const fileJobs = readCronJobsFromFile();
+        const jobs = Array.isArray(fileJobs) ? fileJobs : [];
+        const scheduleStr = (job: { schedule?: { kind?: string; expr?: string; everyMs?: number } }) => {
+          const s = job.schedule;
+          if (!s) return "cron -";
+          if (s.kind === "cron" && s.expr) return `cron ${s.expr}`;
+          if (s.kind === "every" && s.everyMs != null) {
+            const ms = s.everyMs;
+            if (ms % (24 * 60 * 60 * 1000) === 0) return `every ${ms / (24 * 60 * 60 * 1000)}d`;
+            if (ms % (60 * 60 * 1000) === 0) return `every ${ms / (60 * 60 * 1000)}h`;
+            if (ms % (60 * 1000) === 0) return `every ${ms / (60 * 1000)}m`;
+            return `every ${ms}ms`;
+          }
+          return "cron -";
+        };
+        type JobRow = { id?: string; name?: string; schedule?: { kind?: string; expr?: string; everyMs?: number } };
+        const lines = ["ID\tNAME\tSCHEDULE", ...(jobs as JobRow[]).map((j) => `${j.id ?? ""}\t${(j.name ?? j.id ?? "").replace(/\t/g, " ")}\t${scheduleStr(j)}`)];
+        return res.json({ success: true, data: lines.join("\n") });
       }
 
       case "cron-list-json": {
-        const result = await runCommand("cron list --json --all", 30000);
-        const parsed = JSON.parse(result.stdout);
-        return res.json({ success: true, data: parsed });
+        const fileJobs = readCronJobsFromFile();
+        const jobs = Array.isArray(fileJobs) ? fileJobs : [];
+        return res.json({ success: true, data: { jobs } });
       }
 
       case "cron-enable": {

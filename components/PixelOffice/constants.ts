@@ -2,6 +2,8 @@ import type { FloorColor } from './office/types'
 
 // ── Grid & Layout ────────────────────────────────────────────
 export const TILE_SIZE = 16
+/** Scale for z-order so row (lower on screen) dominates over sprite height. Lower row index = behind; higher row = in front. */
+export const Z_ROW_SCALE = 1000
 export const DEFAULT_COLS = 20
 export const DEFAULT_ROWS = 11
 export const MAX_COLS = 64
@@ -70,6 +72,16 @@ export const ROTATE_BUTTON_BG = 'rgba(50, 120, 200, 0.85)'
 // ── Camera ───────────────────────────────────────────────────
 export const CAMERA_FOLLOW_LERP = 0.1
 export const CAMERA_FOLLOW_SNAP_THRESHOLD = 0.5
+
+// ── Floor tileset (MV) ──────────────────────────────────────
+/** Use only the first row of the MV floor image (e.g. 8 distinct patterns, skip duplicate/black rows). */
+export const FLOOR_MV_FIRST_ROW_ONLY = true
+/** Max floor tiles to use from MV image (0 = use all). Set to 8 to match an 8-pattern strip. */
+export const FLOOR_MV_MAX_TILES = 8
+/** Override MV floor tile size (0 = auto). Auto: first row is split into FLOOR_MV_MAX_TILES tiles so 45, 48, etc. all fit. */
+export const FLOOR_MV_TILE_SIZE = 0
+/** How many pattern repeats per tile in the image (e.g. 2 = 2×2 = 4 blocks). We use 1 block per grid cell, so extract 1/N of each tile. */
+export const FLOOR_MV_PATTERN_PER_TILE = 2
 
 // ── Zoom ─────────────────────────────────────────────────────
 export const ZOOM_MIN = 1

@@ -79,7 +79,7 @@ const Index = () => {
   return (
     <CopanionProvider seoSchema={todoSEOSchema}>
       <TodoListProvider>
-        <TodoList />
+          <TodoList />
       </TodoListProvider>
     </CopanionProvider>
   );

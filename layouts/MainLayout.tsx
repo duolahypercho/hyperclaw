@@ -16,6 +16,7 @@ import {
   VirtualPixelOffice,
   VirtualDocs,
   VirtualAgents,
+  VirtualUsage,
   VirtualOpenClaw,
 } from "$/components/Tool/VirtualToolComponents";
 import { TimerProvider } from "$/Providers/TimerProv";
@@ -75,6 +76,7 @@ const MainLayout = ({ children }: any) => {
     { path: "/Tool/Agents", component: VirtualAgents, name: "Agents" },
     { path: "/Tool/PixelOffice", component: VirtualPixelOffice, name: "AI Agent Office" },
     { path: "/Tool/Docs", component: VirtualDocs, name: "Docs" },
+    { path: "/Tool/Usage", component: VirtualUsage, name: "Token Usage" },
     { path: "/Settings", component: VirtualSettings, name: "Settings" },
   ];
 
