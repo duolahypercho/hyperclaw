@@ -6,3 +6,7 @@ export { AssistantProvider as AssistantProvider } from "./AssistantProv";
 export { ThemeProvider as ThemeProvider } from "./ThemeProv";
 export { TimerProvider as TimerProvider } from "./TimerProv";
 export { PricingModalProvider as PricingModalProvider, usePricingModal } from "./PricingModalProv";
+export {
+  OpenClawProvider as OpenClawProvider,
+  useOpenClawContext as useOpenClawContext,
+} from "./OpenClawProv";

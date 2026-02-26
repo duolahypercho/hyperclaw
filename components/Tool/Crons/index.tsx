@@ -107,7 +107,6 @@ function CronsContent() {
     jobsForList,
   } = useCrons();
 
-  // Only wait for the bridge (get-crons = one file read). Don't block on useOpenClaw at all.
   const initialLoading = bridgeLoading && jobsForList.length === 0;
 
   if (initialLoading) {

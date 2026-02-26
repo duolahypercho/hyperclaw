@@ -1139,6 +1139,179 @@ function createOpenClawFolder(relativePath) {
   }
 }
 
+// ─── OpenClaw usage (token aggregation from ~/.openclaw/agents/*/sessions/*.json) ───
+function toNum(v) {
+  if (typeof v === "number" && !Number.isNaN(v)) return Math.max(0, Math.floor(v));
+  if (typeof v === "string") return Math.max(0, Math.floor(parseInt(v, 10)) || 0);
+  return 0;
+}
+
+function getTokenCounts(r) {
+  const u = r.usage && typeof r.usage === "object" ? r.usage : r;
+  const input = toNum(u.inputTokens ?? u.input_tokens ?? r.inputTokens ?? r.input_tokens);
+  const output = toNum(u.outputTokens ?? u.output_tokens ?? r.outputTokens ?? r.output_tokens);
+  const totalRaw = toNum(u.totalTokens ?? u.total_tokens ?? r.totalTokens ?? r.total_tokens);
+  return { input, output, total: totalRaw || input + output };
+}
+
+function toDateKey(record) {
+  const raw = record.updatedAt ?? record.createdAt ?? record.date ?? record.timestamp;
+  if (typeof raw === "string") {
+    const d = new Date(raw);
+    return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+  }
+  if (typeof raw === "number" && raw > 0) return new Date(raw).toISOString().slice(0, 10);
+  return null;
+}
+
+function hasSessionTokenFields(r) {
+  if (!r || typeof r !== "object") return false;
+  const o = r;
+  return (
+    o.inputTokens !== undefined ||
+    o.outputTokens !== undefined ||
+    o.totalTokens !== undefined ||
+    o.input_tokens !== undefined ||
+    o.output_tokens !== undefined ||
+    o.total_tokens !== undefined ||
+    Boolean(o.usage && typeof o.usage === "object")
+  );
+}
+
+function extractRecords(data) {
+  if (!data || typeof data !== "object") return [];
+  const obj = data;
+  if (Array.isArray(data)) return data.filter((x) => x && typeof x === "object");
+  if (Array.isArray(obj.sessions)) return obj.sessions.filter((x) => x && typeof x === "object");
+  if (Array.isArray(obj.data)) return obj.data.filter((x) => x && typeof x === "object");
+  if (hasSessionTokenFields(obj)) return [obj];
+  const values = Object.values(obj).filter((x) => x != null && typeof x === "object");
+  if (values.length === 1 && Array.isArray(values[0])) return values[0].filter((x) => x && typeof x === "object");
+  const out = [];
+  for (const v of values) {
+    if (!v || typeof v !== "object") continue;
+    if (hasSessionTokenFields(v)) out.push(v);
+    else {
+      const nested = extractRecords(v);
+      if (nested.length) out.push(...nested);
+    }
+  }
+  return out.length ? out : values;
+}
+
+function addAllSessionFilesInDir(out, sessionsDir, agentId) {
+  if (!fs.existsSync(sessionsDir) || !fs.statSync(sessionsDir).isDirectory()) return;
+  try {
+    const entries = fs.readdirSync(sessionsDir, { withFileTypes: true });
+    for (const e of entries) {
+      if (!e.isFile() || !e.name.toLowerCase().endsWith(".json")) continue;
+      out.push({ path: path.join(sessionsDir, e.name), agentId });
+    }
+  } catch {}
+}
+
+function walkAndCollectSessions(out, baseDir, relativePath) {
+  if (!fs.existsSync(baseDir) || !fs.statSync(baseDir).isDirectory()) return;
+  try {
+    const entries = fs.readdirSync(baseDir, { withFileTypes: true });
+    const sessionsDir = path.join(baseDir, "sessions");
+    if (fs.existsSync(sessionsDir) && fs.statSync(sessionsDir).isDirectory()) {
+      const agentId = relativePath || path.basename(baseDir) || "agent";
+      addAllSessionFilesInDir(out, sessionsDir, agentId);
+    }
+    for (const e of entries) {
+      if (!e.isDirectory() || e.name === "sessions") continue;
+      walkAndCollectSessions(out, path.join(baseDir, e.name), relativePath ? `${relativePath}/${e.name}` : e.name);
+    }
+  } catch {}
+}
+
+function collectSessionsPaths(openclawRoot) {
+  const out = [];
+  addAllSessionFilesInDir(out, path.join(openclawRoot, "sessions"), "_global");
+  const agentsDir = path.join(openclawRoot, "agents");
+  if (fs.existsSync(agentsDir) && fs.statSync(agentsDir).isDirectory()) {
+    try {
+      const dirs = fs.readdirSync(agentsDir, { withFileTypes: true });
+      for (const d of dirs) {
+        if (!d.isDirectory()) continue;
+        walkAndCollectSessions(out, path.join(agentsDir, d.name), d.name);
+      }
+    } catch {}
+  }
+  const workspaceDir = path.join(openclawRoot, "workspace");
+  if (fs.existsSync(workspaceDir) && fs.statSync(workspaceDir).isDirectory()) {
+    try {
+      const dirs = fs.readdirSync(workspaceDir, { withFileTypes: true });
+      for (const d of dirs) {
+        if (!d.isDirectory()) continue;
+        walkAndCollectSessions(out, path.join(workspaceDir, d.name), d.name);
+      }
+    } catch {}
+  }
+  return out;
+}
+
+function getOpenClawUsage() {
+  const byDayMap = new Map();
+  const byAgentMap = new Map();
+  const debugFiles = [];
+  let totalInput = 0, totalOutput = 0, totalTotal = 0;
+  const sessionsPaths = fs.existsSync(OPENCLAW_HOME) ? collectSessionsPaths(OPENCLAW_HOME) : [];
+  if (sessionsPaths.length === 0) {
+    return {
+      byDay: [],
+      totals: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+      byAgent: [],
+      hint: `No session files found at ${OPENCLAW_HOME}. Session files are expected at ~/.openclaw/agents/*/sessions/sessions.json (or other .json in those directories).`,
+    };
+  }
+  for (const { path: filePath, agentId } of sessionsPaths) {
+    let raw, fileDateKey = null;
+    try {
+      const stat = fs.statSync(filePath);
+      fileDateKey = stat.mtime.toISOString().slice(0, 10);
+      raw = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    } catch {
+      continue;
+    }
+    const records = extractRecords(raw);
+    const agentTotals = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+    for (const r of records) {
+      const { input, output, total } = getTokenCounts(r);
+      const dateKey = toDateKey(r) ?? fileDateKey;
+      agentTotals.inputTokens += input;
+      agentTotals.outputTokens += output;
+      agentTotals.totalTokens += total;
+      totalInput += input;
+      totalOutput += output;
+      totalTotal += total;
+      if (dateKey) {
+        const existing = byDayMap.get(dateKey) ?? { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+        existing.inputTokens += input;
+        existing.outputTokens += output;
+        existing.totalTokens += total;
+        byDayMap.set(dateKey, existing);
+      }
+    }
+    if (agentTotals.inputTokens > 0 || agentTotals.outputTokens > 0 || agentTotals.totalTokens > 0) {
+      const existing = byAgentMap.get(agentId) ?? { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+      existing.inputTokens += agentTotals.inputTokens;
+      existing.outputTokens += agentTotals.outputTokens;
+      existing.totalTokens += agentTotals.totalTokens;
+      byAgentMap.set(agentId, existing);
+    }
+    debugFiles.push({ path: filePath, agentId, records: records.length, totalTokens: agentTotals.totalTokens });
+  }
+  const byDay = Array.from(byDayMap.entries()).map(([date, v]) => ({ date, ...v })).sort((a, b) => a.date.localeCompare(b.date));
+  const byAgent = Array.from(byAgentMap.entries()).map(([agentId, v]) => ({ agentId, ...v }));
+  const result = { byDay, totals: { inputTokens: totalInput, outputTokens: totalOutput, totalTokens: totalTotal }, byAgent, debug: { files: debugFiles } };
+  if (totalTotal === 0 && sessionsPaths.length > 0) {
+    result.hint = "Session files were found but contained no token records. Ensure each file has objects with inputTokens, outputTokens, totalTokens, and optional createdAt or timestamp.";
+  }
+  return result;
+}
+
 function runOpenClawCommand(command, timeoutMs = 15000) {
   const env = openclawEnv();
   return new Promise((resolve, reject) => {
@@ -2259,6 +2432,8 @@ ipcMain.handle("hyperclaw:bridge-invoke", async (event, { action, task, id, patc
       return getEmployeeStatus();
     case "get-config":
       return getConfig();
+    case "get-openclaw-usage":
+      return { success: true, data: getOpenClawUsage() };
     case "read-office-layout":
       return readOfficeLayout();
     case "write-office-layout": {

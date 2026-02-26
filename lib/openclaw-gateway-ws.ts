@@ -29,18 +29,6 @@ function randomId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 11)}`;
 }
 
-/** Get device identity from Electron API */
-async function getDeviceIdentity(): Promise<{ deviceId?: string; publicKeyPem?: string; error?: string }> {
-  if (typeof window !== "undefined" && (window as unknown as { electronAPI?: { openClaw?: { getDeviceIdentity?: () => Promise<{ deviceId: string; publicKeyPem: string; error?: string }> } } }).electronAPI?.openClaw?.getDeviceIdentity) {
-    try {
-      return await (window as unknown as { electronAPI: { openClaw: { getDeviceIdentity: () => Promise<{ deviceId: string; publicKeyPem: string; error?: string }> } } }).electronAPI.openClaw.getDeviceIdentity();
-    } catch (e) {
-      return { error: (e as Error).message };
-    }
-  }
-  return { error: "Electron API not available" };
-}
-
 /** Sign a connect challenge using Electron API */
 async function signConnectChallenge(params: {
   clientId: string;
@@ -148,10 +136,7 @@ const gatewayConnection = {
       if (tokenToUse == null || tokenToUse === "") {
         console.warn("[Gateway WS] No auth token (config gateway.auth.token or OPENCLAW_GATEWAY_PASSWORD). Signing may fail.");
       }
-      console.log("[Gateway WS] Got challenge, signing with device identity...");
-      console.log("tokenToUse", tokenToUse);
-      console.log("nonce", nonce);
-      console.log("payload", payload);
+
       // Sign the challenge using Electron API
       signConnectChallenge({
         clientId: "gateway-client",

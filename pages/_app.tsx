@@ -6,6 +6,7 @@ import {
   ServiceProvider,
   UserProvider,
   ThemeProvider,
+  OpenClawProvider,
 } from "$/Providers";
 import { SessionProvider } from "next-auth/react";
 import Router from "next/router";
@@ -46,6 +47,7 @@ function MyApp({ Component, pageProps }: any) {
       {/* Core providers first */}
       <SessionProvider session={pageProps.session}>
         <ThemeProvider attribute="class" enableSystem disableTransitionOnChange>
+          <OpenClawProvider>
           <OSProvider>
             <GuidanceProvider>
               <TooltipProvider>
@@ -63,6 +65,7 @@ function MyApp({ Component, pageProps }: any) {
               </TooltipProvider>
             </GuidanceProvider>
           </OSProvider>
+          </OpenClawProvider>
         </ThemeProvider>
       </SessionProvider>
     </main>
