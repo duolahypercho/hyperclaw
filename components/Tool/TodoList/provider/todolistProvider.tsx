@@ -8,6 +8,8 @@ import {
   useCallback,
   useRef,
 } from "react";
+import { spawnAgentForTask } from "$/lib/useAgentSpawner";
+
 const OBJECT_ID_RE = /^[0-9a-f]{24}$/i;
 
 const isValidObjectId = (id: string): boolean => OBJECT_ID_RE.test(id);
@@ -511,6 +513,20 @@ export function TodoListProvider({ children, inMiniMode }: Props) {
       if (response.status !== 200) {
         throw new Error("Failed to update status");
       }
+
+      // Spawn agent when task moves to in_progress
+      if (isNowInProgress && taskBeforeUpdate?.assignedAgent && !wasInProgress) {
+        const taskForSpawn = taskBeforeUpdate;
+        // Spawn agent in background (don't await)
+        spawnAgentForTask({
+          taskId: taskForSpawn._id,
+          agentId: taskForSpawn.assignedAgent,
+          taskTitle: taskForSpawn.title || "",
+          taskDescription: taskForSpawn.description,
+          document: taskForSpawn.linkedDocumentUrl,
+        }).catch(console.error);
+      }
+
       if (!ignore) {
         setTasks((prevTasks) => {
           const updatedTasks = prevTasks.map((task) =>

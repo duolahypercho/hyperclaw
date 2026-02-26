@@ -1,6 +1,6 @@
 import React, { useState } from "react";
-import { signOut } from "next-auth/react";
 import { useUser } from "$/Providers/UserProv";
+import { useOpenClawContext } from "$/Providers/OpenClawProv";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   DropdownMenu,
@@ -13,14 +13,22 @@ import {
 import { User, Settings, LogOut, Sparkles, CreditCard } from "lucide-react";
 import { useRouter } from "next/router";
 import { getMediaUrl } from "$/utils";
+import { cn } from "@/lib/utils";
 import { motion } from "framer-motion";
 import { usePricingModal } from "$/Providers/PricingModalProv";
 import { getBillingPortalUrl } from "$/services/user";
 import { useToast } from "@/components/ui/use-toast";
 import { Badge } from "@/components/ui/badge";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 const Userdropdown = () => {
   const { userInfo, membership, logout } = useUser();
+  const { gatewayHealthy, gatewayHealthError } = useOpenClawContext();
   const router = useRouter();
   const { openModal } = usePricingModal();
   const [isLoadingBilling, setIsLoadingBilling] = useState(false);
@@ -79,6 +87,22 @@ const Userdropdown = () => {
     }
   };
 
+  // OpenClaw gateway health: true = green, false = red, null = unknown/loading (amber)
+  const healthDot =
+    gatewayHealthy === true ? (
+      "bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.6)]"
+    ) : gatewayHealthy === false ? (
+      "bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.6)]"
+    ) : (
+      "bg-amber-500/80 animate-pulse"
+    );
+  const healthLabel =
+    gatewayHealthy === true
+      ? "OpenClaw gateway connected"
+      : gatewayHealthy === false
+        ? gatewayHealthError || "OpenClaw gateway disconnected"
+        : "OpenClaw status checking...";
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -97,6 +121,26 @@ const Userdropdown = () => {
               {getInitials(userInfo.Firstname, userInfo.Lastname)}
             </AvatarFallback>
           </Avatar>
+          <TooltipProvider delayDuration={300}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span
+                  className="absolute bottom-0 right-0 flex h-3 w-3 items-center justify-center rounded-full bg-secondary shadow-sm"
+                  aria-label={healthLabel}
+                >
+                  <span
+                    className={cn(
+                      "h-2 w-2 rounded-full transition-all duration-300",
+                      healthDot
+                    )}
+                  />
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="text-xs">
+                {healthLabel}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </motion.button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
