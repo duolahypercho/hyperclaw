@@ -9,11 +9,13 @@ import React, {
   useMemo,
   useRef,
 } from "react";
-import { Bot, FileText, RefreshCw, Save, Loader2 } from "lucide-react";
+import { Bot, FileText, Plus, RefreshCw, Save, Loader2, Trash2 } from "lucide-react";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
 import { AppSchema } from "@OS/Layout/types";
 import type { SidebarSection, SidebarItem } from "@OS/Layout/Sidebar/SidebarSchema";
 import { AgentSidebarSelect } from "../AgentSidebarSelect";
+import { AddAgentDialog } from "../AddAgentDialog";
+import { DeleteAgentDialog } from "$/components/Tool/Agents/DeleteAgentDialog";
 
 export interface Agent {
   id: string;
@@ -21,6 +23,8 @@ export interface Agent {
   status: string;
   role?: string;
   lastActive?: string;
+  /** Folder name under OPENCLAW_HOME for this agent's workspace (from getTeam workspace path). */
+  workspaceFolder?: string;
 }
 
 export interface AgentFileEntry {
@@ -30,16 +34,10 @@ export interface AgentFileEntry {
   sizeBytes: number;
 }
 
-export interface AgentOption {
-  id: string;
-  name: string;
-}
-
 interface AgentsContextValue {
   agents: Agent[];
   agentFiles: AgentFileEntry[];
   workspaceLabels: Record<string, string>;
-  agentOptions: AgentOption[];
   selectedAgentId: string;
   setSelectedAgentId: (id: string) => void;
   filteredAgentFiles: AgentFileEntry[];
@@ -103,16 +101,6 @@ async function fetchDocContent(relativePath: string): Promise<string | null> {
   return null;
 }
 
-/** Derive agent folder names from file paths (first path segment). */
-function agentFoldersFromFiles(files: AgentFileEntry[]): string[] {
-  const set = new Set<string>();
-  for (const f of files) {
-    const seg = f.relativePath.split("/")[0];
-    if (seg) set.add(seg);
-  }
-  return Array.from(set).sort((a, b) => a.localeCompare(b));
-}
-
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -132,32 +120,21 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [addAgentDialogOpen, setAddAgentDialogOpen] = useState(false);
+  const [deleteAgentDialogOpen, setDeleteAgentDialogOpen] = useState(false);
   const selectedPathRef = useRef<string | null>(null);
 
-  // Agent options: folder-based when we have files (display names from identity.md); API agents when no files. No "All Agent" option.
-  const agentOptions = useMemo(() => {
-    const folders = agentFoldersFromFiles(agentFiles);
-    if (folders.length > 0) {
-      return folders.map((id) => ({
-        id,
-        name: workspaceLabels[id] ?? id,
-      }));
-    }
-    if (agents.length > 0) {
-      return agents;
-    }
-    return [];
-  }, [agents, agentFiles, workspaceLabels]);
-
-  // Files belonging to the selected agent (path prefix match)
+  // Files belonging to the selected agent: match by workspace folder from getTeam()
   const filteredAgentFiles = useMemo(() => {
     if (!selectedAgentId) return [];
+    const agent = agents.find((a) => a.id === selectedAgentId);
+    const folder = agent?.workspaceFolder ?? selectedAgentId;
     return agentFiles.filter(
       (f) =>
-        f.relativePath === selectedAgentId ||
-        f.relativePath.startsWith(selectedAgentId + "/")
+        f.relativePath === folder ||
+        f.relativePath.startsWith(folder + "/")
     );
-  }, [agentFiles, selectedAgentId]);
+  }, [agentFiles, agents, selectedAgentId]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -186,13 +163,13 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
 
   // When options load, default to first agent; fix selection if missing from list
   useEffect(() => {
-    if (loading || agentOptions.length === 0) return;
-    const ids = new Set(agentOptions.map((o) => o.id));
-    const targetId = agentOptions[0]?.id ?? "";
+    if (loading || agents.length === 0) return;
+    const ids = new Set(agents.map((a) => a.id));
+    const targetId = agents[0]?.id ?? "";
     if (selectedAgentId === "" || !ids.has(selectedAgentId)) {
       setSelectedAgentId(targetId);
     }
-  }, [loading, agentOptions, selectedAgentId]);
+  }, [loading, agents, selectedAgentId]);
 
   // When agent or file list changes: keep current file if still in list; otherwise default to agents.md or first file
   useEffect(() => {
@@ -286,7 +263,7 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
       items: fileItems,
     });
 
-    if (!loading && agentOptions.length === 0 && agentFiles.length === 0) {
+    if (!loading && agents.length === 0 && agentFiles.length === 0) {
       sections.push({
         id: "agents-empty",
         type: "default",
@@ -306,7 +283,7 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
     selectedFile?.relativePath,
     selectedAgentId,
     loading,
-    agentOptions.length,
+    agents.length,
     agentFiles.length,
   ]);
 
@@ -314,13 +291,33 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
     content !== null && originalContent !== null && content !== originalContent;
 
   const appSchema: AppSchema = useMemo(
-    () => ({
+    () => {
+      const firstAgentId = agents[0]?.id ?? null;
+      const isFirstAgent = firstAgentId != null && selectedAgentId === firstAgentId;
+      return {
       header: {
         title: "Agents",
         icon: Bot,
         rightUI: {
           type: "buttons",
           buttons: [
+            {
+              id: "add-agent",
+              label: "Add agent",
+              icon: <Plus className="h-4 w-4" />,
+              onClick: () => setAddAgentDialogOpen(true),
+            },
+            {
+              id: "delete-agent",
+              label: "Delete agent",
+              icon: <Trash2 className="h-4 w-4" />,
+              onClick: () => {
+                if (!isFirstAgent) setDeleteAgentDialogOpen(true);
+              },
+              disabled: !selectedAgentId || isFirstAgent,
+              variant: "ghost",
+              className: "text-muted-foreground hover:text-destructive",
+            },
             {
               id: "agents-save",
               label: saving ? "Saving…" : "Save",
@@ -347,7 +344,8 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
         },
       },
       sidebar: { sections: sidebarSections },
-    }),
+    };
+    },
     [
       sidebarSections,
       refresh,
@@ -356,6 +354,8 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
       selectedFile,
       content,
       hasUnsavedChanges,
+      agents,
+      selectedAgentId,
     ]
   );
 
@@ -364,7 +364,6 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
       agents,
       agentFiles,
       workspaceLabels,
-      agentOptions,
       selectedAgentId,
       setSelectedAgentId,
       filteredAgentFiles,
@@ -385,7 +384,6 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
       agents,
       agentFiles,
       workspaceLabels,
-      agentOptions,
       selectedAgentId,
       filteredAgentFiles,
       selectedFile,
@@ -403,6 +401,23 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
   );
 
   return (
-    <AgentsContext.Provider value={value}>{children}</AgentsContext.Provider>
+    <AgentsContext.Provider value={value}>
+      {children}
+      <AddAgentDialog
+        open={addAgentDialogOpen}
+        onOpenChange={setAddAgentDialogOpen}
+        onSuccess={() => refresh()}
+      />
+      <DeleteAgentDialog
+        open={deleteAgentDialogOpen}
+        onOpenChange={setDeleteAgentDialogOpen}
+        agentId={selectedAgentId}
+        agentDisplayName={workspaceLabels[selectedAgentId] ?? selectedAgentId}
+        onSuccess={() => refresh()}
+        isFirstAgent={
+          agents[0] != null && selectedAgentId === agents[0].id
+        }
+      />
+    </AgentsContext.Provider>
   );
 }

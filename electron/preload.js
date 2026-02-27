@@ -80,6 +80,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
     deleteTask: (id) => ipcRenderer.invoke("hyperclaw:delete-task", id),
     sendCommand: (command) => ipcRenderer.invoke("hyperclaw:send-command", command),
     triggerProcessCommands: () => ipcRenderer.invoke("hyperclaw:trigger-process-commands"),
+    spawnAgentForTask: (params) => ipcRenderer.invoke("hyperclaw:spawn-agent-for-task", params),
 
     onEvent: (callback) => {
       if (typeof callback !== "function") return;

@@ -103,7 +103,6 @@ const gatewayConnection = {
       if (pending) {
         this.pendingRequests.delete(id);
         if (msg.ok) {
-          console.log("[Gateway WS] Response OK");
           pending.resolve(msg.payload);
         } else {
           console.log("[Gateway WS] Response Error:", msg.error);
@@ -114,7 +113,6 @@ const gatewayConnection = {
       // No pending request: may be connect response (hello-ok)
       if (msg.ok === true && (msg.payload as Record<string, unknown>)?.type === "hello-ok") {
         this.setState(true, null);
-        console.log("[Gateway WS] Handshake complete - connected!");
         return;
       }
       return;
@@ -147,7 +145,6 @@ const gatewayConnection = {
         nonce: nonce,
       }).then((signed) => {
         if (signed && !signed.error && signed.device && signed.client) {
-          console.log("[Gateway WS] Sending signed connect request");
           // Protocol: connect.params.auth.token must match gateway token or socket is closed
           const authToken =
             (tokenToUse && String(tokenToUse).trim()) ||
@@ -177,8 +174,6 @@ const gatewayConnection = {
       });
       return;
     }
-    // Log other events
-    console.log("[Gateway WS] Event:", msg.event, msg);
   },
 
   connect(wsUrl: string, options: GatewayConnectOptions = {}) {
@@ -189,7 +184,6 @@ const gatewayConnection = {
     this.disconnect();
     this.wsUrl = wsUrl;
     this.token = token;
-    console.log("[Gateway WS] Connecting to:", wsUrl, "token:", !!token);
     try {
       this.ws = new WebSocket(wsUrl);
     } catch (e) {
@@ -199,7 +193,6 @@ const gatewayConnection = {
     }
     this.ws.onopen = () => {
       this.reconnectAttempt = 0;
-      console.log("[Gateway WS] Socket opened, waiting for challenge...");
     };
     this.ws.onmessage = (ev: MessageEvent) => {
       try {
@@ -289,7 +282,6 @@ export async function getGatewayConfig(): Promise<{ gatewayUrl: string; token: s
       const config = await (window as unknown as { electronAPI: { openClaw: { getGatewayConnectUrl: () => Promise<{ gatewayUrl: string; token: string }> } } }).electronAPI.openClaw.getGatewayConnectUrl();
       gatewayUrl = config.gatewayUrl || gatewayUrl;
       token = config.token;
-      console.log("[Gateway WS] Got config:", { gatewayUrl, hasToken: !!token });
     } catch (e) {
       console.warn("[Gateway WS] Failed to get config:", e);
     }
@@ -324,7 +316,6 @@ export async function sendChatMessageWs(sessionKey: string, message: string): Pr
   }
   
   const idempotencyKey = `ws-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  console.log("[Gateway WS] Sending chat.send:", { sessionKey, message, idempotencyKey });
   return gatewayConnection.request("chat.send", {
     sessionKey,
     message,

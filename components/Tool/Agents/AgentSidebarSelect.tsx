@@ -13,7 +13,7 @@ import { useAgents } from "./provider/agentsProvider";
 
 export function AgentSidebarSelect() {
   const {
-    agentOptions,
+    agents,
     selectedAgentId,
     setSelectedAgentId,
     loading,
@@ -30,14 +30,23 @@ export function AgentSidebarSelect() {
         disabled={loading}
       >
         <SelectTrigger className="w-full h-9 text-xs">
-          <SelectValue placeholder="Select agent…" />
+          <SelectValue placeholder="Select agent…">
+            {selectedAgentId
+              ? (() => {
+                  const agent = agents.find((a) => a.id === selectedAgentId);
+                  return agent
+                    ? `${agent.name} (${agent.id})`
+                    : selectedAgentId;
+                })()
+              : "Select agent…"}
+          </SelectValue>
         </SelectTrigger>
         <SelectContent>
-          {agentOptions.map((opt) => (
-            <SelectItem key={opt.id} value={opt.id} className="text-xs">
+          {agents.map((agent) => (
+            <SelectItem key={agent.id} value={agent.id} className="text-xs">
               <span className="flex items-center gap-2">
                 <Bot className="h-3.5 w-3.5 text-muted-foreground" />
-                {opt.name}
+                {agent.name} ({agent.id})
               </span>
             </SelectItem>
           ))}

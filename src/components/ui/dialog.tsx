@@ -43,12 +43,13 @@ const DialogContent = forwardRef<
   ComponentPropsWithoutRef<typeof Content> & {
     showCloseButton?: boolean;
     variant?: "default" | "secondary";
+    overlayClassName?: string;
   }
->(({ className, children, variant = "default", showCloseButton = true, ...props }, ref) => {
+>(({ className, children, variant = "default", showCloseButton = true, overlayClassName, ...props }, ref) => {
   if (variant === "secondary") {
     return (
       <DialogPortal>
-        <DialogOverlay className="bg-transparent" />
+        <DialogOverlay className={cn("bg-transparent", overlayClassName)} />
         <Content
           ref={ref}
           className={cn(
@@ -70,7 +71,7 @@ const DialogContent = forwardRef<
   }
   return (
     <DialogPortal>
-      <DialogOverlay />
+      <DialogOverlay className={overlayClassName} />
       <Content
         ref={ref}
         className={cn(

@@ -206,6 +206,14 @@ export interface HyperClawBridgeAPI {
   sendCommand: (command: BridgeCommand) => Promise<{ success: boolean }>;
   getDailySummary: (date: string) => Promise<{ success: boolean; data?: string | null; error?: string }>;
   triggerProcessCommands: () => Promise<{ success: boolean; error?: string }>;
+  spawnAgentForTask: (params: {
+    taskId: string;
+    agentId: string;
+    taskTitle: string;
+    taskDescription?: string;
+    document?: string;
+    context?: Record<string, unknown>;
+  }) => Promise<{ success: boolean; error?: string; stdout?: string; taskId: string; agentId: string }>;
   onEvent: (callback: (event: BridgeEvent) => void) => void;
   onTasksChanged: (callback: (tasks: HyperClawTask[]) => void) => void;
   removeAllBridgeListeners: () => void;

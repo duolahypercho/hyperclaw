@@ -41,7 +41,7 @@ export function MemorySidebarFilter() {
             placeholder="Search by name or content…"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="h-9 pl-8 text-sm"
+            className="h-9 pl-8 text-xs"
           />
         </div>
         <div className="space-y-1.5">

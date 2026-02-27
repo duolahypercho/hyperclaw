@@ -1148,9 +1148,15 @@ function toNum(v) {
 
 function getTokenCounts(r) {
   const u = r.usage && typeof r.usage === "object" ? r.usage : r;
-  const input = toNum(u.inputTokens ?? u.input_tokens ?? r.inputTokens ?? r.input_tokens);
-  const output = toNum(u.outputTokens ?? u.output_tokens ?? r.outputTokens ?? r.output_tokens);
-  const totalRaw = toNum(u.totalTokens ?? u.total_tokens ?? r.totalTokens ?? r.total_tokens);
+  const input = toNum(
+    u.inputTokens ?? u.input_tokens ?? u.prompt_tokens ?? r.inputTokens ?? r.input_tokens ?? r.prompt_tokens
+  );
+  const output = toNum(
+    u.outputTokens ?? u.output_tokens ?? u.completion_tokens ?? r.outputTokens ?? r.output_tokens ?? r.completion_tokens
+  );
+  const totalRaw = toNum(
+    u.totalTokens ?? u.total_tokens ?? r.totalTokens ?? r.total_tokens
+  );
   return { input, output, total: totalRaw || input + output };
 }
 
@@ -1174,6 +1180,9 @@ function hasSessionTokenFields(r) {
     o.input_tokens !== undefined ||
     o.output_tokens !== undefined ||
     o.total_tokens !== undefined ||
+    o.prompt_tokens !== undefined ||
+    o.completion_tokens !== undefined ||
+    o.contextTokens !== undefined ||
     Boolean(o.usage && typeof o.usage === "object")
   );
 }
@@ -1183,6 +1192,18 @@ function extractRecords(data) {
   const obj = data;
   if (Array.isArray(data)) return data.filter((x) => x && typeof x === "object");
   if (Array.isArray(obj.sessions)) return obj.sessions.filter((x) => x && typeof x === "object");
+  // OpenClaw store: sessions.json is often sessionKey -> SessionEntry (plain object map)
+  if (obj.sessions && typeof obj.sessions === "object" && !Array.isArray(obj.sessions)) {
+    const entries = Object.values(obj.sessions).filter((x) => x && typeof x === "object");
+    return entries.filter((x) => hasSessionTokenFields(x));
+  }
+  // Root itself is the store: { "sessionKey1": { inputTokens, ... }, "sessionKey2": { ... }, ... }
+  if (!Array.isArray(obj) && !("sessions" in obj) && !("data" in obj)) {
+    const values = Object.values(obj).filter((x) => x != null && typeof x === "object" && !Array.isArray(x));
+    if (values.length > 0 && values.some(hasSessionTokenFields)) {
+      return values.filter(hasSessionTokenFields);
+    }
+  }
   if (Array.isArray(obj.data)) return obj.data.filter((x) => x && typeof x === "object");
   if (hasSessionTokenFields(obj)) return [obj];
   const values = Object.values(obj).filter((x) => x != null && typeof x === "object");
@@ -1199,56 +1220,21 @@ function extractRecords(data) {
   return out.length ? out : values;
 }
 
-function addAllSessionFilesInDir(out, sessionsDir, agentId) {
-  if (!fs.existsSync(sessionsDir) || !fs.statSync(sessionsDir).isDirectory()) return;
-  try {
-    const entries = fs.readdirSync(sessionsDir, { withFileTypes: true });
-    for (const e of entries) {
-      if (!e.isFile() || !e.name.toLowerCase().endsWith(".json")) continue;
-      out.push({ path: path.join(sessionsDir, e.name), agentId });
-    }
-  } catch {}
-}
-
-function walkAndCollectSessions(out, baseDir, relativePath) {
-  if (!fs.existsSync(baseDir) || !fs.statSync(baseDir).isDirectory()) return;
-  try {
-    const entries = fs.readdirSync(baseDir, { withFileTypes: true });
-    const sessionsDir = path.join(baseDir, "sessions");
-    if (fs.existsSync(sessionsDir) && fs.statSync(sessionsDir).isDirectory()) {
-      const agentId = relativePath || path.basename(baseDir) || "agent";
-      addAllSessionFilesInDir(out, sessionsDir, agentId);
-    }
-    for (const e of entries) {
-      if (!e.isDirectory() || e.name === "sessions") continue;
-      walkAndCollectSessions(out, path.join(baseDir, e.name), relativePath ? `${relativePath}/${e.name}` : e.name);
-    }
-  } catch {}
-}
-
 function collectSessionsPaths(openclawRoot) {
+  // Only ~/.openclaw/agents/<agentId>/sessions/sessions.json per agent folder
   const out = [];
-  addAllSessionFilesInDir(out, path.join(openclawRoot, "sessions"), "_global");
   const agentsDir = path.join(openclawRoot, "agents");
-  if (fs.existsSync(agentsDir) && fs.statSync(agentsDir).isDirectory()) {
-    try {
-      const dirs = fs.readdirSync(agentsDir, { withFileTypes: true });
-      for (const d of dirs) {
-        if (!d.isDirectory()) continue;
-        walkAndCollectSessions(out, path.join(agentsDir, d.name), d.name);
+  if (!fs.existsSync(agentsDir) || !fs.statSync(agentsDir).isDirectory()) return out;
+  try {
+    const dirs = fs.readdirSync(agentsDir, { withFileTypes: true });
+    for (const d of dirs) {
+      if (!d.isDirectory()) continue;
+      const sessionsPath = path.join(agentsDir, d.name, "sessions", "sessions.json");
+      if (fs.existsSync(sessionsPath) && fs.statSync(sessionsPath).isFile()) {
+        out.push({ path: sessionsPath, agentId: d.name });
       }
-    } catch {}
-  }
-  const workspaceDir = path.join(openclawRoot, "workspace");
-  if (fs.existsSync(workspaceDir) && fs.statSync(workspaceDir).isDirectory()) {
-    try {
-      const dirs = fs.readdirSync(workspaceDir, { withFileTypes: true });
-      for (const d of dirs) {
-        if (!d.isDirectory()) continue;
-        walkAndCollectSessions(out, path.join(workspaceDir, d.name), d.name);
-      }
-    } catch {}
-  }
+    }
+  } catch {}
   return out;
 }
 
@@ -1263,7 +1249,7 @@ function getOpenClawUsage() {
       byDay: [],
       totals: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
       byAgent: [],
-      hint: `No session files found at ${OPENCLAW_HOME}. Session files are expected at ~/.openclaw/agents/*/sessions/sessions.json (or other .json in those directories).`,
+      hint: `No session files found. Expected one file per agent at ~/.openclaw/agents/<agentId>/sessions/sessions.json`,
     };
   }
   for (const { path: filePath, agentId } of sessionsPaths) {
@@ -1936,17 +1922,12 @@ function getTeam() {
     const lines = output.split("\n");
     const agents = [];
     let current = null;
-    const UUID_REGEX = /^[a-f0-9-]{36}$/i;
+
     for (const line of lines) {
       const bullet = line.match(/^\s*-\s+([a-z0-9_-]+)(?:\s+\(([^)]+)\))?\s*$/i);
       if (bullet) {
         if (current) {
-          agents.push({
-            id: current.id,
-            name: current.name || current.id.charAt(0).toUpperCase() + current.id.slice(1),
-            status: current.isDefault ? "active" : "idle",
-            role: current.name || undefined,
-          });
+          agents.push(buildTeamAgent(current));
         }
         const id = bullet[1];
         const label = bullet[2];
@@ -1954,19 +1935,49 @@ function getTeam() {
           id,
           name: label && label.toLowerCase() !== "default" ? label : null,
           isDefault: (label && label.toLowerCase() === "default") || id === "main",
+          workspace: null,
+          agentDir: null,
+          model: null,
+          routingRules: null,
+          routing: null,
         };
         continue;
       }
+      if (!current) continue;
+
       const identity = line.match(/^\s*Identity:\s+.+?\s+(\S+)\s+\(IDENTITY\.md\)/i);
-      if (identity && current) current.name = current.name || identity[1];
+      if (identity) {
+        current.name = current.name || identity[1];
+        continue;
+      }
+      const workspace = line.match(/^\s*Workspace:\s+(.+)$/);
+      if (workspace) {
+        current.workspace = workspace[1].trim();
+        continue;
+      }
+      const agentDir = line.match(/^\s*Agent dir:\s+(.+)$/i);
+      if (agentDir) {
+        current.agentDir = agentDir[1].trim();
+        continue;
+      }
+      const model = line.match(/^\s*Model:\s+(.+)$/);
+      if (model) {
+        current.model = model[1].trim();
+        continue;
+      }
+      const routingRules = line.match(/^\s*Routing rules:\s+(.+)$/i);
+      if (routingRules) {
+        current.routingRules = routingRules[1].trim();
+        continue;
+      }
+      const routing = line.match(/^\s*Routing:\s+(.+)$/i);
+      if (routing) {
+        current.routing = routing[1].trim();
+        continue;
+      }
     }
     if (current) {
-      agents.push({
-        id: current.id,
-        name: current.name || current.id.charAt(0).toUpperCase() + current.id.slice(1),
-        status: current.isDefault ? "active" : "idle",
-        role: current.name || undefined,
-      });
+      agents.push(buildTeamAgent(current));
     }
     return agents;
   } catch (err) {
@@ -1974,6 +1985,24 @@ function getTeam() {
     writeToBridgeLog(`getTeam failed: ${msg}`);
     return [];
   }
+}
+
+function buildTeamAgent(current) {
+  const name = current.name || current.id.charAt(0).toUpperCase() + current.id.slice(1);
+  const workspace = current.workspace ?? undefined;
+  const workspaceFolder = workspace ? path.basename(path.normalize(workspace)) : undefined;
+  return {
+    id: current.id,
+    name,
+    status: current.isDefault ? "active" : "idle",
+    role: current.name || undefined,
+    workspace,
+    workspaceFolder,
+    agentDir: current.agentDir ?? undefined,
+    model: current.model ?? undefined,
+    routingRules: current.routingRules ?? undefined,
+    routing: current.routing ?? undefined,
+  };
 }
 
 function parseCronLine(trimmed) {
@@ -2183,6 +2212,25 @@ function getCronsWithState() {
   });
 }
 
+/** Return a single cron job by id with full info (payload, schedule object, delivery, etc.) from jobs.json. */
+function getCronById(jobId) {
+  if (typeof jobId !== "string" || !jobId.trim()) return null;
+  const id = jobId.trim();
+  if (!/^[a-f0-9-]{36}$/i.test(id)) return null;
+  try {
+    if (!fs.existsSync(CRON_JOBS_PATH)) return null;
+    const raw = fs.readFileSync(CRON_JOBS_PATH, "utf-8");
+    const data = JSON.parse(raw);
+    const list = data?.jobs;
+    if (!Array.isArray(list)) return null;
+    const job = list.find((j) => j && j.id === id);
+    return job ?? null;
+  } catch (err) {
+    writeToBridgeLog(`getCronById failed: ${err && (err.message || String(err))}`);
+    return null;
+  }
+}
+
 function getConfig() {
   try {
     const configPath = path.join(OPENCLAW_HOME, "openclaw.json");
@@ -2197,6 +2245,19 @@ function getConfig() {
     return config;
   } catch {
     return {};
+  }
+}
+
+/** Models from agents.defaults.models in openclaw.json: only model ids (keys), no alias or other attributes. */
+function getDefaultModels() {
+  try {
+    if (!fs.existsSync(OPENCLAW_CONFIG_PATH)) return [];
+    const config = JSON.parse(fs.readFileSync(OPENCLAW_CONFIG_PATH, "utf-8"));
+    const models = config?.agents?.defaults?.models;
+    if (!models || typeof models !== "object") return [];
+    return Object.keys(models).map((id) => ({ id, name: id }));
+  } catch {
+    return [];
   }
 }
 
@@ -2297,12 +2358,45 @@ function logBridge(action, err) {
   } catch (_) {}
 }
 
-ipcMain.handle("hyperclaw:bridge-invoke", async (event, { action, task, id, patch, command, date, lines, startDate, endDate, jobIds, jobId, limit, offset, runAtMs, todoData, relativePath, content: docContent, layout: officeLayout, seats: officeSeats }) => {
+ipcMain.handle("hyperclaw:bridge-invoke", async (event, { action, task, id, patch, command, date, lines, startDate, endDate, jobIds, jobId, limit, offset, runAtMs, todoData, relativePath, content: docContent, layout: officeLayout, seats: officeSeats, agentId, agentName, cronAddParams, cronRunJobId, cronRunDue, cronEditJobId, cronEditParams, cronDeleteJobId }) => {
   logBridge(action);
   ensureHyperClawDir();
   switch (action) {
     case "list-agents": {
       return { success: true, data: getTeam() };
+    }
+    case "add-agent": {
+      const name = typeof agentName === "string" ? agentName.trim() : "";
+      if (!name) return { success: false, error: "Agent name is required" };
+      if (!/^[a-zA-Z0-9_.-]+$/.test(name)) return { success: false, error: "Agent name may only contain letters, numbers, underscores, hyphens, and dots" };
+      if (name.length > 120) return { success: false, error: "Agent name too long" };
+      const normalizedId = name.toLowerCase().replace(/[^a-z0-9_.-]/g, "");
+      if (!normalizedId) return { success: false, error: "Agent name must contain at least one letter or number" };
+      const workspacePath = path.join(OPENCLAW_HOME, "workspace-" + normalizedId);
+      try {
+        await runOpenClawWithArgs(["agents", "add", name, "--workspace", workspacePath, "--non-interactive"], 30000);
+        return { success: true };
+      } catch (err) {
+        return { success: false, error: err.message || err.stderr || "Failed to add agent" };
+      }
+    }
+    case "delete-agent": {
+      const idOrName = typeof agentId === "string" ? agentId.trim() : "";
+      if (!idOrName) return { success: false, error: "Agent id is required" };
+      let normalizedId = idOrName.toLowerCase().replace(/[^a-z0-9_.-]/g, "");
+      if (!normalizedId) return { success: false, error: "Invalid agent id" };
+      // Strip "workspace-" prefix if present (workspace folders use this naming but agent ID is just the name)
+      if (normalizedId.startsWith("workspace-")) {
+        normalizedId = normalizedId.substring("workspace-".length);
+      }
+      if (!normalizedId) return { success: false, error: "Invalid agent id after stripping prefix" };
+      if (normalizedId === "main") return { success: false, error: "Cannot delete the main agent" };
+      try {
+        await runOpenClawWithArgs(["agents", "delete", normalizedId, "--force"], 15000);
+        return { success: true };
+      } catch (err) {
+        return { success: false, error: err.message || err.stderr || "Failed to delete agent" };
+      }
     }
     case "list-openclaw-memory": {
       return { success: true, data: listOpenClawMemorySources() };
@@ -2409,8 +2503,16 @@ ipcMain.handle("hyperclaw:bridge-invoke", async (event, { action, task, id, patc
       return getLogs(lines || 100);
     case "get-team":
       return getTeam();
+    case "list-models":
+      return { success: true, data: getDefaultModels() };
     case "get-crons":
       return getCronsWithState();
+    case "get-cron-by-id": {
+      const jid = typeof jobId === "string" ? jobId.trim() : "";
+      const full = getCronById(jid);
+      if (full == null) return { error: "Job not found" };
+      return full;
+    }
     case "get-cron-runs": {
       const ids = Array.isArray(jobIds) ? jobIds : getCrons().map((c) => c.id);
       return { runsByJobId: getCronRuns(ids) };
@@ -2427,6 +2529,91 @@ ipcMain.handle("hyperclaw:bridge-invoke", async (event, { action, task, id, patc
       const detail = jid && runAt != null ? getCronRunDetail(jid, runAt) : null;
       if (detail == null) return { error: "Run not found" };
       return detail;
+    }
+    case "cron-add": {
+      const p = cronAddParams && typeof cronAddParams === "object" ? cronAddParams : {};
+      if (typeof p.name !== "string" || !p.name.trim()) {
+        return { success: false, error: "name is required" };
+      }
+      const session = (p.session && String(p.session)) || "main";
+      const hasAt = typeof p.at === "string" && p.at.trim().length > 0;
+      const hasCron = typeof p.cron === "string" && p.cron.trim().length > 0;
+      if (!hasAt && !hasCron) {
+        return { success: false, error: "Either at (ISO or relative e.g. 20m) or cron expression is required" };
+      }
+      const args = ["cron", "add", "--name", p.name.trim(), "--session", session];
+      if (hasAt) args.push("--at", p.at.trim());
+      if (hasCron) args.push("--cron", p.cron.trim());
+      if (typeof p.tz === "string" && p.tz.trim()) args.push("--tz", p.tz.trim());
+      if (typeof p.message === "string" && p.message.trim()) args.push("--message", p.message.trim());
+      if (typeof p.systemEvent === "string" && p.systemEvent.trim()) args.push("--system-event", p.systemEvent.trim());
+      if (p.wake === "now" || p.wake === true) args.push("--wake", "now");
+      if (p.deleteAfterRun === true) args.push("--delete-after-run");
+      if (p.announce === true) {
+        args.push("--announce");
+        if (typeof p.channel === "string" && p.channel.trim()) args.push("--channel", p.channel.trim());
+        if (typeof p.to === "string" && p.to.trim()) args.push("--to", p.to.trim());
+      }
+      if (typeof p.stagger === "string" && p.stagger.trim()) args.push("--stagger", p.stagger.trim());
+      if (typeof p.model === "string" && p.model.trim()) args.push("--model", p.model.trim());
+      if (typeof p.thinking === "string" && p.thinking.trim()) args.push("--thinking", p.thinking.trim());
+      if (typeof p.agent === "string" && p.agent.trim()) args.push("--agent", p.agent.trim());
+      try {
+        await runOpenClawWithArgs(args, 30000);
+        return { success: true };
+      } catch (err) {
+        return { success: false, error: err.message || err.stderr || "Failed to add cron job" };
+      }
+    }
+    case "cron-run": {
+      const runJobId = typeof cronRunJobId === "string" ? cronRunJobId.trim() : "";
+      if (!runJobId || !/^[a-f0-9-]{36}$/i.test(runJobId)) {
+        return { success: false, error: "Valid job id is required" };
+      }
+      const args = ["cron", "run", runJobId];
+      if (cronRunDue === true) args.push("--due");
+      try {
+        await runOpenClawWithArgs(args, 60000);
+        return { success: true };
+      } catch (err) {
+        return { success: false, error: err.message || err.stderr || "Run failed" };
+      }
+    }
+    case "cron-edit": {
+      const editJobId = typeof cronEditJobId === "string" ? cronEditJobId.trim() : "";
+      if (!editJobId || !/^[a-f0-9-]{36}$/i.test(editJobId)) {
+        return { success: false, error: "Valid job id is required" };
+      }
+      const p = cronEditParams && typeof cronEditParams === "object" ? cronEditParams : {};
+      const args = ["cron", "edit", editJobId];
+      if (typeof p.name === "string" && p.name.trim()) args.push("--name", p.name.trim());
+      if (typeof p.message === "string" && p.message.trim()) args.push("--message", p.message.trim());
+      if (typeof p.model === "string" && p.model.trim()) args.push("--model", p.model.trim());
+      if (typeof p.thinking === "string" && p.thinking.trim()) args.push("--thinking", p.thinking.trim());
+      if (p.clearAgent === true) args.push("--clear-agent");
+      else if (typeof p.agent === "string" && p.agent.trim()) args.push("--agent", p.agent.trim());
+      if (p.exact === true) args.push("--exact");
+      if (args.length === 3) {
+        return { success: false, error: "At least one field to update is required" };
+      }
+      try {
+        await runOpenClawWithArgs(args, 15000);
+        return { success: true };
+      } catch (err) {
+        return { success: false, error: err.message || err.stderr || "Failed to update job" };
+      }
+    }
+    case "cron-delete": {
+      const delJobId = typeof cronDeleteJobId === "string" ? cronDeleteJobId.trim() : "";
+      if (!delJobId || !/^[a-f0-9-]{36}$/i.test(delJobId)) {
+        return { success: false, error: "Valid job id is required" };
+      }
+      try {
+        await runOpenClawWithArgs(["cron", "rm", delJobId], 15000);
+        return { success: true };
+      } catch (err) {
+        return { success: false, error: err.message || err.stderr || "Failed to delete cron job" };
+      }
     }
     case "get-employee-status":
       return getEmployeeStatus();

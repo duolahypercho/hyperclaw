@@ -3,6 +3,57 @@ import cronParser from "cron-parser";
 import type { OpenClawCronJobJson, CronRunRecord } from "$/types/electron";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
 
+/** Params for adding a cron job (maps to openclaw cron add flags). */
+export interface CronAddParams {
+  name: string;
+  at?: string;
+  cron?: string;
+  tz?: string;
+  session?: string;
+  message?: string;
+  systemEvent?: string;
+  wake?: "now" | boolean;
+  deleteAfterRun?: boolean;
+  announce?: boolean;
+  channel?: string;
+  to?: string;
+  stagger?: string;
+  model?: string;
+  thinking?: string;
+  agent?: string;
+}
+
+/** Params for editing a cron job (patch). */
+export interface CronEditParams {
+  name?: string;
+  message?: string;
+  model?: string;
+  thinking?: string;
+  agent?: string;
+  clearAgent?: boolean;
+  exact?: boolean;
+}
+
+export async function cronAdd(params: CronAddParams): Promise<{ success: boolean; error?: string }> {
+  const data = (await bridgeInvoke("cron-add", { cronAddParams: params })) as { success?: boolean; error?: string };
+  return { success: data?.success === true, error: data?.error };
+}
+
+export async function cronRun(jobId: string, options?: { due?: boolean }): Promise<{ success: boolean; error?: string }> {
+  const data = (await bridgeInvoke("cron-run", { cronRunJobId: jobId, cronRunDue: options?.due === true })) as { success?: boolean; error?: string };
+  return { success: data?.success === true, error: data?.error };
+}
+
+export async function cronEdit(jobId: string, params: CronEditParams): Promise<{ success: boolean; error?: string }> {
+  const data = (await bridgeInvoke("cron-edit", { cronEditJobId: jobId, cronEditParams: params })) as { success?: boolean; error?: string };
+  return { success: data?.success === true, error: data?.error };
+}
+
+export async function cronDelete(jobId: string): Promise<{ success: boolean; error?: string }> {
+  const data = (await bridgeInvoke("cron-delete", { cronDeleteJobId: jobId })) as { success?: boolean; error?: string };
+  return { success: data?.success === true, error: data?.error };
+}
+
 /** Assume each cron run lasts 10 minutes for calendar display. */
 export const CRON_RUN_DURATION_MS = 10 * 60 * 1000;
 export const CRON_RUN_DURATION_MINUTES = 10;
@@ -87,6 +138,15 @@ export async function fetchCronsFromBridge(): Promise<OpenClawCronJobJson[]> {
   return mapBridgeCronsToJobs(data as BridgeCron[]);
 }
 
+/** Fetch a single cron job by id with full info (payload.message, payload.model, etc.) for editing. */
+export async function fetchCronById(jobId: string): Promise<OpenClawCronJobJson | null> {
+  if (!jobId?.trim()) return null;
+  const raw = await bridgeInvoke("get-cron-by-id", { jobId: jobId.trim() });
+  if (raw && typeof raw === "object" && "id" in (raw as object)) return raw as OpenClawCronJobJson;
+  if (raw && typeof raw === "object" && "error" in (raw as object)) return null;
+  return null;
+}
+
 /** Fetch run history from ~/.openclaw/cron/runs/{jobId}.jsonl via bridge (bulk; used by calendar etc.). */
 export async function fetchCronRunsFromBridge(
   jobIds: string[]
@@ -111,6 +171,24 @@ export async function fetchCronRunsForJob(
     runs: Array.isArray(out?.runs) ? out.runs : [],
     hasMore: Boolean(out?.hasMore),
   };
+}
+
+const RUNS_FETCH_PAGE_SIZE = 100;
+
+/** Fetch all runs for a job in one go (used when opening job detail so all messages load at once). */
+export async function fetchAllCronRunsForJob(jobId: string): Promise<CronRunRecord[]> {
+  if (!jobId) return [];
+  const all: CronRunRecord[] = [];
+  let offset = 0;
+  let hasMore = true;
+  while (hasMore) {
+    const { runs, hasMore: more } = await fetchCronRunsForJob(jobId, RUNS_FETCH_PAGE_SIZE, offset);
+    all.push(...runs);
+    hasMore = more;
+    offset += runs.length;
+    if (runs.length === 0) break;
+  }
+  return all;
 }
 
 /** Full run record (entire JSON line) for "Show more" / full session log. */

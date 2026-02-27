@@ -1,8 +1,8 @@
 "use client";
 
-import React, { useEffect, useRef, useCallback, useState } from "react";
+import React, { useEffect, useCallback, useState, useRef, useMemo } from "react";
 import { format } from "date-fns";
-import { Loader2, CheckCircle2, XCircle, Clock, ChevronDown, ChevronUp, CalendarClock, User, ToggleLeft } from "lucide-react";
+import { Loader2, CheckCircle2, XCircle, Clock, ChevronDown, ChevronUp, CalendarClock, User, ToggleLeft, Play, Pencil, Trash2 } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -12,19 +12,26 @@ import {
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
-import { fetchCronRunsForJob, fetchCronRunDetail, formatDurationMs } from "./utils";
+import { fetchAllCronRunsForJob, fetchCronRunDetail, formatDurationMs } from "./utils";
+import { useCrons } from "./provider/cronsProvider";
+import { EditCronDialog } from "./EditCronDialog";
+import { DeleteCronDialog } from "./DeleteCronDialog";
 import type { OpenClawCronJobJson } from "$/types/electron";
 import type { CronRunRecord } from "$/types/electron";
-
-const RUNS_PAGE_SIZE = 10;
-/** Approximate chars that fit in 2 lines at text-xs; below this we don't show "Show more". */
-const TRUNCATE_THRESHOLD = 100;
 
 const statusLabels: Record<string, string> = {
   ok: "Success",
   error: "Failed",
   idle: "Idle",
 };
+
+/** Heuristic: content would exceed 2 lines (so we show "View logs" when collapsed). */
+function wouldExceedTwoLines(text: string | null | undefined): boolean {
+  if (!text || typeof text !== "string") return false;
+  const lines = text.split("\n").length;
+  if (lines > 2) return true;
+  return text.length > 140;
+}
 
 export interface CronJobDetailDialogProps {
   open: boolean;
@@ -33,70 +40,59 @@ export interface CronJobDetailDialogProps {
 }
 
 export function CronJobDetailDialog({ open, onOpenChange, job }: CronJobDetailDialogProps) {
+  const { cronRun, runningJobId, jobsForList } = useCrons();
+  // Use the current job from the list so the dialog shows updated data after edit/optimistic update
+  const displayJob = useMemo(
+    () => (job?.id ? jobsForList.find((j) => j.id === job.id) ?? job : job),
+    [job, jobsForList]
+  );
   const [runs, setRuns] = useState<CronRunRecord[]>([]);
-  const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const loadMoreRef = useRef<HTMLLIElement>(null);
-  const offsetRef = useRef(0);
-  const loadingMoreRef = useRef(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [runError, setRunError] = useState<string | null>(null);
+  const [isRunning, setIsRunning] = useState(false);
   const [expandedRunKey, setExpandedRunKey] = useState<string | null>(null);
   const [fullDetail, setFullDetail] = useState<Record<string, unknown> | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const hasAutoExpandedRef = useRef(false);
 
-  const loadPage = useCallback(async (jobId: string, offset: number, append: boolean) => {
-    if (offset === 0) setLoading(true);
-    else {
-      loadingMoreRef.current = true;
-      setLoadingMore(true);
-    }
+  const loadAllRuns = useCallback(async (jobId: string) => {
+    setLoading(true);
     try {
-      const { runs: page, hasMore: more } = await fetchCronRunsForJob(
-        jobId,
-        RUNS_PAGE_SIZE,
-        offset
-      );
-      setRuns((prev) => (append ? [...prev, ...page] : page));
-      setHasMore(more);
-      offsetRef.current = offset + page.length;
+      const allRuns = await fetchAllCronRunsForJob(jobId);
+      setRuns(allRuns);
     } finally {
       setLoading(false);
-      loadingMoreRef.current = false;
-      setLoadingMore(false);
     }
   }, []);
 
   useEffect(() => {
-    if (!open || !job?.id) {
+    if (!open || !displayJob?.id) {
       setRuns([]);
-      setHasMore(false);
-      offsetRef.current = 0;
       setExpandedRunKey(null);
       setFullDetail(null);
+      hasAutoExpandedRef.current = false;
       return;
     }
-    loadPage(job.id, 0, false);
-  }, [open, job?.id, loadPage]);
+    loadAllRuns(displayJob.id);
+  }, [open, displayJob?.id, loadAllRuns]);
 
-  // Auto-load more when user scrolls to the bottom
   useEffect(() => {
-    if (!open || !job?.id || !hasMore || loading || loadingMore) return;
-    const el = loadMoreRef.current;
-    if (!el) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (!entries[0]?.isIntersecting || loadingMoreRef.current) return;
-        loadPage(job.id, offsetRef.current, true);
-      },
-      { root: null, rootMargin: "120px", threshold: 0 }
-    );
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [open, job?.id, hasMore, loading, loadingMore, loadPage]);
+    if (!displayJob?.id || runs.length === 0 || hasAutoExpandedRef.current || detailLoading) return;
+    const latest = runs[0];
+    if (!latest) return;
+    hasAutoExpandedRef.current = true;
+    setDetailLoading(true);
+    fetchCronRunDetail(displayJob.id, latest.runAtMs)
+      .then((detail) => setFullDetail(detail ?? null))
+      .catch(() => setFullDetail(null))
+      .finally(() => setDetailLoading(false));
+  }, [displayJob?.id, runs]);
 
   const handleShowMore = useCallback(
     async (run: CronRunRecord) => {
-      if (!job?.id) return;
+      if (!displayJob?.id) return;
       const key = `${run.runAtMs}-${run.sessionId ?? run.runAtMs}`;
       if (expandedRunKey === key) {
         setExpandedRunKey(null);
@@ -107,7 +103,7 @@ export function CronJobDetailDialog({ open, onOpenChange, job }: CronJobDetailDi
       setFullDetail(null);
       setDetailLoading(true);
       try {
-        const detail = await fetchCronRunDetail(job.id, run.runAtMs);
+        const detail = await fetchCronRunDetail(displayJob.id, run.runAtMs);
         setFullDetail(detail ?? null);
       } catch {
         setFullDetail(null);
@@ -115,33 +111,33 @@ export function CronJobDetailDialog({ open, onOpenChange, job }: CronJobDetailDi
         setDetailLoading(false);
       }
     },
-    [job?.id, expandedRunKey]
+    [displayJob?.id, expandedRunKey]
   );
 
-  if (!job) return null;
+  if (!displayJob) return null;
 
-  const status = (job.state?.lastStatus ?? "idle") as string;
+  const status = (displayJob.state?.lastStatus ?? "idle") as string;
   const statusLabel = statusLabels[status] ?? status;
-  const lastRunAtMs = job.state?.lastRunAtMs;
+  const lastRunAtMs = displayJob.state?.lastRunAtMs;
   const lastRunStr = lastRunAtMs
     ? format(new Date(lastRunAtMs), "MMM d, yyyy · h:mm a")
     : "—";
-  const nextRunAtMs = job.state?.nextRunAtMs;
+  const nextRunAtMs = displayJob.state?.nextRunAtMs;
   const nextRunStr = nextRunAtMs
     ? format(new Date(nextRunAtMs), "MMM d, yyyy · h:mm a")
     : "—";
-  const scheduleStr = job.schedule?.expr ?? "—";
-  const agentStr = job.agentId ?? "main";
+  const scheduleStr = displayJob.schedule?.expr ?? "—";
+  const agentStr = displayJob.agentId ?? "main";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md gap-0 sm:rounded-xl max-h-[85vh] flex flex-col overflow-hidden p-0">
         <DialogHeader className="px-6 pt-6 pb-2 space-y-1.5 shrink-0">
           <DialogTitle className="text-base font-semibold pr-8 leading-snug">
-            {job.name}
+            {displayJob.name}
           </DialogTitle>
           <DialogDescription className="text-xs font-mono text-muted-foreground break-all">
-            {job.id}
+            {displayJob.id}
           </DialogDescription>
           <div className="flex flex-wrap items-center gap-3 pt-2 text-sm">
             <span className="flex items-center gap-1.5">
@@ -179,8 +175,55 @@ export function CronJobDetailDialog({ open, onOpenChange, job }: CronJobDetailDi
             <div className="flex items-center gap-2 text-muted-foreground">
               <ToggleLeft className="h-3.5 w-3.5 shrink-0" />
               <span>Enabled</span>
-              <span className="text-foreground ml-auto">{job.enabled !== false ? "Yes" : "No"}</span>
+              <span className="text-foreground ml-auto">{displayJob.enabled !== false ? "Yes" : "No"}</span>
             </div>
+          </div>
+          <div className="px-6 py-3 flex flex-wrap items-center gap-2 border-t border-border/40">
+            <Button
+              size="sm"
+              variant="default"
+              className="gap-1.5 h-8 text-xs"
+              disabled={isRunning}
+              onClick={async () => {
+                setRunError(null);
+                setIsRunning(true);
+                try {
+                  const result = await cronRun(displayJob.id);
+                  console.log("result", result);
+                  if (!result.success) setRunError(result.error ?? "Run failed");
+                } finally {
+                  setIsRunning(false);
+                }
+              }}
+            >
+              {isRunning ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Play className="w-3.5 h-3.5" />
+              )}
+              Run now
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-1.5 h-8 text-xs"
+              onClick={() => setEditOpen(true)}
+            >
+              <Pencil className="w-3.5 h-3.5" />
+              Edit
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="gap-1.5 h-8 text-xs text-destructive hover:text-destructive hover:bg-destructive/10"
+              onClick={() => setDeleteOpen(true)}
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              Delete
+            </Button>
+            {runError && (
+              <p className="text-xs text-destructive w-full mt-1">{runError}</p>
+            )}
           </div>
         </DialogHeader>
 
@@ -199,13 +242,14 @@ export function CronJobDetailDialog({ open, onOpenChange, job }: CronJobDetailDi
               </div>
             ) : (
               <ul className="space-y-2 pr-2">
-                {runs.map((run) => {
+                {runs.map((run: CronRunRecord) => {
                   const runKey = `${run.runAtMs}-${run.sessionId ?? run.runAtMs}`;
                   const isExpanded = expandedRunKey === runKey;
                   const detail = isExpanded ? fullDetail : null;
-                  const hasLongSummary = run.summary && run.summary.length > TRUNCATE_THRESHOLD;
-                  const hasLongError = run.error && run.status === "error" && run.error.length > TRUNCATE_THRESHOLD;
-                  const hasMoreToShow = hasLongSummary || hasLongError;
+                  const showMoreButton =
+                    isExpanded ||
+                    wouldExceedTwoLines(run.summary) ||
+                    wouldExceedTwoLines(run.error);
                   return (
                     <li
                       key={runKey}
@@ -227,11 +271,11 @@ export function CronJobDetailDialog({ open, onOpenChange, job }: CronJobDetailDi
                         )}
                       </div>
                       <div className="mt-1.5 text-xs text-foreground/90 space-y-1">
-                        {!isExpanded && run.summary && run.status !== "error" && (
-                          <p className="line-clamp-2">{run.summary}</p>
+                        {!isExpanded && run.summary && run.summary !== run.error && (
+                          <p className="line-clamp-2 whitespace-pre-wrap break-words">{run.summary}</p>
                         )}
                         {!isExpanded && run.error && run.status === "error" && (
-                          <p className="text-destructive line-clamp-2">{run.error}</p>
+                          <p className="text-destructive line-clamp-2 whitespace-pre-wrap break-words">{run.error}</p>
                         )}
                         {isExpanded && (detailLoading ? (
                           <p className="text-muted-foreground">Loading…</p>
@@ -246,21 +290,27 @@ export function CronJobDetailDialog({ open, onOpenChange, job }: CronJobDetailDi
                               </pre>
                             )}
                             {"log" in detail && detail.log != null && String(detail.log).trim() !== "" && (
-                              <pre className="whitespace-pre-wrap break-words text-foreground/80 font-mono">
-                                {String(detail.log)}
-                              </pre>
+                              <>
+                                <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground mt-2">Log</p>
+                                <pre className="whitespace-pre-wrap break-words text-foreground/80 font-mono mt-0.5">
+                                  {String(detail.log)}
+                                </pre>
+                              </>
                             )}
                             {"output" in detail && detail.output != null && String(detail.output).trim() !== "" && (
-                              <pre className="whitespace-pre-wrap break-words text-foreground/80 font-mono">
-                                {String(detail.output)}
-                              </pre>
+                              <>
+                                <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground mt-2">Output</p>
+                                <pre className="whitespace-pre-wrap break-words text-foreground/80 font-mono mt-0.5">
+                                  {String(detail.output)}
+                                </pre>
+                              </>
                             )}
                           </>
                         ) : (
                           <p className="text-muted-foreground">No additional details for this run.</p>
                         ))}
                       </div>
-                      {(isExpanded || hasMoreToShow) && (
+                      {showMoreButton && (
                         <div className="mt-2 flex justify-end">
                           <Button
                             variant="ghost"
@@ -279,7 +329,7 @@ export function CronJobDetailDialog({ open, onOpenChange, job }: CronJobDetailDi
                             ) : (
                               <>
                                 <ChevronDown className="w-3.5 h-3.5 mr-1" />
-                                Show more
+                                View logs
                               </>
                             )}
                           </Button>
@@ -288,18 +338,25 @@ export function CronJobDetailDialog({ open, onOpenChange, job }: CronJobDetailDi
                     </li>
                   );
                 })}
-                {hasMore && (
-                  <li ref={loadMoreRef} className="flex justify-center py-4 min-h-8">
-                    {loadingMore && (
-                      <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
-                    )}
-                  </li>
-                )}
               </ul>
             )}
           </ScrollArea>
         </div>
       </DialogContent>
+      <EditCronDialog
+        open={editOpen}
+        onOpenChange={setEditOpen}
+        job={displayJob}
+        onSuccess={() => loadAllRuns(displayJob.id)}
+      />
+      <DeleteCronDialog
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        job={displayJob}
+        onSuccess={() => {
+          onOpenChange(false);
+        }}
+      />
     </Dialog>
   );
 }

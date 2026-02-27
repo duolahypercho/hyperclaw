@@ -2,7 +2,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import fs from "fs";
 import path from "path";
 import os from "os";
-import { execSync, exec } from "child_process";
+import { execSync, exec, spawn } from "child_process";
 import { promisify } from "util";
 
 const execAsync = promisify(exec);
@@ -307,7 +307,7 @@ interface ParsedCronJob {
   lastStatus?: string;
 }
 
-/** Shape of a single job in ~/.openclaw/cron/jobs.json */
+/** Shape of a single job in ~/.openclaw/cron/jobs.json (minimal; full file may include payload, delivery, etc.). */
 interface OpenClawCronJobFile {
   id: string;
   agentId?: string;
@@ -402,6 +402,24 @@ function parseCronLine(line: string): ParsedCronJob | null {
 /** Read cron list from ~/.openclaw/cron/jobs.json only (no CLI). */
 function getCrons(): ParsedCronJob[] {
   return getCronsFromJson();
+}
+
+/** Return a single cron job by id with full info (payload, schedule, delivery, etc.) from jobs.json. */
+function getCronById(jobId: string): Record<string, unknown> | null {
+  if (typeof jobId !== "string" || !jobId.trim()) return null;
+  const id = jobId.trim();
+  if (!UUID_REGEX.test(id)) return null;
+  try {
+    if (!fs.existsSync(CRON_JOBS_PATH)) return null;
+    const raw = fs.readFileSync(CRON_JOBS_PATH, "utf-8");
+    const data = JSON.parse(raw) as { version?: number; jobs?: Record<string, unknown>[] };
+    const list = data?.jobs;
+    if (!Array.isArray(list)) return null;
+    const job = list.find((j) => j && typeof j === "object" && (j as { id?: string }).id === id);
+    return job && typeof job === "object" ? (job as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Shape of one line in ~/.openclaw/cron/runs/{jobId}.jsonl */
@@ -547,6 +565,22 @@ function getConfig() {
     return config;
   } catch {
     return {};
+  }
+}
+
+/** Models from ~/.openclaw/openclaw.json agents.defaults.models: only model ids (keys), no alias or other attributes. */
+function getDefaultModels(): { id: string; name: string }[] {
+  try {
+    const configPath = path.join(OPENCLAW_DIR, "openclaw.json");
+    if (!fs.existsSync(configPath)) return [];
+    const config = JSON.parse(fs.readFileSync(configPath, "utf-8")) as {
+      agents?: { defaults?: { models?: Record<string, unknown> } };
+    };
+    const models = config?.agents?.defaults?.models;
+    if (!models || typeof models !== "object") return [];
+    return Object.keys(models).map((id) => ({ id, name: id }));
+  } catch {
+    return [];
   }
 }
 
@@ -778,26 +812,27 @@ function hasSessionTokenFields(r: unknown): r is SessionTokenRecord {
   );
 }
 
-/** Extract session records. Supports: array of records, { sessions: [] }, { data: [] }, single record, and OpenClaw format: root object keyed by session id (e.g. "agent:aegis:cron:...") with values like { inputTokens, outputTokens, totalTokens, updatedAt }. */
+/** Flatten an array to token records: each element is either a record (if it has token fields) or recursed into (e.g. session with nested turns[].usage). */
+function flattenToTokenRecords(arr: unknown[]): SessionTokenRecord[] {
+  const out: SessionTokenRecord[] = [];
+  for (const x of arr) {
+    if (!x || typeof x !== "object") continue;
+    if (hasSessionTokenFields(x)) out.push(x as SessionTokenRecord);
+    else out.push(...extractRecords(x));
+  }
+  return out;
+}
+
+/** Extract session records. Supports: array of records, { sessions: [] }, { data: [] }, single record, and OpenClaw format: root object keyed by session id (e.g. "agent:aegis:cron:...") with values like { inputTokens, outputTokens, totalTokens, updatedAt }. Nested session/turn structures (e.g. sessions[].turns[].usage) are flattened so every token-bearing record is counted. */
 function extractRecords(data: unknown): SessionTokenRecord[] {
   if (!data || typeof data !== "object") return [];
   const obj = data as Record<string, unknown>;
-  if (Array.isArray(data)) {
-    return data.filter((x) => x && typeof x === "object") as SessionTokenRecord[];
-  }
-  if (Array.isArray(obj.sessions)) {
-    return obj.sessions.filter((x: unknown) => x && typeof x === "object") as SessionTokenRecord[];
-  }
-  if (Array.isArray(obj.data)) {
-    return obj.data.filter((x: unknown) => x && typeof x === "object") as SessionTokenRecord[];
-  }
-  if (hasSessionTokenFields(obj)) {
-    return [obj as SessionTokenRecord];
-  }
+  if (Array.isArray(data)) return flattenToTokenRecords(data);
+  if (Array.isArray(obj.sessions)) return flattenToTokenRecords(obj.sessions as unknown[]);
+  if (Array.isArray(obj.data)) return flattenToTokenRecords(obj.data as unknown[]);
+  if (hasSessionTokenFields(obj)) return [obj as SessionTokenRecord];
   const values = Object.values(obj).filter((x) => x != null && typeof x === "object") as SessionTokenRecord[];
-  if (values.length === 1 && Array.isArray(values[0])) {
-    return (values[0] as unknown as SessionTokenRecord[]).filter((x) => x && typeof x === "object");
-  }
+  if (values.length === 1 && Array.isArray(values[0])) return flattenToTokenRecords(values[0] as unknown[]);
   // OpenClaw sessions.json: root is { "sessionKey1": { inputTokens, outputTokens, totalTokens, updatedAt }, ... } — take every value that has token fields
   const out: SessionTokenRecord[] = [];
   for (const v of values) {
@@ -1180,6 +1215,34 @@ const PROCESS_COMMANDS_MESSAGE =
 
 const OPENCLAW_AGENT_TIMEOUT_MS = 180000; // 3 min for multiple days
 
+/** Run openclaw with an args array (safe for user input). */
+function runOpenClawArgs(args: string[], timeoutMs = 20000): Promise<{ stdout: string; stderr: string }> {
+  const cwd = fs.existsSync(OPENCLAW_DIR) ? OPENCLAW_DIR : os.homedir();
+  const env = { ...process.env, FORCE_COLOR: "0" };
+  return new Promise((resolve, reject) => {
+    const child = spawn("openclaw", args, { env, cwd });
+    const chunks: Buffer[] = [];
+    const errChunks: Buffer[] = [];
+    child.stdout?.on("data", (chunk: Buffer) => chunks.push(chunk));
+    child.stderr?.on("data", (chunk: Buffer) => errChunks.push(chunk));
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      reject(new Error("Command timed out"));
+    }, timeoutMs);
+    child.on("close", (code, signal) => {
+      clearTimeout(timer);
+      const stdout = Buffer.concat(chunks as unknown as Uint8Array[]).toString().trim();
+      const stderr = Buffer.concat(errChunks as unknown as Uint8Array[]).toString().trim();
+      if (code !== 0) reject(new Error(stderr || `Exit ${code}`));
+      else resolve({ stdout, stderr });
+    });
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+  });
+}
+
 /**
  * Run OpenClaw agent once so it reads commands.jsonl and processes generate_daily_summary.
  * Writes to ~/.hyperclaw/daily-summaries/ per day.
@@ -1207,7 +1270,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
   ensureDir();
 
-  const { action, task, id, patch, command, date, lines, jobIds, jobId: singleJobId, runAtMs, limit: runsLimit, offset: runsOffset, relativePath, content: docContent, todoData, query } = req.body;
+  const { action, task, id, patch, command, date, lines, jobIds, jobId: singleJobId, runAtMs, limit: runsLimit, offset: runsOffset, relativePath, content: docContent, todoData, query, cronAddParams, cronRunJobId, cronRunDue, cronEditJobId, cronEditParams, cronDeleteJobId, agentName, agentId } = req.body;
 
   switch (action) {
     case "trigger-process-commands": {
@@ -1308,6 +1371,101 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (detail == null) return res.status(404).json({ error: "Run not found" });
       return res.json(detail);
     }
+    case "get-cron-by-id": {
+      const jid = (singleJobId as string | undefined) ?? (req.body?.jobId as string | undefined);
+      const full = typeof jid === "string" ? getCronById(jid) : null;
+      if (full == null) return res.status(404).json({ error: "Job not found" });
+      return res.json(full);
+    }
+    case "cron-add": {
+      const p = cronAddParams as Record<string, unknown> | undefined;
+      if (!p || typeof p.name !== "string" || !p.name.trim()) {
+        return res.status(400).json({ success: false, error: "name is required" });
+      }
+      const session = (p.session as string) || "main";
+      const hasAt = typeof p.at === "string" && p.at.trim().length > 0;
+      const hasCron = typeof p.cron === "string" && p.cron.trim().length > 0;
+      if (!hasAt && !hasCron) {
+        return res.status(400).json({ success: false, error: "Either at (ISO or relative e.g. 20m) or cron expression is required" });
+      }
+      const args = ["cron", "add", "--name", p.name.trim(), "--session", session];
+      if (hasAt) args.push("--at", (p.at as string).trim());
+      if (hasCron) args.push("--cron", (p.cron as string).trim());
+      if (typeof p.tz === "string" && p.tz.trim()) args.push("--tz", p.tz.trim());
+      if (typeof p.message === "string" && p.message.trim()) args.push("--message", p.message.trim());
+      if (typeof p.systemEvent === "string" && p.systemEvent.trim()) args.push("--system-event", p.systemEvent.trim());
+      if (p.wake === "now" || p.wake === true) args.push("--wake", "now");
+      if (p.deleteAfterRun === true) args.push("--delete-after-run");
+      if (p.announce === true) {
+        args.push("--announce");
+        if (typeof p.channel === "string" && p.channel.trim()) args.push("--channel", p.channel.trim());
+        if (typeof p.to === "string" && p.to.trim()) args.push("--to", p.to.trim());
+      }
+      if (typeof p.stagger === "string" && p.stagger.trim()) args.push("--stagger", p.stagger.trim());
+      if (typeof p.model === "string" && p.model.trim()) args.push("--model", p.model.trim());
+      if (typeof p.thinking === "string" && p.thinking.trim()) args.push("--thinking", p.thinking.trim());
+      if (typeof p.agent === "string" && p.agent.trim()) args.push("--agent", p.agent.trim());
+      try {
+        await runOpenClawArgs(args, 30000);
+        return res.json({ success: true });
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return res.status(500).json({ success: false, error: msg });
+      }
+    }
+    case "cron-run": {
+      const jobId = typeof cronRunJobId === "string" ? cronRunJobId.trim() : "";
+      if (!jobId || !/^[a-f0-9-]{36}$/i.test(jobId)) {
+        return res.status(400).json({ success: false, error: "Valid job id is required" });
+      }
+      const args = ["cron", "run", jobId];
+      if (cronRunDue === true) args.push("--due");
+      try {
+        await runOpenClawArgs(args, 60000);
+        return res.json({ success: true });
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return res.status(500).json({ success: false, error: msg });
+      }
+    }
+    case "cron-edit": {
+      const jobId = typeof cronEditJobId === "string" ? cronEditJobId.trim() : "";
+      if (!jobId || !/^[a-f0-9-]{36}$/i.test(jobId)) {
+        return res.status(400).json({ success: false, error: "Valid job id is required" });
+      }
+      const p = cronEditParams as Record<string, unknown> | undefined;
+      const args = ["cron", "edit", jobId];
+      if (typeof p?.name === "string" && p.name.trim()) args.push("--name", p.name.trim());
+      if (typeof p?.message === "string" && p.message.trim()) args.push("--message", p.message.trim());
+      if (typeof p?.model === "string" && p.model.trim()) args.push("--model", p.model.trim());
+      if (typeof p?.thinking === "string" && p.thinking.trim()) args.push("--thinking", p.thinking.trim());
+      if (p?.clearAgent === true) args.push("--clear-agent");
+      else if (typeof p?.agent === "string" && p.agent.trim()) args.push("--agent", p.agent.trim());
+      if (p?.exact === true) args.push("--exact");
+      if (args.length === 3) {
+        return res.status(400).json({ success: false, error: "At least one field to update is required" });
+      }
+      try {
+        await runOpenClawArgs(args, 15000);
+        return res.json({ success: true });
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return res.status(500).json({ success: false, error: msg });
+      }
+    }
+    case "cron-delete": {
+      const jobIdToDelete = typeof cronDeleteJobId === "string" ? cronDeleteJobId.trim() : "";
+      if (!jobIdToDelete || !/^[a-f0-9-]{36}$/i.test(jobIdToDelete)) {
+        return res.status(400).json({ success: false, error: "Valid job id is required" });
+      }
+      try {
+        await runOpenClawArgs(["cron", "rm", jobIdToDelete], 15000);
+        return res.json({ success: true });
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return res.status(500).json({ success: false, error: msg });
+      }
+    }
     case "get-employee-status": {
       const ACTIVE_CRON_WINDOW_MS = 10 * 60 * 1000;
       const team = getTeam() as { id: string; name: string; status: string; role?: string }[];
@@ -1363,6 +1521,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const agents = getTeam();
       return res.json({ success: true, data: agents });
     }
+    case "list-models": {
+      const models = getDefaultModels();
+      return res.json({ success: true, data: models });
+    }
     case "list-openclaw-docs": {
       const files = listOpenClawMarkdownFiles();
       const workspaceLabels = getOpenClawWorkspaceLabels();
@@ -1403,6 +1565,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     case "create-openclaw-folder": {
       const createFolderResult = createOpenClawFolder(relativePath ?? "");
       return res.json(createFolderResult);
+    }
+    case "add-agent": {
+      const name = typeof agentName === "string" ? agentName.trim() : "";
+      if (!name) return res.status(400).json({ success: false, error: "Agent name is required" });
+      if (!/^[a-zA-Z0-9_.-]+$/.test(name)) return res.status(400).json({ success: false, error: "Agent name may only contain letters, numbers, underscores, hyphens, and dots" });
+      if (name.length > 120) return res.status(400).json({ success: false, error: "Agent name too long" });
+      const normalizedId = name.toLowerCase().replace(/[^a-z0-9_.-]/g, "");
+      if (!normalizedId) return res.status(400).json({ success: false, error: "Agent name must contain at least one letter or number" });
+      const workspacePath = path.join(OPENCLAW_DIR, "workspace-" + normalizedId);
+      try {
+        await runOpenClawArgs(["agents", "add", name, "--workspace", workspacePath, "--non-interactive"], 30000);
+        return res.json({ success: true });
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return res.status(500).json({ success: false, error: msg });
+      }
+    }
+    case "delete-agent": {
+      const idOrName = typeof agentId === "string" ? agentId.trim() : "";
+      if (!idOrName) return res.status(400).json({ success: false, error: "Agent id is required" });
+      const normalizedId = idOrName.toLowerCase().replace(/[^a-z0-9_.-]/g, "");
+      if (!normalizedId) return res.status(400).json({ success: false, error: "Invalid agent id" });
+      if (normalizedId === "main") return res.status(400).json({ success: false, error: "Cannot delete the main agent" });
+      try {
+        await runOpenClawArgs(["agents", "delete", normalizedId, "--force"], 15000);
+        return res.json({ success: true });
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return res.status(500).json({ success: false, error: msg });
+      }
     }
     default:
       return res.status(400).json({ error: `Unknown action: ${action}` });

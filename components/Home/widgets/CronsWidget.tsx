@@ -6,6 +6,7 @@ import {
   Maximize2,
   Minimize2,
   Clock,
+  Plus,
   RefreshCw,
   ExternalLink,
   Loader2,
@@ -34,7 +35,7 @@ export const CronsCustomHeader: React.FC<CustomProps> = ({
   onMaximize,
   isEditMode,
 }) => {
-  const { jobsForList, bridgeLoading, refresh } = useCrons();
+  const { jobsForList, bridgeLoading, refresh, openAddCron } = useCrons();
   const { toolAbstracts } = useOS();
 
   const cronsTool = useMemo(
@@ -69,6 +70,15 @@ export const CronsCustomHeader: React.FC<CustomProps> = ({
       </div>
 
       <div className="flex items-center gap-1.5">
+        <Button
+          variant="ghost"
+          size="iconSm"
+          className="h-6 w-6 text-primary"
+          onClick={openAddCron}
+          title="Add cron job"
+        >
+          <Plus className="w-3 h-3" />
+        </Button>
         <Button
           variant="ghost"
           size="iconSm"
@@ -113,8 +123,9 @@ const CronsWidgetContent = memo((props: CustomProps) => {
     jobsForList,
     parsedCronJobs,
     bridgeLoading,
+    bridgeError,
     showEmptyState,
-    fetchBridgeCrons,
+    refresh,
     bridgeOnly,
   } = useCrons();
 
@@ -162,14 +173,24 @@ const CronsWidgetContent = memo((props: CustomProps) => {
               <p className="text-sm text-muted-foreground mb-3">
                 OpenClaw not found or no crons.
               </p>
+              {bridgeError && (
+                <p className="text-xs text-destructive mb-3 max-w-[240px]">
+                  {bridgeError}
+                </p>
+              )}
               <Button
                 variant="outline"
                 size="sm"
                 className="h-7 text-xs gap-1.5"
-                onClick={fetchBridgeCrons}
+                onClick={() => refresh()}
+                disabled={bridgeLoading}
               >
-                <RefreshCw className="w-3 h-3" />
-                Retry
+                {bridgeLoading ? (
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                ) : (
+                  <RefreshCw className="w-3 h-3" />
+                )}
+                {bridgeLoading ? "Retrying…" : "Retry"}
               </Button>
               <Button
                 variant="ghost"

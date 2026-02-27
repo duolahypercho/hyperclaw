@@ -492,8 +492,6 @@ export function TodoListProvider({ children, inMiniMode }: Props) {
     try {
       // Get the task before updating
       const taskBeforeUpdate = tasks.find((t) => t._id === id);
-      const wasCompleted = taskBeforeUpdate?.status === "completed";
-      const isNowCompleted = status === "completed";
       const wasInProgress = taskBeforeUpdate?.status === "in_progress";
       const isNowInProgress = status === "in_progress";
 
@@ -518,13 +516,16 @@ export function TodoListProvider({ children, inMiniMode }: Props) {
       if (isNowInProgress && taskBeforeUpdate?.assignedAgent && !wasInProgress) {
         const taskForSpawn = taskBeforeUpdate;
         // Spawn agent in background (don't await)
-        spawnAgentForTask({
-          taskId: taskForSpawn._id,
-          agentId: taskForSpawn.assignedAgent,
-          taskTitle: taskForSpawn.title || "",
-          taskDescription: taskForSpawn.description,
-          document: taskForSpawn.linkedDocumentUrl,
-        }).catch(console.error);
+        if (taskForSpawn.assignedAgent) {
+          const result = await spawnAgentForTask({
+            taskId: taskForSpawn._id,
+            agentId: taskForSpawn.assignedAgent,
+            taskTitle: taskForSpawn.title || "",
+            taskDescription: taskForSpawn.description,
+            document: taskForSpawn.linkedDocumentUrl,
+          }).catch(console.error);
+          console.log("spawned agent for task", result);
+        }
       }
 
       if (!ignore) {

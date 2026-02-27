@@ -1,9 +1,9 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import { format, isToday } from "date-fns";
-import { CheckCircle2, XCircle, Clock, ChevronRight, HelpCircle } from "lucide-react";
+import { CheckCircle2, XCircle, Clock, ChevronRight, HelpCircle, Loader2 } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Dialog,
@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { getSlotsForDay, getJobPalette, findRunForSlot, formatDurationMs } from "./utils";
+import { getSlotsForDay, getJobPalette, findRunForSlot, formatDurationMs, fetchCronRunDetail } from "./utils";
 import type { OpenClawCronJobJson } from "$/types/electron";
 import type { CronRunRecord } from "$/types/electron";
 import type { CronJobParsed } from "./utils";
@@ -41,6 +41,25 @@ function RunDetailDialog({
   onOpenChange: (open: boolean) => void;
   entry: { job: OpenClawCronJobJson; slot: CronRunSlot; run: CronRunRecord | null } | null;
 }) {
+  const [fullDetail, setFullDetail] = useState<Record<string, unknown> | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+
+  useEffect(() => {
+    if (!open) {
+      setFullDetail(null);
+      setDetailLoading(false);
+      return;
+    }
+    setFullDetail(null);
+    if (entry?.job?.id && entry?.run) {
+      setDetailLoading(true);
+      fetchCronRunDetail(entry.job.id, entry.run.runAtMs)
+        .then((detail) => setFullDetail(detail ?? null))
+        .catch(() => setFullDetail(null))
+        .finally(() => setDetailLoading(false));
+    }
+  }, [open, entry?.job?.id, entry?.run?.runAtMs]);
+
   if (!entry) return null;
   const { job, slot, run } = entry;
   const timeRange = `${format(slot.start, "h:mm a")} – ${format(slot.end, "h:mm a")}`;
@@ -104,7 +123,7 @@ function RunDetailDialog({
                   {run.durationMs != null ? formatDurationMs(run.durationMs) : "—"}
                 </span>
               </div>
-              {run.summary && (
+              {run.summary && run.summary !== run.error && (
                 <div>
                   <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground mb-1">
                     Summary

@@ -4,7 +4,7 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "../../../utils";
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium ring-offset-background/10 transition-colors focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-0 disabled:pointer-events-none active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed",
+  "inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-normal ring-offset-background/10 transition-colors focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-0 disabled:pointer-events-none active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed",
   {
     variants: {
       variant: {
@@ -33,7 +33,7 @@ const buttonVariants = cva(
         success:
           "bg-success text-success-foreground hover:bg-primary/70 active:bg-primary/30 shadow-[0_4px_6px_-1px_rgba(18,76,0,0.1)] hover:shadow-[0_6px_8px_-1px_rgba(18,76,0,0.15)] active:shadow-[0_2px_4px_-1px_rgba(18,76,0,0.1)] transition-all duration-200",
         input:
-          "flex w-full rounded-md border border-solid border-primary/10 bg-secondary/30 px-3 py-2 text-sm font-medium ring-offset-ring-input-ring-focus placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-[1px] focus-visible:ring-primary/30 focus-visible:ring-offset-0 disabled:cursor-not-allowed disabled:opacity-50 text-primary-foreground",
+          "flex w-full rounded-md border border-solid border-primary/10 bg-secondary/30 px-3 py-2 text-sm font-normal ring-offset-ring-input-ring-focus placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-[1px] focus-visible:ring-primary/30 focus-visible:ring-offset-0 disabled:cursor-not-allowed disabled:opacity-50 text-primary-foreground",
         selectItem:
           "relative flex w-full rounded-md select-none items-center py-2 pl-8 pr-2 text-sm outline-none text-foreground hover:bg-secondary/70 active:bg-secondary/30 active:scale-[0.99] transition-colors cursor-pointer data-[state=checked]:bg-primary/30",
       },

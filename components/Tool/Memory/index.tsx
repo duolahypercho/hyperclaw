@@ -331,19 +331,7 @@ function JournalContentView({
       </div>
     );
   }
-
-  const dateLabel = updatedAt
-    ? new Date(updatedAt).toLocaleDateString("en-US", {
-        weekday: "long",
-        month: "long",
-        day: "numeric",
-        year: "numeric",
-      })
-    : "";
-  const sizeStr = sizeBytes != null ? formatSize(sizeBytes) : "";
-  const filteredContent = useMemo(() => stripSessionFromContent(content), [content]);
-  const words = wordCount(filteredContent);
-  const journalDate = updatedAt ? updatedAt.slice(0, 10) : name ?? path;
+ const filteredContent = useMemo(() => stripSessionFromContent(content), [content]);
 
   const blocks = useMemo(() => parseJournalContent(filteredContent), [filteredContent]);
   const hasTimeStamps = blocks.some((b) => b.time);
@@ -358,7 +346,7 @@ function JournalContentView({
       <ScrollArea className="h-full">
         <div
           className={cn(
-            "rounded-lg border border-border/50 bg-muted/20 px-4 py-4",
+            "rounded-lg border border-border/50 bg-muted/20 px-4 py-4 customScrollbar2",
             hasTimeStamps && "space-y-5"
           )}
         >

@@ -7,10 +7,11 @@ import React, {
   useCallback,
   useMemo,
   useEffect,
+  useRef,
   ReactNode,
 } from "react";
 import { format, startOfWeek, endOfWeek } from "date-fns";
-import { Calendar, CalendarDays, CalendarRange, List, RefreshCw } from "lucide-react";
+import { Calendar, CalendarDays, CalendarRange, List, Plus, RefreshCw } from "lucide-react";
 import { useOpenClawContext } from "$/Providers";
 import { useOS } from "@OS/Provider/OSProv";
 import { AppSchema } from "@OS/Layout/types";
@@ -20,9 +21,17 @@ import {
   parseCronJobs,
   parseRelativeTime,
   fetchCronsFromBridge,
+  fetchCronRunsFromBridge,
   getStatusColor,
   getAgentColor,
+  cronAdd as cronAddUtil,
+  cronRun as cronRunUtil,
+  cronEdit as cronEditUtil,
+  cronDelete as cronDeleteUtil,
+  type CronAddParams,
+  type CronEditParams,
 } from "../utils";
+import { AddCronDialog } from "../AddCronDialog";
 
 export interface CronsContextValue {
   jobsForList: OpenClawCronJobJson[];
@@ -32,11 +41,18 @@ export interface CronsContextValue {
   bridgeOnly: boolean;
   installed: boolean | null;
   bridgeLoading: boolean;
+  bridgeError: string | null;
   showEmptyState: boolean;
   refresh: () => void;
-  fetchBridgeCrons: () => Promise<void>;
+  fetchBridgeCrons: () => Promise<OpenClawCronJobJson[]>;
   handleToggleEnabled: (job: OpenClawCronJobJson) => Promise<void>;
+  cronAdd: (params: CronAddParams) => Promise<{ success: boolean; error?: string }>;
+  cronRun: (jobId: string, options?: { due?: boolean }) => Promise<{ success: boolean; error?: string }>;
+  cronEdit: (jobId: string, params: CronEditParams) => Promise<{ success: boolean; error?: string }>;
+  cronDelete: (jobId: string) => Promise<{ success: boolean; error?: string }>;
+  openAddCron: () => void;
   togglingId: string | null;
+  runningJobId: string | null;
   selectedDate: Date | undefined;
   setSelectedDate: (d: Date | undefined) => void;
   getStatusColor: (status: string) => string;
@@ -70,15 +86,26 @@ export function CronsProvider({ children }: { children: ReactNode }) {
 
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(new Date());
   const [togglingId, setTogglingId] = useState<string | null>(null);
+  const [runningJobId, setRunningJobId] = useState<string | null>(null);
   const [bridgeCrons, setBridgeCrons] = useState<OpenClawCronJobJson[]>([]);
   const [bridgeLoading, setBridgeLoading] = useState(false);
+  const [bridgeError, setBridgeError] = useState<string | null>(null);
   const [runsByJobId, setRunsByJobId] = useState<Record<string, CronRunRecord[]>>({});
+  const deletedJobRollbackRef = useRef<OpenClawCronJobJson | null>(null);
 
   const fetchBridgeCrons = useCallback(async () => {
     setBridgeLoading(true);
+    setBridgeError(null);
     try {
       const jobs = await fetchCronsFromBridge();
-      setBridgeCrons(jobs);
+      const list = Array.isArray(jobs) ? jobs : [];
+      setBridgeCrons(list);
+      return list;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to load cron jobs";
+      setBridgeError(message);
+      setBridgeCrons([]);
+      return [];
     } finally {
       setBridgeLoading(false);
     }
@@ -118,9 +145,38 @@ export function CronsProvider({ children }: { children: ReactNode }) {
 
   // No bulk run fetch on mount — list uses job.state (lastRunAtMs, lastStatus). Run history loads on demand when user opens a job detail.
 
-  const refresh = useCallback(() => {
-    if (installed) refreshAll();
-    else fetchBridgeCrons();
+  // Load run history for calendar (week/month) so completed runs show in day view
+  const loadRunsForCalendar = useCallback(async () => {
+    const ids = jobsForList.map((j) => j.id).filter(Boolean);
+    if (ids.length === 0) return;
+    try {
+      const runs = await fetchCronRunsFromBridge(ids);
+      setRunsByJobId(runs);
+    } catch {
+      setRunsByJobId({});
+    }
+  }, [jobsForList]);
+
+  useEffect(() => {
+    if (showEmptyState || bridgeLoading) return;
+    loadRunsForCalendar();
+  }, [showEmptyState, bridgeLoading, loadRunsForCalendar]);
+
+  const refresh = useCallback(async () => {
+    // Always refresh the bridge list so the UI (which prefers bridgeCrons when it has length) updates
+    const jobs = await fetchBridgeCrons();
+    const jobIds = Array.isArray(jobs) ? jobs.map((j) => j.id).filter(Boolean) : [];
+    if (installed) {
+      await refreshAll();
+    }
+    if (jobIds.length > 0) {
+      try {
+        const runs = await fetchCronRunsFromBridge(jobIds);
+        setRunsByJobId(runs);
+      } catch {
+        // keep existing
+      }
+    }
   }, [installed, refreshAll, fetchBridgeCrons]);
 
   const handleToggleEnabled = useCallback(
@@ -134,6 +190,111 @@ export function CronsProvider({ children }: { children: ReactNode }) {
       }
     },
     [cronDisable, cronEnable, fetchCronListJson]
+  );
+
+  const cronAdd = useCallback(
+    async (params: CronAddParams) => {
+      const optimisticId = `pending-add-${Date.now()}`;
+      const scheduleExpr = params.cron?.trim() ?? params.at?.trim() ?? "";
+      const optimisticJob: OpenClawCronJobJson = {
+        id: optimisticId,
+        name: params.name?.trim() ?? "New job",
+        enabled: true,
+        agentId: params.agent ?? "main",
+        schedule: {
+          kind: params.cron ? "cron" : "every",
+          expr: scheduleExpr,
+        },
+        state: { lastStatus: "idle" },
+      };
+      setBridgeCrons((prev) => [...prev, optimisticJob]);
+      try {
+        const result = await cronAddUtil(params);
+        if (result.success) {
+          await refresh();
+          return result;
+        }
+        setBridgeCrons((prev) => prev.filter((j) => j.id !== optimisticId));
+        return result;
+      } catch (err) {
+        setBridgeCrons((prev) => prev.filter((j) => j.id !== optimisticId));
+        throw err;
+      }
+    },
+    [refresh]
+  );
+
+  const cronRun = useCallback(
+    async (jobId: string, options?: { due?: boolean }) => {
+      setRunningJobId(jobId);
+      try {
+        const result = await cronRunUtil(jobId, options);
+        if (result.success) await refresh();
+        return result;
+      } finally {
+        setRunningJobId(null);
+      }
+    },
+    [refresh]
+  );
+
+  const cronEdit = useCallback(
+    async (jobId: string, params: CronEditParams) => {
+      setBridgeCrons((prev) =>
+        prev.map((j) => {
+          if (j.id !== jobId) return j;
+          return {
+            ...j,
+            ...(typeof params.name === "string" && params.name.trim() && { name: params.name.trim() }),
+            ...(params.clearAgent && { agentId: undefined }),
+            ...(typeof params.agent === "string" && params.agent.trim() && { agentId: params.agent.trim() }),
+          };
+        })
+      );
+      try {
+        const result = await cronEditUtil(jobId, params);
+        if (result.success) {
+          await refresh();
+          return result;
+        }
+        await refresh();
+        return result;
+      } catch (err) {
+        await refresh();
+        throw err;
+      }
+    },
+    [refresh]
+  );
+
+  const cronDelete = useCallback(
+    async (jobId: string) => {
+      setBridgeCrons((prev) => {
+        const removed = prev.find((j) => j.id === jobId) ?? null;
+        deletedJobRollbackRef.current = removed;
+        return removed ? prev.filter((j) => j.id !== jobId) : prev;
+      });
+      try {
+        const result = await cronDeleteUtil(jobId);
+        if (result.success) {
+          deletedJobRollbackRef.current = null;
+          await refresh();
+          return result;
+        }
+        if (deletedJobRollbackRef.current) {
+          setBridgeCrons((prev) => [...prev, deletedJobRollbackRef.current!]);
+          deletedJobRollbackRef.current = null;
+        }
+        return result;
+      } catch (err) {
+        if (deletedJobRollbackRef.current) {
+          setBridgeCrons((prev) => [...prev, deletedJobRollbackRef.current!]);
+          deletedJobRollbackRef.current = null;
+        }
+        throw err;
+      }
+    },
+    [refresh]
   );
 
   const handleViewChange = useCallback(
@@ -156,28 +317,13 @@ export function CronsProvider({ children }: { children: ReactNode }) {
     return "All Jobs";
   }, [currentView, selectedDate]);
 
+  const [addCronOpen, setAddCronOpen] = useState(false);
+  const openAddCron = useCallback(() => setAddCronOpen(true), []);
   const appSchema: AppSchema = useMemo(
     () => ({
       header: {
         title: "Cron Jobs",
-        leftUI: {
-          type: "buttons",
-          buttons: [
-            {
-              id: "refresh",
-              label: "Refresh",
-              icon: <RefreshCw className="w-4 h-4" />,
-              onClick: refresh,
-              variant: "ghost",
-            },
-          ],
-        },
-        centerUI: {
-          type: "breadcrumbs",
-          breadcrumbs: [{ label: headerTitle }],
-          className: "text-base font-semibold text-foreground",
-        },
-        rightUI: {
+        leftUI:{
           type: "tabs",
           tabs: [
             { id: "weekly", label: "Week", value: "weekly" },
@@ -187,6 +333,30 @@ export function CronsProvider({ children }: { children: ReactNode }) {
           activeValue: currentView,
           onValueChange: handleViewChange,
         },
+        rightUI: {
+          type: "buttons",
+          buttons: [
+            {
+              id: "refresh",
+              label: "Refresh",
+              icon: <RefreshCw className="w-4 h-4" />,
+              onClick: refresh,
+              variant: "ghost",
+            },
+            {
+              id: "add-cron",
+              label: "Add",
+              icon: <Plus className="w-4 h-4" />,
+              onClick: () => setAddCronOpen(true),
+              variant: "default",
+            }
+          ],
+        },
+        centerUI: {
+          type: "breadcrumbs",
+          breadcrumbs: [{ label: headerTitle }],
+          className: "text-base font-semibold text-foreground",
+        }
       },
       sidebar: undefined,
     }),
@@ -202,11 +372,18 @@ export function CronsProvider({ children }: { children: ReactNode }) {
       bridgeOnly,
       installed,
       bridgeLoading,
+      bridgeError,
       showEmptyState,
       refresh,
       fetchBridgeCrons,
       handleToggleEnabled,
+      cronAdd,
+      cronRun,
+      cronEdit,
+      cronDelete,
+      openAddCron,
       togglingId,
+      runningJobId,
       selectedDate,
       setSelectedDate,
       getStatusColor,
@@ -222,16 +399,36 @@ export function CronsProvider({ children }: { children: ReactNode }) {
       bridgeOnly,
       installed,
       bridgeLoading,
+      bridgeError,
       showEmptyState,
       refresh,
       fetchBridgeCrons,
       handleToggleEnabled,
+      cronAdd,
+      cronRun,
+      cronEdit,
+      cronDelete,
+      openAddCron,
       togglingId,
+      runningJobId,
       selectedDate,
       errors,
       appSchema,
     ]
   );
 
-  return <CronsContext.Provider value={value}>{children}</CronsContext.Provider>;
+  return (
+    <CronsContext.Provider value={value}>
+      {children}
+      {addCronOpen && (
+        <AddCronDialog
+          open={addCronOpen}
+          onOpenChange={setAddCronOpen}
+          onSuccess={() => {
+            setAddCronOpen(false);
+          }}
+        />
+      )}
+    </CronsContext.Provider>
+  );
 }

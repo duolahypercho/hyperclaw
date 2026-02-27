@@ -64,7 +64,7 @@ function AgentFileEditor() {
             value={content ?? ""}
             onChange={(e) => setContent(e.target.value)}
             placeholder="Edit file content (markdown)..."
-            className="w-full min-h-full p-4 bg-background text-sm font-mono text-foreground placeholder:text-muted-foreground focus:outline-none resize-none border-0 block"
+            className="w-full customScrollbar2 min-h-full p-4 bg-background text-sm font-mono text-foreground placeholder:text-muted-foreground focus:outline-none resize-none border-0 block"
             spellCheck={false}
           />
         </div>

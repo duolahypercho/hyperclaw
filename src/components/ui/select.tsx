@@ -38,7 +38,7 @@ const SelectTrigger = forwardRef<
     ref={ref}
     type="button"
     className={cn(
-      "flex items-center justify-between h-10 w-full rounded-md border-[1px] border-solid border-primary/10 text-foreground hover:bg-primary/5 focus:ring-[0px] px-3 py-2 text-sm font-medium focus:ring-offset-ring-input-ring-focus file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-[1px] focus-visible:ring-offset-ring-input-ring-focus focus-visible:ring-offset-0 disabled:cursor-not-allowed disabled:opacity-50 shadow-sm",
+      "flex items-center justify-between h-10 w-full rounded-md border-[1px] border-solid border-primary/10 text-foreground hover:bg-primary/5 focus:ring-[0px] px-3 py-2 text-sm font-normal focus:ring-offset-ring-input-ring-focus file:border-0 file:bg-transparent file:text-sm file:font-normal placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-[1px] focus-visible:ring-offset-ring-input-ring-focus focus-visible:ring-offset-0 disabled:cursor-not-allowed disabled:opacity-50 shadow-sm",
       className
     )}
     {...props}
@@ -138,7 +138,7 @@ const SelectItem = forwardRef<
   <Item
     ref={ref}
     className={cn(
-      "relative flex w-full rounded-md select-none items-center py-2 pl-8 pr-2 text-sm outline-none text-foreground hover:bg-primary/5 active:bg-primary/10 transition-colors cursor-pointer data-[state=checked]:bg-primary/10 font-medium",
+      "relative flex w-full rounded-md select-none items-center py-2 pl-8 pr-2 text-sm outline-none text-foreground hover:bg-primary/5 active:bg-primary/10 transition-colors cursor-pointer data-[state=checked]:bg-primary/10 font-normal",
       className
     )}
     {...props}
