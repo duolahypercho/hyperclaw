@@ -14,7 +14,6 @@ import { Copanionkit } from "$/OS/AI/core/copanionkit";
 import { getCopanionRuntimeUrl } from "$/services/http.config";
 import { useUser } from "./UserProv";
 import { getCachedToken } from "$/lib/auth-token-cache";
-import { useRateLimit } from "$/hooks/useRateLimit";
 import { RateLimitInfo } from "$/services/rate-limit-client";
 import { CopanionActionProvider } from "$/OS/AI/core/Providers/CopanionActionProv";
 
@@ -26,10 +25,6 @@ export interface exportedValue {
   loading: boolean;
   setLoading: (loading: boolean) => void;
   buttonRef: React.RefObject<HTMLButtonElement>;
-  generateResponseDailyRateLimitData: RateLimitInfo | null;
-  isGenerateResponseDailyRateLimitLoading: boolean;
-  isGenerateResponseDailyRateLimitExceeded: boolean;
-  refetchGenerateResponseDailyRateLimit: () => void;
 }
 
 const initialState: exportedValue = {
@@ -54,16 +49,11 @@ const initialState: exportedValue = {
   loading: false,
   setLoading: () => {},
   buttonRef: { current: null },
-  generateResponseDailyRateLimitData: null,
-  isGenerateResponseDailyRateLimitLoading: false,
-  isGenerateResponseDailyRateLimitExceeded: false,
-  refetchGenerateResponseDailyRateLimit: () => {},
 };
 
 export const AssistantContext = createContext<exportedValue>(initialState);
 
 export const AssistantProvider = ({ children }: { children: ReactNode }) => {
-  const { status } = useUser();
   const [loading, setLoading] = useState<boolean>(false);
   const [chatid, setchatID] = useState<string>("");
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -93,26 +83,6 @@ export const AssistantProvider = ({ children }: { children: ReactNode }) => {
       setLoading(false);
     }
   }, []);
-  // Fetch rate limit data
-  const {
-    data: generateResponseDailyRateLimitData,
-    isLoading: isGenerateResponseDailyRateLimitLoading,
-    isExceeded: isGenerateResponseDailyRateLimitExceeded,
-    refetch: refetchGenerateResponseDailyRateLimit,
-  } = useRateLimit({
-    limitType: "generate_response_daily",
-    refetchOnWindowFocus: true, // Refetch when user returns to tab
-    refetchOnZero: true, // Auto-refetch when limit resets
-  });
-/* 
-  // Load assistant info when user is authenticated
-  useEffect(() => {
-    if (status === "authenticated") {
-      setTimeout(() => {
-        setInfo();
-      }, 0);
-    }
-  }, [status]); */
 
   const value: exportedValue = useMemo(
     () => ({
@@ -123,10 +93,6 @@ export const AssistantProvider = ({ children }: { children: ReactNode }) => {
       loading,
       setLoading,
       buttonRef,
-      generateResponseDailyRateLimitData,
-      isGenerateResponseDailyRateLimitLoading,
-      isGenerateResponseDailyRateLimitExceeded,
-      refetchGenerateResponseDailyRateLimit,
     }),
     [
       personality,
@@ -136,24 +102,12 @@ export const AssistantProvider = ({ children }: { children: ReactNode }) => {
       loading,
       setLoading,
       buttonRef,
-      generateResponseDailyRateLimitData,
-      isGenerateResponseDailyRateLimitLoading,
-      isGenerateResponseDailyRateLimitExceeded,
-      refetchGenerateResponseDailyRateLimit,
     ]
   );
 
   return (
     <AssistantContext.Provider value={value}>
-      <Copanionkit
-        runtimeUrl={getCopanionRuntimeUrl()}
-        publicApiKey={getCachedToken() || undefined}
-        forwardedParameters={{
-          temperature: 1,
-        }}
-      >
-        <CopanionActionProvider>{children}</CopanionActionProvider>
-      </Copanionkit>
+        {children}
     </AssistantContext.Provider>
   );
 };

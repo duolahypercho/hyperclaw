@@ -21,6 +21,12 @@ export interface AddTodoTaskRequest {
   recurrence?: RecurrenceRule;
   assignedAgent?: string;
   linkedDocumentUrl?: string;
+  /** Optional delivery channel for announcing task result (e.g. when run by cron) */
+  delivery?: {
+    announce?: boolean;
+    channel?: string;
+    to?: string;
+  };
 }
 
 export interface AddTodoListRequest {

@@ -657,37 +657,50 @@ function createWindow() {
   });
 }
 
-// IPC Handlers for Window Controls
-ipcMain.handle("window-minimize", () => {
-  if (mainWindow) {
-    mainWindow.minimize();
+// IPC Handlers for Window Controls — operate on the window that sent the IPC (main or child)
+function getSenderWindow(event) {
+  return event.sender && BrowserWindow.fromWebContents(event.sender);
+}
+
+ipcMain.handle("window-minimize", (event) => {
+  const win = getSenderWindow(event);
+  if (win && !win.isDestroyed()) {
+    win.minimize();
   }
 });
 
-ipcMain.handle("window-maximize", () => {
-  if (mainWindow) {
-    if (mainWindow.isMaximized()) {
-      mainWindow.unmaximize();
+ipcMain.handle("window-maximize", (event) => {
+  const win = getSenderWindow(event);
+  if (win && !win.isDestroyed()) {
+    if (win.isMaximized()) {
+      win.unmaximize();
     } else {
-      mainWindow.maximize();
+      win.maximize();
     }
   }
 });
 
-ipcMain.handle("window-close", () => {
-  if (mainWindow) {
+ipcMain.handle("window-close", (event) => {
+  const win = getSenderWindow(event);
+  if (!win || win.isDestroyed()) return;
+  // Main window: hide on first close (tray behavior), close on second
+  if (win === mainWindow) {
     if (!appIsQuiting) {
       appIsQuiting = true;
       mainWindow.hide();
     } else {
       mainWindow.close();
     }
+  } else {
+    // Child window: just close it
+    win.close();
   }
 });
 
-ipcMain.handle("window-is-maximized", () => {
-  if (mainWindow) {
-    return mainWindow.isMaximized();
+ipcMain.handle("window-is-maximized", (event) => {
+  const win = getSenderWindow(event);
+  if (win && !win.isDestroyed()) {
+    return win.isMaximized();
   }
   return false;
 });
@@ -2501,6 +2514,21 @@ ipcMain.handle("hyperclaw:bridge-invoke", async (event, { action, task, id, patc
     case "write-office-seats": {
       if (officeSeats == null || typeof officeSeats !== "object") return { success: false, error: "Missing seats" };
       return writeOfficeSeats(officeSeats);
+    }
+    case "get-running-crons": {
+      try {
+        const { stdout } = await runOpenClawWithArgs(["sessions"], 10000);
+        const lines = (stdout || "").split("\n").filter((l) => l.includes(":cron:"));
+        const running = lines
+          .map((l) => {
+            const match = l.match(/agent:([^:]+):cron:([^\s]+)/);
+            return match ? { agentId: match[1], jobId: match[2] } : null;
+          })
+          .filter(Boolean);
+        return running;
+      } catch {
+        return [];
+      }
     }
     default:
       logBridge(action, `Unknown action: ${action}`);

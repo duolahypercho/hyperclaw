@@ -361,6 +361,7 @@ export function getStatusColor(status: string): string {
     case "ok": return "bg-emerald-500";
     case "error": return "bg-red-500";
     case "idle": return "bg-yellow-500";
+    case "running": return "bg-primary";
     default: return "bg-gray-500";
   }
 }

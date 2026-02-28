@@ -14,7 +14,7 @@ function formatTokens(n: number): string {
 
 /** Compact token usage widget for Tool pages (TodoList, Crons, Agents). Shows totals from ~/.openclaw sessions. */
 export default function UsageWidget() {
-  const { usage, loading, error } = useUsage();
+  const { usage, sessionsUsage, loading, error } = useUsage();
 
   if (loading) {
     return (
@@ -40,7 +40,7 @@ export default function UsageWidget() {
     );
   }
 
-  const rawTotals = usage?.totals;
+  const rawTotals = sessionsUsage?.totals ?? usage?.totals;
   const totals = rawTotals
     ? {
         inputTokens: rawTotals.input,

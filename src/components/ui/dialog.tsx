@@ -45,7 +45,15 @@ const DialogContent = forwardRef<
     variant?: "default" | "secondary";
     overlayClassName?: string;
   }
->(({ className, children, variant = "default", showCloseButton = true, overlayClassName, ...props }, ref) => {
+>(({ className, children, variant = "default", showCloseButton = true, overlayClassName, onPointerDownOutside, ...props }, ref) => {
+  const handlePointerDownOutside = (e: CustomEvent<{ originalEvent: PointerEvent }>) => {
+    const hasOpenSelect = document.querySelector('[role="listbox"][data-state="open"]');
+    if (hasOpenSelect) {
+      e.preventDefault();
+    }
+    onPointerDownOutside?.(e);
+  };
+  const contentProps = { ...props, onPointerDownOutside: handlePointerDownOutside };
   if (variant === "secondary") {
     return (
       <DialogPortal>
@@ -57,7 +65,7 @@ const DialogContent = forwardRef<
             className
           )}
           style={{ boxShadow: "0 15px 50px rgba(0,0,0,.35)" }}
-          {...props}
+          {...contentProps}
         >
           {children}
           {showCloseButton && (
@@ -75,10 +83,10 @@ const DialogContent = forwardRef<
       <Content
         ref={ref}
         className={cn(
-          "fixed left-[50%] top-[50%] z-[100] grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border-[1px] bg-background border-solid border-primary/10 p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] sm:rounded-lg",
+          "fixed left-[50%] top-[50%] z-[100] grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border-[1px] bg-background border-solid border-primary/10 p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2           data-[state=open]:slide-in-from-top-[48%] sm:rounded-lg",
           className
         )}
-        {...props}
+        {...contentProps}
       >
         {children}
         {showCloseButton && (

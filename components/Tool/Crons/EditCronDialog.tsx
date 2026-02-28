@@ -189,6 +189,8 @@ export function EditCronDialog({ open, onOpenChange, job, onSuccess }: EditCronD
       setModel(getJobModel(fullJob));
       setThinking(getJobThinking(fullJob));
       const delivery = getJobDelivery(fullJob);
+      console.log("fullJob", fullJob);
+      console.log("delivery", delivery);
       setAnnounce(delivery.announce);
       setChannel(deliveryToChannelValue(delivery.channel, delivery.to));
       setTo(isChannelFileValue(deliveryToChannelValue(delivery.channel, delivery.to)) ? "" : delivery.to);
@@ -264,16 +266,18 @@ export function EditCronDialog({ open, onOpenChange, job, onSuccess }: EditCronD
         ...(announce && {
           announce: true,
           ...((): { channel?: string; to?: string } => {
-            const fromFile = isChannelFileValue(channel);
+            const ch = channel.trim();
+            const fromFile = isChannelFileValue(ch);
             if (fromFile) {
-              const [chType, chId] = channel.split(":");
+              const [chType, chId] = ch.split(":");
               return {
                 ...(chType?.trim() && { channel: chType.trim() }),
                 ...(chId?.trim() && { to: `channel:${chId.trim()}` }),
               };
             }
+            if (ch === "last") return {};
             return {
-              ...(channel.trim() && { channel: channel.trim() }),
+              ...(ch && { channel: ch }),
               ...(to.trim() && { to: to.trim() }),
             };
           })(),
@@ -449,7 +453,7 @@ export function EditCronDialog({ open, onOpenChange, job, onSuccess }: EditCronD
                         value={channel}
                         onValueChange={(v) => {
                           setChannel(v);
-                          if (isChannelFileValue(v)) setTo("");
+                          if (isChannelFileValue(v) || v === "last") setTo("");
                         }}
                         disabled={fullJobLoading}
                       >

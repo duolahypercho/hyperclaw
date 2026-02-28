@@ -363,19 +363,323 @@ export interface UsageCostPayload {
   [key: string]: unknown;
 }
 
+/** Date interpretation for gateway (matches OpenClaw usage API). */
+export type UsageDateMode = "utc" | "gateway" | "specific";
+
+const LEGACY_USAGE_DATE_PARAMS_STORAGE_KEY = "openclaw.control.usage.date-params.v1";
+const LEGACY_USAGE_DATE_PARAMS_DEFAULT_GATEWAY_KEY = "__default__";
+const LEGACY_MODE_RE = /unexpected property ['"]mode['"]/i;
+const LEGACY_OFFSET_RE = /unexpected property ['"]utcoffset['"]/i;
+const LEGACY_INVALID_RE = /invalid sessions\.usage params/i;
+
+let legacyUsageDateParamsCache: Set<string> | null = null;
+
+function getLocalStorage(): Storage | null {
+  if (typeof window !== "undefined" && window.localStorage) return window.localStorage;
+  if (typeof localStorage !== "undefined") return localStorage;
+  return null;
+}
+
+function loadLegacyUsageDateParamsCache(): Set<string> {
+  const storage = getLocalStorage();
+  if (!storage) return new Set<string>();
+  try {
+    const raw = storage.getItem(LEGACY_USAGE_DATE_PARAMS_STORAGE_KEY);
+    if (!raw) return new Set<string>();
+    const parsed = JSON.parse(raw) as { unsupportedGatewayKeys?: unknown } | null;
+    if (!parsed || !Array.isArray(parsed.unsupportedGatewayKeys)) return new Set<string>();
+    return new Set(
+      (parsed.unsupportedGatewayKeys as string[])
+        .filter((entry) => typeof entry === "string")
+        .map((e) => e.trim())
+        .filter(Boolean)
+    );
+  } catch {
+    return new Set<string>();
+  }
+}
+
+function getLegacyUsageDateParamsCache(): Set<string> {
+  if (!legacyUsageDateParamsCache) {
+    legacyUsageDateParamsCache = loadLegacyUsageDateParamsCache();
+  }
+  return legacyUsageDateParamsCache;
+}
+
+function persistLegacyUsageDateParamsCache(cache: Set<string>) {
+  const storage = getLocalStorage();
+  if (!storage) return;
+  try {
+    storage.setItem(
+      LEGACY_USAGE_DATE_PARAMS_STORAGE_KEY,
+      JSON.stringify({ unsupportedGatewayKeys: Array.from(cache) })
+    );
+  } catch {
+    /* ignore */
+  }
+}
+
+function normalizeGatewayCompatibilityKey(gatewayUrl?: string | null): string {
+  const trimmed = gatewayUrl?.trim();
+  if (!trimmed) return LEGACY_USAGE_DATE_PARAMS_DEFAULT_GATEWAY_KEY;
+  try {
+    const parsed = new URL(trimmed);
+    const pathname = parsed.pathname === "/" ? "" : parsed.pathname;
+    return `${parsed.protocol}//${parsed.host}${pathname}`.toLowerCase();
+  } catch {
+    return trimmed.toLowerCase();
+  }
+}
+
+function shouldSendLegacyDateInterpretation(gatewayKey: string): boolean {
+  return !getLegacyUsageDateParamsCache().has(gatewayKey);
+}
+
+function rememberLegacyDateInterpretation(gatewayKey: string) {
+  const cache = getLegacyUsageDateParamsCache();
+  cache.add(gatewayKey);
+  persistLegacyUsageDateParamsCache(cache);
+}
+
+function toErrorMessage(err: unknown): string {
+  if (typeof err === "string") return err;
+  if (err instanceof Error && typeof err.message === "string" && err.message.trim()) return err.message;
+  if (err && typeof err === "object") {
+    try {
+      const s = JSON.stringify(err);
+      if (s) return s;
+    } catch {
+      /* ignore */
+    }
+  }
+  return "request failed";
+}
+
+function isLegacyDateInterpretationUnsupportedError(err: unknown): boolean {
+  const message = toErrorMessage(err);
+  return (
+    LEGACY_INVALID_RE.test(message) &&
+    (LEGACY_MODE_RE.test(message) || LEGACY_OFFSET_RE.test(message))
+  );
+}
+
+function formatUtcOffset(timezoneOffsetMinutes: number): string {
+  const offsetFromUtcMinutes = -timezoneOffsetMinutes;
+  const sign = offsetFromUtcMinutes >= 0 ? "+" : "-";
+  const absMinutes = Math.abs(offsetFromUtcMinutes);
+  const hours = Math.floor(absMinutes / 60);
+  const minutes = absMinutes % 60;
+  return minutes === 0
+    ? `UTC${sign}${hours}`
+    : `UTC${sign}${hours}:${minutes.toString().padStart(2, "0")}`;
+}
+
+export interface UsageDateRangeParams {
+  startDate: string;
+  endDate: string;
+  timeZone?: "local" | "utc";
+}
+
+function buildDateInterpretationParams(
+  timeZone: "local" | "utc",
+  includeDateInterpretation = true
+): { mode: UsageDateMode; utcOffset?: string } | undefined {
+  if (!includeDateInterpretation) return undefined;
+  if (timeZone === "utc") {
+    return { mode: "utc" };
+  }
+  return {
+    mode: "specific",
+    utcOffset: formatUtcOffset(new Date().getTimezoneOffset()),
+  };
+}
+
+/** Params for usage.cost and sessions.usage (same date-range design as OpenClaw control UI). */
+export interface UsageFetchParams extends UsageDateRangeParams {
+  timeZone?: "local" | "utc";
+  /** Max sessions to return (sessions.usage only). Default 1000. */
+  limit?: number;
+}
+
+/** Session usage entry (minimal shape from gateway sessions.usage). */
+export interface SessionsUsageEntry {
+  key: string;
+  label?: string;
+  sessionId?: string;
+  updatedAt?: number;
+  agentId?: string;
+  channel?: string;
+  model?: string;
+  modelProvider?: string;
+  usage?: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    totalTokens: number;
+    totalCost: number;
+    inputCost?: number;
+    outputCost?: number;
+    cacheReadCost?: number;
+    cacheWriteCost?: number;
+    missingCostEntries: number;
+    firstActivity?: number;
+    lastActivity?: number;
+    activityDates?: string[];
+  };
+  [key: string]: unknown;
+}
+
+/** Result shape from gateway sessions.usage (sessions + totals + aggregates). */
+export interface SessionsUsageResult {
+  updatedAt: number;
+  startDate: string;
+  endDate: string;
+  sessions: SessionsUsageEntry[];
+  totals: GatewayUsageTotals;
+  aggregates: {
+    messages?: { total: number; user: number; assistant: number; toolCalls: number; toolResults: number; errors: number };
+    tools?: { totalCalls: number; uniqueTools: number; tools: Array<{ name: string; count: number }> };
+    byModel?: Array<{ provider?: string; model?: string; count: number; totals: GatewayUsageTotals }>;
+    byProvider?: Array<{ provider?: string; model?: string; count: number; totals: GatewayUsageTotals }>;
+    byAgent?: Array<{ agentId: string; totals: GatewayUsageTotals }>;
+    byChannel?: Array<{ channel: string; totals: GatewayUsageTotals }>;
+    [key: string]: unknown;
+  };
+}
+
 /** Fetch usage cost from the gateway via WebSocket (usage.cost).
- * @param params.detail - Optional: "off" | "tokens" | "full" to request different response detail levels.
+ * Same design as OpenClaw: pass startDate/endDate and optional timeZone for date interpretation.
+ * If startDate/endDate omitted, gateway uses default range (e.g. last 30 days).
+ * When includeDateInterpretation is false (e.g. legacy gateway), mode/utcOffset are omitted.
  */
-export async function getUsageCostWs(params?: { detail?: "off" | "tokens" | "full" }): Promise<UsageCostPayload> {
+export async function getUsageCostWs(params?: {
+  startDate?: string;
+  endDate?: string;
+  timeZone?: "local" | "utc";
+  detail?: "off" | "tokens" | "full";
+  includeDateInterpretation?: boolean;
+}): Promise<UsageCostPayload> {
   const { connected } = getGatewayConnectionState();
   if (!connected) {
-    console.warn("Gateway is not connected. Skipping usage cost fetch.");
-    return {
-      error: "Gateway not connected",
-    } as UsageCostPayload;
+    return { error: "Gateway not connected" } as UsageCostPayload;
   }
 
-  const requestParams: Record<string, unknown> = params?.detail ? { detail: params.detail } : {};
+  const requestParams: Record<string, unknown> = {};
+  if (params?.detail) requestParams.detail = params.detail;
+  if (params?.startDate) requestParams.startDate = params.startDate;
+  if (params?.endDate) requestParams.endDate = params.endDate;
+  const tz = params?.timeZone ?? "local";
+  const includeDateInterpretation = params?.includeDateInterpretation !== false;
+  const dateInterpretation = buildDateInterpretationParams(tz, includeDateInterpretation);
+  if (dateInterpretation) {
+    requestParams.mode = dateInterpretation.mode;
+    if (dateInterpretation.utcOffset) requestParams.utcOffset = dateInterpretation.utcOffset;
+  }
+
   const payload = await gatewayConnection.request<UsageCostPayload>("usage.cost", requestParams);
   return payload ?? {};
+}
+
+/** Fetch sessions usage from the gateway via WebSocket (sessions.usage).
+ * Same design as OpenClaw: startDate, endDate, timeZone, limit, includeContextWeight.
+ * When includeDateInterpretation is false (e.g. legacy gateway), mode/utcOffset are omitted.
+ */
+export async function getSessionsUsageWs(params: {
+  startDate: string;
+  endDate: string;
+  timeZone?: "local" | "utc";
+  limit?: number;
+  includeContextWeight?: boolean;
+  includeDateInterpretation?: boolean;
+}): Promise<SessionsUsageResult | null> {
+  const { connected } = getGatewayConnectionState();
+  if (!connected) {
+    return null;
+  }
+
+  const includeDateInterpretation = params.includeDateInterpretation !== false;
+  const dateInterpretation = buildDateInterpretationParams(
+    params.timeZone ?? "local",
+    includeDateInterpretation
+  );
+  const requestParams: Record<string, unknown> = {
+    startDate: params.startDate,
+    endDate: params.endDate,
+    limit: params.limit ?? 1000,
+    includeContextWeight: params.includeContextWeight ?? true,
+  };
+  if (dateInterpretation) {
+    requestParams.mode = dateInterpretation.mode;
+    if (dateInterpretation.utcOffset) requestParams.utcOffset = dateInterpretation.utcOffset;
+  }
+
+  try {
+    const payload = await gatewayConnection.request<SessionsUsageResult>("sessions.usage", requestParams);
+    return payload ?? null;
+  } catch (err) {
+    console.warn("[Gateway WS] sessions.usage failed (older gateway?):", err);
+    return null;
+  }
+}
+
+/** Load both usage.cost and sessions.usage in parallel (same design as OpenClaw control UI).
+ * Uses legacy fallback: if gateway rejects mode/utcOffset, retries without and remembers per gateway.
+ * Returns cost payload and sessions result; sessions may be null if gateway does not support sessions.usage.
+ */
+export async function loadUsageWs(params: UsageFetchParams): Promise<{
+  usageCost: UsageCostPayload;
+  sessionsUsage: SessionsUsageResult | null;
+}> {
+  const { startDate, endDate, timeZone = "local", limit = 1000 } = params;
+
+  let gatewayKey = LEGACY_USAGE_DATE_PARAMS_DEFAULT_GATEWAY_KEY;
+  try {
+    const config = await getGatewayConfig();
+    gatewayKey = normalizeGatewayCompatibilityKey(config.gatewayUrl);
+  } catch {
+    /* use default key */
+  }
+
+  const runRequests = (includeDateInterpretation: boolean) =>
+    Promise.all([
+      getUsageCostWs({
+        startDate,
+        endDate,
+        timeZone,
+        includeDateInterpretation,
+      }),
+      getSessionsUsageWs({
+        startDate,
+        endDate,
+        timeZone,
+        limit,
+        includeContextWeight: true,
+        includeDateInterpretation,
+      }),
+    ]);
+
+  const { connected } = getGatewayConnectionState();
+  if (!connected) {
+    return {
+      usageCost: { error: "Gateway not connected" } as UsageCostPayload,
+      sessionsUsage: null,
+    };
+  }
+
+  const includeDateInterpretation = shouldSendLegacyDateInterpretation(gatewayKey);
+  try {
+    const [usageCost, sessionsUsage] = await runRequests(includeDateInterpretation);
+    return { usageCost: usageCost ?? {}, sessionsUsage };
+  } catch (err) {
+    if (
+      includeDateInterpretation &&
+      isLegacyDateInterpretationUnsupportedError(err)
+    ) {
+      rememberLegacyDateInterpretation(gatewayKey);
+      const [usageCost, sessionsUsage] = await runRequests(false);
+      return { usageCost: usageCost ?? {}, sessionsUsage };
+    }
+    throw err;
+  }
 }

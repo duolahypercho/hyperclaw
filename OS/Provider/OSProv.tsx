@@ -337,7 +337,7 @@ export const OSProvider: React.FC<OSProviderProps> = ({ children }) => {
   // Memoize tools with stable click handlers
   const memoizedTools = useMemo(
     () => [
-      {
+ /*      {
         id: "todo-list",
         name: "My Tasks",
         description: "Manage your tasks and stay productive",
@@ -347,7 +347,7 @@ export const OSProvider: React.FC<OSProviderProps> = ({ children }) => {
           createToolClickHandler("/Tool/TodoList", "todo-list")();
         },
         href: "/Tool/TodoList",
-      },
+      }, */
       {
         id: "crons",
         name: "Crons",

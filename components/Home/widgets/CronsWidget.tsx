@@ -127,13 +127,27 @@ const CronsWidgetContent = memo((props: CustomProps) => {
     showEmptyState,
     refresh,
     bridgeOnly,
+    runningJobIds,
   } = useCrons();
 
   const [selectedJob, setSelectedJob] = useState<OpenClawCronJobJson | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
 
-  // Jobs are already sorted by next run (soonest first) from the provider
-  const sortedJobs = jobsForList;
+  // Running jobs first, then sort the rest by last run (most recent first)
+  const sortedJobs = useMemo(() => {
+    const running: OpenClawCronJobJson[] = [];
+    const rest: OpenClawCronJobJson[] = [];
+    for (const j of jobsForList) {
+      if (runningJobIds.includes(j.id)) running.push(j);
+      else rest.push(j);
+    }
+    rest.sort((a, b) => {
+      const aMs = a.state?.lastRunAtMs ?? 0;
+      const bMs = b.state?.lastRunAtMs ?? 0;
+      return bMs - aMs; // descending: most recent last run first
+    });
+    return [...running, ...rest];
+  }, [jobsForList, runningJobIds]);
 
   const handleJobClick = useCallback((job: OpenClawCronJobJson) => {
     setSelectedJob(job);
@@ -220,7 +234,8 @@ const CronsWidgetContent = memo((props: CustomProps) => {
                       const lastRunStr = lastRunMs
                         ? formatDistanceToNow(new Date(lastRunMs), { addSuffix: true })
                         : "—";
-                      const status = job.state?.lastStatus ?? "idle";
+                      const isRunning = runningJobIds.includes(job.id);
+                      const status = isRunning ? "running" : (job.state?.lastStatus ?? "idle");
                       const palette = getJobPalette(job.id);
 
                       return (
@@ -242,15 +257,19 @@ const CronsWidgetContent = memo((props: CustomProps) => {
                             "flex items-center gap-2 px-2 py-1.5 rounded-md border-l-2 transition-colors cursor-pointer",
                             palette.border,
                             "hover:bg-muted/20",
-                            !job.enabled && "opacity-50"
+                            !job.enabled && "opacity-50",
+                            isRunning && "bg-primary/5"
                           )}
                         >
                           <div
                             className={cn(
-                              "w-1.5 h-1.5 rounded-full shrink-0",
-                              getStatusColor(status)
+                              "w-1.5 h-1.5 rounded-full shrink-0 relative z-50",
+                              isRunning ? "bg-amber-500" : getStatusColor(status)
                             )}
                           />
+                          {isRunning ? (
+                            <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin text-primary" />
+                          ) : null}
                           <div className="flex-1 min-w-0 overflow-hidden">
                             <p
                               className="text-xs font-normal text-foreground truncate min-w-0"
@@ -259,7 +278,9 @@ const CronsWidgetContent = memo((props: CustomProps) => {
                               {job.name}
                             </p>
                             <p className="text-[11px] text-muted-foreground truncate">
-                              Next {nextRunStr} · Last {lastRunStr}
+                              {isRunning
+                                ? "In progress…"
+                                : `Next ${nextRunStr} · Last ${lastRunStr}`}
                             </p>
                           </div>
                         </motion.div>

@@ -208,13 +208,14 @@ export function AddCronDialog({ open, onOpenChange, onSuccess }: AddCronDialogPr
     if (agent && agent !== AGENT_NONE && agent.trim()) params.agent = agent.trim();
     if (session === "isolated" && announce) {
       params.announce = true;
-      const fromFile = isChannelFileValue(channel);
+      const ch = channel.trim();
+      const fromFile = isChannelFileValue(ch);
       if (fromFile) {
-        const [chType, chId] = channel.split(":");
+        const [chType, chId] = ch.split(":");
         if (chType) params.channel = chType.trim();
         if (chId) params.to = `channel:${chId.trim()}`;
-      } else {
-        if (channel.trim()) params.channel = channel.trim();
+      } else if (ch !== "last") {
+        if (ch) params.channel = ch;
         if (to.trim()) params.to = to.trim();
       }
     }
@@ -434,7 +435,13 @@ export function AddCronDialog({ open, onOpenChange, onSuccess }: AddCronDialogPr
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div className="space-y-1.5">
                         <Label className="text-[10px] text-muted-foreground">Channel</Label>
-                        <Select value={channel} onValueChange={(v) => { setChannel(v); if (isChannelFileValue(v)) setTo(""); }}>
+                        <Select
+                          value={channel}
+                          onValueChange={(v) => {
+                            setChannel(v);
+                            if (isChannelFileValue(v) || v === "last") setTo("");
+                          }}
+                        >
                           <SelectTrigger className="h-9 min-w-0 overflow-hidden bg-muted/30 border-border/60">
                             <span className="block min-w-0 truncate text-left">
                               <SelectValue placeholder={channelsLoading ? "Loading channels…" : "Choose channel…"} />

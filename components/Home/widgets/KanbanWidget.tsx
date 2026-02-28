@@ -1,4 +1,4 @@
-import React, { memo, useMemo, useCallback, useState, useEffect } from "react";
+import React, { memo, useMemo, useCallback, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { CustomProps } from "$/components/Home/widgets/types/widgets";
 import {
@@ -16,27 +16,13 @@ import {
   Plus,
   FileText,
   Bot,
-  Calendar,
   Trash2,
+  Loader2,
+  ScrollText,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import {
   ContextMenu,
@@ -45,18 +31,12 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { useTodoList } from "$/components/Tool/TodoList/provider/todolistProvider";
+import { useIsTaskRunningCron } from "$/components/Tool/TodoList/hooks/useIsTaskRunningCron";
 import { useOS } from "@OS/Provider/OSProv";
 import { Task } from "$/components/Tool/TodoList/types";
 import { useFocusMode } from "./hooks/useFocusMode";
-import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
-import type { DocEntry } from "$/components/Tool/Docs/types";
-
-interface TeamAgent {
-  id: string;
-  name: string;
-  status: string;
-  role?: string;
-}
+import { AddTaskDialog } from "./AddTaskDialog";
+import { TaskDetailDialog } from "./TaskDetailDialog";
 
 type KanbanStatus = "pending" | "in_progress" | "blocked" | "completed";
 
@@ -176,51 +156,11 @@ function getAgentTagColor(agentName: string): string {
   return AGENT_TAG_COLORS[Math.abs(h) % AGENT_TAG_COLORS.length];
 }
 
-const KanbanCustomHeader: React.FC<CustomProps> = ({
-  widget,
-  isMaximized,
-  onMaximize,
-  isEditMode,
-}) => {
-  const { tasks, handleAddTask } = useTodoList();
+const KanbanCustomHeader: React.FC<
+  CustomProps & { onOpenAddTask?: () => void }
+> = ({ widget, isMaximized, onMaximize, isEditMode, onOpenAddTask }) => {
+  const { tasks } = useTodoList();
   const { toolAbstracts } = useOS();
-  const [addTaskOpen, setAddTaskOpen] = useState(false);
-  const [newTaskTitle, setNewTaskTitle] = useState("");
-  const [newTaskDescription, setNewTaskDescription] = useState("");
-  const [newTaskAssignedAgent, setNewTaskAssignedAgent] = useState("");
-  const [newTaskLinkedDocumentUrl, setNewTaskLinkedDocumentUrl] = useState("");
-  const [adding, setAdding] = useState(false);
-  const [agents, setAgents] = useState<TeamAgent[]>([]);
-  const [agentsLoading, setAgentsLoading] = useState(false);
-  const [docs, setDocs] = useState<DocEntry[]>([]);
-  const [docsLoading, setDocsLoading] = useState(false);
-  const [linkDocCustomMode, setLinkDocCustomMode] = useState(false);
-
-  useEffect(() => {
-    if (!addTaskOpen) return;
-    setAgentsLoading(true);
-    bridgeInvoke("get-team", {})
-      .then((res) => {
-        const list = Array.isArray(res) ? res as TeamAgent[] : [];
-        setAgents(list);
-      })
-      .catch(() => setAgents([]))
-      .finally(() => setAgentsLoading(false));
-  }, [addTaskOpen]);
-
-  useEffect(() => {
-    if (!addTaskOpen) return;
-    setDocsLoading(true);
-    bridgeInvoke("list-openclaw-docs", {})
-      .then((res) => {
-        const result = res as { success?: boolean; data?: { files?: DocEntry[] } | DocEntry[] };
-        const data = result?.data;
-        const files = Array.isArray(data) ? data : (data && "files" in data && Array.isArray(data.files) ? data.files : []);
-        setDocs(files);
-      })
-      .catch(() => setDocs([]))
-      .finally(() => setDocsLoading(false));
-  }, [addTaskOpen]);
 
   const todoTool = useMemo(
     () => toolAbstracts.find((t) => t.id === "todo-list"),
@@ -228,32 +168,6 @@ const KanbanCustomHeader: React.FC<CustomProps> = ({
   );
 
   const totalTasks = tasks.length;
-
-  const onAddTask = async () => {
-    const title = newTaskTitle.trim();
-    if (!title || adding) return;
-    setAdding(true);
-    try {
-      const agent =
-        newTaskAssignedAgent
-          ? agents.find((a) => a.id === newTaskAssignedAgent)
-          : undefined;
-      await handleAddTask({
-        title,
-        description: newTaskDescription.trim() || undefined,
-        assignedAgent: agent?.name ?? undefined,
-        linkedDocumentUrl: newTaskLinkedDocumentUrl.trim() || undefined,
-      });
-      setNewTaskTitle("");
-      setNewTaskDescription("");
-      setNewTaskAssignedAgent("");
-      setNewTaskLinkedDocumentUrl("");
-      setLinkDocCustomMode(false);
-      setAddTaskOpen(false);
-    } finally {
-      setAdding(false);
-    }
-  };
 
   return (
     <div className="flex items-center justify-between px-3 py-2">
@@ -278,187 +192,15 @@ const KanbanCustomHeader: React.FC<CustomProps> = ({
       </div>
 
       <div className="flex items-center gap-1.5">
-        <Popover
-          open={addTaskOpen}
-          onOpenChange={(open) => {
-            setAddTaskOpen(open);
-            if (!open) setLinkDocCustomMode(false);
-          }}
+        <Button
+          variant="ghost"
+          size="iconSm"
+          className="h-6 w-6 text-primary"
+          onClick={onOpenAddTask}
+          title="Add task"
         >
-          <PopoverTrigger asChild>
-            <Button
-              variant="ghost"
-              size="iconSm"
-              className="h-6 w-6"
-              title="Add task"
-            >
-              <Plus className="w-3 h-3" />
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent className="w-72 p-3" align="end">
-            <div className="flex flex-col gap-3">
-              <div className="space-y-1.5">
-                <Label className="text-xs font-normal text-muted-foreground">
-                  Title
-                </Label>
-                <Input
-                  placeholder="Task title..."
-                  value={newTaskTitle}
-                  onChange={(e) => setNewTaskTitle(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) onAddTask();
-                  }}
-                  className="h-8 text-sm"
-                  autoFocus
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs font-normal text-muted-foreground">
-                  Description
-                </Label>
-                <Textarea
-                  placeholder="Add a description..."
-                  value={newTaskDescription}
-                  onChange={(e) => setNewTaskDescription(e.target.value)}
-                  className="min-h-[60px] text-sm resize-none shadow-none"
-                  rows={2}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs font-normal text-muted-foreground flex items-center gap-1">
-                  <Bot className="w-3 h-3" />
-                  Assigned agent
-                </Label>
-                <Select
-                  value={newTaskAssignedAgent || "__none__"}
-                  onValueChange={(v) =>
-                    setNewTaskAssignedAgent(v === "__none__" ? "" : v)
-                  }
-                  disabled={agentsLoading}
-                >
-                  <SelectTrigger className="h-8 text-sm">
-                    <SelectValue
-                      placeholder={
-                        agentsLoading ? "Loading agents..." : "Select agent"
-                      }
-                    />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none__">None</SelectItem>
-                    {agents.map((agent) => {
-                      const label = agent.name || agent.id || "Unnamed";
-                      return (
-<SelectItem
-                        key={agent.id}
-                        value={agent.id}
-                        className="text-sm"
-                      >
-                          {label}
-                          {agent.role && (
-                            <span className="text-muted-foreground ml-1">
-                              ({agent.role})
-                            </span>
-                          )}
-                        </SelectItem>
-                      );
-                    })}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs font-normal text-muted-foreground flex items-center gap-1">
-                  <FileText className="w-3 h-3" />
-                  Link document
-                </Label>
-                {(() => {
-                  const docUrls = docs.map((d) =>
-                    `/Tool/Docs?path=${encodeURIComponent(d.relativePath)}`
-                  );
-                  const isDocUrl =
-                    newTaskLinkedDocumentUrl &&
-                    docUrls.includes(newTaskLinkedDocumentUrl);
-                  const selectValue = linkDocCustomMode
-                    ? "__custom__"
-                    : !newTaskLinkedDocumentUrl
-                      ? "__none__"
-                      : isDocUrl
-                        ? newTaskLinkedDocumentUrl
-                        : "__custom__";
-                  return (
-                    <div className="space-y-1.5">
-                      <Select
-                        value={selectValue}
-                        onValueChange={(v) => {
-                          if (v === "__custom__") {
-                            setLinkDocCustomMode(true);
-                          } else if (v === "__none__") {
-                            setLinkDocCustomMode(false);
-                            setNewTaskLinkedDocumentUrl("");
-                          } else {
-                            setLinkDocCustomMode(false);
-                            setNewTaskLinkedDocumentUrl(v);
-                          }
-                        }}
-                        disabled={docsLoading}
-                      >
-                        <SelectTrigger className="h-8 text-sm">
-                          <SelectValue
-                            placeholder={
-                              docsLoading
-                                ? "Loading docs..."
-                                : "Pick a doc or paste URL"
-                            }
-                          />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="__none__" className="text-sm">
-                            None
-                          </SelectItem>
-                          {docs.map((doc) => {
-                            const url = `/Tool/Docs?path=${encodeURIComponent(doc.relativePath)}`;
-                            return (
-                              <SelectItem
-                                key={doc.relativePath}
-                                value={url}
-                                className="text-sm"
-                              >
-                                {doc.name}
-                              </SelectItem>
-                            );
-                          })}
-                          <SelectItem
-                            value="__custom__"
-                            className="text-sm"
-                          >
-                            Other (paste URL)
-                          </SelectItem>
-                        </SelectContent>
-                      </Select>
-                      {(linkDocCustomMode || selectValue === "__custom__") && (
-                        <Input
-                          placeholder="https://... or /Tool/Docs?path=..."
-                          value={newTaskLinkedDocumentUrl}
-                          onChange={(e) =>
-                            setNewTaskLinkedDocumentUrl(e.target.value)
-                          }
-                          className="h-8 text-sm"
-                        />
-                      )}
-                    </div>
-                  );
-                })()}
-              </div>
-              <Button
-                size="sm"
-                className="h-7 text-sm"
-                onClick={onAddTask}
-                disabled={!newTaskTitle.trim() || adding}
-              >
-                {adding ? "Adding..." : "Add task"}
-              </Button>
-            </div>
-          </PopoverContent>
-        </Popover>
+          <Plus className="w-3 h-3" />
+        </Button>
         <Button
           variant="ghost"
           size="iconSm"
@@ -490,139 +232,164 @@ interface MiniKanbanCardProps {
   columnId: KanbanStatus;
   onStatusChange: (taskId: string, status: KanbanStatus) => void;
   onSelect: (taskId: string) => void;
+  onViewDetails: (taskId: string) => void;
   onDelete: (taskId: string) => void;
 }
 
 const MiniKanbanCard = React.forwardRef<HTMLDivElement, MiniKanbanCardProps>(
-  ({ task, columnId, onStatusChange, onSelect, onDelete }, ref) => {
+  ({ task, columnId, onStatusChange, onSelect, onViewDetails, onDelete }, ref) => {
+    // Only allow: Backlog → In Progress, or Review → Done
     const nextCol = useMemo(() => {
-      const idx = COLUMNS.findIndex((c) => c.id === columnId);
-      return idx < COLUMNS.length - 1 ? COLUMNS[idx + 1] : null;
+      if (columnId === "pending") return COLUMNS[1]; // in_progress
+      if (columnId === "blocked") return COLUMNS[3]; // completed
+      return null;
     }, [columnId]);
+    const isAgentRunning = useIsTaskRunningCron(task._id);
 
     const hasMetaRow =
       task.createdAt || task.assignedAgent || task.linkedDocumentUrl;
 
+    const canDelete = columnId === "pending" || columnId === "blocked" ;
+
+    const showViewDetails = columnId === "blocked" || columnId === "completed" ;
+
     return (
       <ContextMenu>
         <ContextMenuTrigger asChild>
-      <motion.div
-      ref={ref}
-      layout
-      initial={{ opacity: 0, y: 4 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, scale: 0.95 }}
-      transition={{ duration: 0.15 }}
-      draggable
-      onDragStart={(e: React.DragEvent<HTMLDivElement>) => {
-        const ev = e as unknown as React.DragEvent;
-        ev.dataTransfer?.setData("text/plain", task._id);
-        ev.dataTransfer?.setData("application/kanban-status", task.status);
-      }}
-      className={cn(
-        "group relative rounded-md border border-solid border-border/50 bg-card/60 px-2 py-1.5 cursor-grab active:cursor-grabbing transition-all hover:border-border hover:bg-card/90",
-        task.status === "completed" && "opacity-60"
-      )}
-      onClick={() => onSelect(task._id)}
-    >
-      <div className="flex items-start gap-1.5">
-        {task.starred && (
-          <Star className="w-2.5 h-2.5 text-amber-400 fill-amber-400 shrink-0 mt-0.5" />
-        )}
-        <div className="min-w-0 flex-1 space-y-1">
-          <p
-            className={cn(
-              "text-xs font-normal text-foreground truncate",
-              task.status === "completed" && "line-through text-muted-foreground"
-            )}
-          >
-            {task.title}
-          </p>
-          {task.description?.trim() && (
-            <p className="text-[11px] text-muted-foreground line-clamp-2 leading-tight">
-              {task.description.trim()}
-            </p>
+        <motion.div
+          ref={ref}
+          layout
+          initial={{ opacity: 0, y: 4 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, scale: 0.95 }}
+          transition={{ duration: 0.15 }}
+          className={cn(
+            "group relative rounded-md border border-solid border-border/50 bg-card/60 px-2 py-1.5 cursor-pointer transition-all hover:border-border hover:bg-card/90",
+            "active:scale-100 active:opacity-100",
+            task.status === "completed" && "opacity-60"
           )}
-          {hasMetaRow && (
-            <div className="flex flex-wrap items-center gap-1.5 gap-y-0.5 text-[11px] leading-none">
-              {task.createdAt && (() => {
-                const { text, tier } = getRelativeTaskDate(task.createdAt);
-                return (
-                  <span
-                    className={cn(
-                      "inline-flex items-center gap-0.5 shrink-0 rounded px-1.5 py-0.5 font-medium border border-transparent",
-                      DATE_TIER_CLASSES[tier]
-                    )}
-                  >
-                    <span className="leading-none">{text}</span>
-                  </span>
-                );
-              })()}
-              {task.assignedAgent && (
-                <span
-                  className={cn(
-                    "inline-flex items-center gap-0.5 truncate max-w-[88px] rounded border px-1.5 py-0.5 font-medium",
-                    getAgentTagColor(task.assignedAgent)
-                  )}
-                >
-                  <Bot className="w-2.5 h-2.5 shrink-0 opacity-80" />
-                  <span className="truncate">{task.assignedAgent}</span>
-                </span>
+          onClick={() => onSelect(task._id)}
+        >
+          <div className="flex items-start gap-1.5">
+            {task.starred && (
+              <Star className="w-2.5 h-2.5 text-amber-400 fill-amber-400 shrink-0 mt-0.5" />
+            )}
+            <div className="min-w-0 flex-1 space-y-1">
+              <p
+                className={cn(
+                  "text-xs font-normal text-foreground truncate",
+                  task.status === "completed" && "line-through text-muted-foreground"
+                )}
+              >
+                {task.title}
+              </p>
+              {task.description?.trim() && (
+                <p className="text-[11px] text-muted-foreground line-clamp-2 leading-tight">
+                  {task.description.trim()}
+                </p>
               )}
-              {task.linkedDocumentUrl && (
-                <a
-                  href={task.linkedDocumentUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 font-medium bg-primary/10 text-primary border border-primary/20 hover:bg-primary/15 truncate max-w-[70px]"
-                  onClick={(e) => e.stopPropagation()}
-                  title={task.linkedDocumentUrl}
-                >
-                  <FileText className="w-2.5 h-2.5 shrink-0 opacity-80" />
-                  <span className="truncate">Doc</span>
-                </a>
+              {hasMetaRow && (
+                <div className="flex flex-wrap items-center gap-1.5 gap-y-0.5 text-[10px] leading-none">
+                  {task.assignedAgent && (
+                    <span
+                      className={cn(
+                        "inline-flex items-center gap-0.5 truncate max-w-[88px] rounded border px-1.5 py-0.5 font-medium",
+                        getAgentTagColor(task.assignedAgent)
+                      )}
+                    >
+                      <Bot className="w-2.5 h-2.5 shrink-0 opacity-80" />
+                      <span className="truncate">{task.assignedAgent}</span>
+                    </span>
+                  )}
+                  {columnId === "in_progress" && isAgentRunning && (
+                    <Badge
+                      variant="outline"
+                      className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0 h-5 bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/40"
+                    >
+                      <Loader2 className="w-2.5 h-2.5 shrink-0 animate-spin" />
+                      In progress
+                    </Badge>
+                  )}
+                  {task.linkedDocumentUrl && (
+                    <a
+                      href={task.linkedDocumentUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 font-medium bg-primary/10 text-primary border border-primary/20 hover:bg-primary/15 truncate max-w-[70px]"
+                      onClick={(e) => e.stopPropagation()}
+                      title={task.linkedDocumentUrl}
+                    >
+                      <FileText className="w-2.5 h-2.5 shrink-0 opacity-80" />
+                      <span className="truncate">Doc</span>
+                    </a>
+                  )}
+                </div>
               )}
             </div>
-          )}
-        </div>
-        <div className="flex items-center gap-0.5 shrink-0 mt-0.5">
-          {nextCol && (
-            <Button
-              variant="ghost"
-              size="iconSm"
-              className="h-4 w-4 opacity-0 group-hover:opacity-100 transition-opacity"
-              onClick={(e) => {
-                e.stopPropagation();
-                onStatusChange(task._id, nextCol.id);
-              }}
-            >
-              <ArrowRight className="w-2.5 h-2.5" />
-            </Button>
-          )}
-          <Button
-            variant="ghost"
-            size="iconSm"
-            className="h-4 w-4 opacity-0 group-hover:opacity-100 transition-opacity text-destructive hover:text-destructive hover:bg-destructive/10"
-            onClick={(e) => {
-              e.stopPropagation();
-              onDelete(task._id);
-            }}
-            title="Delete task"
-          >
-            <Trash2 className="w-2.5 h-2.5" />
-          </Button>
-        </div>
-      </div>
-    </motion.div>
+            <div className="flex items-center gap-0.5 shrink-0 mt-0.5">
+              {showViewDetails && (
+                <Button
+                  variant="ghost"
+                  size="iconSm"
+                  className="h-4 w-4 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onViewDetails(task._id);
+                  }}
+                  title="See logs & info"
+                >
+                  <ScrollText className="w-2.5 h-2.5" />
+                </Button>
+              )}
+              {nextCol && (
+                <Button
+                  variant="ghost"
+                  size="iconSm"
+                  className="h-4 w-4 opacity-0 group-hover:opacity-100 transition-opacity"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onStatusChange(task._id, nextCol.id);
+                  }}
+                >
+                  <ArrowRight className="w-2.5 h-2.5" />
+                </Button>
+              )}
+              {canDelete && (
+                <Button
+                  variant="ghost"
+                  size="iconSm"
+                  className="h-4 w-4 opacity-0 group-hover:opacity-100 transition-opacity text-destructive hover:text-destructive hover:bg-destructive/10"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDelete(task._id);
+                  }}
+                  title="Delete task"
+                >
+                  <Trash2 className="w-2.5 h-2.5" />
+                </Button>
+              )}
+            </div>
+          </div>
+        </motion.div>
         </ContextMenuTrigger>
         <ContextMenuContent className="w-48">
-          <ContextMenuItem
-            className="text-destructive focus:text-destructive"
-            onClick={() => onDelete(task._id)}
-          >
-            <Trash2 className="w-3.5 h-3.5 mr-2" />
-            Delete task
-          </ContextMenuItem>
+          {showViewDetails && (
+            <ContextMenuItem
+              onClick={() => onViewDetails(task._id)}
+            >
+              <ScrollText className="w-3.5 h-3.5 mr-2" />
+              See logs & info
+            </ContextMenuItem>
+          )}
+          {canDelete && (
+            <ContextMenuItem
+              className="text-destructive focus:text-destructive"
+              onClick={() => onDelete(task._id)}
+            >
+              <Trash2 className="w-3.5 h-3.5 mr-2" />
+              Delete task
+            </ContextMenuItem>
+          )}
         </ContextMenuContent>
       </ContextMenu>
   );
@@ -635,6 +402,7 @@ interface MiniKanbanColumnProps {
   tasks: Task[];
   onStatusChange: (taskId: string, status: KanbanStatus) => void;
   onSelect: (taskId: string) => void;
+  onViewDetails: (taskId: string) => void;
   onDelete: (taskId: string) => void;
 }
 
@@ -643,39 +411,20 @@ const MiniKanbanColumn: React.FC<MiniKanbanColumnProps> = ({
   tasks,
   onStatusChange,
   onSelect,
+  onViewDetails,
   onDelete,
 }) => {
-  const [isDragOver, setIsDragOver] = useState(false);
-
   return (
     <div
       className={cn(
-        "flex flex-col min-w-0 flex-1 rounded-md border border-solid transition-all duration-150",
-        isDragOver
-          ? "border-1 border-primary bg-primary/5 shadow-sm"
-          : "border-border bg-background/30"
+        "flex flex-col min-w-0 flex-1 rounded-md border border-solid border-border bg-background/30 transition-all duration-150"
       )}
-      onDragOver={(e: React.DragEvent<HTMLDivElement>) => {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = "move";
-        setIsDragOver(true);
-      }}
-      onDragLeave={() => setIsDragOver(false)}
-      onDrop={(e) => {
-        e.preventDefault();
-        setIsDragOver(false);
-        const taskId = e.dataTransfer.getData("text/plain");
-        const from = e.dataTransfer.getData("application/kanban-status");
-        if (taskId && from !== column.id) {
-          onStatusChange(taskId, column.id);
-        }
-      }}
     >
       <div className="flex items-center gap-1.5 px-2 py-1.5 border-b border-t-0 border-l-0 border-r-0 border-solid border-border">
         <span className={cn("shrink-0", column.accentClass)}>
           {column.icon}
         </span>
-        <span className="text-xs font-semibold text-foreground truncate">
+        <span className="text-xs font-medium text-foreground truncate">
           {column.label}
         </span>
         <span className="text-[11px] text-muted-foreground ml-auto font-normal">
@@ -697,6 +446,7 @@ const MiniKanbanColumn: React.FC<MiniKanbanColumnProps> = ({
                 columnId={column.id}
                 onStatusChange={onStatusChange}
                 onSelect={onSelect}
+                onViewDetails={onViewDetails}
                 onDelete={onDelete}
               />
             ))
@@ -711,6 +461,19 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
   const { isFocusModeActive } = useFocusMode();
   const { tasks, handleStatusChange, handleSelectTask, handleDeleteTask } =
     useTodoList();
+
+  const [addTaskOpen, setAddTaskOpen] = useState(false);
+  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
+
+  const handleViewDetails = useCallback(
+    (taskId: string) => {
+      const task = tasks.find((t) => t._id === taskId) ?? null;
+      setSelectedTask(task);
+      setDetailOpen(true);
+    },
+    [tasks]
+  );
 
   const grouped = useMemo(() => {
     const g: Record<KanbanStatus, Task[]> = {
@@ -741,7 +504,7 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
 
   const handleSelect = useCallback(
     (taskId: string) => {
-      handleSelectTask(taskId);
+      handleSelectTask(taskId, { viewOnly: true });
     },
     [handleSelectTask]
   );
@@ -768,7 +531,10 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
           isFocusModeActive && "border-transparent grayscale-[30%]"
         )}
       >
-        <KanbanCustomHeader {...props} />
+        <KanbanCustomHeader
+          {...props}
+          onOpenAddTask={() => setAddTaskOpen(true)}
+        />
         <div className="flex-1 flex gap-1.5 p-2 pt-0 overflow-hidden min-h-0">
           {COLUMNS.map((col) => (
             <MiniKanbanColumn
@@ -777,10 +543,24 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
               tasks={grouped[col.id]}
               onStatusChange={handleMove}
               onSelect={handleSelect}
+              onViewDetails={handleViewDetails}
               onDelete={handleDelete}
             />
           ))}
         </div>
+        <AddTaskDialog
+          open={addTaskOpen}
+          onOpenChange={setAddTaskOpen}
+          onSuccess={() => setAddTaskOpen(false)}
+        />
+        <TaskDetailDialog
+          task={selectedTask}
+          open={detailOpen}
+          onOpenChange={(open) => {
+            setDetailOpen(open);
+            if (!open) setSelectedTask(null);
+          }}
+        />
       </Card>
     </motion.div>
   );

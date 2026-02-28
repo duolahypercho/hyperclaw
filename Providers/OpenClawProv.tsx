@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, type ReactNode } from "react";
+import { createContext, useContext, type ReactNode, useMemo } from "react";
 import { useOpenClaw } from "$/hooks/useOpenClaw";
 
 type OpenClawContextValue = ReturnType<typeof useOpenClaw>;
@@ -11,7 +11,34 @@ const OpenClawContext = createContext<OpenClawContextValue | null>(null);
 const OPENCLAW_AUTO_REFRESH_MS = 30000;
 
 export function OpenClawProvider({ children }: { children: ReactNode }) {
-  const value = useOpenClaw(OPENCLAW_AUTO_REFRESH_MS);
+  const openClaw = useOpenClaw(OPENCLAW_AUTO_REFRESH_MS);
+  const value = useMemo(
+    () => openClaw,
+    [
+      openClaw.installed,
+      openClaw.loading,
+      openClaw.version,
+      openClaw.status,
+      openClaw.gatewayHealthy,
+      openClaw.gatewayHealthError,
+      openClaw.cronJobs,
+      openClaw.cronJobsJson,
+      openClaw.agents,
+      openClaw.logs,
+      openClaw.errors,
+      openClaw.refreshAll,
+      openClaw.fetchStatus,
+      openClaw.fetchGatewayHealth,
+      openClaw.fetchCronList,
+      openClaw.fetchCronListJson,
+      openClaw.fetchAgents,
+      openClaw.fetchLogs,
+      openClaw.runCommand,
+      openClaw.sendMessage,
+      openClaw.cronEnable,
+      openClaw.cronDisable,
+    ]
+  );
   return (
     <OpenClawContext.Provider value={value}>
       {children}

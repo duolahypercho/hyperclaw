@@ -30,6 +30,7 @@ import { CopilotTextarea } from "../AITextArea";
 import { HTMLCopanionTextAreaElement } from "../AITextArea/types";
 import { cn } from "../../../utils";
 import { useTodoList } from "./provider/todolistProvider";
+import { useIsTaskRunningCron } from "./hooks/useIsTaskRunningCron";
 import { Step, TaskDetails as TaskDetailsType } from "./types";
 import { convertSlateToMarkdown } from "$/utils/Slate";
 import { DndContext, DragEndEvent, closestCenter } from "@dnd-kit/core";
@@ -397,6 +398,7 @@ const TaskDetails = ({
     handleDragEndSteps: handleDragEndSteps,
   } = useTodoList();
   const { toggleDetail } = useInteractApp();
+  const isAgentRunning = useIsTaskRunningCron(task._id);
 
   const [editedTitle, setEditedTitle] = useState(task.title);
   const [completed, setCompleted] = useState(task.status === "completed");
@@ -586,6 +588,14 @@ const TaskDetails = ({
           </Button>
         </div>
       </div>
+
+      {task.status === "in_progress" && isAgentRunning && (
+        <div className="flex-none flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-xs text-primary">
+          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+          <span className="font-medium">In progress</span>
+          <span className="text-muted-foreground">Agent is working on this task</span>
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto customScrollbar2 space-y-3">
         <div className="flex flex-col gap-0">

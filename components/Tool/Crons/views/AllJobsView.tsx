@@ -21,6 +21,7 @@ const statusLabels: Record<string, string> = {
   ok: "Success",
   error: "Failed",
   idle: "Idle",
+  running: "In progress",
 };
 
 export function AllJobsView() {
@@ -32,6 +33,7 @@ export function AllJobsView() {
     bridgeLoading,
     handleToggleEnabled,
     togglingId,
+    runningJobIds,
   } = useCrons();
   const [detailJob, setDetailJob] = useState<OpenClawCronJobJson | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
@@ -97,7 +99,8 @@ export function AllJobsView() {
               const lastRunStr = lastRunMs
                 ? formatDistanceToNow(new Date(lastRunMs), { addSuffix: true })
                 : "—";
-              const status = (job.state?.lastStatus ?? "idle") as string;
+              const isRunning = runningJobIds.includes(job.id);
+              const status = (isRunning ? "running" : (job.state?.lastStatus ?? "idle")) as string;
               const statusLabel = statusLabels[status] ?? status;
               const agent = job.agentId ?? "main";
               const isToggling = togglingId === job.id;
@@ -115,16 +118,39 @@ export function AllJobsView() {
                     ${palette.border} border-l-[3px]
                     hover:bg-muted/30 hover:border-border/60 transition-colors duration-150
                     ${!job.enabled ? "opacity-50" : ""}
+                    ${isRunning ? "bg-primary/5" : ""}
                   `}
                 >
-                  <Switch
-                    checked={job.enabled}
-                    onCheckedChange={() => handleToggleEnabled(job)}
-                    disabled={isToggling || bridgeOnly}
-                    className="shrink-0"
-                  />
+                  <TooltipProvider delayDuration={300}>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <div className="shrink-0">
+                          <Switch
+                            checked={job.enabled}
+                            onCheckedChange={() => handleToggleEnabled(job)}
+                            disabled={isToggling || bridgeOnly}
+                            className="shrink-0"
+                            aria-label={job.enabled ? "Disable job" : "Enable job"}
+                          />
+                        </div>
+                      </TooltipTrigger>
+                      <TooltipContent side="right" className="max-w-xs">
+                        <p className="font-medium">
+                          {job.enabled ? "Disable" : "Enable"} job
+                        </p>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          {bridgeOnly
+                            ? "Install OpenClaw CLI to use openclaw cron enable/disable"
+                            : `Uses openclaw cron ${job.enabled ? "disable" : "enable"}`}
+                        </p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
                   {isToggling && (
                     <Loader2 className="w-4 h-4 animate-spin shrink-0 text-muted-foreground" />
+                  )}
+                  {isRunning && !isToggling && (
+                    <Loader2 className="w-4 h-4 animate-spin shrink-0 text-primary" aria-label="Running" />
                   )}
                   <TooltipProvider delayDuration={300}>
                     <Tooltip>

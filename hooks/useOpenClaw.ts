@@ -1,6 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
 import {
+  getRunningJobIds,
+  removeRunningJobIds,
+  getRunningJobStartedAt,
+} from "$/lib/crons-running-store";
+import {
   buildGatewayWsUrl,
   connectGatewayWs,
   getGatewayConnectionState,
@@ -379,6 +384,52 @@ export function useOpenClaw(autoRefreshMs = 0) {
     });
     return unsub;
   }, [setPartial]);
+
+  // Cron running poll: match latest run by runAtMs close to our "Run now" time; remove when that run is finished.
+  useEffect(() => {
+    const CRON_POLL_MS = 2000;
+    const DEBUG = typeof window !== "undefined" && (window as unknown as { __CRON_POLL_DEBUG?: boolean }).__CRON_POLL_DEBUG !== false;
+    const debugLog = (...args: unknown[]) => DEBUG && console.log("[cron-poll]", ...args);
+    // Run is "ours" if runAtMs is within this window of when we clicked Run now (clock skew + delay)
+    const WINDOW_BEFORE_MS = 10_000;   // 10s before (clock skew)
+    const WINDOW_AFTER_MS = 300_000;   // 5 min after (run can start a bit later)
+    const RECENT_MS = 120_000;         // if no startedAt (legacy): treat run as ours if within 2 min
+
+    const checkRunningCrons = async () => {
+      const currentIds = getRunningJobIds();
+      if (currentIds.length === 0) return;
+      for (const jobId of currentIds) {
+        try {
+          const startedAt = getRunningJobStartedAt(jobId);
+          const result = (await bridgeInvoke("get-cron-runs-for-job", {
+            jobId,
+            limit: 10,
+            offset: 0,
+          })) as { runs?: { action?: string; runAtMs?: number }[] };
+          const runs = Array.isArray(result?.runs) ? result.runs : [];
+          const latest = runs[0];
+
+          if (!latest) continue;
+
+          const runAtMs = latest.runAtMs ?? 0;
+          const isOurs = startedAt != null
+            ? runAtMs >= startedAt - WINDOW_BEFORE_MS && runAtMs <= startedAt + WINDOW_AFTER_MS
+            : runAtMs >= Date.now() - RECENT_MS;
+
+          if (isOurs && String(latest.action) === "finished") {
+            debugLog("poll: job", jobId, "our run finished (runAtMs", runAtMs, "), removing");
+            removeRunningJobIds([jobId]);
+          }
+        } catch (e) {
+          if (DEBUG) console.warn("[cron-poll] error for job", jobId, e);
+        }
+      }
+    };
+
+    debugLog("start interval (time-based runAtMs)", CRON_POLL_MS, "ms. Disable: window.__CRON_POLL_DEBUG = false");
+    const intervalId = setInterval(checkRunningCrons, CRON_POLL_MS);
+    return () => clearInterval(intervalId);
+  }, []);
 
   useEffect(() => {
     if (autoRefreshMs > 0 && state.installed) {

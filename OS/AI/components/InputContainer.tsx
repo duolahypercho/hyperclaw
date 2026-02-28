@@ -113,12 +113,6 @@ export const InputContainer: React.FC<InputContainerProps> = ({
   const isControlled = controlledValue !== undefined;
   const currentValue = isControlled ? controlledValue : inputValue;
   const setValue = isControlled ? controlledOnChange : setInputValue;
-  const {
-    isGenerateResponseDailyRateLimitExceeded: isRateLimitExceeded,
-    refetchGenerateResponseDailyRateLimit: refetchRateLimit,
-    generateResponseDailyRateLimitData: rateLimitData,
-    isGenerateResponseDailyRateLimitLoading: isRateLimitLoading,
-  } = useAssistant();
 
   const {
     copanionActionMode: selectedActionType,
@@ -159,8 +153,8 @@ export const InputContainer: React.FC<InputContainerProps> = ({
   );
 
   const isInputDisabled = useMemo(
-    () => disabled || isLoading || isSending || isRateLimitExceeded,
-    [disabled, isLoading, isSending, isRateLimitExceeded]
+    () => disabled || isLoading || isSending,
+    [disabled, isLoading, isSending]
   );
 
   const isUploading = useMemo(
@@ -170,7 +164,6 @@ export const InputContainer: React.FC<InputContainerProps> = ({
 
   const canSend = useMemo(
     () =>
-      !isRateLimitExceeded &&
       !isUploading &&
       (allowEmptySend ||
         (currentValue.trim().length > 0 && !isComposing) ||
@@ -180,7 +173,6 @@ export const InputContainer: React.FC<InputContainerProps> = ({
       currentValue,
       isComposing,
       currentAttachments,
-      isRateLimitExceeded,
       isUploading,
     ]
   );
@@ -256,9 +248,6 @@ export const InputContainer: React.FC<InputContainerProps> = ({
           }
         })
       );
-
-      // Refetch rate limit after successful message send
-      refetchRateLimit();
 
       // Refocus the textarea after sending
       if (textareaRef.current) {
@@ -647,7 +636,6 @@ export const InputContainer: React.FC<InputContainerProps> = ({
       setIsRecording(false);
       
       await onSendMessage(messageToSend, []);
-      refetchRateLimit();
 
       // Clear input if not controlled
       if (!isControlled) {
@@ -669,7 +657,6 @@ export const InputContainer: React.FC<InputContainerProps> = ({
     setValue,
     selectedActionType,
     onSendMessage,
-    refetchRateLimit,
     clearTranscript,
     isControlled,
     setInputValue,
@@ -895,14 +882,6 @@ export const InputContainer: React.FC<InputContainerProps> = ({
       <div className={cn("relative space-y-3", className)}>
         {/* Input Area */}
         <div className="relative flex flex-col items-end w-full">
-          {rateLimitData && !isRateLimitLoading && (
-            <RateLimit
-              remaining={rateLimitData.remaining}
-              limit={rateLimitData.limit}
-              resetTime={rateLimitData.resetTime}
-              className="w-full mb-2"
-            />
-          )}
           {/* Text Input */}
           <div
             className={cn(
@@ -1014,9 +993,7 @@ export const InputContainer: React.FC<InputContainerProps> = ({
               minRows={rows}
               maxRows={8}
               placeholder={
-                isRateLimitExceeded
-                  ? "Rate limit exceeded. Please wait for reset..."
-                  : isUploading
+                isUploading
                     ? "Uploading files... Please wait..."
                     : isInputDisabled
                       ? "Please wait for AI to finish responding..."

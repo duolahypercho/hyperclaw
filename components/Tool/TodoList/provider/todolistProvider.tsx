@@ -8,7 +8,10 @@ import {
   useCallback,
   useRef,
 } from "react";
-import { spawnAgentForTask } from "$/lib/useAgentSpawner";
+import { cronAdd, fetchCronsFromBridge } from "$/components/Tool/Crons/utils";
+import { addRunningJobId } from "$/lib/crons-running-store";
+import { addPendingTaskCronRun } from "$/lib/task-cron-run-store";
+import { useCronTaskStatusPoll } from "../hooks/useCronTaskStatusPoll";
 
 const OBJECT_ID_RE = /^[0-9a-f]{24}$/i;
 
@@ -102,8 +105,6 @@ import {
 } from "../utils";
 import { useDebouncedReorder } from "../hooks";
 import { useRouter } from "next/router";
-import { useCopanionReadable } from "$/OS/AI/core";
-import { encode } from "@toon-format/toon";
 
 interface Props {
   children: ReactNode;
@@ -138,6 +139,7 @@ interface exportedValue {
     source,
     assignedAgent,
     linkedDocumentUrl,
+    delivery,
   }: {
     title: string;
     listId?: string;
@@ -153,6 +155,8 @@ interface exportedValue {
     source?: "app" | "bridge";
     assignedAgent?: string;
     linkedDocumentUrl?: string;
+    /** Optional delivery channel for announcing result (e.g. when task is run by cron) */
+    delivery?: { announce?: boolean; channel?: string; to?: string };
   }) => Promise<any>;
   handleDeleteTask: (id: string, ignore?: boolean) => void;
   handleStatusChange: (
@@ -216,7 +220,7 @@ interface exportedValue {
   ) => void;
   handleOnCloseTaskDetails: () => void;
   handleDragEndLists: (event: DragEndEvent) => void;
-  handleSelectTask: (taskId: string | undefined) => void;
+  handleSelectTask: (taskId: string | undefined, options?: { viewOnly?: boolean }) => void;
   handleTaskWorkflow: ({
     title,
     listId,
@@ -345,35 +349,6 @@ export function TodoListProvider({ children, inMiniMode }: Props) {
   const [descendantContentTaskId, setDescendantContentTaskId] = useState<string | undefined>(undefined);
   const debouncedContent = useDebounce(descendantContent, 300); // Debounce the content
   const initialLoaded = useRef(true);
-
-  useCopanionReadable(
-    {
-      description:
-        "Currently you are on the single active goal view. So everything user want to do might be related to the below goal with the information",
-      value: selectedTask
-        ? `Below is all the information about the active goal user is working on: 
-        ${encode({
-          _id: selectedTask._id,
-          title: selectedTask.title,
-          description: selectedTask.details.description,
-          status: selectedTask.status,
-          goalDueDate: selectedTask.dueDate,
-          recurrence: selectedTask.recurrence,
-          steps: selectedTask.details.steps.map((step) => ({
-            _id: step._id,
-            title: step.title,
-            status: step.status,
-            finishedAt: step.finishedAt
-              ? new Date(step.finishedAt).toLocaleDateString()
-              : null,
-          })),
-          statistics: selectedTask?.statistics,
-        })}`
-        : "User is not working on any goal currently.",
-      available: selectedTask == null ? "disabled" : "enabled",
-    },
-    [selectedTask]
-  );
 
   useEffect(() => {
     if (isSaveNote && selectedTask && descendantContentTaskId === selectedTask._id) {
@@ -512,19 +487,37 @@ export function TodoListProvider({ children, inMiniMode }: Props) {
         throw new Error("Failed to update status");
       }
 
-      // Spawn agent when task moves to in_progress
+      // Create a one-shot cron that runs immediately, then deletes itself
       if (isNowInProgress && taskBeforeUpdate?.assignedAgent && !wasInProgress) {
-        const taskForSpawn = taskBeforeUpdate;
-        // Spawn agent in background (don't await)
-        if (taskForSpawn.assignedAgent) {
-          const result = await spawnAgentForTask({
-            taskId: taskForSpawn._id,
-            agentId: taskForSpawn.assignedAgent,
-            taskTitle: taskForSpawn.title || "",
-            taskDescription: taskForSpawn.description,
-            document: taskForSpawn.linkedDocumentUrl,
-          }).catch(console.error);
-          console.log("spawned agent for task", result);
+        const t = taskBeforeUpdate;
+        const message = [
+          `Work on task: ${t.title || ""}`,
+          t.description ? `Description: ${t.description}` : "",
+          t.linkedDocumentUrl ? `Document: ${t.linkedDocumentUrl}` : "",
+          `Task ID: ${t._id}`,
+        ]
+          .filter(Boolean)
+          .join("\n");
+        const jobName = `Task [${t._id}]: ${(t.title || "Untitled").slice(0, 50)}`;
+        await cronAdd({
+          name: jobName,
+          at: new Date().toISOString(),
+          session: "isolated",
+          agent: t.assignedAgent,
+          message,
+          deleteAfterRun: true,
+        }).catch(console.error);
+        // Track this task's cron run so we can move to Done (ok) or Review (error) when it finishes
+        try {
+          await new Promise((r) => setTimeout(r, 150));
+          const jobs = await fetchCronsFromBridge();
+          const job = jobs.find((j) => j.name?.includes(t._id) || j.name === jobName);
+          if (job?.id) {
+            addPendingTaskCronRun(t._id, job.id);
+            addRunningJobId(job.id);
+          }
+        } catch {
+          // ignore; task stays in progress until user moves it
         }
       }
 
@@ -542,6 +535,10 @@ export function TodoListProvider({ children, inMiniMode }: Props) {
       handleApiError(error, "update status");
     }
   };
+
+  useCronTaskStatusPoll((taskId, status) => {
+    handleStatusChange(taskId, status === "ok" ? "completed" : "blocked");
+  });
 
   const handleToggleMyDay = (id: string, ignore?: boolean) => {
     return handleToggleTaskProperty(id, "myDay", updateTodoTaskAPI, ignore);
@@ -564,6 +561,7 @@ export function TodoListProvider({ children, inMiniMode }: Props) {
       existingId,
       assignedAgent,
       linkedDocumentUrl,
+      delivery,
     }: {
       title: string;
       listId?: string;
@@ -576,6 +574,7 @@ export function TodoListProvider({ children, inMiniMode }: Props) {
       existingId?: string;
       assignedAgent?: string;
       linkedDocumentUrl?: string;
+      delivery?: { announce?: boolean; channel?: string; to?: string };
     }): Promise<any> => {
       const newObjectId = existingId ? sanitizeId(existingId) : generateId();
       try {
@@ -620,6 +619,7 @@ export function TodoListProvider({ children, inMiniMode }: Props) {
           recurrence: recurrence,
           assignedAgent: assignedAgent?.trim() || undefined,
           linkedDocumentUrl: linkedDocumentUrl?.trim() || undefined,
+          delivery,
         });
 
         if (response.status !== 200) {
@@ -1848,7 +1848,7 @@ export function TodoListProvider({ children, inMiniMode }: Props) {
     setTitle("Tasks");
   };
 
-  const handleSelectTask = async (taskId: string | undefined) => {
+  const handleSelectTask = async (taskId: string | undefined, options?: { viewOnly?: boolean }) => {
     try {
       if (!taskId) {
         setSelectedTask(undefined);
@@ -1882,28 +1882,32 @@ export function TodoListProvider({ children, inMiniMode }: Props) {
         } as TaskDetailsType);
       }
 
-      setInProgressTask(taskId);
-      setTasks((prevTasks) =>
-        prevTasks.map((task) =>
-          task._id === taskId ? { ...task, status: "in_progress" } : task
-        )
-      );
+      const viewOnly = options?.viewOnly === true;
+      if (!viewOnly) {
+        setInProgressTask(taskId);
+        setTasks((prevTasks) =>
+          prevTasks.map((task) =>
+            task._id === taskId ? { ...task, status: "in_progress" } : task
+          )
+        );
+      }
 
-      const [getTodoTaskByIdAPIResponse, toggleActiveTaskAPIResponse] =
-        await Promise.all([
-          getTodoTaskByIdAPI(taskId),
-          toggleActiveTaskAPI(taskId),
-        ]);
+      const apiCalls = viewOnly
+        ? [getTodoTaskByIdAPI(taskId)]
+        : [getTodoTaskByIdAPI(taskId), toggleActiveTaskAPI(taskId)];
+      const results = await Promise.all(apiCalls);
+      const getTodoTaskByIdAPIResponse = results[0] as { status: number; data?: unknown };
+      const toggleActiveTaskAPIResponse = results[1] as { status: number } | undefined;
 
       if (getTodoTaskByIdAPIResponse.status !== 200) {
         throw new Error("Failed to get task details");
       }
 
-      if (toggleActiveTaskAPIResponse.status !== 200) {
+      if (!viewOnly && toggleActiveTaskAPIResponse?.status !== 200) {
         throw new Error("Failed to toggle active task");
       }
 
-      const taskData = getTodoTaskByIdAPIResponse.data;
+      const taskData = getTodoTaskByIdAPIResponse.data as TaskDetailsType | undefined;
       if (!taskData) throw new Error("Task not found");
 
       // Convert markdown to slate content
@@ -1912,10 +1916,9 @@ export function TodoListProvider({ children, inMiniMode }: Props) {
           taskData.details?.description || ""
         ) || [];
 
-      // Update with full task data - exclude description from top level since it should only be in details
-      const { description: ___, steps: ____, ...apiDataWithoutExcluded } = taskData;
+      // Update with full task data
       setSelectedTask({
-        ...apiDataWithoutExcluded,
+        ...taskData,
         details: {
           ...taskData.details,
           descendants: slateContent,

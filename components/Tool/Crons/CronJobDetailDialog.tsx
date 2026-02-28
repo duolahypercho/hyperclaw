@@ -10,6 +10,13 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
+import { Switch } from "@/components/ui/switch";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
 import { fetchAllCronRunsForJob, fetchCronRunDetail, formatDurationMs, syncCronRunsForJob } from "./utils";
@@ -23,6 +30,7 @@ const statusLabels: Record<string, string> = {
   ok: "Success",
   error: "Failed",
   idle: "Idle",
+  running: "In progress",
 };
 
 /** Heuristic: content would exceed 2 lines (so we show "View logs" when collapsed). */
@@ -40,12 +48,13 @@ export interface CronJobDetailDialogProps {
 }
 
 export function CronJobDetailDialog({ open, onOpenChange, job }: CronJobDetailDialogProps) {
-  const { cronRun, runningJobId, jobsForList, refresh } = useCrons();
+  const { cronRun, runningJobIds, jobsForList, refresh, handleToggleEnabled, togglingId, bridgeOnly } = useCrons();
   // Use the current job from the list so the dialog shows updated data after edit/optimistic update
   const displayJob = useMemo(
     () => (job?.id ? jobsForList.find((j) => j.id === job.id) ?? job : job),
     [job, jobsForList]
   );
+  const isJobRunning = Boolean(displayJob?.id && runningJobIds.includes(displayJob.id));
   const [runs, setRuns] = useState<CronRunRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
@@ -117,7 +126,7 @@ export function CronJobDetailDialog({ open, onOpenChange, job }: CronJobDetailDi
 
   if (!displayJob) return null;
 
-  const status = (displayJob.state?.lastStatus ?? "idle") as string;
+  const status = (isJobRunning ? "running" : (displayJob.state?.lastStatus ?? "idle")) as string;
   const statusLabel = statusLabels[status] ?? status;
   const lastRunAtMs = displayJob.state?.lastRunAtMs;
   const lastRunStr = lastRunAtMs
@@ -142,7 +151,9 @@ export function CronJobDetailDialog({ open, onOpenChange, job }: CronJobDetailDi
           </DialogDescription>
           <div className="flex flex-wrap items-center gap-3 pt-2 text-sm">
             <span className="flex items-center gap-1.5">
-              {status === "ok" ? (
+              {status === "running" ? (
+                <Loader2 className="h-4 w-4 text-primary shrink-0 animate-spin" />
+              ) : status === "ok" ? (
                 <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
               ) : status === "error" ? (
                 <XCircle className="h-4 w-4 text-destructive shrink-0" />
@@ -174,17 +185,31 @@ export function CronJobDetailDialog({ open, onOpenChange, job }: CronJobDetailDi
               </span>
             </div>
             <div className="flex items-center gap-2 text-muted-foreground">
-              <ToggleLeft className="h-3.5 w-3.5 shrink-0" />
-              <span>Enabled</span>
-              <span className="text-foreground ml-auto">{displayJob.enabled !== false ? "Yes" : "No"}</span>
+              <div className="flex items-center gap-2 w-full">
+                <ToggleLeft className="h-3.5 w-3.5 shrink-0" />
+                <span>Enabled</span>
+                <span className="ml-auto flex items-center gap-2">
+                  {togglingId === displayJob.id ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                  ) : (
+                    <Switch
+                      checked={displayJob.enabled !== false}
+                      onCheckedChange={() => handleToggleEnabled(displayJob)}
+                      disabled={togglingId === displayJob.id || bridgeOnly}
+                      className="shrink-0"
+                      aria-label={displayJob.enabled !== false ? "Disable job" : "Enable job"}
+                    />
+                  )}
+                </span>
+              </div>
             </div>
           </div>
-          <div className="px-6 py-3 flex flex-wrap items-center gap-2 border-t border-border/40">
+          <div className="py-3 flex flex-wrap items-center gap-2 border-t border-border/40">
             <Button
               size="sm"
-              variant="default"
-              className="gap-1.5 h-8 text-xs"
-              disabled={isRunning}
+              variant={isJobRunning ? "outline" : "default"}
+              className={`gap-1.5 h-8 text-xs ${isJobRunning ? "border-amber-500/60 bg-amber-500/15 text-amber-600 dark:text-amber-400 dark:bg-amber-500/20 dark:border-amber-500/50" : ""}`}
+              disabled={isRunning || isJobRunning}
               onClick={async () => {
                 setRunError(null);
                 setIsRunning(true);
@@ -194,15 +219,6 @@ export function CronJobDetailDialog({ open, onOpenChange, job }: CronJobDetailDi
                     setRunError(result.error ?? "Run failed");
                     setIsRunning(false);
                   } else {
-                    // Sync latest run from Claw then refresh run history and job list
-                    try {
-                      await syncCronRunsForJob(displayJob.id);
-                    } catch {
-                      // Non-fatal: still refresh what we have
-                    }
-                    const runs = await loadAllRuns(displayJob.id);
-                    console.log("runs", runs);
-                    refresh?.();
                     setIsRunning(false);
                   }
                 } catch (e: unknown) {
@@ -215,6 +231,11 @@ export function CronJobDetailDialog({ open, onOpenChange, job }: CronJobDetailDi
                 <>
                   <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
                   Sending to Claw
+                </>
+              ) : isJobRunning ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                  In progress
                 </>
               ) : (
                 <>
@@ -234,8 +255,8 @@ export function CronJobDetailDialog({ open, onOpenChange, job }: CronJobDetailDi
             </Button>
             <Button
               size="sm"
-              variant="ghost"
-              className="gap-1.5 h-8 text-xs text-destructive hover:text-destructive hover:bg-destructive/10"
+              variant="destructive"
+              className="gap-1.5 h-8 text-xs"
               onClick={() => setDeleteOpen(true)}
             >
               <Trash2 className="w-3.5 h-3.5" />

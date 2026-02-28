@@ -1,4 +1,4 @@
-import React, { useMemo, useCallback, useState } from "react";
+import React, { useMemo, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Inbox,
@@ -11,6 +11,7 @@ import {
   MoreHorizontal,
   Trash2,
   ArrowRight,
+  Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -24,6 +25,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Task } from "./types";
 import { useTodoList } from "./provider/todolistProvider";
+import { useIsTaskRunningCron } from "./hooks/useIsTaskRunningCron";
 
 export type KanbanColumn = "pending" | "in_progress" | "blocked" | "completed";
 
@@ -112,7 +114,7 @@ const KanbanCard = React.forwardRef<HTMLDivElement, KanbanCardProps>(
     },
     ref
   ) => {
-    const [isDragging, setIsDragging] = useState(false);
+    const isAgentRunning = useIsTaskRunningCron(task._id);
 
     const nextStatus = useMemo(() => {
       const idx = COLUMNS.findIndex((c) => c.id === column.id);
@@ -133,18 +135,10 @@ const KanbanCard = React.forwardRef<HTMLDivElement, KanbanCardProps>(
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, scale: 0.95, y: -4 }}
       transition={{ duration: 0.2, ease: "easeOut" }}
-      draggable
-      onDragStart={(e: React.DragEvent<HTMLDivElement>) => {
-        setIsDragging(true);
-        const ev = e as unknown as React.DragEvent;
-        ev.dataTransfer?.setData("text/plain", task._id);
-        ev.dataTransfer?.setData("application/kanban-status", task.status);
-      }}
-      onDragEnd={() => setIsDragging(false)}
       className={cn(
-        "group relative rounded-lg border border-solid border-border bg-card/80 backdrop-blur-sm p-3 cursor-grab active:cursor-grabbing transition-all duration-200",
+        "group relative rounded-lg border border-solid border-border bg-card/80 backdrop-blur-sm p-3 cursor-pointer transition-all duration-200",
         "hover:border-border hover:shadow-sm hover:bg-card",
-        isDragging && "opacity-50 scale-95 shadow-lg",
+        "active:scale-100 active:opacity-100",
         compact && "p-2"
       )}
       onClick={() => onSelect(task._id)}
@@ -159,6 +153,13 @@ const KanbanCard = React.forwardRef<HTMLDivElement, KanbanCardProps>(
           >
             {task.title}
           </p>
+
+          {column.id === "in_progress" && isAgentRunning && (
+            <div className="flex items-center gap-1.5 mt-1 text-[11px] text-primary">
+              <Loader2 className="w-3 h-3 shrink-0 animate-spin" />
+              <span>In progress</span>
+            </div>
+          )}
 
           {!compact && (
             <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
@@ -286,48 +287,17 @@ const KanbanColumnComponent: React.FC<KanbanColumnComponentProps> = ({
   onToggleStar,
   compact = false,
 }) => {
-  const [isDragOver, setIsDragOver] = useState(false);
-
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-    setIsDragOver(true);
-  }, []);
-
-  const handleDragLeave = useCallback(() => {
-    setIsDragOver(false);
-  }, []);
-
-  const handleDrop = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault();
-      setIsDragOver(false);
-      const taskId = e.dataTransfer.getData("text/plain");
-      const fromStatus = e.dataTransfer.getData("application/kanban-status");
-      if (taskId && fromStatus !== column.id) {
-        onStatusChange(taskId, column.id);
-      }
-    },
-    [column.id, onStatusChange]
-  );
-
   return (
     <div
       className={cn(
-        "flex flex-col min-w-0 flex-1 rounded-lg border border-solid transition-all duration-200",
-        isDragOver
-          ? cn("border-2", column.borderClass, column.bgClass, "shadow-sm")
-          : "border-border bg-background/40"
+        "flex flex-col min-w-0 flex-1 rounded-lg border border-solid border-border bg-background/40 transition-all duration-200"
       )}
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
     >
       <div className="flex items-center gap-2 px-3 py-2.5 border-b border-t-0 border-l-0 border-r-0 border-solid border-border">
         <span className={cn("shrink-0", column.accentClass)}>
           {column.icon}
         </span>
-        <span className="text-xs font-semibold text-foreground">
+        <span className="text-xs font-medium text-foreground">
           {column.label}
         </span>
         <Badge

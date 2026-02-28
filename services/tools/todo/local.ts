@@ -54,6 +54,8 @@ interface StoredTask {
   attachments: string[];
   assignedAgent?: string;
   linkedDocumentUrl?: string;
+  /** Delivery channel for announcing result when task is run (e.g. by cron). */
+  delivery?: { announce?: boolean; channel?: string; to?: string };
 }
 
 interface StoredList {
@@ -97,6 +99,14 @@ function normalizeTask(t: Record<string, unknown>): StoredTask {
     attachments: Array.isArray(t.attachments) ? (t.attachments as string[]) : [],
     assignedAgent: t.assignedAgent as string | undefined,
     linkedDocumentUrl: t.linkedDocumentUrl as string | undefined,
+    delivery:
+      t.delivery && typeof t.delivery === "object"
+        ? {
+            announce: Boolean((t.delivery as Record<string, unknown>).announce),
+            channel: typeof (t.delivery as Record<string, unknown>).channel === "string" ? (t.delivery as Record<string, unknown>).channel as string : undefined,
+            to: typeof (t.delivery as Record<string, unknown>).to === "string" ? (t.delivery as Record<string, unknown>).to as string : undefined,
+          }
+        : undefined,
   };
 }
 
@@ -175,6 +185,7 @@ function taskToSummary(t: StoredTask) {
     statistics: statsToDate(t.statistics),
     assignedAgent: t.assignedAgent,
     linkedDocumentUrl: t.linkedDocumentUrl,
+    delivery: t.delivery,
   };
 }
 
@@ -202,6 +213,9 @@ function taskToDetails(t: StoredTask) {
       steps: steps.map(stepToDate),
       attachments,
     },
+    assignedAgent: t.assignedAgent,
+    linkedDocumentUrl: t.linkedDocumentUrl,
+    delivery: t.delivery,
   };
 }
 
@@ -300,6 +314,7 @@ export const addTodoTaskAPI = async (req: AddTodoTaskRequest) => {
     attachments: [],
     assignedAgent: req.assignedAgent,
     linkedDocumentUrl: req.linkedDocumentUrl,
+    delivery: req.delivery,
   };
   data.tasks.push(newTask);
   await save(data);

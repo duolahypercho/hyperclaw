@@ -12,6 +12,7 @@ import {
 } from "$/components/Home/widgets";
 import { useOS } from "@OS/Provider/OSProv";
 import { useToast } from "@/components/ui/use-toast";
+import { cn } from "@/lib/utils";
 import { PomodoroProvider } from "$/components/Tool/Pomodoro/pomoProvider";
 
 export default function Home() {
@@ -241,7 +242,10 @@ export default function Home() {
         />
       )}
       <div
-        className="flex-1 overflow-auto customScrollbar2 bg-background/80 backdrop-blur-xl"
+        className={cn(
+          "flex-1 overflow-auto customScrollbar2 bg-background/80 backdrop-blur-xl",
+          isEditMode && "select-none"
+        )}
         data-dashboard="true"
       >
         <Dashboard

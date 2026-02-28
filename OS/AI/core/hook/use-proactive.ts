@@ -29,7 +29,6 @@ export function useProactive(
   const syncingRef = useRef(false); // Lock to prevent concurrent database syncs
   const [isDatabaseReady, setIsDatabaseReady] = useState(false);
   const databaseCheckedRef = useRef(false);
-  const { isGenerateResponseDailyRateLimitExceeded } = useAssistant();
 
   // Initialize database state on mount (only once)
   useEffect(() => {
@@ -89,7 +88,6 @@ export function useProactive(
 
   useEffect(() => {
     if (
-      isGenerateResponseDailyRateLimitExceeded ||
       isLoading ||
       !osSettings.copanion
     )

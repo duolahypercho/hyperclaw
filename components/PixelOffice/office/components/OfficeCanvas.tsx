@@ -496,12 +496,15 @@ export function OfficeCanvas({ officeState, onClick, isEditMode, editorState, on
         return
       }
 
-      // Left-click (non-edit): record start for possible drag-to-pan (only when not over an agent)
+      // Left-click (non-edit): record start for possible drag-to-pan (only when not over an agent or a seat)
       if (e.button === 0 && !isEditMode) {
         didPanThisGestureRef.current = false
         const pos = screenToWorld(e.clientX, e.clientY)
         const hitId = pos ? officeState.getCharacterAt(pos.worldX, pos.worldY) : null
-        if (hitId === null) {
+        const tile = screenToTile(e.clientX, e.clientY)
+        const seatId = tile ? officeState.getSeatAtTile(tile.col, tile.row) : null
+        // Don't start pan when over an agent or a seat — so chair clicks and agent clicks always register
+        if (hitId === null && !seatId) {
           leftPanStartRef.current = {
             mouseX: e.clientX,
             mouseY: e.clientY,
