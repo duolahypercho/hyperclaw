@@ -94,6 +94,16 @@ The OpenClaw **gateway** is a local WebSocket at `ws://127.0.0.1:18789` (or the 
 - **Custom gateway port**: If you use a non-default port in `~/.openclaw/openclaw.json` (`gateway.port`), add that port to `connect-src` in `next.config.js` (e.g. `ws://127.0.0.1:YOUR_PORT`).
 - **If the gateway still doesn't connect**: Ensure the OpenClaw gateway is running on the user's PC (e.g. `openclaw gateway run` or the OpenClaw app). In Electron DevTools (e.g. Console), check for CSP or WebSocket errors.
 
+**"Origin not allowed" (Control UI)**: The Copanion Electron app **automatically** adds your app origin (from `electron/app-config.json` `remoteUrl`) to `~/.openclaw/openclaw.json` → `gateway.controlUi.allowedOrigins` when:
+
+- The app runs in **remote** mode, and
+- The user (or the UI) requests the gateway connect URL, and at app startup.
+
+So in normal use, users do not need to edit the file by hand. If you still see *origin not allowed*, then:
+
+  1. Open `~/.openclaw/openclaw.json` and ensure `gateway.controlUi.allowedOrigins` includes your app URL (no trailing slash), e.g. `["https://app.claw.hypercho.com"]`.
+  2. Restart the OpenClaw gateway (e.g. restart the OpenClaw app or `openclaw gateway run`).
+
 **Security**: Allowing `ws://127.0.0.1:18789` does **not** let attackers reach your servers—127.0.0.1 is the user's own machine. It only lets your app's frontend connect to a local WebSocket on that machine. The rule is restricted to port 18789 so that even in the event of XSS, script cannot probe other local services (e.g. Redis, dev servers on other ports).
 
 ## Summary

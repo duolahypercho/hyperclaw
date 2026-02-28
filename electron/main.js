@@ -1244,8 +1244,41 @@ ipcMain.handle("openclaw:gateway-health", async () => {
   }
 });
 
+// Ensure ~/.openclaw/openclaw.json has gateway.controlUi.allowedOrigins including the app origin
+// (so the gateway accepts the Control UI when loaded from Vercel in Electron).
+function ensureOpenClawControlUiOrigin(origin) {
+  const o = typeof origin === "string" ? origin.trim().replace(/\/+$/, "") : "";
+  if (!o || (!o.startsWith("http://") && !o.startsWith("https://"))) return;
+  try {
+    if (!fs.existsSync(OPENCLAW_HOME)) fs.mkdirSync(OPENCLAW_HOME, { recursive: true });
+    let config = {};
+    if (fs.existsSync(OPENCLAW_CONFIG_PATH)) {
+      let raw = fs.readFileSync(OPENCLAW_CONFIG_PATH, "utf-8");
+      try {
+        config = JSON.parse(raw);
+      } catch {
+        raw = raw
+          .replace(/\/\/[^\n]*/g, "")
+          .replace(/\/\*[\s\S]*?\*\//g, "")
+          .replace(/,(\s*[}\]])/g, "$1");
+        config = JSON.parse(raw);
+      }
+    }
+    if (!config.gateway) config.gateway = {};
+    if (!config.gateway.controlUi) config.gateway.controlUi = {};
+    if (!Array.isArray(config.gateway.controlUi.allowedOrigins)) config.gateway.controlUi.allowedOrigins = [];
+    if (!config.gateway.controlUi.allowedOrigins.includes(o)) {
+      config.gateway.controlUi.allowedOrigins.push(o);
+      fs.writeFileSync(OPENCLAW_CONFIG_PATH, JSON.stringify(config, null, 2), "utf-8");
+    }
+  } catch (err) {
+    console.warn("[Copanion] Could not update openclaw.json controlUi.allowedOrigins:", err?.message);
+  }
+}
+
 ipcMain.handle("openclaw:get-gateway-connect-url", async () => {
   try {
+    if (isRemoteMode && remoteUrl) ensureOpenClawControlUiOrigin(remoteUrl);
     if (!fs.existsSync(OPENCLAW_CONFIG_PATH)) {
       return { gatewayUrl: "http://127.0.0.1:18789", token: null, error: "Config file not found" };
     }
@@ -2906,6 +2939,7 @@ app.whenReady().then(() => {
   writeToBridgeLog("Copanion main process started");
   createTray();
   createWindow();
+  if (isRemoteMode && remoteUrl) ensureOpenClawControlUiOrigin(remoteUrl);
   startBridgeWatchers();
   startDailyMemoryScheduler();
 
