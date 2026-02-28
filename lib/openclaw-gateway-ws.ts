@@ -322,3 +322,60 @@ export async function sendChatMessageWs(sessionKey: string, message: string): Pr
     idempotencyKey,
   });
 }
+
+/** Single day from gateway usage.cost response. */
+export interface GatewayUsageDaily {
+  date: string;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  totalTokens: number;
+  totalCost: number;
+  inputCost: number;
+  outputCost: number;
+  cacheReadCost: number;
+  cacheWriteCost: number;
+  missingCostEntries: number;
+}
+
+/** Totals from gateway usage.cost response. */
+export interface GatewayUsageTotals {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  totalTokens: number;
+  totalCost: number;
+  inputCost: number;
+  outputCost: number;
+  cacheReadCost: number;
+  cacheWriteCost: number;
+  missingCostEntries: number;
+}
+
+/** Result shape from gateway usage.cost (daily + totals). */
+export interface UsageCostPayload {
+  updatedAt?: number;
+  days?: number;
+  daily?: GatewayUsageDaily[];
+  totals?: GatewayUsageTotals;
+  [key: string]: unknown;
+}
+
+/** Fetch usage cost from the gateway via WebSocket (usage.cost).
+ * @param params.detail - Optional: "off" | "tokens" | "full" to request different response detail levels.
+ */
+export async function getUsageCostWs(params?: { detail?: "off" | "tokens" | "full" }): Promise<UsageCostPayload> {
+  const { connected } = getGatewayConnectionState();
+  if (!connected) {
+    console.warn("Gateway is not connected. Skipping usage cost fetch.");
+    return {
+      error: "Gateway not connected",
+    } as UsageCostPayload;
+  }
+
+  const requestParams: Record<string, unknown> = params?.detail ? { detail: params.detail } : {};
+  const payload = await gatewayConnection.request<UsageCostPayload>("usage.cost", requestParams);
+  return payload ?? {};
+}

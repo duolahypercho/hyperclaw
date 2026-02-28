@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
-import { fetchAllCronRunsForJob, fetchCronRunDetail, formatDurationMs } from "./utils";
+import { fetchAllCronRunsForJob, fetchCronRunDetail, formatDurationMs, syncCronRunsForJob } from "./utils";
 import { useCrons } from "./provider/cronsProvider";
 import { EditCronDialog } from "./EditCronDialog";
 import { DeleteCronDialog } from "./DeleteCronDialog";
@@ -40,7 +40,7 @@ export interface CronJobDetailDialogProps {
 }
 
 export function CronJobDetailDialog({ open, onOpenChange, job }: CronJobDetailDialogProps) {
-  const { cronRun, runningJobId, jobsForList } = useCrons();
+  const { cronRun, runningJobId, jobsForList, refresh } = useCrons();
   // Use the current job from the list so the dialog shows updated data after edit/optimistic update
   const displayJob = useMemo(
     () => (job?.id ? jobsForList.find((j) => j.id === job.id) ?? job : job),
@@ -62,6 +62,7 @@ export function CronJobDetailDialog({ open, onOpenChange, job }: CronJobDetailDi
     try {
       const allRuns = await fetchAllCronRunsForJob(jobId);
       setRuns(allRuns);
+      return allRuns;
     } finally {
       setLoading(false);
     }
@@ -189,19 +190,38 @@ export function CronJobDetailDialog({ open, onOpenChange, job }: CronJobDetailDi
                 setIsRunning(true);
                 try {
                   const result = await cronRun(displayJob.id);
-                  console.log("result", result);
-                  if (!result.success) setRunError(result.error ?? "Run failed");
-                } finally {
+                  if (!result.success) {
+                    setRunError(result.error ?? "Run failed");
+                    setIsRunning(false);
+                  } else {
+                    // Sync latest run from Claw then refresh run history and job list
+                    try {
+                      await syncCronRunsForJob(displayJob.id);
+                    } catch {
+                      // Non-fatal: still refresh what we have
+                    }
+                    const runs = await loadAllRuns(displayJob.id);
+                    console.log("runs", runs);
+                    refresh?.();
+                    setIsRunning(false);
+                  }
+                } catch (e: unknown) {
+                  setRunError(e instanceof Error ? e.message : "Run failed");
                   setIsRunning(false);
                 }
               }}
             >
               {isRunning ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                  Sending to Claw
+                </>
               ) : (
-                <Play className="w-3.5 h-3.5" />
+                <>
+                  <Play className="w-3.5 h-3.5 shrink-0" />
+                  Run now
+                </>
               )}
-              Run now
             </Button>
             <Button
               size="sm"

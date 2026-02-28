@@ -7,4 +7,3 @@ export { default as HyperchoDropdownMenuLabel } from "./DropdownMenuLabel";
 export { default as HyperchoDropdownMenuSeparator } from "./DropdownMenuSeparator";
 export { default as HyperchoDropdownSubMenuTrigger } from "./SubMenuTrigger";
 export { default as HyperchoDropdownSubContext } from "./SubMenuContext";
-export { default as HyperchoMutiSelect } from "./MutiSelect";

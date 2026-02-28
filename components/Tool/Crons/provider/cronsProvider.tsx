@@ -1,5 +1,6 @@
 "use client";
 
+import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
 import React, {
   createContext,
   useContext,
@@ -63,6 +64,10 @@ export interface CronsContextValue {
 
 const CronsContext = createContext<CronsContextValue | null>(null);
 
+export function useCronsActions() {
+  return useCrons();
+}
+
 export function useCrons() {
   const ctx = useContext(CronsContext);
   if (!ctx) throw new Error("useCrons must be used within CronsProvider");
@@ -119,6 +124,35 @@ export function CronsProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (installed === false) fetchBridgeCrons();
   }, [installed, fetchBridgeCrons]);
+
+  // Poll for running cron jobs every 10 seconds
+  useEffect(() => {
+    let intervalId: NodeJS.Timeout;
+    
+    const checkRunningCrons = async () => {
+      try {
+        const result = await bridgeInvoke("get-running-crons", {}) as { agentId: string; jobId: string }[];
+        if (!Array.isArray(result) || result.length === 0) {
+          if (runningJobId) setRunningJobId(null);
+          return;
+        }
+        const firstRunning = result[0];
+        const jobId = firstRunning.jobId;
+        if (jobId && jobId !== runningJobId) {
+          setRunningJobId(jobId);
+        }
+      } catch (e) {
+        // Ignore polling errors
+      }
+    };
+    
+    checkRunningCrons();
+    intervalId = setInterval(checkRunningCrons, 10000);
+    
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [runningJobId]);
 
   const parsedCronJobs = useMemo(() => parseCronJobs(cronJobs), [cronJobs]);
   const openClawJobs =

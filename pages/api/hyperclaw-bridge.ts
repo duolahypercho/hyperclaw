@@ -1394,7 +1394,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (typeof p.tz === "string" && p.tz.trim()) args.push("--tz", p.tz.trim());
       if (typeof p.message === "string" && p.message.trim()) args.push("--message", p.message.trim());
       if (typeof p.systemEvent === "string" && p.systemEvent.trim()) args.push("--system-event", p.systemEvent.trim());
-      if (p.wake === "now" || p.wake === true) args.push("--wake", "now");
       if (p.deleteAfterRun === true) args.push("--delete-after-run");
       if (p.announce === true) {
         args.push("--announce");
@@ -1422,6 +1421,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (cronRunDue === true) args.push("--due");
       try {
         await runOpenClawArgs(args, 60000);
+        return res.json({ success: true });
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return res.status(500).json({ success: false, error: msg });
+      }
+    }
+    case "cron-runs-sync": {
+      const syncJobId = typeof singleJobId === "string" ? singleJobId.trim() : "";
+      if (!syncJobId || !/^[a-f0-9-]{36}$/i.test(syncJobId)) {
+        return res.status(400).json({ success: false, error: "Valid job id is required" });
+      }
+      try {
+        await runOpenClawArgs(["cron", "runs", "--id", syncJobId, "--limit", "1"], 15000);
         return res.json({ success: true });
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -1594,6 +1606,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
         return res.status(500).json({ success: false, error: msg });
+      }
+    }
+    // Get running cron jobs by parsing CLI output
+    case "get-running-crons": {
+      try {
+        const { stdout } = await execAsync("openclaw sessions", { cwd: OPENCLAW_DIR, env: openclawEnv(), timeout: 10000 });
+        const lines = stdout.split("\n").filter((l: string) => l.includes(":cron:"));
+        const running = lines.map((l: string) => {
+          const match = l.match(/agent:([^:]+):cron:([^\s]+)/);
+          return match ? { agentId: match[1], jobId: match[2] } : null;
+        }).filter(Boolean);
+        return res.json(running);
+      } catch {
+        return res.json([]);
       }
     }
     default:

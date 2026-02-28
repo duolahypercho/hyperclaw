@@ -19,7 +19,6 @@ import {
 } from "lucide-react";
 import { useOS } from "@OS/Provider/OSProv";
 import { useSoundEffect } from "@OS/hooks/useSoundEffect";
-import { useMusicPlayer } from "$/components/Tool/Music/MusicPlayer/providers/musicProvider";
 import { useTimer } from "$/Providers/TimerProv";
 import { AppSchema } from "@OS/Layout/types";
 import { isElectron } from "$/hooks/useIsElectron";

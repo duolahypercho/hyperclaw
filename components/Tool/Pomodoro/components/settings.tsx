@@ -13,10 +13,8 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Slider } from "@/components/ui/slider";
-import { useMusicPlayer } from "$/components/Tool/Music/MusicPlayer/providers/musicProvider";
 import { usePomodoro } from "../pomoProvider";
 import { FOCUS, SHORT_BREAK, PomodoroSettings } from "../types";
-import { ZSong } from "$/components/Tool/Music/Provider/types";
 
 interface SettingsPanelContentProps {
   className?: string;

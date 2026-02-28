@@ -35,7 +35,6 @@ import {
   HyperchoInputOTP,
 } from "$/components/UI/InputBox";
 import { useInterim } from "$/Providers/InterimProv";
-import { HyperchoMutiSelect } from "$/components/UI/Dropdown";
 import Switch from "$/components/UI/Switch";
 import { FieldConfig, SchemaConfig } from "@/types/form";
 import {
@@ -238,16 +237,6 @@ const HyperchoFormInput = ({
             </SelectGroup>
           </SelectContent>
         </Select>
-      );
-    case "multiSelect":
-      return (
-        <HyperchoMutiSelect
-          onValueChange={field.onChange}
-          value={field.value}
-          placeholder={config.placeholder}
-          selectedValue={config.selectedValue}
-          maxSelect={config.maxItems}
-        />
       );
     case "checkbox":
       return (

@@ -7,10 +7,10 @@ import UsageChart from "./components/UsageChart";
 
 const appSchema: AppSchema = {
   header: {
-    title: "Token Usage",
+    title: "Gateway Usage & Cost",
     centerUI: {
       type: "breadcrumbs",
-      breadcrumbs: [{ label: "OpenClaw sessions" }],
+      breadcrumbs: [{ label: "OpenClaw gateway" }],
       className: "text-base font-semibold text-foreground",
     },
   },

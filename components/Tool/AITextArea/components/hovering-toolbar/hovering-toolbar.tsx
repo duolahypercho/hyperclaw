@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Editor, Location, Transforms, Range } from "slate";
+import { Editor, Location, Node as SlateNode, Transforms, Range } from "slate";
 import { ReactEditor, useSlate, useSlateSelection } from "slate-react";
 import { HoveringInsertionPromptBox } from "./text-insertion-prompt-box";
 import { Menu, Portal } from "./hovering-toolbar-components";
@@ -68,7 +68,9 @@ export const HoveringToolbar = (props: HoveringToolbarProps) => {
         const boundingRects = []; // Store all bounding rectangles
         for (const [blockNode] of selectedBlocks) {
           // Get the DOM node for each block
-          const domNode = ReactEditor.toDOMNode(editor, blockNode);
+          const domNode = (
+            ReactEditor as { toDOMNode(editor: Editor, node: SlateNode): HTMLElement }
+          ).toDOMNode(editor, blockNode);
 
           // Apply the highlight class
           if (markdownMode) {
@@ -135,7 +137,7 @@ export const HoveringToolbar = (props: HoveringToolbarProps) => {
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (ref.current && !ref.current.contains(event.target as Node)) {
+      if (ref.current && !ref.current.contains(event.target as Node | null)) {
         setIsDisplayed(false);
       }
     };

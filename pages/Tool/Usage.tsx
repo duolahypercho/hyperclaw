@@ -6,9 +6,9 @@ import Usage from "$/components/Tool/Usage";
 import { UsageProvider } from "$/components/Tool/Usage/provider/usageProvider";
 
 const usageSEOSchema: SEOSchema = {
-  title: "Token Usage - Copanion OS",
+  title: "Gateway Usage & Cost - Copanion OS",
   description:
-    "View aggregated token usage from OpenClaw agents and sessions. Input, output, and total tokens from ~/.openclaw/agents and sessions.",
+    "View token usage and cost from the OpenClaw gateway. Daily input, output, cache read/write, and cost breakdown.",
   url: "https://www.copanion.hypercho.com/Tool/Usage",
   image: "https://hypercho.com/hypercho_banner.png",
   author: "Hypercho",
@@ -19,14 +19,14 @@ const usageSEOSchema: SEOSchema = {
     card: "summary_large_image",
     site: "@hypercho",
     creator: "@hypercho",
-    title: "Token Usage - Copanion OS",
-    description: "OpenClaw token usage and usage by agent.",
+    title: "Gateway Usage & Cost - Copanion OS",
+    description: "OpenClaw gateway token usage and cost by day.",
     image: "https://hypercho.com/hypercho_banner.png",
   },
   openGraph: {
     type: "software",
-    title: "Token Usage - Copanion OS",
-    description: "View token usage from OpenClaw agents and sessions.",
+    title: "Gateway Usage & Cost - Copanion OS",
+    description: "View token usage and cost from the OpenClaw gateway.",
     url: "https://www.copanion.hypercho.com/Tool/Usage",
     image: "https://hypercho.com/hypercho_banner.png",
     site_name: "Hypercho Copanion",
@@ -34,15 +34,15 @@ const usageSEOSchema: SEOSchema = {
   },
   jsonLd: {
     "@type": "SoftwareApplication",
-    name: "Copanion Token Usage",
-    description: "Aggregated token usage from OpenClaw sessions and agents",
+    name: "Copanion Gateway Usage",
+    description: "Token usage and cost from OpenClaw gateway (usage.cost)",
     applicationCategory: "ProductivityApplication",
     operatingSystem: "Web Browser",
     softwareVersion: "1.0",
     featureList: [
-      "Token usage by day",
-      "Input / output / total tokens",
-      "Usage by agent",
+      "Usage by day",
+      "Input / output / cache read & write",
+      "Cost breakdown (USD)",
       "Charts and totals",
     ],
     offers: {
@@ -58,7 +58,7 @@ const usageSEOSchema: SEOSchema = {
       url: "https://hypercho.com",
     },
     applicationSubCategory: "OfficeApplication",
-    storageRequirements: "Read from ~/.openclaw/agents and sessions",
+    storageRequirements: "OpenClaw gateway connection",
     browserRequirements: "Chrome 90+, Firefox 88+, Safari 14+, Edge 90+",
   },
 };

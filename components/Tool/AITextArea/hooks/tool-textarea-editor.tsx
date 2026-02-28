@@ -9,6 +9,11 @@ import {
 import { CustomEditor, CustomElement, CustomText } from "../types";
 import { jsx } from "slate-hyperscript";
 
+/** Editor type including DOM insertData (present at runtime via withReact, not in slate-react typings). */
+type EditorWithInsertData = CustomEditor & {
+  insertData: (data: DataTransfer) => void | Promise<void>;
+};
+
 const ELEMENT_TAGS: Record<string, (el: any) => Partial<CustomElement>> = {
   BLOCKQUOTE: () => ({ type: "block_quote" }),
   H1: () => ({ type: "heading_one" }),
@@ -190,8 +195,9 @@ export function useToolTextareaEditor({
       }
     };
 
-    const { insertData } = editor;
-    editor.insertData = async (data) => {
+    const editorWithData = editor as EditorWithInsertData;
+    const { insertData } = editorWithData;
+    editorWithData.insertData = async (data: DataTransfer) => {
       const html = data.getData("text/html");
 
       const { files } = data;

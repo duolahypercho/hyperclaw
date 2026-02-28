@@ -3,7 +3,18 @@ import cronParser from "cron-parser";
 import type { OpenClawCronJobJson, CronRunRecord } from "$/types/electron";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
 
-/** Params for adding a cron job (maps to openclaw cron add flags). */
+/**
+ * Params for adding a cron job (maps to openclaw cron add flags).
+ *
+ * CLI equivalent (run in terminal):
+ *   openclaw cron add --name "Job name" --session main --system-event "Reminder text" --at "20m"
+ *   openclaw cron add --name "Job name" --session isolated --message "Prompt" --cron "0 7 * * *" --tz "America/Los_Angeles"
+ *
+ * Rules:
+ *   - Main session: --system-event is REQUIRED (use System event field in UI).
+ *   - Isolated session: use --message and/or --system-event.
+ *   - Schedule: one of --at (ISO or relative e.g. 20m) or --cron (e.g. 0 7 * * *).
+ */
 export interface CronAddParams {
   name: string;
   at?: string;
@@ -12,7 +23,6 @@ export interface CronAddParams {
   session?: string;
   message?: string;
   systemEvent?: string;
-  wake?: "now" | boolean;
   deleteAfterRun?: boolean;
   announce?: boolean;
   channel?: string;
@@ -32,6 +42,9 @@ export interface CronEditParams {
   agent?: string;
   clearAgent?: boolean;
   exact?: boolean;
+  announce?: boolean;
+  channel?: string;
+  to?: string;
 }
 
 export async function cronAdd(params: CronAddParams): Promise<{ success: boolean; error?: string }> {
@@ -39,9 +52,35 @@ export async function cronAdd(params: CronAddParams): Promise<{ success: boolean
   return { success: data?.success === true, error: data?.error };
 }
 
+// Fire-and-forget cron run - triggers and returns immediately
 export async function cronRun(jobId: string, options?: { due?: boolean }): Promise<{ success: boolean; error?: string }> {
-  const data = (await bridgeInvoke("cron-run", { cronRunJobId: jobId, cronRunDue: options?.due === true })) as { success?: boolean; error?: string };
-  return { success: data?.success === true, error: data?.error };
+  try {
+    // Trigger the cron but don't wait for completion
+    // Use timeout to avoid hanging - if it takes >5s, consider it started
+    const data = await Promise.race([
+      bridgeInvoke("cron-run", { cronRunJobId: jobId, cronRunDue: options?.due === true }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 5000))
+    ]) as { success?: boolean; error?: string };
+    return { success: true, error: undefined }; // Assume success if triggered
+  } catch (e: unknown) {
+    const err = e instanceof Error ? e : new Error(String(e));
+    if (err.message === "timeout") {
+      return { success: true, error: undefined };
+    }
+    return { success: false, error: err.message };
+  }
+}
+
+/** Run `openclaw cron runs --id <jobId> --limit 1` to fetch/sync the latest run info for a job. */
+export async function syncCronRunsForJob(jobId: string): Promise<{ success: boolean; error?: string }> {
+  if (!jobId?.trim()) return { success: false, error: "Job id is required" };
+  try {
+    const data = await bridgeInvoke("cron-runs-sync", { jobId: jobId.trim() }) as { success?: boolean; error?: string };
+    return { success: data?.success === true, error: data?.error };
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { success: false, error: msg };
+  }
 }
 
 export async function cronEdit(jobId: string, params: CronEditParams): Promise<{ success: boolean; error?: string }> {

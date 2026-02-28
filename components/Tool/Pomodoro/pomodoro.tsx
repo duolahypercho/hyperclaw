@@ -12,7 +12,6 @@ import {
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { usePomodoro } from "./pomoProvider";
-import { useMusicPlayer } from "$/components/Tool/Music/MusicPlayer/providers/musicProvider";
 import { useTimer } from "$/Providers/TimerProv";
 import { isEqual } from "lodash";
 
@@ -25,7 +24,6 @@ import {
 } from "./types";
 import { SettingsPanel } from "./components/settings";
 import { PomodoroAnimation } from "./components/animation";
-import { ZSong } from "$/components/Tool/Music/Provider/types";
 
 const SESSION_ICONS = {
   [FOCUS]: Timer,

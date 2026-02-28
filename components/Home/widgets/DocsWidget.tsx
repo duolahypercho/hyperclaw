@@ -409,7 +409,7 @@ const DocsWidgetContent = memo((props: CustomProps) => {
               <ScrollArea className="flex-1 min-h-0">
                 <div className="space-y-0.5 pr-2">
                   {displayList.length > 0 && (
-                    <p className="text-xs font-normal text-muted-foreground px-2 py-1 sticky top-0 bg-card/80 backdrop-blur-sm z-[1]">
+                    <p className="text-xs font-normal text-muted-foreground px-2 py-1 mx-1 sticky top-0 bg-card/80 backdrop-blur-sm z-[1]">
                       {viewMode === "agents" ? "Agent files" : "Recently edited"}
                     </p>
                   )}

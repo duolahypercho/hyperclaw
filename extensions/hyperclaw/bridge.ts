@@ -16,18 +16,21 @@ function generateTaskId(): string {
 }
 
 type TodoData = { tasks: Record<string, unknown>[]; lists: unknown[]; activeTaskId: string | null };
+type ChannelData = { channels: Record<string, unknown>[] };
 
 export class HyperClawBridge {
   private dataDir: string;
   private todoPath: string;
   private eventsPath: string;
   private commandsPath: string;
+  private channelsPath: string;
 
   constructor(dataDir?: string) {
     this.dataDir = dataDir ?? DEFAULT_DATA_DIR;
     this.todoPath = path.join(this.dataDir, "todo.json");
     this.eventsPath = path.join(this.dataDir, "events.jsonl");
     this.commandsPath = path.join(this.dataDir, "commands.jsonl");
+    this.channelsPath = path.join(this.dataDir, "channels.json");
   }
 
   private ensureDir(): void {
@@ -132,5 +135,71 @@ export class HyperClawBridge {
     } catch {
       return [];
     }
+  }
+
+  // ── Channel Management ─────────────────────────────────────────────────
+  private readChannelData(): ChannelData {
+    try {
+      if (!fs.existsSync(this.channelsPath)) {
+        return { channels: [] };
+      }
+      const raw = JSON.parse(fs.readFileSync(this.channelsPath, "utf-8"));
+      return {
+        channels: Array.isArray(raw.channels) ? raw.channels : [],
+      };
+    } catch {
+      return { channels: [] };
+    }
+  }
+
+  private writeChannelData(data: ChannelData): void {
+    this.ensureDir();
+    fs.writeFileSync(this.channelsPath, JSON.stringify(data, null, 2), "utf-8");
+  }
+
+  addChannel(channel: {
+    id: string;
+    name: string;
+    type: string;
+    kind: string;
+  }): Record<string, unknown> {
+    const data = this.readChannelData();
+    const now = new Date().toISOString();
+    const newChannel = {
+      ...channel,
+      createdAt: now,
+    };
+    const exists = data.channels.find((c: Record<string, unknown>) => c.id === channel.id);
+    if (exists) return { ...exists, error: "Channel already exists" };
+    data.channels.push(newChannel);
+    this.writeChannelData(data);
+    return newChannel;
+  }
+
+  getChannels(): Record<string, unknown>[] {
+    return this.readChannelData().channels;
+  }
+
+  getChannel(id: string): Record<string, unknown> | undefined {
+    const channels = this.readChannelData().channels;
+    return channels.find((c) => c.id === id) as Record<string, unknown> | undefined;
+  }
+
+  updateChannel(id: string, patch: Record<string, unknown>): Record<string, unknown> | undefined {
+    const data = this.readChannelData();
+    const idx = data.channels.findIndex((c) => c.id === id);
+    if (idx === -1) return undefined;
+    Object.assign(data.channels[idx], patch);
+    this.writeChannelData(data);
+    return data.channels[idx];
+  }
+
+  deleteChannel(id: string): boolean {
+    const data = this.readChannelData();
+    const initialLength = data.channels.length;
+    data.channels = data.channels.filter((c) => c.id !== id);
+    if (data.channels.length === initialLength) return false;
+    this.writeChannelData(data);
+    return true;
   }
 }

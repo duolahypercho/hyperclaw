@@ -7,7 +7,7 @@ import {
 } from "slate-react";
 import { ToolBoxImageElement } from "../types";
 import { Button } from "@/components/ui/button";
-import { Transforms } from "slate";
+import { Transforms, Editor, Node, Path } from "slate";
 import { Trash } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { getMediaUrl } from "../../../../utils";
@@ -103,7 +103,11 @@ const ImageElement = (
   const selected = useSelected();
   const focused = useFocused();
   const editor = useSlateStatic();
-  const path = ReactEditor.findPath(editor, props.element);
+  const path = (
+    ReactEditor as {
+      findPath(editor: Editor, node: Node): Path;
+    }
+  ).findPath(editor, props.element);
 
   return (
     <div {...props.attributes} contentEditable={false}>

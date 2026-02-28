@@ -211,7 +211,9 @@ const BaseTextareaWithToolbarContext = forwardRef(
           });
 
           // Scroll to bottom after inserting text
-          const editorElement = ReactEditor.toDOMNode(editor, editor);
+          const editorElement = (
+            ReactEditor as { toDOMNode(editor: Editor, node: Node): HTMLElement }
+          ).toDOMNode(editor, editor);
           editorElement.scrollTop = editorElement.scrollHeight;
 
           insertedTextLengthRef.current += text.length;
@@ -729,7 +731,9 @@ const BaseTextareaWithHoveringContext = forwardRef(
           });
 
           // Scroll to bottom after inserting text
-          const editorElement = ReactEditor.toDOMNode(editor, editor);
+          const editorElement = (
+            ReactEditor as { toDOMNode(editor: Editor, node: Node): HTMLElement }
+          ).toDOMNode(editor, editor);
           editorElement.scrollTop = editorElement.scrollHeight;
 
           insertedTextLengthRef.current += text.length;

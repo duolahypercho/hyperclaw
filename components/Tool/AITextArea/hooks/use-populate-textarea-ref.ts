@@ -1,5 +1,5 @@
 import React from "react";
-import { Editor, Descendant, Point, Transforms } from "slate";
+import { Editor, Descendant, Point, Transforms, Node as SlateNode } from "slate";
 import { ReactEditor } from "slate-react";
 import { getFullEditorTextWithNewlines } from "../lib/get-text-around-cursor";
 import { replaceEditorText } from "../components/replace-text";
@@ -77,11 +77,11 @@ export function usePopulateTextareaRef(
         constructor(private editor: CustomEditor) {}
 
         focus() {
-          ReactEditor.focus(this.editor);
+          (ReactEditor as { focus(editor: Editor): void }).focus(this.editor);
         }
 
         blur() {
-          ReactEditor.blur(this.editor);
+          (ReactEditor as { blur(editor: Editor): void }).blur(this.editor);
         }
 
         enhance(enhanceHandlerArgs: EnhanceHandler) {
@@ -131,7 +131,7 @@ export function usePopulateTextareaRef(
           });
 
           /* 5️⃣  Give the DOM node focus (harmless if it already has it) */
-          ReactEditor.focus(this.editor);
+          (ReactEditor as { focus(editor: Editor): void }).focus(this.editor);
         }
 
         get value() {
@@ -148,7 +148,11 @@ export function usePopulateTextareaRef(
         if (!editor.children) {
           editorHtmlElement = document.createElement("div"); // Fallback element
         } else {
-          editorHtmlElement = ReactEditor.toDOMNode(editor, editor);
+          editorHtmlElement = (
+            ReactEditor as unknown as {
+              toDOMNode(editor: Editor, node: SlateNode): HTMLElement;
+            }
+          ).toDOMNode(editor, editor as unknown as SlateNode);
         }
       } catch (error) {
         console.warn("Failed to get editor DOM node:", error);

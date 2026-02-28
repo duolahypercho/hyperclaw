@@ -1139,165 +1139,6 @@ function createOpenClawFolder(relativePath) {
   }
 }
 
-// ─── OpenClaw usage (token aggregation from ~/.openclaw/agents/*/sessions/*.json) ───
-function toNum(v) {
-  if (typeof v === "number" && !Number.isNaN(v)) return Math.max(0, Math.floor(v));
-  if (typeof v === "string") return Math.max(0, Math.floor(parseInt(v, 10)) || 0);
-  return 0;
-}
-
-function getTokenCounts(r) {
-  const u = r.usage && typeof r.usage === "object" ? r.usage : r;
-  const input = toNum(
-    u.inputTokens ?? u.input_tokens ?? u.prompt_tokens ?? r.inputTokens ?? r.input_tokens ?? r.prompt_tokens
-  );
-  const output = toNum(
-    u.outputTokens ?? u.output_tokens ?? u.completion_tokens ?? r.outputTokens ?? r.output_tokens ?? r.completion_tokens
-  );
-  const totalRaw = toNum(
-    u.totalTokens ?? u.total_tokens ?? r.totalTokens ?? r.total_tokens
-  );
-  return { input, output, total: totalRaw || input + output };
-}
-
-function toDateKey(record) {
-  const raw = record.updatedAt ?? record.createdAt ?? record.date ?? record.timestamp;
-  if (typeof raw === "string") {
-    const d = new Date(raw);
-    return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
-  }
-  if (typeof raw === "number" && raw > 0) return new Date(raw).toISOString().slice(0, 10);
-  return null;
-}
-
-function hasSessionTokenFields(r) {
-  if (!r || typeof r !== "object") return false;
-  const o = r;
-  return (
-    o.inputTokens !== undefined ||
-    o.outputTokens !== undefined ||
-    o.totalTokens !== undefined ||
-    o.input_tokens !== undefined ||
-    o.output_tokens !== undefined ||
-    o.total_tokens !== undefined ||
-    o.prompt_tokens !== undefined ||
-    o.completion_tokens !== undefined ||
-    o.contextTokens !== undefined ||
-    Boolean(o.usage && typeof o.usage === "object")
-  );
-}
-
-function extractRecords(data) {
-  if (!data || typeof data !== "object") return [];
-  const obj = data;
-  if (Array.isArray(data)) return data.filter((x) => x && typeof x === "object");
-  if (Array.isArray(obj.sessions)) return obj.sessions.filter((x) => x && typeof x === "object");
-  // OpenClaw store: sessions.json is often sessionKey -> SessionEntry (plain object map)
-  if (obj.sessions && typeof obj.sessions === "object" && !Array.isArray(obj.sessions)) {
-    const entries = Object.values(obj.sessions).filter((x) => x && typeof x === "object");
-    return entries.filter((x) => hasSessionTokenFields(x));
-  }
-  // Root itself is the store: { "sessionKey1": { inputTokens, ... }, "sessionKey2": { ... }, ... }
-  if (!Array.isArray(obj) && !("sessions" in obj) && !("data" in obj)) {
-    const values = Object.values(obj).filter((x) => x != null && typeof x === "object" && !Array.isArray(x));
-    if (values.length > 0 && values.some(hasSessionTokenFields)) {
-      return values.filter(hasSessionTokenFields);
-    }
-  }
-  if (Array.isArray(obj.data)) return obj.data.filter((x) => x && typeof x === "object");
-  if (hasSessionTokenFields(obj)) return [obj];
-  const values = Object.values(obj).filter((x) => x != null && typeof x === "object");
-  if (values.length === 1 && Array.isArray(values[0])) return values[0].filter((x) => x && typeof x === "object");
-  const out = [];
-  for (const v of values) {
-    if (!v || typeof v !== "object") continue;
-    if (hasSessionTokenFields(v)) out.push(v);
-    else {
-      const nested = extractRecords(v);
-      if (nested.length) out.push(...nested);
-    }
-  }
-  return out.length ? out : values;
-}
-
-function collectSessionsPaths(openclawRoot) {
-  // Only ~/.openclaw/agents/<agentId>/sessions/sessions.json per agent folder
-  const out = [];
-  const agentsDir = path.join(openclawRoot, "agents");
-  if (!fs.existsSync(agentsDir) || !fs.statSync(agentsDir).isDirectory()) return out;
-  try {
-    const dirs = fs.readdirSync(agentsDir, { withFileTypes: true });
-    for (const d of dirs) {
-      if (!d.isDirectory()) continue;
-      const sessionsPath = path.join(agentsDir, d.name, "sessions", "sessions.json");
-      if (fs.existsSync(sessionsPath) && fs.statSync(sessionsPath).isFile()) {
-        out.push({ path: sessionsPath, agentId: d.name });
-      }
-    }
-  } catch {}
-  return out;
-}
-
-function getOpenClawUsage() {
-  const byDayMap = new Map();
-  const byAgentMap = new Map();
-  const debugFiles = [];
-  let totalInput = 0, totalOutput = 0, totalTotal = 0;
-  const sessionsPaths = fs.existsSync(OPENCLAW_HOME) ? collectSessionsPaths(OPENCLAW_HOME) : [];
-  if (sessionsPaths.length === 0) {
-    return {
-      byDay: [],
-      totals: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-      byAgent: [],
-      hint: `No session files found. Expected one file per agent at ~/.openclaw/agents/<agentId>/sessions/sessions.json`,
-    };
-  }
-  for (const { path: filePath, agentId } of sessionsPaths) {
-    let raw, fileDateKey = null;
-    try {
-      const stat = fs.statSync(filePath);
-      fileDateKey = stat.mtime.toISOString().slice(0, 10);
-      raw = JSON.parse(fs.readFileSync(filePath, "utf-8"));
-    } catch {
-      continue;
-    }
-    const records = extractRecords(raw);
-    const agentTotals = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
-    for (const r of records) {
-      const { input, output, total } = getTokenCounts(r);
-      const dateKey = toDateKey(r) ?? fileDateKey;
-      agentTotals.inputTokens += input;
-      agentTotals.outputTokens += output;
-      agentTotals.totalTokens += total;
-      totalInput += input;
-      totalOutput += output;
-      totalTotal += total;
-      if (dateKey) {
-        const existing = byDayMap.get(dateKey) ?? { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
-        existing.inputTokens += input;
-        existing.outputTokens += output;
-        existing.totalTokens += total;
-        byDayMap.set(dateKey, existing);
-      }
-    }
-    if (agentTotals.inputTokens > 0 || agentTotals.outputTokens > 0 || agentTotals.totalTokens > 0) {
-      const existing = byAgentMap.get(agentId) ?? { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
-      existing.inputTokens += agentTotals.inputTokens;
-      existing.outputTokens += agentTotals.outputTokens;
-      existing.totalTokens += agentTotals.totalTokens;
-      byAgentMap.set(agentId, existing);
-    }
-    debugFiles.push({ path: filePath, agentId, records: records.length, totalTokens: agentTotals.totalTokens });
-  }
-  const byDay = Array.from(byDayMap.entries()).map(([date, v]) => ({ date, ...v })).sort((a, b) => a.date.localeCompare(b.date));
-  const byAgent = Array.from(byAgentMap.entries()).map(([agentId, v]) => ({ agentId, ...v }));
-  const result = { byDay, totals: { inputTokens: totalInput, outputTokens: totalOutput, totalTokens: totalTotal }, byAgent, debug: { files: debugFiles } };
-  if (totalTotal === 0 && sessionsPaths.length > 0) {
-    result.hint = "Session files were found but contained no token records. Ensure each file has objects with inputTokens, outputTokens, totalTokens, and optional createdAt or timestamp.";
-  }
-  return result;
-}
-
 function runOpenClawCommand(command, timeoutMs = 15000) {
   const env = openclawEnv();
   return new Promise((resolve, reject) => {
@@ -1616,6 +1457,17 @@ const HYPERCLAW_TODO_DATA_PATH = path.join(HYPERCLAW_DATA_DIR, "todo.json");
 const HYPERCLAW_OFFICE_DIR = path.join(HYPERCLAW_DATA_DIR, "office");
 const HYPERCLAW_OFFICE_LAYOUT_PATH = path.join(HYPERCLAW_OFFICE_DIR, "layout.json");
 const HYPERCLAW_OFFICE_SEATS_PATH = path.join(HYPERCLAW_OFFICE_DIR, "seats.json");
+const HYPERCLAW_CHANNELS_PATH = path.join(HYPERCLAW_DATA_DIR, "channels.json");
+
+function getHyperClawChannels() {
+  try {
+    if (!fs.existsSync(HYPERCLAW_CHANNELS_PATH)) return [];
+    const raw = JSON.parse(fs.readFileSync(HYPERCLAW_CHANNELS_PATH, "utf-8"));
+    return Array.isArray(raw.channels) ? raw.channels : [];
+  } catch {
+    return [];
+  }
+}
 
 function ensureHyperClawDir() {
   if (!fs.existsSync(HYPERCLAW_DATA_DIR)) {
@@ -2365,6 +2217,9 @@ ipcMain.handle("hyperclaw:bridge-invoke", async (event, { action, task, id, patc
     case "list-agents": {
       return { success: true, data: getTeam() };
     }
+    case "list-channels": {
+      return { success: true, data: getHyperClawChannels() };
+    }
     case "add-agent": {
       const name = typeof agentName === "string" ? agentName.trim() : "";
       if (!name) return { success: false, error: "Agent name is required" };
@@ -2547,7 +2402,6 @@ ipcMain.handle("hyperclaw:bridge-invoke", async (event, { action, task, id, patc
       if (typeof p.tz === "string" && p.tz.trim()) args.push("--tz", p.tz.trim());
       if (typeof p.message === "string" && p.message.trim()) args.push("--message", p.message.trim());
       if (typeof p.systemEvent === "string" && p.systemEvent.trim()) args.push("--system-event", p.systemEvent.trim());
-      if (p.wake === "now" || p.wake === true) args.push("--wake", "now");
       if (p.deleteAfterRun === true) args.push("--delete-after-run");
       if (p.announce === true) {
         args.push("--announce");
@@ -2573,10 +2427,22 @@ ipcMain.handle("hyperclaw:bridge-invoke", async (event, { action, task, id, patc
       const args = ["cron", "run", runJobId];
       if (cronRunDue === true) args.push("--due");
       try {
-        await runOpenClawWithArgs(args, 60000);
+        await runOpenClawWithArgs(args, 120000);
         return { success: true };
       } catch (err) {
         return { success: false, error: err.message || err.stderr || "Run failed" };
+      }
+    }
+    case "cron-runs-sync": {
+      const syncJobId = typeof jobId === "string" ? jobId.trim() : "";
+      if (!syncJobId || !/^[a-f0-9-]{36}$/i.test(syncJobId)) {
+        return { success: false, error: "Valid job id is required" };
+      }
+      try {
+        await runOpenClawWithArgs(["cron", "runs", "--id", syncJobId, "--limit", "1"], 15000);
+        return { success: true };
+      } catch (err) {
+        return { success: false, error: err.message || err.stderr || "Failed to sync cron runs" };
       }
     }
     case "cron-edit": {
@@ -2593,6 +2459,11 @@ ipcMain.handle("hyperclaw:bridge-invoke", async (event, { action, task, id, patc
       if (p.clearAgent === true) args.push("--clear-agent");
       else if (typeof p.agent === "string" && p.agent.trim()) args.push("--agent", p.agent.trim());
       if (p.exact === true) args.push("--exact");
+      if (p.announce === true) {
+        args.push("--announce");
+        if (typeof p.channel === "string" && p.channel.trim()) args.push("--channel", p.channel.trim());
+        if (typeof p.to === "string" && p.to.trim()) args.push("--to", p.to.trim());
+      }
       if (args.length === 3) {
         return { success: false, error: "At least one field to update is required" };
       }
@@ -2619,8 +2490,6 @@ ipcMain.handle("hyperclaw:bridge-invoke", async (event, { action, task, id, patc
       return getEmployeeStatus();
     case "get-config":
       return getConfig();
-    case "get-openclaw-usage":
-      return { success: true, data: getOpenClawUsage() };
     case "read-office-layout":
       return readOfficeLayout();
     case "write-office-layout": {

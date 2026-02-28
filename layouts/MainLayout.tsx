@@ -20,7 +20,6 @@ import {
   VirtualOpenClaw,
 } from "$/components/Tool/VirtualToolComponents";
 import { TimerProvider } from "$/Providers/TimerProv";
-import { MusicPlayerProvider } from "$/components/Tool/Music/MusicPlayer/providers/musicProvider";
 import { useInterim } from "$/Providers/InterimProv";
 import DesktopOnlyAccess from "$/components/DesktopOnlyAccess";
 import DesktopLayout from "./DesktopLayout";

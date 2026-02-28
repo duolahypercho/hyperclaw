@@ -140,27 +140,6 @@ function createFormSchema(schemaConfig: SchemaConfig) {
       continue;
     }
 
-    if (config.type === "multiSelect") {
-      let arraySchema = z.array(z.string());
-
-      if (config.minItems !== undefined) {
-        arraySchema = arraySchema.min(config.minItems, {
-          message:
-            config.minMessage || `Select at least ${config.minItems} item(s)`,
-        });
-      }
-
-      if (config.maxItems !== undefined) {
-        arraySchema = arraySchema.max(config.maxItems, {
-          message:
-            config.maxMessage || `Select at most ${config.maxItems} item(s)`,
-        });
-      }
-
-      schemaObject[key] = arraySchema;
-      continue;
-    }
-
     if (config.type === "select") {
       let fieldSchema = z.string();
       schemaObject[key] = fieldSchema;
@@ -242,9 +221,6 @@ export function extractDefaultValue(config: SchemaConfig) {
     switch (fieldConfig.type) {
       case "checkbox":
         extractedProperties[key] = fieldConfig.defaultValue || false;
-        break;
-      case "multiSelect":
-        extractedProperties[key] = fieldConfig.defaultValue || [];
         break;
       case "group":
         if (isGroupFieldConfig(fieldConfig)) {

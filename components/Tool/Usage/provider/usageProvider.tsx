@@ -6,14 +6,12 @@ import React, {
   useState,
   useCallback,
   useEffect,
-  useMemo,
   ReactNode,
 } from "react";
-import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
-import type { OpenClawUsageResult } from "$/types/electron";
+import { getUsageCostWs, type UsageCostPayload } from "$/lib/openclaw-gateway-ws";
 
 export interface UsageContextValue {
-  usage: OpenClawUsageResult | null;
+  usage: UsageCostPayload | null;
   loading: boolean;
   error: string | null;
   refetch: () => Promise<void>;
@@ -28,58 +26,24 @@ export function useUsage() {
 }
 
 export function UsageProvider({ children }: { children: ReactNode }) {
-  const [usage, setUsage] = useState<OpenClawUsageResult | null>(null);
+  const [usage, setUsage] = useState<UsageCostPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
-  const emptyUsage = useMemo<OpenClawUsageResult>(
-    () => ({
-      byDay: [],
-      totals: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-      byAgent: [],
-    }),
-    []
-  );
 
   const refetch = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const res = (await bridgeInvoke("get-openclaw-usage", {})) as {
-        success?: boolean;
-        data?: OpenClawUsageResult;
-        error?: string;
-        byDay?: OpenClawUsageResult["byDay"];
-        totals?: OpenClawUsageResult["totals"];
-        byAgent?: OpenClawUsageResult["byAgent"];
-      };
-      const data =
-        res?.data ??
-        (res && Array.isArray(res.byDay) && res.totals && Array.isArray(res.byAgent)
-          ? (res as OpenClawUsageResult)
-          : null);
-      if (data && typeof data === "object") {
-        setUsage({
-          byDay: Array.isArray(data.byDay) ? data.byDay : emptyUsage.byDay,
-          totals: data.totals && typeof data.totals === "object" ? data.totals : emptyUsage.totals,
-          byAgent: Array.isArray(data.byAgent) ? data.byAgent : emptyUsage.byAgent,
-          hint: typeof data.hint === "string" ? data.hint : undefined,
-          debug:
-            Array.isArray((data as OpenClawUsageResult).debug?.files)
-              ? { files: (data as OpenClawUsageResult).debug!.files }
-              : undefined,
-        });
-      } else {
-        setUsage(emptyUsage);
-        if (res?.error) setError(res.error);
-      }
+      const payload = await getUsageCostWs({ detail: "full" });
+      console.log("payload", payload);
+      setUsage(payload ?? null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load usage");
-      setUsage(emptyUsage);
+      setError(e instanceof Error ? e.message : "Failed to load gateway usage");
+      setUsage(null);
     } finally {
       setLoading(false);
     }
-  }, [emptyUsage]);
+  }, []);
 
   useEffect(() => {
     refetch();

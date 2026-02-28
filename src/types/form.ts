@@ -72,14 +72,6 @@ interface SelectFieldConfig extends BaseFieldConfig {
   defaultValue?: string;
 }
 
-interface MutiSelectFieldConfig extends BaseFieldConfig {
-  type: "multiSelect";
-  selectedValue: { key: string; value: string }[];
-  minItems?: number;
-  maxItems?: number;
-  defaultValue?: string[];
-}
-
 interface PhoneFieldConfig extends BaseFieldConfig {
   type: "phone";
   defaultValue?: string;
@@ -138,5 +130,4 @@ export type FieldConfig =
   | ImageFieldConfig
   | LogoFieldConfig
   | CheckboxFieldConfig
-  | MutiSelectFieldConfig
   | GroupFieldConfig;

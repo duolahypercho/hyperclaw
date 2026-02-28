@@ -40,11 +40,14 @@ export default function UsageWidget() {
     );
   }
 
-  const totals = usage?.totals ?? {
-    inputTokens: 0,
-    outputTokens: 0,
-    totalTokens: 0,
-  };
+  const rawTotals = usage?.totals;
+  const totals = rawTotals
+    ? {
+        inputTokens: rawTotals.input,
+        outputTokens: rawTotals.output,
+        totalTokens: rawTotals.totalTokens,
+      }
+    : { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
 
   return (
     <motion.div
