@@ -9,7 +9,7 @@ const cronsSEOSchema: SEOSchema = {
   title: "Cron Jobs - Copanion OS",
   description:
     "Monitor and manage your OpenClaw cron jobs. View schedules, track job status, and visualize upcoming executions in a calendar view.",
-  url: "https://www.copanion.hypercho.com/Tool/Crons",
+  url: "https://www.app.claw.hypercho.com/Tool/Crons",
   image: "https://hypercho.com/hypercho_banner.png",
   author: "Hypercho",
   robots: "index,follow",
@@ -29,7 +29,7 @@ const cronsSEOSchema: SEOSchema = {
     title: "Cron Jobs - Copanion OS",
     description:
       "Monitor and manage your OpenClaw cron jobs. View schedules, track job status, and visualize upcoming executions in a calendar view.",
-    url: "https://www.copanion.hypercho.com/Tool/Crons",
+    url: "https://www.app.claw.hypercho.com/Tool/Crons",
     image: "https://hypercho.com/hypercho_banner.png",
     site_name: "Hypercho Copanion",
     locale: "en_US",
@@ -54,7 +54,7 @@ const cronsSEOSchema: SEOSchema = {
       price: "0",
       priceCurrency: "USD",
       availability: "https://schema.org/InStock",
-      url: "https://www.copanion.hypercho.com/Tool/Crons",
+      url: "https://www.app.claw.hypercho.com/Tool/Crons",
     },
     creator: {
       "@type": "Organization",
@@ -62,8 +62,8 @@ const cronsSEOSchema: SEOSchema = {
       url: "https://hypercho.com",
     },
     applicationSubCategory: "OfficeApplication",
-    downloadUrl: "https://www.copanion.hypercho.com/Tool/Crons",
-    installUrl: "https://www.copanion.hypercho.com/Tool/Crons",
+    downloadUrl: "https://www.app.claw.hypercho.com/Tool/Crons",
+    installUrl: "https://www.app.claw.hypercho.com/Tool/Crons",
     softwareRequirements: "Web Browser with JavaScript enabled",
     storageRequirements: "Cloud-based storage",
     permissions: "Access to OpenClaw CLI",

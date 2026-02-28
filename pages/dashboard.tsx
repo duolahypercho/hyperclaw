@@ -16,7 +16,7 @@ const Index = () => {
       <SEO
         title="Copanion OS - Your AI-Powered Workspace"
         description="Launch into your personal AI-first operating system. Access Todo List, Music Player, AI Chat, and productivity tools in one seamless interface. Start your intelligent workflow with Copanion OS."
-        url="https://www.copanion.hypercho.com/"
+        url="https://www.app.claw.hypercho.com/"
         image="https://hypercho.com/hypercho_banner.png"
         author="Hypercho"
         keywords="Copanion OS, AI workspace, productivity app, todo list, AI chat, productivity tools, Hypercho, interactive OS, smart workspace, AI assistant, task management"
@@ -35,7 +35,7 @@ const Index = () => {
           { property: "og:image:type", content: "image/png" },
           {
             name: "apple-itunes-app",
-            content: "app-argument=https://www.copanion.hypercho.com/",
+            content: "app-argument=https://www.app.claw.hypercho.com/",
           },
         ]}
         additionalStructuredData={{
@@ -62,7 +62,7 @@ const Index = () => {
             price: "0",
             priceCurrency: "USD",
             availability: "https://schema.org/InStock",
-            url: "https://www.copanion.hypercho.com/",
+            url: "https://www.app.claw.hypercho.com/",
           },
           aggregateRating: {
             "@type": "AggregateRating",
@@ -77,8 +77,8 @@ const Index = () => {
             url: "https://hypercho.com",
           },
           applicationSubCategory: "OfficeApplication",
-          downloadUrl: "https://www.copanion.hypercho.com/",
-          installUrl: "https://www.copanion.hypercho.com/",
+          downloadUrl: "https://www.app.claw.hypercho.com/",
+          installUrl: "https://www.app.claw.hypercho.com/",
           softwareRequirements: "Web Browser with JavaScript enabled",
           memoryRequirements: "Minimum 2GB RAM recommended",
           storageRequirements: "No local storage required - cloud-based",

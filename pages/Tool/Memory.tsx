@@ -8,7 +8,7 @@ const memorySEOSchema: SEOSchema = {
   title: "Memory Viewer - Copanion OS",
   description:
     "Browse and read memory files from your OpenClaw workspace. Access agent memories, logs, and stored information in one convenient location.",
-  url: "https://www.copanion.hypercho.com/Tool/Memory",
+  url: "https://www.app.claw.hypercho.com/Tool/Memory",
   image: "https://hypercho.com/hypercho_banner.png",
   author: "Hypercho",
   robots: "index,follow",
@@ -28,7 +28,7 @@ const memorySEOSchema: SEOSchema = {
     title: "Memory Viewer - Copanion OS",
     description:
       "Browse and read memory files from your OpenClaw workspace. Access agent memories, logs, and stored information in one convenient location.",
-    url: "https://www.copanion.hypercho.com/Tool/Memory",
+    url: "https://www.app.claw.hypercho.com/Tool/Memory",
     image: "https://hypercho.com/hypercho_banner.png",
     site_name: "Hypercho Copanion",
     locale: "en_US",
@@ -53,7 +53,7 @@ const memorySEOSchema: SEOSchema = {
       price: "0",
       priceCurrency: "USD",
       availability: "https://schema.org/InStock",
-      url: "https://www.copanion.hypercho.com/Tool/Memory",
+      url: "https://www.app.claw.hypercho.com/Tool/Memory",
     },
     creator: {
       "@type": "Organization",
@@ -61,8 +61,8 @@ const memorySEOSchema: SEOSchema = {
       url: "https://hypercho.com",
     },
     applicationSubCategory: "OfficeApplication",
-    downloadUrl: "https://www.copanion.hypercho.com/Tool/Memory",
-    installUrl: "https://www.copanion.hypercho.com/Tool/Memory",
+    downloadUrl: "https://www.app.claw.hypercho.com/Tool/Memory",
+    installUrl: "https://www.app.claw.hypercho.com/Tool/Memory",
     softwareRequirements: "Web Browser with JavaScript enabled",
     storageRequirements: "Cloud-based storage with local caching",
     permissions: "Access to local storage for offline functionality",

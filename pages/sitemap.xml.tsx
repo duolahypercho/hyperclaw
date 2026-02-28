@@ -5,7 +5,7 @@ const Sitemap = () => {
 };
 
 export const getServerSideProps: GetServerSideProps = async ({ res }) => {
-  const baseUrl = "https://copanion.hypercho.com";
+  const baseUrl = "https://app.claw.hypercho.com";
 
   const staticPages = [
     "",

@@ -69,7 +69,7 @@ export const getServerSideProps: GetServerSideProps = async ({ res }) => {
     related_applications: [
       {
         platform: "webapp",
-        url: "https://www.copanion.hypercho.com/manifest.json",
+        url: "https://www.app.claw.hypercho.com/manifest.json",
       },
     ],
     prefer_related_applications: false,

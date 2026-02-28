@@ -9,7 +9,7 @@ const docsSEOSchema: SEOSchema = {
   title: "Docs - Copanion OS",
   description:
     "Browse and read markdown documentation from your OpenClaw workspace. View all .md files under ~/.openclaw with a clean, consistent layout.",
-  url: "https://www.copanion.hypercho.com/Tool/Docs",
+  url: "https://www.app.claw.hypercho.com/Tool/Docs",
   image: "https://hypercho.com/hypercho_banner.png",
   author: "Hypercho",
   robots: "index,follow",
@@ -29,7 +29,7 @@ const docsSEOSchema: SEOSchema = {
     title: "Docs - Copanion OS",
     description:
       "Browse and read markdown documentation from your OpenClaw workspace.",
-    url: "https://www.copanion.hypercho.com/Tool/Docs",
+    url: "https://www.app.claw.hypercho.com/Tool/Docs",
     image: "https://hypercho.com/hypercho_banner.png",
     site_name: "Hypercho Copanion",
     locale: "en_US",
@@ -52,7 +52,7 @@ const docsSEOSchema: SEOSchema = {
       price: "0",
       priceCurrency: "USD",
       availability: "https://schema.org/InStock",
-      url: "https://www.copanion.hypercho.com/Tool/Docs",
+      url: "https://www.app.claw.hypercho.com/Tool/Docs",
     },
     creator: {
       "@type": "Organization",
@@ -60,8 +60,8 @@ const docsSEOSchema: SEOSchema = {
       url: "https://hypercho.com",
     },
     applicationSubCategory: "OfficeApplication",
-    downloadUrl: "https://www.copanion.hypercho.com/Tool/Docs",
-    installUrl: "https://www.copanion.hypercho.com/Tool/Docs",
+    downloadUrl: "https://www.app.claw.hypercho.com/Tool/Docs",
+    installUrl: "https://www.app.claw.hypercho.com/Tool/Docs",
     softwareRequirements: "Web Browser with JavaScript enabled",
     storageRequirements: "Read-only access to ~/.openclaw",
     permissions: "None",

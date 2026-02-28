@@ -8,7 +8,7 @@ const agentsSEOSchema: SEOSchema = {
   title: "Agents - Copanion OS",
   description:
     "List OpenClaw agents and edit agent config files (memory.md, agents.md, soul.md, tools.md, and more) from your workspace.",
-  url: "https://www.copanion.hypercho.com/Tool/Agents",
+  url: "https://www.app.claw.hypercho.com/Tool/Agents",
   image: "https://hypercho.com/hypercho_banner.png",
   author: "Hypercho",
   robots: "index,follow",
@@ -28,7 +28,7 @@ const agentsSEOSchema: SEOSchema = {
     title: "Agents - Copanion OS",
     description:
       "List OpenClaw agents and edit agent config files from your workspace.",
-    url: "https://www.copanion.hypercho.com/Tool/Agents",
+    url: "https://www.app.claw.hypercho.com/Tool/Agents",
     image: "https://hypercho.com/hypercho_banner.png",
     site_name: "Hypercho Copanion",
     locale: "en_US",
@@ -52,7 +52,7 @@ const agentsSEOSchema: SEOSchema = {
       price: "0",
       priceCurrency: "USD",
       availability: "https://schema.org/InStock",
-      url: "https://www.copanion.hypercho.com/Tool/Agents",
+      url: "https://www.app.claw.hypercho.com/Tool/Agents",
     },
     creator: {
       "@type": "Organization",
@@ -60,8 +60,8 @@ const agentsSEOSchema: SEOSchema = {
       url: "https://hypercho.com",
     },
     applicationSubCategory: "OfficeApplication",
-    downloadUrl: "https://www.copanion.hypercho.com/Tool/Agents",
-    installUrl: "https://www.copanion.hypercho.com/Tool/Agents",
+    downloadUrl: "https://www.app.claw.hypercho.com/Tool/Agents",
+    installUrl: "https://www.app.claw.hypercho.com/Tool/Agents",
     softwareRequirements: "Web Browser with JavaScript enabled",
     storageRequirements: "OpenClaw workspace (~/.openclaw)",
     permissions: "Access to OpenClaw CLI and workspace",

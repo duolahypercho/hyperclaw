@@ -9,7 +9,7 @@ const usageSEOSchema: SEOSchema = {
   title: "Gateway Usage & Cost - Copanion OS",
   description:
     "View token usage and cost from the OpenClaw gateway. Daily input, output, cache read/write, and cost breakdown.",
-  url: "https://www.copanion.hypercho.com/Tool/Usage",
+  url: "https://www.app.claw.hypercho.com/Tool/Usage",
   image: "https://hypercho.com/hypercho_banner.png",
   author: "Hypercho",
   robots: "index,follow",
@@ -27,7 +27,7 @@ const usageSEOSchema: SEOSchema = {
     type: "software",
     title: "Gateway Usage & Cost - Copanion OS",
     description: "View token usage and cost from the OpenClaw gateway.",
-    url: "https://www.copanion.hypercho.com/Tool/Usage",
+    url: "https://www.app.claw.hypercho.com/Tool/Usage",
     image: "https://hypercho.com/hypercho_banner.png",
     site_name: "Hypercho Copanion",
     locale: "en_US",
@@ -50,7 +50,7 @@ const usageSEOSchema: SEOSchema = {
       price: "0",
       priceCurrency: "USD",
       availability: "https://schema.org/InStock",
-      url: "https://www.copanion.hypercho.com/Tool/Usage",
+      url: "https://www.app.claw.hypercho.com/Tool/Usage",
     },
     creator: {
       "@type": "Organization",

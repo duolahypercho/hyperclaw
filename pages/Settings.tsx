@@ -10,7 +10,7 @@ const Index = () => {
       <SEO
         title="Settings - Copanion OS"
         description="Customize your Copanion OS experience. Manage account settings, themes, privacy preferences, notifications, and AI assistant configurations. Personalize your AI-powered workspace."
-        url="https://www.copanion.hypercho.com/Settings"
+        url="https://www.app.claw.hypercho.com/Settings"
         image="https://hypercho.com/hypercho_banner.png"
         author="Hypercho"
         keywords="Copanion OS settings, account settings, theme customization, privacy settings, notification preferences, AI assistant settings, user preferences, workspace customization, profile management, security settings"
@@ -32,7 +32,7 @@ const Index = () => {
           "@type": "WebPage",
           name: "Settings - Copanion OS",
           description: "Settings and configuration page for Copanion OS",
-          url: "https://www.copanion.hypercho.com/Settings",
+          url: "https://www.app.claw.hypercho.com/Settings",
           mainEntity: {
             "@type": "SoftwareApplication",
             name: "Copanion OS",
@@ -45,13 +45,13 @@ const Index = () => {
                 "@type": "ListItem",
                 position: 1,
                 name: "Home",
-                item: "https://www.copanion.hypercho.com/",
+                item: "https://www.app.claw.hypercho.com/",
               },
               {
                 "@type": "ListItem",
                 position: 2,
                 name: "Settings",
-                item: "https://www.copanion.hypercho.com/Settings",
+                item: "https://www.app.claw.hypercho.com/Settings",
               },
             ],
           },

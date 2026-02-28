@@ -9,7 +9,7 @@ const todoSEOSchema: SEOSchema = {
   title: "Todo List - Copanion OS",
   description:
     "Organize your tasks and boost productivity with our intelligent todo list. Features smart categorization, priority management, due dates, progress tracking, and seamless integration with your AI workspace.",
-  url: "https://www.copanion.hypercho.com/Tool/TodoList",
+  url: "https://www.app.claw.hypercho.com/Tool/TodoList",
   image: "https://hypercho.com/hypercho_banner.png",
   author: "Hypercho",
   robots: "index,follow",
@@ -29,7 +29,7 @@ const todoSEOSchema: SEOSchema = {
     title: "Todo List - Copanion OS",
     description:
       "Organize your tasks and boost productivity with our intelligent todo list. Features smart categorization, priority management, due dates, progress tracking, and seamless integration with your AI workspace.",
-    url: "https://www.copanion.hypercho.com/Tool/TodoList",
+    url: "https://www.app.claw.hypercho.com/Tool/TodoList",
     image: "https://hypercho.com/hypercho_banner.png",
     site_name: "Hypercho Copanion",
     locale: "en_US",
@@ -58,7 +58,7 @@ const todoSEOSchema: SEOSchema = {
       price: "0",
       priceCurrency: "USD",
       availability: "https://schema.org/InStock",
-      url: "https://www.copanion.hypercho.com/Tool/TodoList",
+      url: "https://www.app.claw.hypercho.com/Tool/TodoList",
     },
     creator: {
       "@type": "Organization",
@@ -66,8 +66,8 @@ const todoSEOSchema: SEOSchema = {
       url: "https://hypercho.com",
     },
     applicationSubCategory: "OfficeApplication",
-    downloadUrl: "https://www.copanion.hypercho.com/Tool/TodoList",
-    installUrl: "https://www.copanion.hypercho.com/Tool/TodoList",
+    downloadUrl: "https://www.app.claw.hypercho.com/Tool/TodoList",
+    installUrl: "https://www.app.claw.hypercho.com/Tool/TodoList",
     softwareRequirements: "Web Browser with JavaScript enabled",
     storageRequirements: "Cloud-based task storage with local sync",
     permissions: "Access to local storage for offline task management",

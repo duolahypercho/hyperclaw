@@ -15,8 +15,8 @@ const Index = () => {
       <SEO
         title="Copanion - Build alone. Finish together."
         description="Copanion is where solo achievers and their AI partners turn vague ideas into missions, block out noise, and conquer the grind. Now building, studying, or working by yourself feels like shipping with a world-class team."
-        url="https://copanion.hypercho.com/"
-        image="https://copanion.hypercho.com/copanion_X_1.png"
+        url="https://app.claw.hypercho.com/"
+        image="https://app.claw.hypercho.com/copanion_X_1.png"
         author="Hypercho"
         keywords="Copanion, productivity app, task completion, focus app, procrastination solution, AI accountability, work sessions, finish tasks, productivity tool, remote work, study app, time management, focus timer, solo achievement, AI partner, mission control, block out noise, conquer the grind"
         type="software"
@@ -30,7 +30,7 @@ const Index = () => {
           },
           {
             name: "apple-itunes-app",
-            content: "app-argument=https://copanion.hypercho.com/",
+            content: "app-argument=https://app.claw.hypercho.com/",
           },
           { name: "theme-color", content: "#BFD7FF" },
           { name: "msapplication-TileColor", content: "#BFD7FF" },
@@ -45,7 +45,7 @@ const Index = () => {
           softwareVersion: "1.0",
           releaseNotes:
             "Launch your accountability partner that won't let you quit mid-task",
-          screenshot: "https://copanion.hypercho.com/copanion_X_1.png",
+          screenshot: "https://app.claw.hypercho.com/copanion_X_1.png",
           featureList: [
             "Proactive Check-ins",
             "Session Commitment",
@@ -63,7 +63,7 @@ const Index = () => {
             price: "0",
             priceCurrency: "USD",
             availability: "https://schema.org/InStock",
-            url: "https://copanion.hypercho.com/",
+            url: "https://app.claw.hypercho.com/",
           },
           aggregateRating: {
             "@type": "AggregateRating",
@@ -78,8 +78,8 @@ const Index = () => {
             url: "https://hypercho.com",
           },
           applicationSubCategory: "ProductivityApplication",
-          downloadUrl: "https://copanion.hypercho.com/",
-          installUrl: "https://copanion.hypercho.com/",
+          downloadUrl: "https://app.claw.hypercho.com/",
+          installUrl: "https://app.claw.hypercho.com/",
           softwareRequirements: "Web Browser with JavaScript enabled",
           memoryRequirements: "Minimum 2GB RAM recommended",
           storageRequirements: "No local storage required - cloud-based",

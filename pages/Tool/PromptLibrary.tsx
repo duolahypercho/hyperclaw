@@ -9,7 +9,7 @@ const promptSEOSchema: SEOSchema = {
   title: "Prompt Library - Copanion OS",
   description:
     "Discover, create, and organize AI prompts with our comprehensive prompt library. Access curated prompts for various AI models, create custom prompts, and share your best prompts with the community.",
-  url: "https://www.copanion.hypercho.com/Tool/PromptLibrary",
+  url: "https://www.app.claw.hypercho.com/Tool/PromptLibrary",
   image: "https://hypercho.com/hypercho_banner.png",
   author: "Hypercho",
   robots: "index,follow",
@@ -29,7 +29,7 @@ const promptSEOSchema: SEOSchema = {
     title: "Prompt Library - Copanion OS",
     description:
       "Discover, create, and organize AI prompts with our comprehensive prompt library. Access curated prompts for various AI models, create custom prompts, and share your best prompts with the community.",
-    url: "https://www.copanion.hypercho.com/Tool/PromptLibrary",
+    url: "https://www.app.claw.hypercho.com/Tool/PromptLibrary",
     image: "https://hypercho.com/hypercho_banner.png",
     site_name: "Hypercho Copanion",
     locale: "en_US",
@@ -58,7 +58,7 @@ const promptSEOSchema: SEOSchema = {
       price: "0",
       priceCurrency: "USD",
       availability: "https://schema.org/InStock",
-      url: "https://www.copanion.hypercho.com/Tool/PromptLibrary",
+      url: "https://www.app.claw.hypercho.com/Tool/PromptLibrary",
     },
     creator: {
       "@type": "Organization",
@@ -66,8 +66,8 @@ const promptSEOSchema: SEOSchema = {
       url: "https://hypercho.com",
     },
     applicationSubCategory: "OfficeApplication",
-    downloadUrl: "https://www.copanion.hypercho.com/Tool/PromptLibrary",
-    installUrl: "https://www.copanion.hypercho.com/Tool/PromptLibrary",
+    downloadUrl: "https://www.app.claw.hypercho.com/Tool/PromptLibrary",
+    installUrl: "https://www.app.claw.hypercho.com/Tool/PromptLibrary",
     softwareRequirements: "Web Browser with JavaScript enabled",
     storageRequirements: "Cloud-based prompt storage with local caching",
     permissions: "Access to local storage for prompt management",

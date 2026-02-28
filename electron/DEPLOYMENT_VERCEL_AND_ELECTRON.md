@@ -12,7 +12,7 @@ When the user opens the Copanion app:
 
 2. **main.js** creates a window and tells Electron to use **preload.js** for that window (`webPreferences.preload`). preload.js is also bundled in the app; it runs in the “renderer” process for that window **before** any web page loads.
 
-3. **main.js** then loads a URL in that window. In remote mode that URL is your Vercel domain (e.g. `https://copanion.hypercho.com/dashboard`). So the **content** (HTML, JS, CSS) comes from Vercel, but the **window** still belongs to Electron and already has preload run.
+3. **main.js** then loads a URL in that window. In remote mode that URL is your Vercel domain (e.g. `https://app.claw.hypercho.com/dashboard`). So the **content** (HTML, JS, CSS) comes from Vercel, but the **window** still belongs to Electron and already has preload run.
 
 4. **preload.js** has exposed `window.electronAPI` (and `hyperClawBridge.invoke`) in that window. The script that Vercel sends runs in the **same** window, so it sees `window.electronAPI` and can call it.
 
@@ -35,14 +35,14 @@ User's PC
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │  You                                                             │
-│  1. Deploy Next.js app to Vercel  →  https://copanion.hypercho.com
+│  1. Deploy Next.js app to Vercel  →  https://app.claw.hypercho.com
 │  2. Build Electron app in "remote" mode  →  Copanion-Setup-Remote.exe / .app
 └─────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────┐
 │  User                                                            │
 │  1. Installs and opens the Electron app                          │
-│  2. The app window loads: https://copanion.hypercho.com/dashboard │
+│  2. The app window loads: https://app.claw.hypercho.com/dashboard │
 │     (same UI they’d see in Chrome, but inside the app)            │
 │  3. When they use Docs, Pixel Office, OpenClaw, etc.:            │
 │     - The page (from your domain) runs bridgeInvoke(...)         │
@@ -70,12 +70,12 @@ So:
 ## Setup (Vercel + Electron for users)
 
 1. **Deploy to Vercel**  
-   Connect your repo and deploy the Next.js app. Note the URL (e.g. `https://copanion.hypercho.com`).
+   Connect your repo and deploy the Next.js app. Note the URL (e.g. `https://app.claw.hypercho.com`).
 
 2. **Point Electron at that URL**  
    In `electron/app-config.json` (or whatever sets config for the build), set:
    - `mode`: `"remote"`
-   - `remoteUrl`: your Vercel URL (e.g. `"https://copanion.hypercho.com"`)
+   - `remoteUrl`: your Vercel URL (e.g. `"https://app.claw.hypercho.com"`)
 
 3. **Build the Electron app in remote mode**  
    From the repo root (or as in your scripts):
@@ -85,6 +85,16 @@ So:
 
 4. **Ship the built app**  
    Distribute the generated installer (.app, .dmg, .exe, etc.). Users install and open it; the window will load your Vercel site and the bridge will run on their machine.
+
+## OpenClaw gateway WebSocket (Vercel + Electron)
+
+The OpenClaw **gateway** is a local WebSocket at `ws://127.0.0.1:18789` (or the port in `~/.openclaw/openclaw.json`). When the app is loaded from **Vercel** inside Electron, the page origin is HTTPS; the renderer must be allowed to open that local WS.
+
+- **Content-Security-Policy**: The Next.js app sets a `connect-src` directive (in `next.config.js`) that allows **only** `ws://127.0.0.1:18789` and `ws://localhost:18789` (and wss). That keeps the rule minimal: the page can talk only to the default OpenClaw gateway port on the user's machine, not to arbitrary localhost ports. Deploy the updated Next.js app to Vercel so this header is sent.
+- **Custom gateway port**: If you use a non-default port in `~/.openclaw/openclaw.json` (`gateway.port`), add that port to `connect-src` in `next.config.js` (e.g. `ws://127.0.0.1:YOUR_PORT`).
+- **If the gateway still doesn't connect**: Ensure the OpenClaw gateway is running on the user's PC (e.g. `openclaw gateway run` or the OpenClaw app). In Electron DevTools (e.g. Console), check for CSP or WebSocket errors.
+
+**Security**: Allowing `ws://127.0.0.1:18789` does **not** let attackers reach your servers—127.0.0.1 is the user's own machine. It only lets your app's frontend connect to a local WebSocket on that machine. The rule is restricted to port 18789 so that even in the event of XSS, script cannot probe other local services (e.g. Redis, dev servers on other ports).
 
 ## Summary
 

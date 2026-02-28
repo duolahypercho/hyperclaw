@@ -8,7 +8,7 @@ const packageJsonPath = path.join(__dirname, '..', 'package.json');
 // Update app config
 const config = {
   mode: mode,
-  remoteUrl: 'https://copanion.hypercho.com',
+  remoteUrl: 'https://app.claw.hypercho.com',
   localUrl: 'http://localhost:1000'
 };
 

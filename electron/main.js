@@ -100,7 +100,7 @@ if (!gotTheLock) {
 // Configuration
 let appConfig = {
   mode: "local",
-  remoteUrl: "https://copanion.hypercho.com",
+  remoteUrl: "https://app.claw.hypercho.com",
   localUrl: "http://localhost:1000",
 };
 
@@ -163,7 +163,7 @@ function fetchImageFromUrl(url) {
 
 function createTray() {
   // Use remote URL for tray icon
-  const remoteIconUrl = "https://copanion.hypercho.com/tray.png";
+  const remoteIconUrl = "https://app.claw.hypercho.com/tray.png";
   
   // Try to fetch icon from remote URL first
   const size = process.platform === "win32" ? 16 : 22;
@@ -353,7 +353,7 @@ function createWindow() {
     }
   }
 
-  // Decide URL to load (respects app-config.json: local = localhost:1000, remote = copanion.hypercho.com)
+  // Decide URL to load (respects app-config.json: local = localhost:1000, remote = app.claw.hypercho.com)
   let urlToLoad;
   if (isDev) {
     urlToLoad = `${localUrl}/dashboard`;

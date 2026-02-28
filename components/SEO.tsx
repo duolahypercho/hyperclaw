@@ -65,7 +65,7 @@ const SEO: React.FC<SEOProps> = ({
       } catch {
         // Fallback if URL parsing fails
         return imgUrl.startsWith("/")
-          ? `https://copanion.hypercho.com${imgUrl}`
+          ? `https://app.claw.hypercho.com${imgUrl}`
           : imgUrl;
       }
     }
@@ -93,13 +93,13 @@ const SEO: React.FC<SEOProps> = ({
       "@type": "Organization",
       name: author,
       url: "https://hypercho.com",
-      logo: "https://copanion.hypercho.com/Logopic.png",
+      logo: "https://app.claw.hypercho.com/Logopic.png",
     },
     publisher: {
       "@type": "Organization",
       name: "Hypercho",
       url: "https://hypercho.com",
-      logo: "https://copanion.hypercho.com/Logopic.png",
+      logo: "https://app.claw.hypercho.com/Logopic.png",
     },
     ...(type === "article" &&
       publishedTime && { datePublished: publishedTime }),
