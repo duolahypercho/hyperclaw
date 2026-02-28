@@ -10,7 +10,7 @@ import {getMediaUrl} from "$/utils";
 const DownloadPage = () => {
   const downloadLinks = {
     windows: getMediaUrl("file/Copanion-0.1.0-win.exe"), // Replace with actual download link
-    mac: getMediaUrl("file/Copanion-0.1.0-mac.zip"), // Replace with actual Microsoft Store link
+    mac: getMediaUrl("file/Copanion-0.1.0-mac.dmg"), // Prefer .dmg to avoid macOS "damaged" warning from .zip
   };
 
   return (
@@ -79,6 +79,9 @@ const DownloadPage = () => {
                       className="group-hover:translate-x-1 transition-transform"
                     />
                   </Button>
+                  <p className="text-xs text-muted-foreground">
+                    Mac: If macOS says the app is &quot;damaged&quot; or from an unidentified developer, right‑click the app → <strong>Open</strong> (first time only).
+                  </p>
                 </div>
               </motion.div>
             </div>

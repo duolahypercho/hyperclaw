@@ -62,7 +62,7 @@ const Login = () => {
       }
 
       await signIn("google", {
-        callbackUrl: "/", // Redirect to homepage after successful login
+        callbackUrl: "/dashboard", // Redirect to dashboard after successful login
       });
     } catch (error) {
       console.error("Google sign-in error:", error);
@@ -104,9 +104,9 @@ const Login = () => {
     setLoading(false);
     //if the signup is a success redirect them
     if (error === null) {
-      //redirect to index page if account is verifed
+      //redirect to dashboard if account is verified
       setPassed(true);
-      router.push("/");
+      router.push("/dashboard");
     }
     //if the user's mail doesn't exsist
     else if (error === "This user doesn't exist") {

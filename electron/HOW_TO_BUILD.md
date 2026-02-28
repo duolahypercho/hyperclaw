@@ -60,11 +60,19 @@ Share the **`.exe` file** - users can double-click it to install your app!
 npm run electron:build:win
 ```
 
-### Mac (DMG)
+### Mac (DMG — recommended to avoid &quot;damaged&quot; .zip on macOS)
 
 ```bash
 npm run electron:build:mac
 ```
+
+For **remote** mode (app loads from Vercel), from repo root:
+
+```bash
+npm run electron:build:mac:remote:dmg
+```
+
+Output: `electron/dist-electron/Hyperclaw-MacOS-0.1.0.dmg`. Upload this file and point the download page to it (e.g. `file/Copanion-0.1.0-mac.dmg` or `file/Hyperclaw-MacOS-0.1.0.dmg`). Using **.dmg** instead of .zip avoids macOS showing &quot;damaged&quot; when users open the app.
 
 ### Linux (AppImage)
 

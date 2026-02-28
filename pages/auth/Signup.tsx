@@ -78,7 +78,7 @@ const Signup = () => {
 
         setResult({ status: false, rCode: 200, loading: true });
         setPassed(true);
-        router.push("/");
+        router.push("/dashboard");
       } else {
         setInternalError(true);
         setTimeout(() => {

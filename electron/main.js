@@ -452,18 +452,32 @@ function createWindow() {
     return { action: "deny" };
   });
 
-  // Prevent navigation to external URLs within the Electron window
+  // Allow OAuth provider origins to open in-app so the callback returns to the Electron window
+  function isOAuthProviderUrl(url) {
+    try {
+      const host = new URL(url).hostname.toLowerCase();
+      return host === "accounts.google.com" || host.endsWith(".accounts.google.com");
+    } catch {
+      return false;
+    }
+  }
+
+  // Prevent navigation to external URLs within the Electron window (except OAuth flows)
   mainWindow.webContents.on("will-navigate", (event, navigationUrl) => {
     const parsedUrl = new URL(navigationUrl);
     const currentUrl = isRemoteMode ? remoteUrl : localUrl;
     const parsedCurrentUrl = new URL(currentUrl);
 
-    // If navigating to an external URL, open in system browser and prevent navigation
-    if (
-      parsedUrl.origin !== parsedCurrentUrl.origin &&
-      !navigationUrl.startsWith(localUrl) &&
-      !navigationUrl.startsWith(remoteUrl)
-    ) {
+    // Allow our app origins
+    if (navigationUrl.startsWith(localUrl) || navigationUrl.startsWith(remoteUrl)) {
+      return;
+    }
+    // Allow OAuth providers in-window so callback returns to the app instead of system browser
+    if (isOAuthProviderUrl(navigationUrl)) {
+      return;
+    }
+    // External URL: open in system browser and prevent in-app navigation
+    if (parsedUrl.origin !== parsedCurrentUrl.origin) {
       event.preventDefault();
       shell.openExternal(navigationUrl);
     }
