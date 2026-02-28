@@ -43,7 +43,7 @@ const Comparison = () => {
       <div className="container mx-auto max-w-6xl">
         <div className="text-center space-y-4 mb-16">
           <h2 className="text-4xl md:text-5xl font-medium text-foreground">
-            How Copanion is Different
+            How Hyperclaw is Different
           </h2>
         </div>
 
@@ -62,7 +62,7 @@ const Comparison = () => {
                   Focusmate
                 </th>
                 <th className="p-4 text-center font-semibold text-primary border-b border-l border-border bg-primary/5">
-                  Copanion
+                  Hyperclaw
                 </th>
               </tr>
             </thead>

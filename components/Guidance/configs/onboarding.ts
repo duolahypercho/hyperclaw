@@ -9,7 +9,7 @@ export const onboardingConfig: GuidanceConfig = {
     {
       id: "navbar-home",
       target: "[data-guidance='navbar-home']",
-      title: "Welcome to Copanion! 👋",
+      title: "Welcome to Hyperclaw! 👋",
       description:
         "This is your home button. Click it to toggle the sidebar or navigate to the dashboard.",
       position: "bottom",
@@ -84,27 +84,7 @@ export const onboardingConfig: GuidanceConfig = {
       position: "right",
       offset: { x: 0, y: 0 },
       skipIfNotFound: true,
-    },
-    {
-      id: "copanion",
-      target: "[data-guidance='copanion']",
-      title: "Copanion",
-      description:
-        "Your companion is always here to help. Ask questions, get help with tasks, or have a conversation. Toggle it from the dock tools.",
-      position: "left",
-      offset: { x: -10, y: 0 },
-      skipIfNotFound: true,
-      beforeStep: async () => {
-        // Ensure we're on dashboard first
-        if (window.location.pathname !== "/dashboard") {
-          window.location.href = "/dashboard";
-          await new Promise((resolve) => setTimeout(resolve, 500));
-        }
-        // Note: Copanion should be opened manually by user from dock tools
-        // We'll just wait a bit for it to potentially be opened
-        await new Promise((resolve) => setTimeout(resolve, 300));
-      },
-    },
+    }
   ],
   onComplete: () => {
   },

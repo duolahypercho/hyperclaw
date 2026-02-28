@@ -81,7 +81,7 @@ const MainLayout = ({ children }: any) => {
 
   // Show loading state only on initial auth check (not during brief session refetch)
   if (showFullPageLoading) {
-    return <Loading text="Loading Copanion..." />;
+    return <Loading text="Loading Hyperclaw..." />;
   }
 
   if (mobileScreen || tabletScreen) {

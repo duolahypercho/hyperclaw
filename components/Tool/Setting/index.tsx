@@ -7,7 +7,7 @@ import Theme from "./pages/theme";
 import Privacy from "./pages/privacy";
 import Danger from "./pages/danger";
 import Notifications from "./pages/notifications";
-import Copanion from "./pages/copanion";
+import Hyperclaw from "./pages/copanion";
 import Payment from "./pages/payment";
 import AIAccess from "./pages/ai-access";
 import { AnimatePresence } from "framer-motion";
@@ -16,7 +16,7 @@ import { useOS } from "@OS/Provider/OSProv";
 
 const sectionList = [
   { id: "general", title: "General", icon: User },
-  { id: "copanion", title: "Copanion", icon: CopanionIcon },
+  { id: "copanion", title: "Hyperclaw", icon: CopanionIcon },
   { id: "ai-access", title: "AI Access", icon: Bot },
   { id: "payment", title: "Subscription", icon: CreditCard },
   { id: "theme", title: "Theme", icon: Moon },
@@ -27,7 +27,7 @@ const sectionList = [
 
 const sectionComponents: Record<string, React.ReactNode> = {
   general: <General />,
-  copanion: <Copanion />,
+  copanion: <Hyperclaw />,
   "ai-access": <AIAccess />,
   payment: <Payment />,
   theme: <Theme />,

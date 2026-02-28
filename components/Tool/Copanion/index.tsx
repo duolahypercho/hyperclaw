@@ -30,7 +30,7 @@ const CopanionChat = memo(() => {
   return (
     <AppLayout
       showState={showState}
-      uniqueKey="copanion"
+      uniqueKey="hyperclaw"
       initialSize={initialSize}
       variant="default"
       className="p-0 bg-background/40 backdrop-blur-3xl"

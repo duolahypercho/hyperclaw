@@ -10,9 +10,9 @@ function logBridgeMode(useIPC: boolean) {
   if (_bridgeLogOnce || typeof window === "undefined") return;
   _bridgeLogOnce = true;
   if (useIPC) {
-    console.info("[Copanion] Bridge: using IPC (Electron main.js)");
+    console.info("[Hyperclaw] Bridge: using IPC (Electron main.js)");
   } else {
-    console.info("[Copanion] Bridge: using fetch (browser / no electronAPI)");
+    console.info("[Hyperclaw] Bridge: using fetch (browser / no electronAPI)");
   }
 }
 

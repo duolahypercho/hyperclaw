@@ -6,7 +6,7 @@ import Usage from "$/components/Tool/Usage";
 import { UsageProvider } from "$/components/Tool/Usage/provider/usageProvider";
 
 const usageSEOSchema: SEOSchema = {
-  title: "Gateway Usage & Cost - Copanion OS",
+  title: "Gateway Usage & Cost - Hyperclaw OS",
   description:
     "View token usage and cost from the OpenClaw gateway. Daily input, output, cache read/write, and cost breakdown.",
   url: "https://www.app.claw.hypercho.com/Tool/Usage",
@@ -19,22 +19,22 @@ const usageSEOSchema: SEOSchema = {
     card: "summary_large_image",
     site: "@hypercho",
     creator: "@hypercho",
-    title: "Gateway Usage & Cost - Copanion OS",
+    title: "Gateway Usage & Cost - Hyperclaw OS",
     description: "OpenClaw gateway token usage and cost by day.",
     image: "https://hypercho.com/hypercho_banner.png",
   },
   openGraph: {
     type: "software",
-    title: "Gateway Usage & Cost - Copanion OS",
+    title: "Gateway Usage & Cost - Hyperclaw OS",
     description: "View token usage and cost from the OpenClaw gateway.",
     url: "https://www.app.claw.hypercho.com/Tool/Usage",
     image: "https://hypercho.com/hypercho_banner.png",
-    site_name: "Hypercho Copanion",
+    site_name: "Hypercho Hyperclaw",
     locale: "en_US",
   },
   jsonLd: {
     "@type": "SoftwareApplication",
-    name: "Copanion Gateway Usage",
+    name: "Hyperclaw Gateway Usage",
     description: "Token usage and cost from OpenClaw gateway (usage.cost)",
     applicationCategory: "ProductivityApplication",
     operatingSystem: "Web Browser",

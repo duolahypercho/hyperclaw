@@ -6,8 +6,8 @@ const Manifest = () => {
 
 export const getServerSideProps: GetServerSideProps = async ({ res }) => {
   const manifest = {
-    name: "Hypercho Copanion OS",
-    short_name: "Copanion",
+    name: "Hypercho Hyperclaw OS",
+    short_name: "Hyperclaw",
     description:
       "AI-first interactive operating system for modern productivity",
     start_url: "/",
@@ -47,7 +47,7 @@ export const getServerSideProps: GetServerSideProps = async ({ res }) => {
         sizes: "1200x630",
         type: "image/png",
         form_factor: "wide",
-        label: "Copanion OS Dashboard",
+        label: "Hyperclaw OS Dashboard",
       },
     ],
     shortcuts: [

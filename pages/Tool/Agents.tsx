@@ -5,7 +5,7 @@ import Agents from "$/components/Tool/Agents";
 import { AgentsProvider } from "$/components/Tool/Agents/provider/agentsProvider";
 
 const agentsSEOSchema: SEOSchema = {
-  title: "Agents - Copanion OS",
+  title: "Agents - Hyperclaw OS",
   description:
     "List OpenClaw agents and edit agent config files (memory.md, agents.md, soul.md, tools.md, and more) from your workspace.",
   url: "https://www.app.claw.hypercho.com/Tool/Agents",
@@ -18,24 +18,24 @@ const agentsSEOSchema: SEOSchema = {
     card: "summary_large_image",
     site: "@hypercho",
     creator: "@hypercho",
-    title: "Agents - Copanion OS",
+    title: "Agents - Hyperclaw OS",
     description:
       "List OpenClaw agents and edit agent config files from your workspace.",
     image: "https://hypercho.com/hypercho_banner.png",
   },
   openGraph: {
     type: "software",
-    title: "Agents - Copanion OS",
+    title: "Agents - Hyperclaw OS",
     description:
       "List OpenClaw agents and edit agent config files from your workspace.",
     url: "https://www.app.claw.hypercho.com/Tool/Agents",
     image: "https://hypercho.com/hypercho_banner.png",
-    site_name: "Hypercho Copanion",
+    site_name: "Hypercho Hyperclaw",
     locale: "en_US",
   },
   jsonLd: {
     "@type": "SoftwareApplication",
-    name: "Copanion Agents",
+    name: "Hyperclaw Agents",
     description:
       "List agents and edit agent files (memory.md, soul.md, etc.) in OpenClaw workspace",
     applicationCategory: "ProductivityApplication",

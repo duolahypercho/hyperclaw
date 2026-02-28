@@ -8,24 +8,24 @@ const Index = () => {
   const { status } = useUser();
 
   if (status !== "authenticated") {
-    return <Loading text="Loading Copanion..." />;
+    return <Loading text="Loading Hyperclaw..." />;
   }
 
   return (
     <>
       <SEO
-        title="Copanion OS - Your AI-Powered Workspace"
-        description="Launch into your personal AI-first operating system. Access Todo List, Music Player, AI Chat, and productivity tools in one seamless interface. Start your intelligent workflow with Copanion OS."
+        title="Hyperclaw OS - Your AI-Powered Workspace"
+        description="Launch into your personal AI-first operating system. Access Todo List, Music Player, AI Chat, and productivity tools in one seamless interface. Start your intelligent workflow with Hyperclaw OS."
         url="https://www.app.claw.hypercho.com/"
         image="https://hypercho.com/hypercho_banner.png"
         author="Hypercho"
-        keywords="Copanion OS, AI workspace, productivity app, todo list, AI chat, productivity tools, Hypercho, interactive OS, smart workspace, AI assistant, task management"
+        keywords="Hyperclaw OS, AI workspace, productivity app, todo list, AI chat, productivity tools, Hypercho, interactive OS, smart workspace, AI assistant, task management"
         type="software"
-        siteName="Hypercho Copanion"
+        siteName="Hypercho Hyperclaw"
         twitterHandle="@hypercho"
         additionalMeta={[
-          { name: "application-name", content: "Copanion OS" },
-          { name: "apple-mobile-web-app-title", content: "Copanion" },
+          { name: "application-name", content: "Hyperclaw OS" },
+          { name: "apple-mobile-web-app-title", content: "Hyperclaw" },
           {
             name: "msapplication-tooltip",
             content: "Launch your AI-powered productivity workspace",
@@ -40,7 +40,7 @@ const Index = () => {
         ]}
         additionalStructuredData={{
           "@type": "SoftwareApplication",
-          name: "Copanion OS",
+          name: "Hyperclaw OS",
           description:
             "AI-powered productivity workspace with integrated tools and applications",
           applicationCategory: "ProductivityApplication",
@@ -51,7 +51,7 @@ const Index = () => {
           screenshot: "https://hypercho.com/hypercho_banner.png",
           featureList: [
             "Todo List & Task Management",
-            "AI Chat Assistant (Copanion)",
+            "AI Chat Assistant (Hyperclaw)",
             "Prompt Library & Templates",
             "Settings & Customization",
             "Real-time Collaboration",

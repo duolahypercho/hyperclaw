@@ -46,7 +46,7 @@ export const CopanionPresenceIndicator: React.FC<
   };
 
   const currentSize = sizeClasses[size];
-  const displayText = text || `${personality.name || "Copanion"} is here`;
+  const displayText = text || `${personality.name || "Hyperclaw"} is here`;
 
   return (
     <motion.div

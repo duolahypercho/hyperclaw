@@ -5,7 +5,7 @@ import Memory from "$/components/Tool/Memory";
 import { MemoryProvider } from "$/components/Tool/Memory/provider/memoryProvider";
 
 const memorySEOSchema: SEOSchema = {
-  title: "Memory Viewer - Copanion OS",
+  title: "Memory Viewer - Hyperclaw OS",
   description:
     "Browse and read memory files from your OpenClaw workspace. Access agent memories, logs, and stored information in one convenient location.",
   url: "https://www.app.claw.hypercho.com/Tool/Memory",
@@ -18,24 +18,24 @@ const memorySEOSchema: SEOSchema = {
     card: "summary_large_image",
     site: "@hypercho",
     creator: "@hypercho",
-    title: "Memory Viewer - Copanion OS",
+    title: "Memory Viewer - Hyperclaw OS",
     description:
       "Browse and read memory files from your OpenClaw workspace. Access agent memories, logs, and stored information in one convenient location.",
     image: "https://hypercho.com/hypercho_banner.png",
   },
   openGraph: {
     type: "software",
-    title: "Memory Viewer - Copanion OS",
+    title: "Memory Viewer - Hyperclaw OS",
     description:
       "Browse and read memory files from your OpenClaw workspace. Access agent memories, logs, and stored information in one convenient location.",
     url: "https://www.app.claw.hypercho.com/Tool/Memory",
     image: "https://hypercho.com/hypercho_banner.png",
-    site_name: "Hypercho Copanion",
+    site_name: "Hypercho Hyperclaw",
     locale: "en_US",
   },
   jsonLd: {
     "@type": "SoftwareApplication",
-    name: "Copanion Memory Viewer",
+    name: "Hyperclaw Memory Viewer",
     description:
       "Browse and read memory files from OpenClaw workspace",
     applicationCategory: "ProductivityApplication",

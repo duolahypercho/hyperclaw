@@ -8,21 +8,21 @@ const Index = () => {
   return (
     <>
       <SEO
-        title="Settings - Copanion OS"
-        description="Customize your Copanion OS experience. Manage account settings, themes, privacy preferences, notifications, and AI assistant configurations. Personalize your AI-powered workspace."
+        title="Settings - Hyperclaw OS"
+        description="Customize your Hyperclaw OS experience. Manage account settings, themes, privacy preferences, notifications, and AI assistant configurations. Personalize your AI-powered workspace."
         url="https://www.app.claw.hypercho.com/Settings"
         image="https://hypercho.com/hypercho_banner.png"
         author="Hypercho"
-        keywords="Copanion OS settings, account settings, theme customization, privacy settings, notification preferences, AI assistant settings, user preferences, workspace customization, profile management, security settings"
+        keywords="Hyperclaw OS settings, account settings, theme customization, privacy settings, notification preferences, AI assistant settings, user preferences, workspace customization, profile management, security settings"
         type="website"
-        siteName="Hypercho Copanion"
+        siteName="Hypercho Hyperclaw"
         twitterHandle="@hypercho"
         additionalMeta={[
-          { name: "application-name", content: "Copanion OS Settings" },
+          { name: "application-name", content: "Hyperclaw OS Settings" },
           { name: "apple-mobile-web-app-title", content: "Settings" },
           {
             name: "msapplication-tooltip",
-            content: "Customize your Copanion OS experience",
+            content: "Customize your Hyperclaw OS experience",
           },
           { property: "og:image:width", content: "1200" },
           { property: "og:image:height", content: "630" },
@@ -30,12 +30,12 @@ const Index = () => {
         ]}
         additionalStructuredData={{
           "@type": "WebPage",
-          name: "Settings - Copanion OS",
-          description: "Settings and configuration page for Copanion OS",
+          name: "Settings - Hyperclaw OS",
+          description: "Settings and configuration page for Hyperclaw OS",
           url: "https://www.app.claw.hypercho.com/Settings",
           mainEntity: {
             "@type": "SoftwareApplication",
-            name: "Copanion OS",
+            name: "Hyperclaw OS",
             applicationCategory: "ProductivityApplication",
           },
           breadcrumb: {
@@ -81,7 +81,7 @@ const Index = () => {
             },
             {
               "@type": "Thing",
-              name: "Copanion AI Settings",
+              name: "Hyperclaw AI Settings",
               description: "Configure AI assistant behavior and preferences",
             },
           ],

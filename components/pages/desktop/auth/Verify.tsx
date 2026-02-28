@@ -223,7 +223,7 @@ const Verify = (props: verifyType) => {
                 className="flex items-center gap-2"
               >
                 <Loader2 className="w-4 h-4 animate-spin" />
-                Setting up your copanion...
+                Setting up your hyperclaw...
               </motion.div>
             ) : verifying ? (
               <motion.div
@@ -262,7 +262,7 @@ const Verify = (props: verifyType) => {
           {loading ? (
             <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
               <Loader2 className="w-4 h-4 animate-spin" />
-              Copanion is sending OTP...
+              Hyperclaw is sending OTP...
             </div>
           ) : (
             <AnimatePresence mode="wait">

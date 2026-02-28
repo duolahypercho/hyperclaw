@@ -13,20 +13,20 @@ const Index = () => {
   return (
     <>
       <SEO
-        title="Copanion - Build alone. Finish together."
-        description="Copanion is where solo achievers and their AI partners turn vague ideas into missions, block out noise, and conquer the grind. Now building, studying, or working by yourself feels like shipping with a world-class team."
+        title="Hyperclaw - Build alone. Finish together."
+        description="Hyperclaw is where solo achievers and their AI partners turn vague ideas into missions, block out noise, and conquer the grind. Now building, studying, or working by yourself feels like shipping with a world-class team."
         url="https://app.claw.hypercho.com/"
         image="https://app.claw.hypercho.com/copanion_X_1.png"
         author="Hypercho"
-        keywords="Copanion, productivity app, task completion, focus app, procrastination solution, AI accountability, work sessions, finish tasks, productivity tool, remote work, study app, time management, focus timer, solo achievement, AI partner, mission control, block out noise, conquer the grind"
+        keywords="Hyperclaw, productivity app, task completion, focus app, procrastination solution, AI accountability, work sessions, finish tasks, productivity tool, remote work, study app, time management, focus timer, solo achievement, AI partner, mission control, block out noise, conquer the grind"
         type="software"
-        siteName="Copanion"
+        siteName="Hyperclaw"
         twitterHandle="@hypercho"
         additionalMeta={[
           {
             name: "msapplication-tooltip",
             content:
-              "Copanion is where solo achievers and their AI partners turn vague ideas into missions, block out noise, and conquer the grind. Now building, studying, or working by yourself feels like shipping with a world-class team.",
+              "Hyperclaw is where solo achievers and their AI partners turn vague ideas into missions, block out noise, and conquer the grind. Now building, studying, or working by yourself feels like shipping with a world-class team.",
           },
           {
             name: "apple-itunes-app",
@@ -37,7 +37,7 @@ const Index = () => {
         ]}
         additionalStructuredData={{
           "@type": "SoftwareApplication",
-          name: "Copanion",
+          name: "Hyperclaw",
           description:
             "AI-powered accountability partner that actively checks on you to help you finish what you start. Proactive check-ins, session commitment, and visual presence.",
           applicationCategory: "ProductivityApplication",

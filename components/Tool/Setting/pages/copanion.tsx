@@ -14,7 +14,7 @@ import HyperchoLogoInput, {
   HyperchoLogoInputRef,
 } from "$/components/UI/HyperchoLogoInput";
 
-const Copanion = () => {
+const Hyperclaw = () => {
   const { userId } = useUser();
   const { chatid, setInfowithData } = useAssistant();
   const coverPhotoRef = useRef<HyperchoLogoInputRef>(null);
@@ -144,7 +144,7 @@ const Copanion = () => {
     let upload = false;
     setUploading(true);
     toast({
-      title: "Setting Up Your Copanion...",
+      title: "Setting Up Your Hyperclaw...",
       description: "Optimizing your assistant to match your style and needs.",
       variant: "loading",
     });
@@ -250,9 +250,9 @@ const Copanion = () => {
     setUploading(false);
     dismiss();
     toast({
-      title: "Copanion Updated!",
+      title: "Hyperclaw Updated!",
       variant: "success",
-      description: "Your Copanion is now up-to-date and ready to talk you.",
+      description: "Your Hyperclaw is now up-to-date and ready to talk you.",
     });
   };
 
@@ -380,4 +380,4 @@ const Copanion = () => {
   );
 };
 
-export default Copanion;
+export default Hyperclaw;

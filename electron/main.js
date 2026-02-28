@@ -50,7 +50,7 @@ function logCrash(label, err) {
   console.error(msg);
   try {
     const os = require("os");
-    const logPath = path.join(os.homedir(), ".openclaw", "copanion-crash.log");
+    const logPath = path.join(os.homedir(), ".openclaw", "hyperclaw-crash.log");
     const logDir = path.dirname(logPath);
     if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
     fs.appendFileSync(logPath, `[${new Date().toISOString()}] ${msg}`, "utf-8");
@@ -69,9 +69,9 @@ app.commandLine.appendSwitch("disable-background-timer-throttling");
 app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
 app.commandLine.appendSwitch("disable-renderer-backgrounding");
 
-// Set app name and App User Model ID to "Copanion" everywhere (notifications, taskbar, etc.)
-app.setName("Copanion");
-app.setAppUserModelId("Copanion");
+// Set app name and App User Model ID to "Hyperclaw" everywhere (notifications, taskbar, etc.)
+app.setName("Hyperclaw");
+app.setAppUserModelId("Hyperclaw");
 
 // Conditionally require electron-updater only when needed (production builds)
 let autoUpdater = null;
@@ -255,7 +255,7 @@ function createTrayWithIcon(trayIcon) {
     
     const contextMenu = Menu.buildFromTemplate([
       {
-        label: "Show Copanion",
+        label: "Show Hyperclaw",
         click: () => {
           if (mainWindow) {
             mainWindow.show();
@@ -279,7 +279,7 @@ function createTrayWithIcon(trayIcon) {
       },
     ]);
 
-    tray.setToolTip("Copanion");
+    tray.setToolTip("Hyperclaw");
     tray.setContextMenu(contextMenu);
     tray.on("click", () => {
       if (mainWindow) {
@@ -295,14 +295,14 @@ function createWindow() {
   const preloadPath = path.join(__dirname, "preload.js");
   const preloadExists = fs.existsSync(preloadPath);
   writeToBridgeLog(`main.js createWindow: preload=${preloadPath} exists=${preloadExists}`);
-  console.log("[Copanion] preload path:", preloadPath, "exists:", preloadExists);
+  console.log("[Hyperclaw] preload path:", preloadPath, "exists:", preloadExists);
 
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
     minWidth: 1200,
     minHeight: 700,
-    title: "Copanion",
+    title: "Hyperclaw",
     frame: false, // Disable default window frame (title bar with controls)
     webPreferences: {
       nodeIntegration: false,
@@ -429,7 +429,7 @@ function createWindow() {
         height: 800,
         minWidth: 800,
         minHeight: 600,
-        title: "Copanion",
+        title: "Hyperclaw",
         frame: false,
         webPreferences: {
           nodeIntegration: false,
@@ -734,7 +734,7 @@ ipcMain.handle("show-notification", async (event, { title, body }) => {
 
   // Create and show notification
   const notification = new Notification({
-    title: title || "Copanion",
+    title: title || "Hyperclaw",
     body: body || "",
     icon: fs.existsSync(iconPath) ? iconPath : undefined,
     silent: false,
@@ -1272,7 +1272,7 @@ function ensureOpenClawControlUiOrigin(origin) {
       fs.writeFileSync(OPENCLAW_CONFIG_PATH, JSON.stringify(config, null, 2), "utf-8");
     }
   } catch (err) {
-    console.warn("[Copanion] Could not update openclaw.json controlUi.allowedOrigins:", err?.message);
+    console.warn("[Hyperclaw] Could not update openclaw.json controlUi.allowedOrigins:", err?.message);
   }
 }
 
@@ -2232,7 +2232,7 @@ function readHyperClawTasks() {
 
 function getBridgeLogPath() {
   const os = require("os");
-  return path.join(os.homedir(), ".openclaw", "copanion-bridge.log");
+  return path.join(os.homedir(), ".openclaw", "hyperclaw-bridge.log");
 }
 
 function writeToBridgeLog(message) {
@@ -2936,7 +2936,7 @@ ipcMain.handle("notes:uploadAttachment", async (event, { folderId, noteId, attac
 
 // App Lifecycle
 app.whenReady().then(() => {
-  writeToBridgeLog("Copanion main process started");
+  writeToBridgeLog("Hyperclaw main process started");
   createTray();
   createWindow();
   if (isRemoteMode && remoteUrl) ensureOpenClawControlUiOrigin(remoteUrl);

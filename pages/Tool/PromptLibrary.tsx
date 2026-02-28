@@ -6,7 +6,7 @@ import { PromptLibraryProvider } from "$/components/Tool/PromptLibrary/provider/
 import PromptHome from "$/components/Tool/PromptLibrary/ui";
 
 const promptSEOSchema: SEOSchema = {
-  title: "Prompt Library - Copanion OS",
+  title: "Prompt Library - Hyperclaw OS",
   description:
     "Discover, create, and organize AI prompts with our comprehensive prompt library. Access curated prompts for various AI models, create custom prompts, and share your best prompts with the community.",
   url: "https://www.app.claw.hypercho.com/Tool/PromptLibrary",
@@ -19,24 +19,24 @@ const promptSEOSchema: SEOSchema = {
     card: "summary_large_image",
     site: "@hypercho",
     creator: "@hypercho",
-    title: "Prompt Library - Copanion OS",
+    title: "Prompt Library - Hyperclaw OS",
     description:
       "Discover, create, and organize AI prompts with our comprehensive prompt library. Access curated prompts for various AI models, create custom prompts, and share your best prompts with the community.",
     image: "https://hypercho.com/hypercho_banner.png",
   },
   openGraph: {
     type: "software",
-    title: "Prompt Library - Copanion OS",
+    title: "Prompt Library - Hyperclaw OS",
     description:
       "Discover, create, and organize AI prompts with our comprehensive prompt library. Access curated prompts for various AI models, create custom prompts, and share your best prompts with the community.",
     url: "https://www.app.claw.hypercho.com/Tool/PromptLibrary",
     image: "https://hypercho.com/hypercho_banner.png",
-    site_name: "Hypercho Copanion",
+    site_name: "Hypercho Hyperclaw",
     locale: "en_US",
   },
   jsonLd: {
     "@type": "SoftwareApplication",
-    name: "Copanion Prompt Library",
+    name: "Hyperclaw Prompt Library",
     description: "Comprehensive AI prompt library for enhanced AI interactions",
     applicationCategory: "ProductivityApplication",
     operatingSystem: "Web Browser",

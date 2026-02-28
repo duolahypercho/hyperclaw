@@ -6,7 +6,7 @@ import Docs from "$/components/Tool/Docs";
 import { DocsProvider } from "$/components/Tool/Docs/provider/docsProvider";
 
 const docsSEOSchema: SEOSchema = {
-  title: "Docs - Copanion OS",
+  title: "Docs - Hyperclaw OS",
   description:
     "Browse and read markdown documentation from your OpenClaw workspace. View all .md files under ~/.openclaw with a clean, consistent layout.",
   url: "https://www.app.claw.hypercho.com/Tool/Docs",
@@ -19,24 +19,24 @@ const docsSEOSchema: SEOSchema = {
     card: "summary_large_image",
     site: "@hypercho",
     creator: "@hypercho",
-    title: "Docs - Copanion OS",
+    title: "Docs - Hyperclaw OS",
     description:
       "Browse and read markdown documentation from your OpenClaw workspace.",
     image: "https://hypercho.com/hypercho_banner.png",
   },
   openGraph: {
     type: "software",
-    title: "Docs - Copanion OS",
+    title: "Docs - Hyperclaw OS",
     description:
       "Browse and read markdown documentation from your OpenClaw workspace.",
     url: "https://www.app.claw.hypercho.com/Tool/Docs",
     image: "https://hypercho.com/hypercho_banner.png",
-    site_name: "Hypercho Copanion",
+    site_name: "Hypercho Hyperclaw",
     locale: "en_US",
   },
   jsonLd: {
     "@type": "SoftwareApplication",
-    name: "Copanion Docs",
+    name: "Hyperclaw Docs",
     description: "Browse OpenClaw workspace markdown docs",
     applicationCategory: "ProductivityApplication",
     operatingSystem: "Web Browser",

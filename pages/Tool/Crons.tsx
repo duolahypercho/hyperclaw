@@ -6,7 +6,7 @@ import Crons from "$/components/Tool/Crons";
 import { CronsProvider } from "$/components/Tool/Crons/provider/cronsProvider";
 
 const cronsSEOSchema: SEOSchema = {
-  title: "Cron Jobs - Copanion OS",
+  title: "Cron Jobs - Hyperclaw OS",
   description:
     "Monitor and manage your OpenClaw cron jobs. View schedules, track job status, and visualize upcoming executions in a calendar view.",
   url: "https://www.app.claw.hypercho.com/Tool/Crons",
@@ -19,24 +19,24 @@ const cronsSEOSchema: SEOSchema = {
     card: "summary_large_image",
     site: "@hypercho",
     creator: "@hypercho",
-    title: "Cron Jobs - Copanion OS",
+    title: "Cron Jobs - Hyperclaw OS",
     description:
       "Monitor and manage your OpenClaw cron jobs. View schedules, track job status, and visualize upcoming executions in a calendar view.",
     image: "https://hypercho.com/hypercho_banner.png",
   },
   openGraph: {
     type: "software",
-    title: "Cron Jobs - Copanion OS",
+    title: "Cron Jobs - Hyperclaw OS",
     description:
       "Monitor and manage your OpenClaw cron jobs. View schedules, track job status, and visualize upcoming executions in a calendar view.",
     url: "https://www.app.claw.hypercho.com/Tool/Crons",
     image: "https://hypercho.com/hypercho_banner.png",
-    site_name: "Hypercho Copanion",
+    site_name: "Hypercho Hyperclaw",
     locale: "en_US",
   },
   jsonLd: {
     "@type": "SoftwareApplication",
-    name: "Copanion Cron Jobs",
+    name: "Hyperclaw Cron Jobs",
     description: "Monitor and manage OpenClaw cron jobs with calendar visualization",
     applicationCategory: "ProductivityApplication",
     operatingSystem: "Web Browser",

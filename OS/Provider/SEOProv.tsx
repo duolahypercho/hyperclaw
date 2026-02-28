@@ -5,8 +5,8 @@ import Head from "next/head";
 export type SEOJsonLd = Record<string, any>;
 
 const defaultSEOSchema: SEOSchema = {
-  title: "Copanion",
-  description: "Copanion",
+  title: "Hyperclaw",
+  description: "Hyperclaw",
   url: "https://hypercho.com",
   image: "https://hypercho.com/opImage.jpg",
 };

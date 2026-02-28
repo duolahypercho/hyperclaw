@@ -6,7 +6,7 @@ import TodoList from "$/components/Tool/TodoList";
 import { TodoListProvider } from "$/components/Tool/TodoList/provider/todolistProvider";
 
 const todoSEOSchema: SEOSchema = {
-  title: "Todo List - Copanion OS",
+  title: "Todo List - Hyperclaw OS",
   description:
     "Organize your tasks and boost productivity with our intelligent todo list. Features smart categorization, priority management, due dates, progress tracking, and seamless integration with your AI workspace.",
   url: "https://www.app.claw.hypercho.com/Tool/TodoList",
@@ -19,24 +19,24 @@ const todoSEOSchema: SEOSchema = {
     card: "summary_large_image",
     site: "@hypercho",
     creator: "@hypercho",
-    title: "Todo List - Copanion OS",
+    title: "Todo List - Hyperclaw OS",
     description:
       "Organize your tasks and boost productivity with our intelligent todo list. Features smart categorization, priority management, due dates, progress tracking, and seamless integration with your AI workspace.",
     image: "https://hypercho.com/hypercho_banner.png",
   },
   openGraph: {
     type: "software",
-    title: "Todo List - Copanion OS",
+    title: "Todo List - Hyperclaw OS",
     description:
       "Organize your tasks and boost productivity with our intelligent todo list. Features smart categorization, priority management, due dates, progress tracking, and seamless integration with your AI workspace.",
     url: "https://www.app.claw.hypercho.com/Tool/TodoList",
     image: "https://hypercho.com/hypercho_banner.png",
-    site_name: "Hypercho Copanion",
+    site_name: "Hypercho Hyperclaw",
     locale: "en_US",
   },
   jsonLd: {
     "@type": "SoftwareApplication",
-    name: "Copanion Todo List",
+    name: "Hyperclaw Todo List",
     description: "Intelligent task management and productivity tool",
     applicationCategory: "ProductivityApplication",
     operatingSystem: "Web Browser",

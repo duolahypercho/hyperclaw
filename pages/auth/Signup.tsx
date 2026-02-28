@@ -148,7 +148,7 @@ const Signup = () => {
               </h1>
               <p className="text-muted-foreground mt-2 text-sm">
                 {CurrentStepIndex === 0
-                  ? "Create an account and meet your copanion"
+                  ? "Create an account and meet your hyperclaw"
                   : "We've sent a verification code to your email"}
               </p>
             </div>

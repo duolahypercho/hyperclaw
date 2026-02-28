@@ -40,7 +40,7 @@ const SEO: React.FC<SEOProps> = ({
   locale = "en_US",
   alternateLocales = [],
   type = "website",
-  siteName = "Hypercho Copanion",
+  siteName = "Hypercho Hyperclaw",
   twitterHandle = "@hypercho",
   facebookAppId,
   additionalMeta = [],
@@ -48,7 +48,7 @@ const SEO: React.FC<SEOProps> = ({
 }) => {
   const fullTitle = title.includes("Hypercho")
     ? title
-    : `${title} | Hypercho Copanion`;
+    : `${title} | Hypercho Hyperclaw`;
 
   // Normalize image URL to ensure it's absolute
   const normalizeImageUrl = (imgUrl: string): string => {
@@ -136,7 +136,7 @@ const SEO: React.FC<SEOProps> = ({
         name="keywords"
         content={
           keywords ||
-          "AI, operating system, productivity, tools, Hypercho, Copanion, artificial intelligence, interactive OS"
+          "AI, operating system, productivity, tools, Hypercho, Hyperclaw, artificial intelligence, interactive OS"
         }
       />
       <meta name="robots" content={robotsContent} />
@@ -145,7 +145,7 @@ const SEO: React.FC<SEOProps> = ({
       <meta name="msapplication-TileColor" content="#3B82F6" />
       <meta name="apple-mobile-web-app-capable" content="yes" />
       <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-      <meta name="apple-mobile-web-app-title" content="Copanion" />
+      <meta name="apple-mobile-web-app-title" content="Hyperclaw" />
 
       {/* Favicon and Icons */}
       <link rel="icon" href="/favicon.ico" />
@@ -169,7 +169,7 @@ const SEO: React.FC<SEOProps> = ({
       <meta property="og:description" content={description} />
       <meta property="og:image" content={absoluteImageUrl} />
       <meta property="og:image:secure_url" content={absoluteImageUrl} />
-      <meta property="og:image:alt" content={`${title} - Hypercho Copanion`} />
+      <meta property="og:image:alt" content={`${title} - Hypercho Hyperclaw`} />
       <meta property="og:image:type" content="image/png" />
       <meta property="og:image:width" content="1200" />
       <meta property="og:image:height" content="630" />
@@ -205,7 +205,7 @@ const SEO: React.FC<SEOProps> = ({
       {/* Twitter image - must be absolute URL with https:// */}
       <meta name="twitter:image" content={absoluteImageUrl} />
       <meta name="twitter:image:src" content={absoluteImageUrl} />
-      <meta name="twitter:image:alt" content={`${title} - Hypercho Copanion`} />
+      <meta name="twitter:image:alt" content={`${title} - Hypercho Hyperclaw`} />
       {/* Twitter image dimensions - recommended for better rendering */}
       <meta name="twitter:image:width" content="1200" />
       <meta name="twitter:image:height" content="630" />
@@ -213,10 +213,10 @@ const SEO: React.FC<SEOProps> = ({
       {/* Additional Meta Tags */}
       <meta name="format-detection" content="telephone=no" />
       <meta name="mobile-web-app-capable" content="yes" />
-      <meta name="application-name" content="Copanion" />
+      <meta name="application-name" content="Hyperclaw" />
       <meta
         name="msapplication-tooltip"
-        content="Hypercho Copanion - AI-First Interactive OS"
+        content="Hypercho Hyperclaw - AI-First Interactive OS"
       />
       <meta name="msapplication-starturl" content="/" />
 

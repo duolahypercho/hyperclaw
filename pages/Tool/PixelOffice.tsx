@@ -7,7 +7,7 @@ import { PixelOfficeProvider, usePixelOffice, FullOfficeView } from "$/component
 import { motion } from "framer-motion";
 
 const pixelOfficeSEOSchema: SEOSchema = {
-  title: "AI Agent Office - Copanion OS",
+  title: "AI Agent Office - Hyperclaw OS",
   description:
     "A retro pixel-art office view of your AI team. See agents from OpenClaw (get-team, get-crons) with working/idle status.",
   url: "https://www.app.claw.hypercho.com/Tool/PixelOffice",

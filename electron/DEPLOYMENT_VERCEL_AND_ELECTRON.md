@@ -79,9 +79,11 @@ So:
 
 3. **Build the Electron app in remote mode**  
    From the repo root (or as in your scripts):
-   - Mac: `npm run electron:build:mac:remote`
+   - Mac: `npm run electron:build:mac:remote` → produces a **.dmg** (when run on macOS). Use `npm run electron:build:mac:remote:zip` for a .zip of the .app instead.
    - Windows: `npm run electron:build:win:remote`  
    This uses `scripts/set-config.js` to set `mode: "remote"` and then builds. The built app will open `remoteUrl/dashboard` (e.g. your Vercel app).
+
+   **Why you might see .app.zip instead of .dmg:** Building the Mac app on **Linux** (e.g. AWS CodeBuild, EC2 Linux) cannot produce a .dmg—DMG creation requires macOS tools. On Linux you only get a .zip of the .app. To get a .dmg, run the Mac build on a Mac (local or a macOS runner in CI).
 
 4. **Ship the built app**  
    Distribute the generated installer (.app, .dmg, .exe, etc.). Users install and open it; the window will load your Vercel site and the bridge will run on their machine.

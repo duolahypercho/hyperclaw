@@ -8,7 +8,7 @@ import { TodoListProvider } from "$/components/Tool/TodoList/provider/todolistPr
 import { Guidance } from "$/components/Guidance";
 import { onboardingConfig } from "$/components/Guidance/configs/onboarding";
 
-// Copanion width constant
+// Hyperclaw width constant
 const COPANION_WIDTH = 400;
 const SIDEBAR_WIDTH = 300;
 
