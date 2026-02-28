@@ -38,8 +38,6 @@
     "@fullcalendar/react": "^6.1.15",
     "@fullcalendar/timegrid": "^6.1.15",
     "@gsap/react": "^2.1.1",
-    "@heroui/button": "^2.2.16",
-    "@heroui/dropdown": "^2.3.16",
     "@hookform/resolvers": "^3.9.1",
     "@langchain/core": "^0.3.75",
     "@langchain/langgraph-sdk": "^0.1.1",
