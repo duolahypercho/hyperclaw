@@ -23,6 +23,16 @@ function buildConnectSrc() {
 const nextConfig = {
   reactStrictMode: true,
   transpilePackages: ["@mui/material", "geist", "ai", "@ai-sdk/react"],
+  // Root → dashboard (landing removed)
+  async redirects() {
+    return [
+      {
+        source: "/",
+        destination: "/dashboard",
+        permanent: false,
+      },
+    ];
+  },
   // OpenClaw gateway WS: ports from NEXT_PUBLIC_OPENCLAW_GATEWAY_PORTS (default 18789).
   // Copanion/User backend: allow localhost:9979 for local runtime and /User/info/.
   async headers() {

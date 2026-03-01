@@ -7,6 +7,7 @@ import { useRouter } from "next/router";
 import { TodoListProvider } from "$/components/Tool/TodoList/provider/todolistProvider";
 import { Guidance } from "$/components/Guidance";
 import { onboardingConfig } from "$/components/Guidance/configs/onboarding";
+import CopanionChat from "$/components/Tool/Copanion";
 
 // Hyperclaw width constant
 const COPANION_WIDTH = 400;
