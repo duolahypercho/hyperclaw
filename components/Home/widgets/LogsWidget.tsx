@@ -17,7 +17,7 @@ import { useFocusMode } from "./hooks/useFocusMode";
 import { cn } from "@/lib/utils";
 
 const LINES_REQUEST = 200;
-const AUTO_REFRESH_MS = 5000;
+const AUTO_REFRESH_MS = 15_000;
 
 export type LogEntry = { time?: string; level?: string; message?: string; tags?: string[] };
 

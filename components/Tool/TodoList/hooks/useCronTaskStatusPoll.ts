@@ -10,7 +10,7 @@ import {
 import { removeRunningJobIds } from "$/lib/crons-running-store";
 import type { CronRunRecord } from "$/types/electron";
 
-const POLL_MS = 2000;
+const POLL_MS = 10_000;
 const WINDOW_BEFORE_MS = 10_000;
 const WINDOW_AFTER_MS = 300_000;
 

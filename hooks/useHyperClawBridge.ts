@@ -27,7 +27,7 @@ function nowIso() {
   return new Date().toISOString();
 }
 
-export function useHyperClawBridge(pollIntervalMs = 5000) {
+export function useHyperClawBridge(pollIntervalMs = 15_000) {
   const [tasks, setTasks] = useState<HyperClawTask[]>([]);
   const [events, setEvents] = useState<BridgeEvent[]>([]);
   const [loading, setLoading] = useState(true);

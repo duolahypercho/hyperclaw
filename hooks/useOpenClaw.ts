@@ -387,7 +387,7 @@ export function useOpenClaw(autoRefreshMs = 0) {
 
   // Cron running poll: match latest run by runAtMs close to our "Run now" time; remove when that run is finished.
   useEffect(() => {
-    const CRON_POLL_MS = 2000;
+    const CRON_POLL_MS = 10_000;
     const DEBUG = typeof window !== "undefined" && (window as unknown as { __CRON_POLL_DEBUG?: boolean }).__CRON_POLL_DEBUG !== false;
     const debugLog = (...args: unknown[]) => DEBUG && console.log("[cron-poll]", ...args);
     // Run is "ours" if runAtMs is within this window of when we clicked Run now (clock skew + delay)

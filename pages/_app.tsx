@@ -45,7 +45,11 @@ function MyApp({ Component, pageProps }: any) {
     <main className={GeistSans.className} suppressHydrationWarning>
       <DebugDocumentWriteLogger />
       {/* Core providers first */}
-      <SessionProvider session={pageProps.session}>
+      <SessionProvider
+        session={pageProps.session}
+        refetchInterval={15 * 60}
+        refetchOnWindowFocus={false}
+      >
         <ThemeProvider attribute="class" enableSystem disableTransitionOnChange>
           <OpenClawProvider>
           <OSProvider>
