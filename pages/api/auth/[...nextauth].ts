@@ -10,14 +10,11 @@ export const authOptions = (req: any, res: any) => {
   const useSecureCookies = process.env.NEXTAUTH_URL!.startsWith("https://");
   const googleClientId = process.env.GOOGLE_CLIENT_ID!;
   const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET!;
-  // Derive cookie domain conditionally to ensure dev works on localhost and prod uses configured domain
   const cookieDomain =
     process.env.NODE_ENV === "production" && process.env.DOMAIN
       ? process.env.DOMAIN
       : undefined;
   const authOption: NextAuthOptions = {
-    // Trust the request host (required for serverless/proxy so OAuth state cookie and callback URL match)
-    trustHost: true,
     //Configure JWT
     providers: [
       CredentialsProvider({
@@ -258,19 +255,7 @@ export const authOptions = (req: any, res: any) => {
           ...(cookieDomain ? { domain: cookieDomain } : {}),
           secure: useSecureCookies,
         },
-      },
-      // OAuth state cookie must use the same options as sessionToken so it is set/read correctly in production (avoids "State cookie was missing" on serverless)
-      state: {
-        name: `${useSecureCookies ? "__Secure-" : ""}next-auth.state`,
-        options: {
-          httpOnly: true,
-          sameSite: "lax",
-          path: "/",
-          secure: useSecureCookies,
-          maxAge: 900,
-          ...(cookieDomain ? { domain: cookieDomain } : {}),
-        },
-      },
+      }
     },
   };
   return authOption;
