@@ -244,6 +244,12 @@ export const authOptions = (req: any, res: any) => {
       signOut: "/auth/Login",
       error: "/auth/Login", // Error code passed in query string
     },
+    events: {
+      // Clear custom auth cookie and ensure session is fully cleared on logout (Google or credentials).
+      signOut: async () => {
+        deleteCookie("hypercho_user_token", { req, res, path: "/" });
+      },
+    },
     cookies: {
       sessionToken: {
         name: `${useSecureCookies ? "__Secure-" : ""}next-auth.session-token`,
