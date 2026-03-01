@@ -104,6 +104,7 @@ export const Guidance: React.FC<GuidanceProps> = ({
         onNext={handleNext}
         onPrevious={handlePrevious}
         onSkip={handleSkip}
+        onComplete={handleComplete}
         showSkipButton={config.showSkipButton !== false}
         showProgress={config.showProgress !== false}
       />

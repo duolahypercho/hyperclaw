@@ -17,6 +17,7 @@ interface GuidanceStepProps {
   onNext: () => void;
   onPrevious: () => void;
   onSkip: () => void;
+  onComplete?: () => void;
   showSkipButton?: boolean;
   showProgress?: boolean;
 }
@@ -167,6 +168,7 @@ export const GuidanceStep: React.FC<GuidanceStepProps> = ({
   onNext,
   onPrevious,
   onSkip,
+  onComplete,
   showSkipButton = true,
   showProgress = true,
 }) => {
@@ -323,7 +325,7 @@ export const GuidanceStep: React.FC<GuidanceStepProps> = ({
                     )}
                   </div>
                   <Button
-                    onClick={isLastStep ? onSkip : onNext}
+                    onClick={isLastStep ? (onComplete ?? onSkip) : onNext}
                     size="sm"
                     className="flex items-center gap-1 bg-primary text-primary-foreground hover:bg-primary/90"
                   >
