@@ -92,8 +92,8 @@ So:
 
 The OpenClaw **gateway** is a local WebSocket at `ws://127.0.0.1:18789` (or the port in `~/.openclaw/openclaw.json`). When the app is loaded from **Vercel** inside Electron, the page origin is HTTPS; the renderer must be allowed to open that local WS.
 
-- **Content-Security-Policy**: The Next.js app sets a `connect-src` directive (in `next.config.js`) that allows **only** `ws://127.0.0.1:18789` and `ws://localhost:18789` (and wss). That keeps the rule minimal: the page can talk only to the default OpenClaw gateway port on the user's machine, not to arbitrary localhost ports. Deploy the updated Next.js app to Vercel so this header is sent.
-- **Custom gateway port**: If you use a non-default port in `~/.openclaw/openclaw.json` (`gateway.port`), add that port to `connect-src` in `next.config.js` (e.g. `ws://127.0.0.1:YOUR_PORT`).
+- **Content-Security-Policy**: The Next.js app sets a `connect-src` directive (in `next.config.js`) that allows WebSocket to the OpenClaw gateway port(s) on localhost. The allowed ports come from **`NEXT_PUBLIC_OPENCLAW_GATEWAY_PORTS`** (default `18789`). Deploy the updated Next.js app to Vercel so this header is sent.
+- **Custom gateway port**: If you use a non-default port in `~/.openclaw/openclaw.json` (`gateway.port`), set **`NEXT_PUBLIC_OPENCLAW_GATEWAY_PORTS`** at build time to include that port, e.g. `18789,9999` to allow both default and 9999. The CSP will then allow `ws://127.0.0.1:9999` and `ws://localhost:9999` (and wss) in addition to 18789.
 - **If the gateway still doesn't connect**: Ensure the OpenClaw gateway is running on the user's PC (e.g. `openclaw gateway run` or the OpenClaw app). In Electron DevTools (e.g. Console), check for CSP or WebSocket errors.
 
 **"Origin not allowed" (Control UI)**: The Copanion Electron app **automatically** adds your app origin (from `electron/app-config.json` `remoteUrl`) to `~/.openclaw/openclaw.json` → `gateway.controlUi.allowedOrigins` when:
@@ -106,7 +106,7 @@ So in normal use, users do not need to edit the file by hand. If you still see *
   1. Open `~/.openclaw/openclaw.json` and ensure `gateway.controlUi.allowedOrigins` includes your app URL (no trailing slash), e.g. `["https://app.claw.hypercho.com"]`.
   2. Restart the OpenClaw gateway (e.g. restart the OpenClaw app or `openclaw gateway run`).
 
-**Security**: Allowing `ws://127.0.0.1:18789` does **not** let attackers reach your servers—127.0.0.1 is the user's own machine. It only lets your app's frontend connect to a local WebSocket on that machine. The rule is restricted to port 18789 so that even in the event of XSS, script cannot probe other local services (e.g. Redis, dev servers on other ports).
+**Security**: Allowing `ws://127.0.0.1` on the configured port(s) does **not** let attackers reach your servers—127.0.0.1 is the user's own machine. It only lets your app's frontend connect to a local WebSocket on that machine. The rule is restricted to the listed port(s) so that even in the event of XSS, script cannot probe other local services (e.g. Redis, dev servers on other ports).
 
 ## Summary
 

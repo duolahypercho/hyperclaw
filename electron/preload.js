@@ -23,6 +23,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
   closeWindow: () => ipcRenderer.invoke("window-close"),
   isMaximized: () => ipcRenderer.invoke("window-is-maximized"),
 
+  // Clear persisted auth (cookies + storage) so logout works in Electron (no "remembered" Google login).
+  clearAuthSession: () => ipcRenderer.invoke("clear-auth-session"),
+
   // Notifications
   showNotification: (title, body) =>
     ipcRenderer.invoke("show-notification", { title, body }),

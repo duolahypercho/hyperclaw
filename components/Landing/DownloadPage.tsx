@@ -5,12 +5,23 @@ import Image from "next/image";
 import { ArrowRight } from "lucide-react";
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
-import {getMediaUrl} from "$/utils";
+import { getMediaUrl } from "$/utils";
+
+// Optional: set in .env so download buttons point to your AWS-hosted builds after running
+// npm run electron:build:mac:remote and uploading the zip(s) from electron/dist-electron/
+// Fallback paths use the same version as electron/package.json "version" – keep in sync when you bump.
+const APP_VERSION = process.env.NEXT_PUBLIC_HYPERCLAW_APP_VERSION || "0.1.0";
+const MAC_DOWNLOAD_URL =
+  process.env.NEXT_PUBLIC_HYPERCLAW_MAC_DOWNLOAD_URL ||
+  getMediaUrl(`file/Hyperclaw-MacOS-${APP_VERSION}.zip`);
+const WINDOWS_DOWNLOAD_URL =
+  process.env.NEXT_PUBLIC_HYPERCLAW_WINDOWS_DOWNLOAD_URL ||
+  getMediaUrl(`file/Hyperclaw-Setup-Remote-${APP_VERSION}.exe`);
 
 const DownloadPage = () => {
   const downloadLinks = {
-    windows: getMediaUrl("file/Copanion-0.1.0-win.exe"), // Replace with actual download link
-    mac: getMediaUrl("file/Copanion-0.1.0-mac.dmg"), // Prefer .dmg to avoid macOS "damaged" warning from .zip
+    windows: WINDOWS_DOWNLOAD_URL,
+    mac: MAC_DOWNLOAD_URL,
   };
 
   return (
@@ -28,10 +39,10 @@ const DownloadPage = () => {
                 className="space-y-6"
               >
                 <h1 className="text-3xl md:text-4xl font-semibold text-foreground leading-tight tracking-tight">
-                  Download the Copanion desktop app for an immersive experience
+                  Download Hyperclaw for Mac
                 </h1>
                 <p className="text-base font-medium text-muted-foreground leading-relaxed">
-                  Talk to copanion all the time. Get things done faster.
+                  Run the full app from your desktop. Remote mode loads the app from the cloud; all bridge features run locally.
                 </p>
 
                 {/* Download Buttons - Notion Style (Black) */}
@@ -99,7 +110,7 @@ const DownloadPage = () => {
                   {/* Image Container with Border */}
                     <Image
                       src="/asset/download.png"
-                      alt="Copanion Desktop App Screenshot"
+                      alt="Hyperclaw Desktop App Screenshot"
                       width={1216}
                       height={616}
                       className="w-full h-auto object-contain"

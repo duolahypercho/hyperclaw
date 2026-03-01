@@ -78,6 +78,10 @@ export const UserProvider = ({ children }: { children: ReactNode }) => {
       setMembership(null);
       clearCachedToken(); // Clear cached token on logout
       await signOut({ redirect: false });
+      // In Electron, clear persisted cookies/storage so the app doesn't "remember" Google login
+      if (typeof window !== "undefined" && window.electronAPI?.clearAuthSession) {
+        await window.electronAPI.clearAuthSession().catch(() => {});
+      }
     } catch {
       setStatus("unauthenticated");
       setMembership(null);

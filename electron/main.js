@@ -8,6 +8,7 @@ const {
   MenuItem,
   nativeImage,
   shell,
+  session,
 } = require("electron");
 const path = require("path");
 const fs = require("fs");
@@ -762,6 +763,31 @@ ipcMain.handle("window-is-maximized", (event) => {
     return win.isMaximized();
   }
   return false;
+});
+
+// Clear persisted auth (cookies + storage) for app origins so logout is effective in Electron.
+// Fixes "auto login" after logout in dist-electron and packaged app.
+ipcMain.handle("clear-auth-session", async () => {
+  try {
+    const ses = session.defaultSession;
+    const origins = [];
+    try {
+      if (localUrl) origins.push(new URL(localUrl).origin);
+    } catch (_) {}
+    try {
+      if (remoteUrl && remoteUrl !== localUrl) origins.push(new URL(remoteUrl).origin);
+    } catch (_) {}
+    for (const origin of origins) {
+      await ses.clearStorageData({
+        origin,
+        storages: ["cookies", "localstorage", "sessionstorage"],
+      });
+    }
+    return { ok: true };
+  } catch (err) {
+    console.error("clear-auth-session failed:", err);
+    return { ok: false, error: err && err.message };
+  }
 });
 
 // Progress bar handler

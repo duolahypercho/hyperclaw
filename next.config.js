@@ -1,10 +1,30 @@
 /** @type {import('next').NextConfig} */
+// OpenClaw gateway: allow WS to localhost. Port comes from env so custom gateway.port (e.g. in ~/.openclaw/openclaw.json) can be allowed.
+// Use NEXT_PUBLIC_OPENCLAW_GATEWAY_PORTS=18789,9999 to allow multiple ports (comma-separated). Defaults to 18789.
+const OPENCLAW_WS_PORTS = (process.env.NEXT_PUBLIC_OPENCLAW_GATEWAY_PORTS || "18789")
+  .split(",")
+  .map((p) => p.trim())
+  .filter(Boolean);
+
+function buildConnectSrc() {
+  const parts = [
+    "connect-src 'self' https:",
+    "http://127.0.0.1:9979 http://localhost:9979",
+  ];
+  for (const port of OPENCLAW_WS_PORTS) {
+    parts.push(
+      `ws://127.0.0.1:${port} ws://localhost:${port}`,
+      `wss://127.0.0.1:${port} wss://localhost:${port}`
+    );
+  }
+  return parts.join(" ");
+}
+
 const nextConfig = {
   reactStrictMode: true,
   transpilePackages: ["@mui/material", "geist", "ai", "@ai-sdk/react"],
-  // OpenClaw gateway WS: allow only localhost and only the default gateway port (18789).
-  // Security: 127.0.0.1 is the user's own machine—attackers cannot reach your servers via this.
-  // We restrict to port 18789 to limit impact of any XSS (script can't probe other local ports).
+  // OpenClaw gateway WS: ports from NEXT_PUBLIC_OPENCLAW_GATEWAY_PORTS (default 18789).
+  // Copanion/User backend: allow localhost:9979 for local runtime and /User/info/.
   async headers() {
     return [
       {
@@ -12,11 +32,7 @@ const nextConfig = {
         headers: [
           {
             key: "Content-Security-Policy",
-            value: [
-              "connect-src 'self' https:",
-              "ws://127.0.0.1:18789 ws://localhost:18789",
-              "wss://127.0.0.1:18789 wss://localhost:18789",
-            ].join(" "),
+            value: buildConnectSrc(),
           },
         ],
       },

@@ -11,7 +11,7 @@ import {
 import { SessionProvider } from "next-auth/react";
 import Router from "next/router";
 import nProgress from "nprogress";
-import { Analytics } from "@vercel/analytics/react";
+import { Analytics } from "@vercel/analytics/next"
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { NextPage } from "next/types";

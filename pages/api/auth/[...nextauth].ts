@@ -102,6 +102,11 @@ export const authOptions = (req: any, res: any) => {
       GoogleProvider({
         clientId: googleClientId,
         clientSecret: googleClientSecret,
+        authorization: {
+          params: {
+            prompt: "select_account", // Always show Google account picker (e.g. after logout)
+          },
+        },
       }),
     ],
     // callbacks

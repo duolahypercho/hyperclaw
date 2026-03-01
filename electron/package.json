@@ -1,6 +1,6 @@
 {
   "name": "Hyperclaw",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Hypercho Hyperclaw - AI-powered desktop application",
   "author": "Hypercho",
   "main": "main.js",
@@ -75,7 +75,7 @@
       "allowToChangeInstallationDirectory": true,
       "allowElevation": true,
       "runAfterFinish": true,
-      "artifactName": "Hyperclaw-Setup-Remote-${version}.${ext}",
+      "artifactName": "Hyperclaw-Setup-Local-${version}.${ext}",
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Hyperclaw",

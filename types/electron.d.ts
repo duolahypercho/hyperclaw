@@ -235,6 +235,7 @@ declare global {
       onUpdateStatus: (callback: (data: UpdateStatus) => void) => void;
       removeUpdateStatusListener: () => void;
       setProgressBar: (progress: number) => Promise<void>;
+      clearAuthSession: () => Promise<{ ok: boolean; error?: string }>;
       openClaw: OpenClawAPI;
       hyperClawBridge: HyperClawBridgeAPI;
       noteFS: any;

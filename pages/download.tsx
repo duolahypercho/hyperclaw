@@ -7,14 +7,14 @@ const Download = () => {
   return (
     <>
       <SEO
-        title="Download Copanion - Desktop App"
-        description="Download the Copanion desktop app for a faster, more integrated experience. Available for Windows and macOS."
+        title="Download Hyperclaw - Desktop App"
+        description="Download the Hyperclaw desktop app for Mac (remote mode). Available for Apple Silicon and Intel."
         url="https://app.claw.hypercho.com/download"
         image="https://app.claw.hypercho.com/copanion_X_1.png"
         author="Hypercho"
-        keywords="Copanion download, desktop app, Windows app, productivity app download"
+        keywords="Hyperclaw download, desktop app, Mac app, productivity app download"
         type="website"
-        siteName="Copanion"
+        siteName="Hypercho"
         twitterHandle="@hypercho"
       />
       <DownloadPage />
