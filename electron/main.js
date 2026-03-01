@@ -406,12 +406,67 @@ function createWindow() {
     }
   });
 
+  // Allow OAuth provider origins to open in-app so the callback returns to the Electron window
+  function isOAuthProviderUrl(url) {
+    try {
+      const host = new URL(url).hostname.toLowerCase();
+      return host === "accounts.google.com" || host.endsWith(".accounts.google.com");
+    } catch {
+      return false;
+    }
+  }
+
+  function isAppOriginUrl(url) {
+    try {
+      return url.startsWith(localUrl) || url.startsWith(remoteUrl);
+    } catch {
+      return false;
+    }
+  }
+
   // Handle external links - open in system browser instead of Electron window.
+  // OAuth URLs (e.g. Google sign-in) open in an in-app child window so the callback returns to the app.
   // For internal URLs: Electron often loads about:blank when window.open() gets a relative URL
   // (e.g. "/Tool/OpenClaw"), so we create the child window ourselves with an absolute URL
   // and the same preload so the app and bridge work in the new window.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (!url) return { action: "deny" };
+    // OAuth: open in child window so callback stays in Electron instead of system browser
+    if (isOAuthProviderUrl(url)) {
+      const preloadPath = path.join(__dirname, "preload.js");
+      setImmediate(() => {
+        const oauthChild = new BrowserWindow({
+          width: 500,
+          height: 650,
+          title: "Sign in",
+          frame: true,
+          webPreferences: {
+            nodeIntegration: false,
+            contextIsolation: true,
+            webSecurity: true,
+            backgroundThrottling: false,
+            // Use default session so callback cookies are shared with main window
+          },
+          show: false,
+        });
+        oauthChild.loadURL(url, { userAgent: mainWindow.webContents.getUserAgent() }).catch((err) => {
+          console.error("OAuth window load failed:", err);
+          oauthChild.close();
+        });
+        oauthChild.once("ready-to-show", () => oauthChild.show());
+        // When OAuth redirects back to our app, load that URL in the main window and close the child.
+        // Use did-navigate so the callback runs in the child first and sets the session cookie (shared session).
+        oauthChild.webContents.on("did-navigate", (ev, navUrl) => {
+          if (isAppOriginUrl(navUrl)) {
+            mainWindow.loadURL(navUrl, { userAgent: mainWindow.webContents.getUserAgent() }).catch(() => {});
+            mainWindow.show();
+            mainWindow.focus();
+            oauthChild.close();
+          }
+        });
+      });
+      return { action: "deny" };
+    }
     if (!url.startsWith(localUrl) && !url.startsWith(remoteUrl)) {
       shell.openExternal(url);
       return { action: "deny" };
@@ -451,16 +506,6 @@ function createWindow() {
     });
     return { action: "deny" };
   });
-
-  // Allow OAuth provider origins to open in-app so the callback returns to the Electron window
-  function isOAuthProviderUrl(url) {
-    try {
-      const host = new URL(url).hostname.toLowerCase();
-      return host === "accounts.google.com" || host.endsWith(".accounts.google.com");
-    } catch {
-      return false;
-    }
-  }
 
   // Prevent navigation to external URLs within the Electron window (except OAuth flows)
   mainWindow.webContents.on("will-navigate", (event, navigationUrl) => {
