@@ -103,6 +103,10 @@ let appConfig = {
   mode: "local",
   remoteUrl: "https://app.claw.hypercho.com",
   localUrl: "http://localhost:1000",
+  gateway: {
+    host: "127.0.0.1",
+    port: 18789,
+  },
 };
 
 try {
@@ -1383,22 +1387,90 @@ ipcMain.handle("openclaw:get-gateway-connect-url", async () => {
         return { gatewayUrl: "http://127.0.0.1:18789", token: null, error: "Config is not valid JSON" };
       }
     }
-    const port = config?.gateway?.port ?? 18789;
-    // Token: config first, then env (OpenClaw uses OPENCLAW_GATEWAY_PASSWORD for token mode)
+    const port = config?.gateway?.port ?? appConfig.gateway?.port ?? 18789;
+    // Use host from appConfig.gateway, fallback to config or default
+    const host = appConfig.gateway?.host ?? config?.gateway?.host ?? "127.0.0.1";
+    // Token: user-specified token first, then config, then env (OpenClaw uses OPENCLAW_GATEWAY_PASSWORD for token mode)
     const token =
+      appConfig.gateway?.token ??
       config?.gateway?.auth?.token ??
       process.env.OPENCLAW_GATEWAY_PASSWORD ??
       process.env.OPENCLAW_GATEWAY_TOKEN ??
       null;
-    const gatewayUrl = `http://127.0.0.1:${port}`;
+    const gatewayUrl = `http://${host}:${port}`;
     return { gatewayUrl, token, error: null };
   } catch (err) {
+    const host = appConfig.gateway?.host ?? "127.0.0.1";
+    const port = appConfig.gateway?.port ?? 18789;
+    const token = appConfig.gateway?.token ?? null;
     return {
-      gatewayUrl: "http://127.0.0.1:18789",
-      token: null,
+      gatewayUrl: `http://${host}:${port}`,
+      token,
       error: err && err.message ? err.message : String(err),
     };
   }
+});
+
+// IPC handler to save gateway config (host/port/token) to app-config.json
+ipcMain.handle("hyperclaw:set-gateway-config", async (event, { host, port, token }) => {
+  try {
+    // Validate input
+    if (!host || typeof host !== "string" || !host.trim()) {
+      return { success: false, error: "Host is required" };
+    }
+    const trimmedHost = host.trim();
+    const trimmedPort = port && typeof port === "number" ? port : 18789;
+    const trimmedToken = token && typeof token === "string" ? token.trim() : "";
+
+    // Update appConfig in memory
+    if (!appConfig.gateway) {
+      appConfig.gateway = {};
+    }
+    appConfig.gateway.host = trimmedHost;
+    appConfig.gateway.port = trimmedPort;
+    appConfig.gateway.token = trimmedToken;
+
+    // Write to app-config.json
+    const configPath = path.join(__dirname, "app-config.json");
+    fs.writeFileSync(configPath, JSON.stringify(appConfig, null, 2), "utf-8");
+
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err && err.message ? err.message : String(err) };
+  }
+});
+
+// IPC handler to get current gateway config
+ipcMain.handle("hyperclaw:get-gateway-config", async () => {
+  return {
+    host: appConfig.gateway?.host ?? "127.0.0.1",
+    port: appConfig.gateway?.port ?? 18789,
+    token: appConfig.gateway?.token ?? "",
+  };
+});
+
+// IPC handler to test gateway connectivity at a given host/port
+ipcMain.handle("hyperclaw:test-gateway-connection", async (event, { host, port }) => {
+  const testHost = (host && typeof host === "string") ? host.trim() : "127.0.0.1";
+  const testPort = (port && typeof port === "number") ? port : 18789;
+  const testUrl = `http://${testHost}:${testPort}`;
+
+  return new Promise((resolve) => {
+    try {
+      const req = http.get(`${testUrl}/health`, { timeout: 5000 }, (res) => {
+        resolve({ success: true, statusCode: res.statusCode, url: testUrl });
+      });
+      req.on("error", (err) => {
+        resolve({ success: false, error: err.message, url: testUrl });
+      });
+      req.on("timeout", () => {
+        req.destroy();
+        resolve({ success: false, error: "Connection timed out", url: testUrl });
+      });
+    } catch (err) {
+      resolve({ success: false, error: err.message, url: testUrl });
+    }
+  });
 });
 
 
@@ -1589,6 +1661,7 @@ const HYPERCLAW_OFFICE_DIR = path.join(HYPERCLAW_DATA_DIR, "office");
 const HYPERCLAW_OFFICE_LAYOUT_PATH = path.join(HYPERCLAW_OFFICE_DIR, "layout.json");
 const HYPERCLAW_OFFICE_SEATS_PATH = path.join(HYPERCLAW_OFFICE_DIR, "seats.json");
 const HYPERCLAW_CHANNELS_PATH = path.join(HYPERCLAW_DATA_DIR, "channels.json");
+const HYPERCLAW_USAGE_PATH = path.join(HYPERCLAW_DATA_DIR, "usage.json");
 
 function getHyperClawChannels() {
   try {
@@ -1597,6 +1670,32 @@ function getHyperClawChannels() {
     return Array.isArray(raw.channels) ? raw.channels : [];
   } catch {
     return [];
+  }
+}
+
+// Local usage storage: save usage data to ~/.hyperclaw/usage.json
+function saveLocalUsageData(usageData) {
+  ensureHyperClawDir();
+  try {
+    fs.writeFileSync(HYPERCLAW_USAGE_PATH, JSON.stringify(usageData, null, 2), "utf-8");
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+}
+
+// Local usage storage: load usage data from ~/.hyperclaw/usage.json
+function loadLocalUsageData() {
+  ensureHyperClawDir();
+  try {
+    if (!fs.existsSync(HYPERCLAW_USAGE_PATH)) {
+      return { success: true, data: null };
+    }
+    const raw = fs.readFileSync(HYPERCLAW_USAGE_PATH, "utf-8");
+    const data = JSON.parse(raw);
+    return { success: true, data };
+  } catch (err) {
+    return { success: false, error: err.message, data: null };
   }
 }
 
@@ -2341,7 +2440,7 @@ function logBridge(action, err) {
   } catch (_) {}
 }
 
-ipcMain.handle("hyperclaw:bridge-invoke", async (event, { action, task, id, patch, command, date, lines, startDate, endDate, jobIds, jobId, limit, offset, runAtMs, todoData, relativePath, content: docContent, layout: officeLayout, seats: officeSeats, agentId, agentName, cronAddParams, cronRunJobId, cronRunDue, cronEditJobId, cronEditParams, cronDeleteJobId }) => {
+ipcMain.handle("hyperclaw:bridge-invoke", async (event, { action, task, id, patch, command, date, lines, startDate, endDate, jobIds, jobId, limit, offset, runAtMs, todoData, relativePath, content: docContent, layout: officeLayout, seats: officeSeats, agentId, agentName, cronAddParams, cronRunJobId, cronRunDue, cronEditJobId, cronEditParams, cronDeleteJobId, usageData }) => {
   logBridge(action);
   ensureHyperClawDir();
   switch (action) {
@@ -2408,6 +2507,12 @@ ipcMain.handle("hyperclaw:bridge-invoke", async (event, { action, task, id, patc
     }
     case "create-openclaw-folder": {
       return createOpenClawFolder(relativePath || "");
+    }
+    case "save-local-usage": {
+      return saveLocalUsageData(usageData);
+    }
+    case "load-local-usage": {
+      return loadLocalUsageData();
     }
     case "trigger-process-commands": {
       try {

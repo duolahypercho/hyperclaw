@@ -1,6 +1,7 @@
 /** @type {import('next').NextConfig} */
-// OpenClaw gateway: allow WS to localhost. Port comes from env so custom gateway.port (e.g. in ~/.openclaw/openclaw.json) can be allowed.
+// OpenClaw gateway: allow WS connections for remote/VPS connections
 // Use NEXT_PUBLIC_OPENCLAW_GATEWAY_PORTS=18789,9999 to allow multiple ports (comma-separated). Defaults to 18789.
+// For production: allows any IP address for maximum flexibility (gateway auth provides security)
 const OPENCLAW_WS_PORTS = (process.env.NEXT_PUBLIC_OPENCLAW_GATEWAY_PORTS || "18789")
   .split(",")
   .map((p) => p.trim())
@@ -8,15 +9,12 @@ const OPENCLAW_WS_PORTS = (process.env.NEXT_PUBLIC_OPENCLAW_GATEWAY_PORTS || "18
 
 function buildConnectSrc() {
   const parts = [
-    "connect-src 'self' https:",
+    "connect-src 'self' https: ws: wss:",
     "http://127.0.0.1:9979 http://localhost:9979",
+    // Allow all WebSocket connections for remote/VPS access (gateway auth provides security)
+    "ws://*:* wss://*:*",
+    "http://*:* https://*:*",
   ];
-  for (const port of OPENCLAW_WS_PORTS) {
-    parts.push(
-      `ws://127.0.0.1:${port} ws://localhost:${port}`,
-      `wss://127.0.0.1:${port} wss://localhost:${port}`
-    );
-  }
   return parts.join(" ");
 }
 

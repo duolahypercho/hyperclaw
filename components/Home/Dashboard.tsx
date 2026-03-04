@@ -21,7 +21,8 @@ export type WidgetType =
   | "kanban"
   | "crons"
   | "docs"
-  | "pixel-office";
+  | "pixel-office"
+  | "usage";
 
 export interface Widget {
   id: string;

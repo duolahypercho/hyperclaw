@@ -85,6 +85,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
     triggerProcessCommands: () => ipcRenderer.invoke("hyperclaw:trigger-process-commands"),
     spawnAgentForTask: (params) => ipcRenderer.invoke("hyperclaw:spawn-agent-for-task", params),
 
+    // Gateway configuration
+    setGatewayConfig: (host, port, token) => ipcRenderer.invoke("hyperclaw:set-gateway-config", { host, port, token }),
+    getGatewayConfig: () => ipcRenderer.invoke("hyperclaw:get-gateway-config"),
+    testGatewayConnection: (host, port) => ipcRenderer.invoke("hyperclaw:test-gateway-connection", { host, port }),
+
     onEvent: (callback) => {
       if (typeof callback !== "function") return;
       ipcRenderer.on("hyperclaw:event", (event, data) => callback(data));

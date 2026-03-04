@@ -20,3 +20,4 @@ export {
   default as PixelOfficeWidget,
   PixelOfficeCustomHeader,
 } from "./PixelOfficeWidget";
+export { default as UsageWidget, UsageCustomHeader } from "./UsageWidget";

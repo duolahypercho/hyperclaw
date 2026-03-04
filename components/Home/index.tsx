@@ -9,6 +9,7 @@ import {
   CronsWidget,
   DocsWidget,
   PixelOfficeWidget,
+  UsageWidget,
 } from "$/components/Home/widgets";
 import { useOS } from "@OS/Provider/OSProv";
 import { useToast } from "@/components/ui/use-toast";
@@ -26,6 +27,7 @@ export default function Home() {
   const cronsTool = toolAbstracts.find((t) => t.id === "crons");
   const docsTool = toolAbstracts.find((t) => t.id === "docs");
   const pixelOfficeTool = toolAbstracts.find((t) => t.id === "pixel-office");
+  const usageTool = toolAbstracts.find((t) => t.id === "usage");
 
   // Memoize widget components to maintain provider state
   const widgets: Widget[] = useMemo(
@@ -86,8 +88,16 @@ export default function Home() {
         component: PixelOfficeWidget,
         defaultValue: { w: 6, h: 4, minW: 4, minH: 3, x: 6, y: 15 },
       },
+      {
+        id: usageTool?.id || "usage",
+        type: "usage",
+        title: usageTool?.name || "Token Usage",
+        icon: usageTool?.icon || null,
+        component: UsageWidget,
+        defaultValue: { w: 8, h: 3, minW: 6, minH: 3, x: 12, y: 15 },
+      },
     ],
-    [todoTool, pomodoroTool, cronsTool, docsTool, pixelOfficeTool]
+    [todoTool, pomodoroTool, cronsTool, docsTool, pixelOfficeTool, usageTool]
   );
 
   // State for visible widgets

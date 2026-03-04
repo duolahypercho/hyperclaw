@@ -179,25 +179,54 @@ export const TimerProvider = ({ children }: { children: React.ReactNode }) => {
     }
   }, []);
 
+  // Track if timers have changed to avoid expensive JSON.stringify on every interval
+  const timersChangedRef = useRef(false);
+  const prevTimersJsonRef = useRef<string>("");
+
+  // Mark timers as changed when they update
+  useEffect(() => {
+    const currentJson = JSON.stringify(timers);
+    if (currentJson !== prevTimersJsonRef.current) {
+      prevTimersJsonRef.current = currentJson;
+      timersChangedRef.current = true;
+    }
+  }, [timers]);
+
   // Save timers to app settings every 15 seconds
   useEffect(() => {
     if (typeof window === "undefined") return;
 
     const intervalId = setInterval(() => {
+      // Only serialize and save if timers have actually changed
+      if (!timersChangedRef.current) {
+        return;
+      }
+
       // Get current timers state and fresh app settings using refs
       const currentTimers = timersRef.current;
       const freshAppSettings = getAppSettingsRef.current("timer");
       const storedTimers = freshAppSettings?.meta?.timers || [];
 
-      // Check if timers have actually changed compared to stored data
-      const hasChanges =
-        JSON.stringify(currentTimers) !== JSON.stringify(storedTimers);
-
-      // Return early if no changes
-      if (!hasChanges) {
+      // Quick length check first (fast)
+      if (currentTimers.length !== storedTimers.length) {
+        timersChangedRef.current = false;
+        updateAppSettingsRef.current("timer", {
+          meta: {
+            timers: currentTimers,
+          },
+        });
         return;
       }
 
+      // Only do JSON.stringify if lengths match (much less frequent)
+      const hasChanges = JSON.stringify(currentTimers) !== JSON.stringify(storedTimers);
+
+      if (!hasChanges) {
+        timersChangedRef.current = false;
+        return;
+      }
+
+      timersChangedRef.current = false;
       updateAppSettingsRef.current("timer", {
         meta: {
           timers: currentTimers,

@@ -108,12 +108,36 @@ export function useOpenClaw(autoRefreshMs = 0) {
   const [state, setState] = useState<OpenClawState>(initialState);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const refreshInProgressRef = useRef(false);
+  // Track pending RAF update to batch multiple updates
+  const pendingRafRef = useRef<number | null>(null);
+  const pendingUpdatesRef = useRef<Partial<OpenClawState> | null>(null);
 
   const setPartial = useCallback(
     (patch: Partial<OpenClawState>) =>
       setState((prev) => ({ ...prev, ...patch })),
     []
   );
+
+  // Batched update using requestAnimationFrame - schedules UI update at next frame
+  // This prevents multiple rapid state updates from causing jank
+  const batchStateUpdate = useCallback((patch: Partial<OpenClawState>) => {
+    // Merge with pending updates
+    pendingUpdatesRef.current = { ...pendingUpdatesRef.current, ...patch };
+
+    // If already scheduled, just merge and return
+    if (pendingRafRef.current !== null) {
+      return;
+    }
+
+    // Schedule update at next animation frame
+    pendingRafRef.current = requestAnimationFrame(() => {
+      if (pendingUpdatesRef.current) {
+        setPartial(pendingUpdatesRef.current);
+        pendingUpdatesRef.current = null;
+      }
+      pendingRafRef.current = null;
+    });
+  }, [setPartial]);
 
   const checkInstalled = useCallback(async (): Promise<boolean> => {
     try {
@@ -292,6 +316,7 @@ export function useOpenClaw(autoRefreshMs = 0) {
     if (Date.now() - lastRefreshEndAt < REFRESH_COOLDOWN_MS) return;
     refreshInProgressRef.current = true;
     globalRefreshInProgress = true;
+    // Use immediate setPartial for loading state - user needs instant feedback
     setPartial({ loading: true });
     const errMsg = (e: unknown) => (e instanceof Error ? e.message : "Failed");
 
@@ -302,21 +327,34 @@ export function useOpenClaw(autoRefreshMs = 0) {
         api.getCronList().catch((e) => ({ success: false as const, error: errMsg(e) })),
         api.getCronListJson().catch((e) => ({ success: false as const, error: errMsg(e), data: undefined })),
       ]);
+
+      // Batch all cron-related updates into single state change
+      const cronUpdates: Partial<OpenClawState> = {};
+
       if (cronListRes.success && cronListRes.data != null) {
-        setPartial({ cronJobs: cronListRes.data, errors: { ...state.errors, cron: null } });
+        cronUpdates.cronJobs = cronListRes.data;
+        cronUpdates.errors = { ...state.errors, cron: null };
       } else if (!cronListRes.success) {
-        setPartial({ errors: { ...state.errors, cron: cronListRes.error ?? "Unknown error" } });
+        cronUpdates.errors = { ...state.errors, cron: cronListRes.error ?? "Unknown error" };
       }
+
       const jobs =
         cronJsonRes.success && cronJsonRes.data
           ? (Array.isArray(cronJsonRes.data) ? cronJsonRes.data : cronJsonRes.data.jobs)
           : null;
       if (jobs && Array.isArray(jobs)) {
-        setPartial({ cronJobsJson: jobs, errors: { ...state.errors, cron: null } });
+        cronUpdates.cronJobsJson = jobs;
+        cronUpdates.errors = { ...state.errors, cron: null };
       } else if (!cronJsonRes.success) {
-        setPartial({ cronJobsJson: null, errors: { ...state.errors, cron: cronJsonRes.error ?? "Unknown error" } });
+        cronUpdates.cronJobsJson = null;
+        cronUpdates.errors = { ...state.errors, cron: cronJsonRes.error ?? "Unknown error" };
       }
-      setPartial({ loading: false });
+
+      cronUpdates.loading = false;
+
+      // Batch all updates together - single re-render
+      batchStateUpdate(cronUpdates);
+
       lastRefreshEndAt = Date.now();
       refreshInProgressRef.current = false;
       globalRefreshInProgress = false;
@@ -364,7 +402,7 @@ export function useOpenClaw(autoRefreshMs = 0) {
       globalRefreshInProgress = false;
       setState((prev) => ({ ...prev, loading: false }));
     }
-  }, [checkInstalled, fetchStatus, fetchGatewayHealth, fetchCronList, fetchCronListJson, fetchAgents, setPartial, state.errors]);
+  }, [checkInstalled, fetchStatus, fetchGatewayHealth, fetchCronList, fetchCronListJson, fetchAgents, setPartial, batchStateUpdate, state.errors]);
 
   useEffect(() => {
     refreshAll().catch((err) => {
@@ -387,7 +425,7 @@ export function useOpenClaw(autoRefreshMs = 0) {
 
   // Cron running poll: match latest run by runAtMs close to our "Run now" time; remove when that run is finished.
   useEffect(() => {
-    const CRON_POLL_MS = 10_000;
+    const CRON_POLL_MS = 5_000; // 5 seconds - fast updates without lag
     const DEBUG = typeof window !== "undefined" && (window as unknown as { __CRON_POLL_DEBUG?: boolean }).__CRON_POLL_DEBUG !== false;
     const debugLog = (...args: unknown[]) => DEBUG && console.log("[cron-poll]", ...args);
     // Run is "ours" if runAtMs is within this window of when we clicked Run now (clock skew + delay)
@@ -398,15 +436,26 @@ export function useOpenClaw(autoRefreshMs = 0) {
     const checkRunningCrons = async () => {
       const currentIds = getRunningJobIds();
       if (currentIds.length === 0) return;
-      for (const jobId of currentIds) {
-        try {
-          const startedAt = getRunningJobStartedAt(jobId);
-          const result = (await bridgeInvoke("get-cron-runs-for-job", {
+
+      // Parallelize all IPC calls - much faster than serial
+      const results = await Promise.allSettled(
+        currentIds.map(jobId =>
+          bridgeInvoke("get-cron-runs-for-job", {
             jobId,
             limit: 10,
             offset: 0,
-          })) as { runs?: { action?: string; runAtMs?: number }[] };
-          const runs = Array.isArray(result?.runs) ? result.runs : [];
+          }).then(result => ({ jobId, result }))
+        )
+      );
+
+      // Process results
+      for (const settled of results) {
+        if (settled.status !== "fulfilled") continue;
+
+        const { jobId, result } = settled.value;
+        try {
+          const startedAt = getRunningJobStartedAt(jobId);
+          const runs = Array.isArray((result as { runs?: unknown })?.runs) ? (result as { runs: { action?: string; runAtMs?: number }[] }).runs : [];
           const latest = runs[0];
 
           if (!latest) continue;
@@ -441,6 +490,16 @@ export function useOpenClaw(autoRefreshMs = 0) {
       };
     }
   }, [autoRefreshMs, state.installed, refreshAll]);
+
+  // Cleanup pending RAF on unmount
+  useEffect(() => {
+    return () => {
+      if (pendingRafRef.current !== null) {
+        cancelAnimationFrame(pendingRafRef.current);
+        pendingRafRef.current = null;
+      }
+    };
+  }, []);
 
   return {
     ...state,

@@ -27,6 +27,7 @@ function generateTaskId(): string {
 }
 const EVENTS_PATH = path.join(DATA_DIR, "events.jsonl");
 const COMMANDS_PATH = path.join(DATA_DIR, "commands.jsonl");
+const USAGE_PATH = path.join(DATA_DIR, "usage.json");
 const OPENCLAW_DIR = path.join(os.homedir(), ".openclaw");
 const OPENCLAW_DIR_ALT = path.join(os.homedir(), "openclaw"); // ~/openclaw (no dot)
 const CRON_JOBS_PATH = path.join(OPENCLAW_DIR, "cron", "jobs.json");
@@ -1270,7 +1271,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
   ensureDir();
 
-  const { action, task, id, patch, command, date, lines, jobIds, jobId: singleJobId, runAtMs, limit: runsLimit, offset: runsOffset, relativePath, content: docContent, todoData, query, cronAddParams, cronRunJobId, cronRunDue, cronEditJobId, cronEditParams, cronDeleteJobId, agentName, agentId } = req.body;
+  const { action, task, id, patch, command, date, lines, jobIds, jobId: singleJobId, runAtMs, limit: runsLimit, offset: runsOffset, relativePath, content: docContent, todoData, query, cronAddParams, cronRunJobId, cronRunDue, cronEditJobId, cronEditParams, cronDeleteJobId, agentName, agentId, usageData } = req.body;
 
   switch (action) {
     case "trigger-process-commands": {
@@ -1577,6 +1578,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     case "create-openclaw-folder": {
       const createFolderResult = createOpenClawFolder(relativePath ?? "");
       return res.json(createFolderResult);
+    }
+    case "save-local-usage": {
+      try {
+        if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+        fs.writeFileSync(USAGE_PATH, JSON.stringify(usageData, null, 2), "utf-8");
+        return res.json({ success: true });
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return res.json({ success: false, error: msg });
+      }
+    }
+    case "load-local-usage": {
+      try {
+        if (!fs.existsSync(USAGE_PATH)) {
+          return res.json({ success: true, data: null });
+        }
+        const raw = fs.readFileSync(USAGE_PATH, "utf-8");
+        const data = JSON.parse(raw);
+        return res.json({ success: true, data });
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return res.json({ success: false, error: msg, data: null });
+      }
     }
     case "add-agent": {
       const name = typeof agentName === "string" ? agentName.trim() : "";

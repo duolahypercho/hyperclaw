@@ -83,9 +83,6 @@ export default function UsageWidget() {
           <div className="text-[10px] text-muted-foreground">Total</div>
         </div>
       </div>
-      <p className="text-[10px] text-muted-foreground mt-2 border-t border-border pt-2">
-        From ~/.openclaw agents & sessions
-      </p>
     </motion.div>
   );
 }
