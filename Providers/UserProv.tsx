@@ -1,8 +1,11 @@
 import {
   createContext,
   ReactNode,
+  useCallback,
   useContext,
   useEffect,
+  useMemo,
+  useRef,
   useState,
 } from "react";
 import { useSession } from "next-auth/react";
@@ -175,14 +178,17 @@ export const UserProvider = ({ children }: { children: ReactNode }) => {
     setStatus(sessionStatus);
   }, [route, sessionStatus]);
 
-  const value = {
+  const fnsRef = useRef({ setId, logout });
+  fnsRef.current = { setId, logout };
+
+  const value = useMemo(() => ({
     userInfo,
     membership,
-    setId,
+    setId: (...args: Parameters<typeof setId>) => fnsRef.current.setId(...args),
     status,
     userId,
-    logout,
-  };
+    logout: () => fnsRef.current.logout(),
+  }), [userInfo, membership, status, userId]);
 
   return (
     <>

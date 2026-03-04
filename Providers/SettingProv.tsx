@@ -1,8 +1,10 @@
 import {
   createContext,
   ReactNode,
+  useCallback,
   useContext,
   useEffect,
+  useMemo,
   useState,
   SetStateAction,
   Dispatch,
@@ -71,15 +73,15 @@ export const SettingProvider = ({ children }: { children: ReactNode }) => {
 
   const [isChanged, setIsChanged] = useState<boolean>(false);
 
-  const handlePauseHintClick = () => {
+  const handlePauseHintClick = useCallback(() => {
     setIsShowPauseHint(false);
     setIsChanged(true);
-  };
+  }, []);
 
-  const handleOptionHintClick = () => {
+  const handleOptionHintClick = useCallback(() => {
     setIsShowOptionHint(false);
     setIsChanged(true);
-  };
+  }, []);
 
   //useEffect for getting stored value of iplayer setting from localstorage
   useEffect(() => {
@@ -109,7 +111,7 @@ export const SettingProvider = ({ children }: { children: ReactNode }) => {
     }
   }, [isChanged]);
 
-  const value: exportedValue = {
+  const value: exportedValue = useMemo(() => ({
     isTimer,
     isRandom,
     isChanged,
@@ -122,7 +124,7 @@ export const SettingProvider = ({ children }: { children: ReactNode }) => {
     setIsShowOptionHint,
     handlePauseHintClick,
     handleOptionHintClick,
-  };
+  }), [isTimer, isRandom, isChanged, isShowPauseHint, isShowOptionHint, handlePauseHintClick, handleOptionHintClick]);
 
   return (
     <>

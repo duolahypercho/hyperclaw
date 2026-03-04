@@ -20,6 +20,17 @@ export function buildGatewayWsUrl(gatewayUrl: string, token?: string | null): st
 
 export type GatewayConnectionState = { connected: boolean; error: string | null };
 
+// Chat event types
+export type ChatEventState = "delta" | "final" | "aborted" | "error";
+
+export interface ChatEventPayload {
+  runId: string;
+  sessionKey: string;
+  state: ChatEventState;
+  message?: unknown;
+  errorMessage?: string;
+}
+
 export type GatewayConnectOptions = { token?: string | null };
 
 const RECONNECT_BACKOFF_MS = [1000, 2000, 4000, 8000, 16000, 30000];
@@ -51,7 +62,7 @@ async function signConnectChallenge(params: {
 }
 
 /** Singleton: one persistent gateway WebSocket */
-const gatewayConnection = {
+export const gatewayConnection = {
   ws: null as WebSocket | null,
   wsUrl: null as string | null,
   token: null as string | null,
@@ -62,6 +73,10 @@ const gatewayConnection = {
   listeners: new Set<() => void>(),
   pendingRequests: new Map<string, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>(),
   deviceIdentity: null as { deviceId: string; publicKeyPem: string } | null,
+  // Chat event handlers
+  chatEventListeners: new Set<(payload: ChatEventPayload) => void>(),
+  // Buffer for accumulating delta text from agent events
+  agentDeltaBuffer: null as Map<string, string> | null,
 
   notify() {
     this.listeners.forEach((cb) => cb());
@@ -105,8 +120,14 @@ const gatewayConnection = {
         if (msg.ok) {
           pending.resolve(msg.payload);
         } else {
-          console.log("[Gateway WS] Response Error:", msg.error);
-          pending.reject(new Error((msg.error as string) || "Request failed"));
+          // Error can be a string or object { code, message }
+          const errorObj = msg.error as { code?: string; message?: string } | undefined;
+          if (typeof msg.error === "string") {
+            pending.reject(new Error(msg.error || "Request failed"));
+          } else {
+            const errorMessage = errorObj?.message || errorObj?.code || "Request failed";
+            pending.reject(new Error(errorMessage));
+          }
         }
         return;
       }
@@ -132,7 +153,6 @@ const gatewayConnection = {
         }
       }
       if (tokenToUse == null || tokenToUse === "") {
-        console.warn("[Gateway WS] No auth token (config gateway.auth.token or OPENCLAW_GATEWAY_PASSWORD). Signing may fail.");
       }
 
       // Sign the challenge using Electron API
@@ -140,7 +160,7 @@ const gatewayConnection = {
         clientId: "gateway-client",
         clientMode: "backend",
         role: "operator",
-        scopes: ["operator.read", "operator.write"],
+        scopes: ["operator.read", "operator.write", "operator.admin"],
         token: tokenToUse ?? undefined,
         nonce: nonce,
       }).then((signed) => {
@@ -173,6 +193,199 @@ const gatewayConnection = {
         }
       });
       return;
+    }
+
+    // Handle chat events (event type "chat" or "chat.delta", "chat.final", etc.)
+    if (msg.type === "event" && typeof msg.event === "string" && (msg.event === "chat" || msg.event.startsWith("chat."))) {
+      const payload = msg.payload as ChatEventPayload;
+      if (payload) {
+        this.chatEventListeners.forEach((handler) => handler(payload));
+      }
+      return;
+    }
+
+    // Handle agent stream events (assistant delta, final, etc.)
+    // Format: agent.{runId}.{stream}.{seq} -> payload contains runId, sessionKey, stream (lifecycle/assistant/tool), data
+    if (msg.type === "event" && typeof msg.event === "string" && msg.event.startsWith("agent.")) {
+      const payload = msg.payload as Record<string, unknown>;
+      const stream = payload?.stream as string;
+      const sessionKey = payload?.sessionKey as string;
+      const runId = payload?.runId as string;
+      const data = payload?.data as Record<string, unknown>;
+
+      // Buffer for accumulating delta text
+      if (!this.agentDeltaBuffer) {
+        this.agentDeltaBuffer = new Map();
+      }
+
+      // Convert agent stream events to chat events
+      if (stream === "assistant" && sessionKey && runId) {
+        // Extract text from data - can be in delta, text, or content fields
+        const delta = data?.delta as string | undefined;
+        const text = data?.text as string | undefined;
+        const content = data?.content as string | undefined;
+        const assistantText = delta || text || content;
+
+        if (assistantText !== undefined && assistantText !== "") {
+          // Get existing buffered text for this run
+          const existingBuffer = this.agentDeltaBuffer.get(runId) || "";
+          const newBuffer = existingBuffer + assistantText;
+          this.agentDeltaBuffer.set(runId, newBuffer);
+
+          // This is a delta event from agent stream
+          const chatPayload: ChatEventPayload = {
+            runId,
+            sessionKey,
+            state: "delta",
+            message: { role: "assistant", content: [{ type: "text", text: assistantText }] },
+          };
+          this.chatEventListeners.forEach((handler) => handler(chatPayload));
+        }
+      }
+
+      // Handle lifecycle end - convert to final with buffered content
+      if (stream === "lifecycle" && sessionKey && runId) {
+        const phase = data?.phase as string;
+        if (phase === "end") {
+          // Get buffered text for this run
+          const bufferedText = this.agentDeltaBuffer.get(runId) || "";
+          this.agentDeltaBuffer.delete(runId);
+
+          const chatPayload: ChatEventPayload = {
+            runId,
+            sessionKey,
+            state: "final",
+            message: bufferedText
+              ? { role: "assistant", content: [{ type: "text", text: bufferedText }], timestamp: Date.now() }
+              : undefined,
+          };
+          this.chatEventListeners.forEach((handler) => handler(chatPayload));
+        }
+      }
+
+      // Handle tool events - convert to toolResult messages for real-time display
+      if (stream === "tool" && sessionKey && runId) {
+        const toolName = data?.name as string | undefined;
+        const toolCallId = data?.callId as string | undefined;
+        const toolInput = data?.input as string | undefined;
+        const toolOutput = data?.output as string | undefined;
+        const toolError = data?.error as string | undefined;
+
+        if (toolCallId && toolName) {
+          // If we have output, show tool result
+          if (toolOutput !== undefined) {
+            const chatPayload: ChatEventPayload = {
+              runId,
+              sessionKey,
+              state: "delta", // Use delta to show in real-time
+              message: {
+                role: "toolResult",
+                toolCallId,
+                toolName,
+                content: toolOutput,
+                isError: !!toolError,
+              },
+            };
+            this.chatEventListeners.forEach((handler) => handler(chatPayload));
+          } else if (toolInput !== undefined) {
+            // Show tool call
+            const chatPayload: ChatEventPayload = {
+              runId,
+              sessionKey,
+              state: "delta",
+              message: {
+                role: "assistant",
+                tool_calls: [{
+                  id: toolCallId,
+                  type: "function",
+                  function: { name: toolName, arguments: toolInput },
+                }],
+              },
+            };
+            this.chatEventListeners.forEach((handler) => handler(chatPayload));
+          }
+        }
+      }
+      return;
+    }
+
+  },
+
+  /** Subscribe to chat events */
+  onChatEvent(callback: (payload: ChatEventPayload) => void): () => void {
+    this.chatEventListeners.add(callback);
+    return () => this.chatEventListeners.delete(callback);
+  },
+
+  /** Send a chat message */
+  sendChatMessage(params: { sessionKey: string; message: string; deliver?: boolean; idempotencyKey?: string; attachments?: unknown[] }): Promise<unknown> {
+    return this.request("chat.send", {
+      sessionKey: params.sessionKey,
+      message: params.message,
+      deliver: params.deliver ?? false,
+      idempotencyKey: params.idempotencyKey || `ws-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      attachments: params.attachments,
+    });
+  },
+
+  /** Abort an in-progress chat run */
+  abortChat(params: { sessionKey: string; runId?: string }): Promise<unknown> {
+    return this.request("chat.abort", {
+      sessionKey: params.sessionKey,
+      ...(params.runId && { runId: params.runId }),
+    });
+  },
+
+  /** Get chat history */
+  getChatHistory(sessionKey: string, limit: number = 200): Promise<{ messages?: unknown[] }> {
+    return this.request("chat.history", { sessionKey, limit });
+  },
+
+  /** List available models */
+  listModels(): Promise<{ models: Array<{ id: string; provider: string; displayName?: string }> }> {
+    return this.request("models.list", {});
+  },
+
+  /** Get session details (including model) */
+  getSession(key: string): Promise<unknown> {
+    return this.request("sessions.get", { key });
+  },
+
+  /** Patch session properties (including model) */
+  patchSession(key: string, patch: Record<string, unknown>): Promise<unknown> {
+    return this.request("sessions.patch", { key, ...patch });
+  },
+
+  /** Get list of sessions for an agent */
+  async listSessions(agentId: string, limit: number = 50): Promise<{ sessions?: Array<{ key: string; label?: string; createdAt?: number; updatedAt?: number; model?: string; modelProvider?: string; thinkingLevel?: string }> }> {
+    // Filter sessions by agent prefix
+    const prefix = `agent:${agentId}:`;
+    const result = await this.request<{ sessions?: Array<{ key: string; label?: string; createdAt?: number; updatedAt?: number; model?: string; modelProvider?: string; thinkingLevel?: string }> }>("sessions.list", { limit: 200 });
+    if (!result?.sessions) {
+      return { sessions: [] };
+    }
+    // Filter to only sessions for this agent
+    const agentSessions = result.sessions.filter(s => s.key.startsWith(prefix));
+    // Sort by updatedAt descending (most recent first)
+    agentSessions.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    // Return top N
+    return { sessions: agentSessions.slice(0, limit) };
+  },
+
+  /** Get session info including model by session key */
+  async getSessionModel(sessionKey: string): Promise<string | null> {
+    try {
+      // Parse agentId from session key (format: agent:xxx:...)
+      const parts = sessionKey.split(':');
+      if (parts.length < 2) return null;
+      const agentId = parts[1];
+
+      const result = await this.listSessions(agentId, 200);
+      const session = result.sessions?.find(s => s.key === sessionKey);
+      return session?.model || null;
+    } catch (error) {
+      console.warn("[GatewayWS] Failed to get session model:", error);
+      return null;
     }
   },
 
@@ -253,6 +466,11 @@ const gatewayConnection = {
   subscribe(cb: () => void): () => void {
     this.listeners.add(cb);
     return () => this.listeners.delete(cb);
+  },
+
+  /** Check if connected */
+  isConnected(): boolean {
+    return this.connected;
   },
 };
 

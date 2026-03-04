@@ -19,21 +19,6 @@ import { OSProvider } from "@OS/Provider/OSProv";
 import { GeistSans } from "geist/font/sans";
 import { UpdateNotification } from "$/components/UpdateNotification";
 import { GuidanceProvider } from "$/components/Guidance";
-import { useEffect } from "react";
-
-function DebugDocumentWriteLogger() {
-  useEffect(() => {
-    const orig = document.write;
-    if (typeof orig !== "function") return;
-    (document as any).write = function (...args: unknown[]) {
-      // #region agent log
-      if (typeof fetch !== "undefined") fetch("http://127.0.0.1:7697/ingest/5b487555-6c93-439c-bf5f-6251fb6e26ec", { method: "POST", headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "d4447e" }, body: JSON.stringify({ sessionId: "d4447e", location: "_app.tsx:document.write", message: "document.write called", data: { len: args.length, sample: String(args[0]).slice(0, 200) }, hypothesisId: "H3", timestamp: Date.now() }) }).catch(() => {});
-      // #endregion
-      return (orig as any).apply(document, args);
-    };
-  }, []);
-  return null;
-}
 
 Router.events.on("routeChangeStart", nProgress.start);
 Router.events.on("routeChangeError", nProgress.done);
@@ -43,7 +28,6 @@ function MyApp({ Component, pageProps }: any) {
   const getLayout = Component.getLayout || ((page: NextPage) => page);
   return (
     <main className={GeistSans.className} suppressHydrationWarning>
-      <DebugDocumentWriteLogger />
       {/* Core providers first */}
       <SessionProvider
         session={pageProps.session}

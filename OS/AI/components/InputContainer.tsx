@@ -10,7 +10,6 @@ import React, {
 import { motion, AnimatePresence } from "framer-motion";
 import TextareaAutosize from "react-textarea-autosize";
 import { Button } from "@/components/ui/button";
-import { useCopanionkit } from "$/OS/AI/core/copanionkit";
 import {
   Popover,
   PopoverContent,
@@ -23,18 +22,17 @@ import {
   Smile,
   RefreshCw,
   ChevronUp,
-  MessageSquare,
-  Infinity,
+  ChevronDown,
   Check,
   X,
   Square,
+  Cpu,
 } from "lucide-react";
 import { getMediaUrl } from "$/utils";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/components/ui/use-toast";
-import { useService } from "$/Providers/ServiceProv";
 import { v4 as uuidv4 } from "uuid";
-import { CopanionActionMode } from "@OS/AI/shared";
+import { gatewayConnection, subscribeGatewayConnection } from "$/lib/openclaw-gateway-ws";
 import {
   AttachmentPreview,
   AttachmentPreviewModal,
@@ -43,8 +41,6 @@ import {
   InputAttachment,
   AttachmentUnion,
 } from "@OS/AI/components/Chat";
-import { useAssistant } from "$/Providers/AssistantProv";
-import RateLimit from "./RateLimit";
 import { useLiveTranscription, VoiceController } from "$/components/Tool/VoiceToText";
 
 export const InputContainer: React.FC<InputContainerProps> = ({
@@ -109,15 +105,68 @@ export const InputContainer: React.FC<InputContainerProps> = ({
     null
   );
   const [pdfPreviewContent, setPdfPreviewContent] = useState<Blob | null>(null);
-  const { uploadFileToCloud, deleteFileFromCloud } = useService();
+
+  // Default models - initialize with defaults first
+  const [availableModels, setAvailableModels] = useState<Array<{ id: string; provider: string; displayName?: string }>>([
+    { id: "claude-opus-4-6", provider: "anthropic", displayName: "Claude Opus 4.6" },
+    { id: "claude-sonnet-4-6", provider: "anthropic", displayName: "Claude Sonnet 4.6" },
+    { id: "claude-haiku-4-5", provider: "anthropic", displayName: "Claude Haiku 4.5" },
+  ]);
+  const [currentModel, setCurrentModel] = useState<string>("claude-opus-4-6");
+  const [isLoadingModels, setIsLoadingModels] = useState(false);
+  const [modelsLoadedFromGateway, setModelsLoadedFromGateway] = useState(false);
   const isControlled = controlledValue !== undefined;
   const currentValue = isControlled ? controlledValue : inputValue;
   const setValue = isControlled ? controlledOnChange : setInputValue;
 
-  const {
-    copanionActionMode: selectedActionType,
-    setCopanionActionMode: setSelectedActionType,
-  } = useCopanionkit();
+  // Load models from gateway and get session model when sessionKey changes
+  useEffect(() => {
+    const loadModels = async () => {
+      setIsLoadingModels(true);
+
+      try {
+        const client = gatewayConnection;
+
+        if (!client.connected) {
+          setIsLoadingModels(false);
+          return;
+        }
+
+        // Get available models (only load once)
+        if (!modelsLoadedFromGateway) {
+          const result = await client.listModels() as { models: Array<{ id: string; provider: string; displayName?: string }> };
+          if (result.models && result.models.length > 0) {
+            setAvailableModels(result.models);
+            setModelsLoadedFromGateway(true);
+          }
+        }
+
+        // Get session model when sessionKey changes
+        if (sessionKey) {
+          const sessionModel = await client.getSessionModel(sessionKey);
+          if (sessionModel) {
+            setCurrentModel(sessionModel);
+          }
+        }
+      } catch (error) {
+        console.error("[InputContainer] Failed to load models:", error);
+      } finally {
+        setIsLoadingModels(false);
+      }
+    };
+
+    loadModels();
+
+    // Also subscribe to gateway connection changes
+    const handleConnect = () => {
+      loadModels();
+    };
+    const unsubscribe = subscribeGatewayConnection(handleConnect);
+
+    return () => {
+      unsubscribe();
+    };
+  }, [sessionKey, modelsLoadedFromGateway]);
 
   // Use external attachments if provided, otherwise use internal state
   const currentAttachments: AttachmentUnion[] =
@@ -177,19 +226,15 @@ export const InputContainer: React.FC<InputContainerProps> = ({
     ]
   );
 
-  // When component becomes disabled, remove current attachments
+  // When component becomes disabled, clear attachments
   useEffect(() => {
     if (isClosed && currentAttachments.length) {
-      currentAttachments.forEach(({ url }) => {
-        if (url) deleteFileFromCloud(url);
-      });
       setCurrentAttachments([]);
     }
   }, [
     isClosed,
     currentAttachments,
     setCurrentAttachments,
-    deleteFileFromCloud,
   ]);
 
   // Reset file input when sessionKey changes (new chat)
@@ -199,6 +244,25 @@ export const InputContainer: React.FC<InputContainerProps> = ({
     }
   }, [sessionKey]);
 
+  // Handle model change
+  const handleModelChange = async (modelId: string) => {
+    if (!sessionKey) return;
+    try {
+      const client = gatewayConnection;
+      // Find the selected model to get the provider
+      const selectedModel = availableModels.find(m => m.id === modelId);
+      // Combine provider and model ID if provider exists
+      const fullModelId = selectedModel?.provider
+        ? `${selectedModel.provider}/${modelId}`
+        : modelId;
+      await client.patchSession(sessionKey, { model: fullModelId });
+      setCurrentModel(modelId);
+    } catch (error) {
+      const err = error as Error;
+      console.error("Failed to update model:", err.message);
+    }
+  };
+
   const handleSendMessage = async () => {
     if (!canSend || isInputDisabled) return;
 
@@ -207,7 +271,7 @@ export const InputContainer: React.FC<InputContainerProps> = ({
       return;
 
     // Append environment details with selected action type
-    const messageToSend = `${baseMessage}<environment_details>\n<mode>${selectedActionType}</mode>\n<message_send_at>${new Date().toISOString()}</message_send_at>\n</environment_details>`;
+    const messageToSend = `${baseMessage}`;
 
     // Store the current values to restore on error
     const currentInputValue = currentValue;
@@ -316,10 +380,20 @@ export const InputContainer: React.FC<InputContainerProps> = ({
     return true;
   };
 
+  // Helper function to convert file to base64 (like OpenClaw)
+  const fileToBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  };
+
   // Helper function to process a single file
   const processFile = async (file: File) => {
     const id = uuidv4();
-    const { category, allowedType } = getFileCategory(file);
+    const { category } = getFileCategory(file);
 
     // Create local preview for images
     const localPreview =
@@ -338,35 +412,27 @@ export const InputContainer: React.FC<InputContainerProps> = ({
     ]);
 
     try {
-      const urlKey = await uploadFileToCloud(
-        file,
-        allowedType,
-        "chatTempFiles/",
-        maxFileSize
-      );
+      // Convert to base64 inline (no cloud upload)
+      const base64Data = await fileToBase64(file);
 
-      if (!urlKey) {
-        throw new Error("Upload failed");
-      }
-
-      // Update attachment with successful upload
+      // Update attachment with base64 data
       setCurrentAttachments((prev: AttachmentUnion[]) =>
         prev.map((a) =>
           ("file" in a ? a.file === file : a.id === id)
-            ? { ...a, url: urlKey as string, uploading: false }
+            ? { ...a, url: base64Data, uploading: false }
             : a
         )
       );
     } catch (error) {
-      console.error(`Failed to upload ${file.name}:`, error);
-      // Remove failed upload
+      console.error(`Failed to process ${file.name}:`, error);
+      // Remove failed file
       setCurrentAttachments((prev: AttachmentUnion[]) =>
-        prev.filter((a) => ("file" in a ? a.file !== file : a.id !== id))
+        prev.filter((a) => ("file" in a ? a.file !== file : a.id === id))
       );
 
       toast({
-        title: "Upload failed",
-        description: `Failed to upload ${file.name}`,
+        title: "Failed to process file",
+        description: `Failed to process ${file.name}`,
         variant: "destructive",
       });
     }
@@ -465,10 +531,6 @@ export const InputContainer: React.FC<InputContainerProps> = ({
   };
 
   const handleAttachmentRemove = (index: number) => {
-    const attachment = currentAttachments[index];
-    if (attachment.url) {
-      deleteFileFromCloud(attachment.url);
-    }
     setCurrentAttachments(currentAttachments.filter((_, i) => i !== index));
   };
 
@@ -545,18 +607,6 @@ export const InputContainer: React.FC<InputContainerProps> = ({
     }
   };
 
-  // Get action type details
-  const getActionTypeDetails = (type: "chat" | "agent") => {
-    switch (type) {
-      case "chat":
-        return { icon: <MessageSquare className="w-4 h-4" />, label: "Chat" };
-      case "agent":
-        return { icon: <Infinity className="w-4 h-4" />, label: "Agent" };
-    }
-  };
-
-  const currentActionDetails = getActionTypeDetails(selectedActionType);
-
   const handleClosePreview = () => {
     setPreviewAttachment(null);
     setTextPreviewContent(null);
@@ -627,7 +677,7 @@ export const InputContainer: React.FC<InputContainerProps> = ({
 
     // Send the message
     const baseMessage = transcriptToSend.trim();
-    const messageToSend = `${baseMessage}<environment_details>\n<mode>${selectedActionType}</mode>\n<message_send_at>${new Date().toISOString()}</message_send_at>\n</environment_details>`;
+    const messageToSend = `${baseMessage}`;
 
     try {
       // Clear transcript and reset voice mode
@@ -655,7 +705,6 @@ export const InputContainer: React.FC<InputContainerProps> = ({
     isListening,
     stopListening,
     setValue,
-    selectedActionType,
     onSendMessage,
     clearTranscript,
     isControlled,
@@ -760,17 +809,19 @@ export const InputContainer: React.FC<InputContainerProps> = ({
         className="flex flex-row items-end justify-between w-full"
       >
         <div className="flex flex-row items-end gap-0">
-          {showActions && (
+          {showActions && availableModels.length > 0 && (
             <Popover open={isPopoverOpen} onOpenChange={setIsPopoverOpen}>
               <PopoverTrigger asChild>
                 <Button
                   variant="outline"
                   size="sm"
-                  className="h-fit py-1.5 px-2 gap-1.5 text-xs font-medium hover:bg-primary/10 transition-colors"
+                  className="h-fit py-1.5 px-2 gap-1.5 text-xs font-normal hover:bg-primary/10 transition-colors"
                 >
-                  {currentActionDetails.icon}
-                  <span>{currentActionDetails.label}</span>
-                  <ChevronUp
+                  <Cpu className="w-3 h-3" />
+                  <span className="max-w-[100px] truncate">
+                    {currentModel ? currentModel.split('/').pop() || currentModel : "Select Model"}
+                  </span>
+                  <ChevronDown
                     className={cn(
                       "w-3 h-3 opacity-60 transition-transform duration-200",
                       isPopoverOpen && "rotate-180"
@@ -779,53 +830,34 @@ export const InputContainer: React.FC<InputContainerProps> = ({
                 </Button>
               </PopoverTrigger>
               <PopoverContent
-                className="w-44 p-1 bg-card/95 backdrop-blur-sm border-primary/20"
+                className="w-48 p-1 bg-card/95 backdrop-blur-sm border-primary/20 max-h-64 overflow-y-auto"
                 align="start"
                 side="top"
               >
                 <div className="flex flex-col gap-0.5">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className={cn(
-                      "w-full justify-between h-fit py-1 px-2 text-xs font-medium hover:bg-primary/10 transition-colors gap-2",
-                      selectedActionType === "chat" &&
-                      "bg-primary/10 text-primary"
-                    )}
-                    onClick={() => {
-                      setSelectedActionType(CopanionActionMode.CHAT);
-                      setIsPopoverOpen(false);
-                    }}
-                  >
-                    <div className="flex items-center gap-2">
-                      <MessageSquare className="w-3 h-3" />
-                      Chat
-                    </div>
-                    {selectedActionType === "chat" && (
-                      <Check className="w-3 h-3" />
-                    )}
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className={cn(
-                      "w-full justify-between h-fit py-1 px-2 text-xs font-medium hover:bg-primary/10 transition-colors gap-2",
-                      selectedActionType === "agent" &&
-                      "bg-primary/10 text-primary"
-                    )}
-                    onClick={() => {
-                      setSelectedActionType(CopanionActionMode.AGENT);
-                      setIsPopoverOpen(false);
-                    }}
-                  >
-                    <div className="flex items-center gap-2">
-                      <Infinity className="w-3 h-3" />
-                      Agent
-                    </div>
-                    {selectedActionType === "agent" && (
-                      <Check className="w-3 h-3" />
-                    )}
-                  </Button>
+                  {availableModels.map((model) => (
+                    <Button
+                      key={model.id}
+                      variant="ghost"
+                      size="sm"
+                      className={cn(
+                        "w-full justify-between h-fit py-1.5 px-2 text-xs font-normal hover:bg-primary/10 transition-colors gap-2",
+                        currentModel === model.id && "bg-primary/10 text-primary"
+                      )}
+                      onClick={() => {
+                        handleModelChange(model.id);
+                        setIsPopoverOpen(false);
+                      }}
+                    >
+                      <div className="flex items-center gap-2">
+                        <Cpu className="w-3 h-3" />
+                        <span className="truncate">{model.id.split('/').pop() || model.id}</span>
+                      </div>
+                      {currentModel === model.id && (
+                        <Check className="w-3 h-3 flex-shrink-0" />
+                      )}
+                    </Button>
+                  ))}
                 </div>
               </PopoverContent>
             </Popover>
@@ -859,9 +891,10 @@ export const InputContainer: React.FC<InputContainerProps> = ({
   }, [
     showActions,
     isPopoverOpen,
-    currentActionDetails,
-    selectedActionType,
-    setSelectedActionType,
+    availableModels,
+    currentModel,
+    handleModelChange,
+    setIsPopoverOpen,
     showEmojiPicker,
     showAttachments,
     isInputDisabled,
@@ -885,7 +918,7 @@ export const InputContainer: React.FC<InputContainerProps> = ({
           {/* Text Input */}
           <div
             className={cn(
-              "flex-1 flex flex-col h-fit w-full rounded-md border border-solid border-primary/10 bg-background/60 backdrop-blur-sm px-3 py-2 text-sm font-medium ring-offset-ring-input-ring-focus placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-[1px] focus-visible:ring-primary/30 focus-visible:ring-offset-0 disabled:cursor-not-allowed disabled:opacity-50 text-foreground shadow-[0_4px_12px_rgba(0,0,0,0.1),0_2px_4px_rgba(0,0,0,0.06)] overflow-clip gap-2",
+              "flex-1 flex flex-col h-fit w-full rounded-md border border-solid border-primary/10 bg-background/60 backdrop-blur-sm px-3 py-2 text-sm font-normal ring-offset-ring-input-ring-focus placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-[1px] focus-visible:ring-primary/30 focus-visible:ring-offset-0 disabled:cursor-not-allowed disabled:opacity-50 text-foreground shadow-[0_4px_12px_rgba(0,0,0,0.1),0_2px_4px_rgba(0,0,0,0.06)] overflow-clip gap-2",
               isInputDisabled && "opacity-60 cursor-not-allowed",
               inputClassName
             )}

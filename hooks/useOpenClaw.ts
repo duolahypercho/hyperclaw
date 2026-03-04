@@ -108,36 +108,12 @@ export function useOpenClaw(autoRefreshMs = 0) {
   const [state, setState] = useState<OpenClawState>(initialState);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const refreshInProgressRef = useRef(false);
-  // Track pending RAF update to batch multiple updates
-  const pendingRafRef = useRef<number | null>(null);
-  const pendingUpdatesRef = useRef<Partial<OpenClawState> | null>(null);
 
   const setPartial = useCallback(
     (patch: Partial<OpenClawState>) =>
       setState((prev) => ({ ...prev, ...patch })),
     []
   );
-
-  // Batched update using requestAnimationFrame - schedules UI update at next frame
-  // This prevents multiple rapid state updates from causing jank
-  const batchStateUpdate = useCallback((patch: Partial<OpenClawState>) => {
-    // Merge with pending updates
-    pendingUpdatesRef.current = { ...pendingUpdatesRef.current, ...patch };
-
-    // If already scheduled, just merge and return
-    if (pendingRafRef.current !== null) {
-      return;
-    }
-
-    // Schedule update at next animation frame
-    pendingRafRef.current = requestAnimationFrame(() => {
-      if (pendingUpdatesRef.current) {
-        setPartial(pendingUpdatesRef.current);
-        pendingUpdatesRef.current = null;
-      }
-      pendingRafRef.current = null;
-    });
-  }, [setPartial]);
 
   const checkInstalled = useCallback(async (): Promise<boolean> => {
     try {
@@ -156,11 +132,11 @@ export function useOpenClaw(autoRefreshMs = 0) {
     const api = getApi();
     const res: OpenClawCommandResult = await api.getStatus();
     if (res.success) {
-      setPartial({ status: res.data ?? null, errors: { ...state.errors, status: null } });
+      setState((prev) => ({ ...prev, status: res.data ?? null, errors: { ...prev.errors, status: null } }));
     } else {
-      setPartial({ errors: { ...state.errors, status: res.error ?? "Unknown error" } });
+      setState((prev) => ({ ...prev, errors: { ...prev.errors, status: res.error ?? "Unknown error" } }));
     }
-  }, [setPartial, state.errors]);
+  }, []);
 
   const fetchGatewayHealth = useCallback(async () => {
     const api = getApi();
@@ -204,11 +180,11 @@ export function useOpenClaw(autoRefreshMs = 0) {
     const api = getApi();
     const res: OpenClawCommandResult = await api.getCronList();
     if (res.success) {
-      setPartial({ cronJobs: res.data ?? null, errors: { ...state.errors, cron: null } });
+      setState((prev) => ({ ...prev, cronJobs: res.data ?? null, errors: { ...prev.errors, cron: null } }));
     } else {
-      setPartial({ errors: { ...state.errors, cron: res.error ?? "Unknown error" } });
+      setState((prev) => ({ ...prev, errors: { ...prev.errors, cron: res.error ?? "Unknown error" } }));
     }
-  }, [setPartial, state.errors]);
+  }, []);
 
   const fetchCronListJson = useCallback(async () => {
     const api = getApi();
@@ -219,14 +195,15 @@ export function useOpenClaw(autoRefreshMs = 0) {
         ? (Array.isArray(res.data) ? res.data : res.data.jobs)
         : null;
     if (jobs && Array.isArray(jobs)) {
-      setPartial({ cronJobsJson: jobs, errors: { ...state.errors, cron: null } });
+      setState((prev) => ({ ...prev, cronJobsJson: jobs, errors: { ...prev.errors, cron: null } }));
     } else {
-      setPartial({
+      setState((prev) => ({
+        ...prev,
         cronJobsJson: null,
-        errors: { ...state.errors, cron: res.error ?? "Unknown error" },
-      });
+        errors: { ...prev.errors, cron: res.error ?? "Unknown error" },
+      }));
     }
-  }, [setPartial, state.errors]);
+  }, []);
 
   const cronEnable = useCallback(async (id: string) => {
     const api = getApi();
@@ -246,7 +223,7 @@ export function useOpenClaw(autoRefreshMs = 0) {
         data?: OpenClawRegistryAgent[];
       };
       if (res?.success && Array.isArray(res.data)) {
-        setPartial({ agents: res.data, errors: { ...state.errors, agents: null } });
+        setState((prev) => ({ ...prev, agents: res.data!, errors: { ...prev.errors, agents: null } }));
         return;
       }
     } catch {
@@ -261,11 +238,11 @@ export function useOpenClaw(autoRefreshMs = 0) {
         name: a.name,
         status: "idle",
       }));
-      setPartial({ agents: mapped, errors: { ...state.errors, agents: null } });
+      setState((prev) => ({ ...prev, agents: mapped, errors: { ...prev.errors, agents: null } }));
     } else {
-      setPartial({ errors: { ...state.errors, agents: res.error ?? "Unknown error" } });
+      setState((prev) => ({ ...prev, errors: { ...prev.errors, agents: res.error ?? "Unknown error" } }));
     }
-  }, [setPartial, state.errors]);
+  }, []);
 
   const runCommand = useCallback(async (args: string): Promise<OpenClawCommandResult> => {
     const api = getApi();
@@ -288,7 +265,7 @@ export function useOpenClaw(autoRefreshMs = 0) {
       const json = await bridgeInvoke("get-logs", { lines: 500 });
       const err = (json as { error?: string })?.error;
       if (err) {
-        setPartial({ logs: null, errors: { ...state.errors, logs: err } });
+        setState((prev) => ({ ...prev, logs: null, errors: { ...prev.errors, logs: err } }));
         return;
       }
       // API returns the log array directly: [{ time, level, message }, ...]
@@ -305,11 +282,11 @@ export function useOpenClaw(autoRefreshMs = 0) {
       } else if (typeof (json as { data?: string })?.data === "string") {
         logText = (json as { data: string }).data;
       }
-      setPartial({ logs: logText, errors: { ...state.errors, logs: null } });
+      setState((prev) => ({ ...prev, logs: logText, errors: { ...prev.errors, logs: null } }));
     } catch (e) {
-      setPartial({ logs: null, errors: { ...state.errors, logs: (e as Error).message ?? "Failed to fetch logs" } });
+      setState((prev) => ({ ...prev, logs: null, errors: { ...prev.errors, logs: (e as Error).message ?? "Failed to fetch logs" } }));
     }
-  }, [setPartial, state.errors]);
+  }, []);
 
   const refreshAll = useCallback(async () => {
     if (refreshInProgressRef.current || globalRefreshInProgress) return;
@@ -328,32 +305,33 @@ export function useOpenClaw(autoRefreshMs = 0) {
         api.getCronListJson().catch((e) => ({ success: false as const, error: errMsg(e), data: undefined })),
       ]);
 
-      // Batch all cron-related updates into single state change
-      const cronUpdates: Partial<OpenClawState> = {};
+      // Batch all cron-related updates into single state change using functional update
+      setState((prev) => {
+        const cronUpdates: Partial<OpenClawState> = {};
 
-      if (cronListRes.success && cronListRes.data != null) {
-        cronUpdates.cronJobs = cronListRes.data;
-        cronUpdates.errors = { ...state.errors, cron: null };
-      } else if (!cronListRes.success) {
-        cronUpdates.errors = { ...state.errors, cron: cronListRes.error ?? "Unknown error" };
-      }
+        if (cronListRes.success && cronListRes.data != null) {
+          cronUpdates.cronJobs = cronListRes.data;
+          cronUpdates.errors = { ...prev.errors, cron: null };
+        } else if (!cronListRes.success) {
+          cronUpdates.errors = { ...prev.errors, cron: cronListRes.error ?? "Unknown error" };
+        }
 
-      const jobs =
-        cronJsonRes.success && cronJsonRes.data
-          ? (Array.isArray(cronJsonRes.data) ? cronJsonRes.data : cronJsonRes.data.jobs)
-          : null;
-      if (jobs && Array.isArray(jobs)) {
-        cronUpdates.cronJobsJson = jobs;
-        cronUpdates.errors = { ...state.errors, cron: null };
-      } else if (!cronJsonRes.success) {
-        cronUpdates.cronJobsJson = null;
-        cronUpdates.errors = { ...state.errors, cron: cronJsonRes.error ?? "Unknown error" };
-      }
+        const jobs =
+          cronJsonRes.success && cronJsonRes.data
+            ? (Array.isArray(cronJsonRes.data) ? cronJsonRes.data : cronJsonRes.data.jobs)
+            : null;
+        if (jobs && Array.isArray(jobs)) {
+          cronUpdates.cronJobsJson = jobs;
+          cronUpdates.errors = { ...(cronUpdates.errors ?? prev.errors), cron: null };
+        } else if (!cronJsonRes.success) {
+          cronUpdates.cronJobsJson = null;
+          cronUpdates.errors = { ...(cronUpdates.errors ?? prev.errors), cron: cronJsonRes.error ?? "Unknown error" };
+        }
 
-      cronUpdates.loading = false;
+        cronUpdates.loading = false;
 
-      // Batch all updates together - single re-render
-      batchStateUpdate(cronUpdates);
+        return { ...prev, ...cronUpdates };
+      });
 
       lastRefreshEndAt = Date.now();
       refreshInProgressRef.current = false;
@@ -402,7 +380,7 @@ export function useOpenClaw(autoRefreshMs = 0) {
       globalRefreshInProgress = false;
       setState((prev) => ({ ...prev, loading: false }));
     }
-  }, [checkInstalled, fetchStatus, fetchGatewayHealth, fetchCronList, fetchCronListJson, fetchAgents, setPartial, batchStateUpdate, state.errors]);
+  }, [checkInstalled, fetchStatus, fetchGatewayHealth, fetchAgents, setPartial]);
 
   useEffect(() => {
     refreshAll().catch((err) => {
@@ -476,30 +454,46 @@ export function useOpenClaw(autoRefreshMs = 0) {
     };
 
     debugLog("start interval (time-based runAtMs)", CRON_POLL_MS, "ms. Disable: window.__CRON_POLL_DEBUG = false");
-    const intervalId = setInterval(checkRunningCrons, CRON_POLL_MS);
-    return () => clearInterval(intervalId);
+
+    // Pause cron poll when tab is hidden
+    let intervalId: ReturnType<typeof setInterval> | null = null;
+    const start = () => { if (!intervalId) intervalId = setInterval(checkRunningCrons, CRON_POLL_MS); };
+    const stop = () => { if (intervalId) { clearInterval(intervalId); intervalId = null; } };
+    const onVisibility = () => { document.visibilityState === "visible" ? start() : stop(); };
+    if (document.visibilityState === "visible") start();
+    document.addEventListener("visibilitychange", onVisibility);
+
+    return () => {
+      stop();
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, []);
 
   useEffect(() => {
     if (autoRefreshMs > 0 && state.installed) {
-      intervalRef.current = setInterval(() => {
-        refreshAll().catch((err) => console.warn("[useOpenClaw] interval refresh failed:", err));
-      }, autoRefreshMs);
+      // Pause auto-refresh when tab is hidden
+      const startRefresh = () => {
+        if (!intervalRef.current) {
+          intervalRef.current = setInterval(() => {
+            refreshAll().catch((err) => console.warn("[useOpenClaw] interval refresh failed:", err));
+          }, autoRefreshMs);
+        }
+      };
+      const stopRefresh = () => {
+        if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+      };
+      const onVisibility = () => { document.visibilityState === "visible" ? startRefresh() : stopRefresh(); };
+
+      if (document.visibilityState === "visible") startRefresh();
+      document.addEventListener("visibilitychange", onVisibility);
+
       return () => {
-        if (intervalRef.current) clearInterval(intervalRef.current);
+        stopRefresh();
+        document.removeEventListener("visibilitychange", onVisibility);
       };
     }
   }, [autoRefreshMs, state.installed, refreshAll]);
 
-  // Cleanup pending RAF on unmount
-  useEffect(() => {
-    return () => {
-      if (pendingRafRef.current !== null) {
-        cancelAnimationFrame(pendingRafRef.current);
-        pendingRafRef.current = null;
-      }
-    };
-  }, []);
 
   return {
     ...state,

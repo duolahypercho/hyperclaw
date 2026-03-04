@@ -10,11 +10,11 @@ import {
   DocsWidget,
   PixelOfficeWidget,
   UsageWidget,
+  GatewayChatWidget,
 } from "$/components/Home/widgets";
 import { useOS } from "@OS/Provider/OSProv";
 import { useToast } from "@/components/ui/use-toast";
 import { cn } from "@/lib/utils";
-import { PomodoroProvider } from "$/components/Tool/Pomodoro/pomoProvider";
 
 export default function Home() {
   const { toolAbstracts, osSettings, updateOSSettings } = useOS();
@@ -96,6 +96,17 @@ export default function Home() {
         component: UsageWidget,
         defaultValue: { w: 8, h: 3, minW: 6, minH: 3, x: 12, y: 15 },
       },
+      {
+        id: "gateway-chat",
+        type: "gateway-chat",
+        title: "AI Assistant",
+        icon: null,
+        component: GatewayChatWidget,
+        defaultValue: { w: 8, h: 6, minW: 6, minH: 4, x: 0, y: 0 },
+        config: { agentId: undefined, sessionKey: undefined }, // Default - uses first available agent
+      },
+      // Additional chat widgets can be enabled by users in edit mode
+      // Each can connect to a different agent or session via their config
     ],
     [todoTool, pomodoroTool, cronsTool, docsTool, pixelOfficeTool, usageTool]
   );
@@ -125,6 +136,108 @@ export default function Home() {
 
   // State for forcing Dashboard reset
   const [resetKey, setResetKey] = useState(0);
+
+  // Minimal type for stored widget data (without component function)
+  type StoredWidget = {
+    id: string;
+    type: string;
+    title: string;
+    defaultValue?: {
+      w: number;
+      h: number;
+      minW: number;
+      minH: number;
+      x: number;
+      y: number;
+    };
+    config?: Record<string, unknown>;
+    isResizable?: boolean;
+  };
+
+  // State for dynamically added widget instances - load from localStorage
+  const [storedWidgetInstances, setStoredWidgetInstances] = useState<StoredWidget[]>(() => {
+    if (typeof window === "undefined") return [];
+    const saved = localStorage.getItem("dashboard-widget-instances");
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  });
+
+  // Save widget instances to localStorage whenever they change
+  useEffect(() => {
+    localStorage.setItem("dashboard-widget-instances", JSON.stringify(storedWidgetInstances));
+  }, [storedWidgetInstances]);
+
+  // Helper to get widget component from type
+  const getWidgetComponent = (type: string) => {
+    const w = widgets.find(w => w.type === type);
+    return w?.component;
+  };
+
+  // Get all widgets (templates + instances with resolved components)
+  const allWidgets = useMemo(() => {
+    // First, get templates
+    const templateWidgets = widgets.map(template => {
+      const instance = storedWidgetInstances.find(s => s.id === template.id);
+      if (instance) {
+        // Merge instance data with template (but keep template's component)
+        return {
+          ...template,
+          ...instance,
+          component: template.component,
+        };
+      }
+      return template;
+    });
+
+    // Then add any stored instances that don't have matching templates (new chat widgets)
+    const additionalInstances = storedWidgetInstances
+      .filter(s => !widgets.find(w => w.id === s.id))
+      .map(s => {
+        const component = getWidgetComponent(s.type);
+        if (!component) return null;
+        return {
+          ...s,
+          component,
+          icon: null,
+        };
+      })
+      .filter(Boolean);
+
+    return [...templateWidgets, ...(additionalInstances as typeof widgets)];
+  }, [widgets, storedWidgetInstances]);
+
+  // Handler for adding a new widget instance
+  const handleAddWidget = (newWidget: typeof widgets[0]) => {
+    // Store only the serializable parts
+    const stored: StoredWidget = {
+      id: newWidget.id,
+      type: newWidget.type,
+      title: newWidget.title,
+      defaultValue: newWidget.defaultValue,
+      config: newWidget.config,
+      isResizable: newWidget.isResizable,
+    };
+    setStoredWidgetInstances(prev => [...prev, stored]);
+    setVisibleWidgets(prev => [...prev, newWidget.id]);
+    // Trigger a layout update
+    setResetKey(k => k + 1);
+  };
+
+  // Handler for removing a widget instance
+  const handleRemoveWidget = (widgetId: string) => {
+    // Only remove if it's an instance (not a template)
+    const isInstance = !widgets.find(w => w.id === widgetId);
+    if (isInstance) {
+      setStoredWidgetInstances(prev => prev.filter(w => w.id !== widgetId));
+      setVisibleWidgets(prev => prev.filter(id => id !== widgetId));
+    }
+  };
 
   // Listen for edit mode toggle from Sidebar
   useEffect(() => {
@@ -241,14 +354,28 @@ export default function Home() {
           visibleWidgets={visibleWidgets}
           onToggleWidget={handleToggleWidget}
           onResetLayout={handleResetLayout}
-          availableWidgets={widgets.map((w) => ({
+          availableWidgets={allWidgets.map((w) => ({
             id: w.id,
-            type: w.type,
+            type: w.type as any,
             title: w.title,
           }))}
           isEditMode={isEditMode}
           onToggleEditMode={handleToggleEditMode}
           onCancelEdit={handleCancelEdit}
+          onAddChatWidget={() => {
+            // Add a new gateway-chat widget instance
+            const chatWidgetTemplate = widgets.find(w => w.type === "gateway-chat");
+            if (chatWidgetTemplate) {
+              const newId = `gateway-chat-${Date.now()}`;
+              const newWidget = {
+                ...chatWidgetTemplate,
+                id: newId,
+                title: `Chat ${Date.now().toString().slice(-4)}`,
+                config: {}, // Fresh config - no preset agent or session
+              };
+              handleAddWidget(newWidget);
+            }
+          }}
         />
       )}
       <div
@@ -260,10 +387,12 @@ export default function Home() {
       >
         <Dashboard
           key={resetKey}
-          widgets={widgets}
+          widgets={allWidgets as any}
           visibleWidgets={visibleWidgets}
           onResetLayout={handleResetLayout}
           isEditMode={isEditMode}
+          onAddWidget={handleAddWidget}
+          onRemoveWidget={handleRemoveWidget}
         />
       </div>
     </div>

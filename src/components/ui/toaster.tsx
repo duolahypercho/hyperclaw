@@ -9,8 +9,7 @@ import {
   ToastViewport,
 } from "@/components/ui/toast";
 import { useToast } from "@/components/ui/use-toast";
-import { Progress } from "@/components/ui/progress";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { HyperchoError, Severity } from "@OS/AI/shared";
 
 // Helper functions for error banner styling
@@ -81,7 +80,6 @@ function getErrorColors(severity: ErrorSeverity): ErrorColors {
 }
 
 function ToastProgress({ duration }: { duration: number }) {
-  const [progress, setProgress] = useState(100);
   const { dismiss } = useToast();
   const dismissRef = useRef(dismiss);
 
@@ -89,31 +87,31 @@ function ToastProgress({ duration }: { duration: number }) {
     dismissRef.current = dismiss;
   }, [dismiss]);
 
-  // Add effect to handle dismissal
+  // Dismiss after duration — single timer instead of 10 state updates/sec
   useEffect(() => {
-    if (progress <= 0) {
+    const timer = setTimeout(() => {
       dismissRef.current();
-    }
-  }, [progress]);
-
-  useEffect(() => {
-    const interval = 100; // Update every 10ms for smoother animation
-    const step = (100 * interval) / duration;
-
-    const timer = setInterval(() => {
-      setProgress((prevProgress) => {
-        if (prevProgress <= 0) {
-          clearInterval(timer);
-          return 0;
-        }
-        return prevProgress - step;
-      });
-    }, interval);
-
-    return () => clearInterval(timer);
+    }, duration);
+    return () => clearTimeout(timer);
   }, [duration]);
 
-  return <Progress value={progress} className="h-1" />;
+  return (
+    <div className="h-1 w-full bg-secondary overflow-hidden rounded-full">
+      <div
+        className="h-full bg-primary rounded-full"
+        style={{
+          width: "100%",
+          animation: `toast-progress ${duration}ms linear forwards`,
+        }}
+      />
+      <style jsx>{`
+        @keyframes toast-progress {
+          from { width: 100%; }
+          to { width: 0%; }
+        }
+      `}</style>
+    </div>
+  );
 }
 
 export function Toaster() {

@@ -104,8 +104,11 @@ export const useUnifiedToolState = (messages: Message[]) => {
 
     // Helper to find matching assistant message for a tool result
     const findMatchingAssistant = (toolMessage: Message) => {
-      if (toolMessage.role === "tool") {
-        const toolCallId = (toolMessage as any).toolCallId;
+      // Handle both "tool" and "toolResult" roles (cast to any to handle gateway's toolResult role)
+      const msgRole = (toolMessage as any).role;
+      if (msgRole === "tool" || msgRole === "toolResult") {
+        // Get toolCallId from top-level or from toolResults array
+        const toolCallId = (toolMessage as any).toolCallId || (toolMessage as any).toolResults?.[0]?.toolCallId;
         return messages.find(
           (msg) =>
             msg.role === "assistant" &&
@@ -131,10 +134,14 @@ export const useUnifiedToolState = (messages: Message[]) => {
 
         const existingState = newToolStates.get(id);
 
-        // Check if there's already a tool result
+        // Check if there's already a tool result (handle both "tool" and "toolResult" roles)
         const toolCallId = toolCall.id;
         const toolResultMessage = messages.find(
-          (msg) => msg.role === "tool" && (msg as any).toolCallId === toolCallId
+          (msg) => {
+            const msgRole = (msg as any).role;
+            return (msgRole === "tool" || msgRole === "toolResult") &&
+              ((msg as any).toolCallId === toolCallId || (msg as any).toolResults?.[0]?.toolCallId === toolCallId);
+          }
         );
 
         const hasToolResult = !!toolResultMessage;
@@ -245,24 +252,28 @@ export const useUnifiedToolState = (messages: Message[]) => {
         }
       }
 
-      // Handle tool result messages
-      if (message.role === "tool") {
+      // Handle tool result messages (handle both "tool" and "toolResult" roles)
+      const msgRole = (message as any).role;
+      if (msgRole === "tool" || msgRole === "toolResult") {
         const matchingAssistant = findMatchingAssistant(message);
         if (matchingAssistant) {
           const assistantId = matchingAssistant.id || "";
           const toolState = newToolStates.get(assistantId);
 
           if (toolState) {
-            const isRejected = isToolRejected(message.content);
-            const rejectionMessage = extractRejectionMessage(message.content);
+            // Get content from toolResults array or from message.content
+            const toolResultContent = (message as any).toolResults?.[0]?.content || message.content;
+            const isError = (message as any).toolResults?.[0]?.isError || false;
+            const isRejected = isToolRejected(toolResultContent);
+            const rejectionMessage = extractRejectionMessage(toolResultContent);
 
             // Check current status to determine transition
             if (toolState.status === "pending" || !toolState.resultContent) {
               // First update: Transition to Executing state
               newToolStates.set(assistantId, {
                 ...toolState,
-                status: "executing", // Show executing state
-                resultContent: message.content,
+                status: isError ? "rejected" : "executing", // Show executing state (or rejected if error)
+                resultContent: toolResultContent,
                 rejectionMessage,
               });
               hasChanges = true;
@@ -285,7 +296,7 @@ export const useUnifiedToolState = (messages: Message[]) => {
                     newMap.set(assistantId, {
                       ...currentState,
                       status: finalStatus,
-                      resultContent: message.content,
+                      resultContent: toolResultContent,
                       rejectionMessage,
                       isExpanded: false, // Collapse when complete
                     });
@@ -300,7 +311,7 @@ export const useUnifiedToolState = (messages: Message[]) => {
               let finalStatus: ToolStatus;
               if ((matchingAssistant as any).expired) {
                 finalStatus = "expired";
-              } else if (isRejected) {
+              } else if (isRejected || isError) {
                 finalStatus = "rejected";
               } else {
                 finalStatus = "completed";
@@ -309,7 +320,7 @@ export const useUnifiedToolState = (messages: Message[]) => {
               newToolStates.set(assistantId, {
                 ...toolState,
                 status: finalStatus,
-                resultContent: message.content,
+                resultContent: toolResultContent,
                 rejectionMessage,
               });
               hasChanges = true;

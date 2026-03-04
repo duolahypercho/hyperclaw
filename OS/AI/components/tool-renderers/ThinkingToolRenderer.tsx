@@ -67,7 +67,18 @@ export const ThinkingToolRenderer: React.FC<ToolRendererProps> = ({
     return toolState.arguments || "Thinking...";
   }, [toolState.arguments, toolState.metadata]);
 
+  const hasError = toolState.resultContent && (
+    toolState.resultContent.toLowerCase().includes("error") ||
+    toolState.resultContent.toLowerCase().includes("failed") ||
+    toolState.resultContent.toLowerCase().includes("exception") ||
+    toolState.resultContent.toLowerCase().includes("rejected")
+  );
+
   const getStatusColor = () => {
+    // Show error styling if result contains error indicators
+    if (hasError) {
+      return "bg-destructive/10 border border-destructive/40 text-destructive-foreground";
+    }
     switch (toolState.status) {
       case "pending":
       case "executing":
@@ -82,7 +93,7 @@ export const ThinkingToolRenderer: React.FC<ToolRendererProps> = ({
   return (
     <motion.div
       className={cn(
-        "py-1.5 px-3 relative w-fit transition-all duration-300 select-text break-words overflow-wrap-anywhere rounded-lg border hover:border-primary/50",
+        "py-1.5 px-3 relative w-fit transition-all duration-300 select-text break-words rounded-lg border hover:border-primary/50",
         getStatusColor()
       )}
       animate={{
@@ -145,24 +156,51 @@ export const ThinkingToolRenderer: React.FC<ToolRendererProps> = ({
             transition={{ duration: 0.3, ease: "easeInOut" }}
             className="overflow-hidden"
           >
-            <div className="mt-3 p-3 bg-primary/5 rounded-lg border border-primary/20">
-              <div className="text-sm text-foreground leading-relaxed">
-                {thoughts ? (
-                  <ReactMarkdown
-                    components={createThoughtsMarkdownComponents()}
-                    remarkPlugins={[
-                      remarkGfm,
-                      remarkBreaks,
-                      [remarkMath, { singleDollarTextMath: false }],
-                    ]}
-                    rehypePlugins={[rehypeRaw]}
-                  >
-                    {thoughts}
-                  </ReactMarkdown>
-                ) : (
-                  "No thoughts available"
-                )}
+            <div className="mt-3 space-y-2">
+              {/* Thoughts section */}
+              <div className="p-3 bg-primary/5 rounded-lg border border-primary/20">
+                <div className="text-sm text-foreground leading-relaxed">
+                  {thoughts ? (
+                    <ReactMarkdown
+                      components={createThoughtsMarkdownComponents()}
+                      remarkPlugins={[
+                        remarkGfm,
+                        remarkBreaks,
+                        [remarkMath, { singleDollarTextMath: false }],
+                      ]}
+                      rehypePlugins={[rehypeRaw]}
+                    >
+                      {thoughts}
+                    </ReactMarkdown>
+                  ) : (
+                    "No thoughts available"
+                  )}
+                </div>
               </div>
+
+              {/* Result section - show if available */}
+              {toolState.resultContent && (
+                <div className={cn(
+                  "p-3 rounded-lg text-xs border",
+                  toolState.status === "rejected" || hasError
+                    ? "bg-destructive/10 border-destructive/40 text-destructive-foreground"
+                    : "bg-muted/50 border-border/50 text-foreground"
+                )}>
+                  <div className="text-muted-foreground mb-1 font-medium">Result:</div>
+                  <div className="prose prose-sm dark:prose-invert max-w-none">
+                    <ReactMarkdown
+                      remarkPlugins={[
+                        remarkGfm,
+                        remarkBreaks,
+                        [remarkMath, { singleDollarTextMath: false }],
+                      ]}
+                      rehypePlugins={[rehypeRaw]}
+                    >
+                      {toolState.resultContent}
+                    </ReactMarkdown>
+                  </div>
+                </div>
+              )}
             </div>
           </motion.div>
         )}

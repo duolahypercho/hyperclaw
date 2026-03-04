@@ -16,6 +16,11 @@ import {
   safeParseJson,
   formatDisplayValue,
 } from "../ToolRegistry";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import remarkBreaks from "remark-breaks";
+import rehypeRaw from "rehype-raw";
 
 export const DefaultToolRenderer: React.FC<ToolRendererProps> = ({
   toolState,
@@ -31,8 +36,6 @@ export const DefaultToolRenderer: React.FC<ToolRendererProps> = ({
   // 2. Status is pending
   // 3. No result content yet (hasn't been executed)
   const isPermissionStage = hasGenerativeUI && toolState.status === "pending";
-
-  const isExpanded = toolState.isExpanded || isPermissionStage;
 
   const parsedArguments = useMemo(
     () => safeParseJson(toolState.arguments),
@@ -51,6 +54,27 @@ export const DefaultToolRenderer: React.FC<ToolRendererProps> = ({
     }
     return Boolean(parsedArguments);
   }, [parsedArguments]);
+
+  const resultHasError = useMemo(() => {
+    if (!toolState.resultContent) return false;
+    const content = toolState.resultContent.toLowerCase();
+    return (
+      content.includes("error") ||
+      content.includes("failed") ||
+      content.includes("exception") ||
+      content.includes("rejected")
+    );
+  }, [toolState.resultContent]);
+
+  const effectiveStatus: ToolStatus =
+    toolState.status === "completed" && resultHasError ? "rejected" : toolState.status;
+
+  const isExpanded =
+    toolState.isExpanded === false
+      ? false
+      : toolState.isExpanded ||
+        isPermissionStage ||
+        (resultHasError && !!toolState.resultContent);
 
   const getStatusColor = (status: ToolStatus) => {
     switch (status) {
@@ -125,7 +149,7 @@ export const DefaultToolRenderer: React.FC<ToolRendererProps> = ({
   };
 
   const getStatusText = () => {
-    switch (toolState.status) {
+    switch (effectiveStatus) {
       case "pending":
         return isPermissionStage
           ? "Asking for permission..."
@@ -148,11 +172,11 @@ export const DefaultToolRenderer: React.FC<ToolRendererProps> = ({
   return (
     <motion.div
       className={cn(
-        "py-1.5 px-3 relative w-fit max-w-full transition-all duration-300 select-text break-words overflow-wrap-anywhere rounded-lg border hover:border-primary",
-        getStatusColor(toolState.status)
+        "py-1.5 px-3 relative w-full max-w-full transition-all duration-300 select-text break-all overflow-wrap-anywhere rounded-lg border hover:border-primary",
+        getStatusColor(effectiveStatus)
       )}
       animate={{
-        scale: toolState.status === "completed" ? [1, 1.01, 1] : 1,
+        scale: effectiveStatus === "completed" ? [1, 1.01, 1] : 1,
       }}
       transition={{ duration: 0.5 }}
       style={{
@@ -174,7 +198,7 @@ export const DefaultToolRenderer: React.FC<ToolRendererProps> = ({
           }
         }}
       >
-        {getStatusIcon(toolState.status)}
+        {getStatusIcon(effectiveStatus)}
         <span className="text-xs font-medium text-muted-foreground group-hover:text-primary transition-colors duration-200 select-none">
           {getStatusText()}
         </span>
@@ -210,18 +234,49 @@ export const DefaultToolRenderer: React.FC<ToolRendererProps> = ({
                   status: "executing",
                 })}
               </div>
-            ) : hasArguments ? (
-              <div className="mt-2 p-2 bg-primary/5 rounded text-xs font-mono border border-border/30">
-                <div className="text-muted-foreground mb-1">Arguments:</div>
-                <pre className="whitespace-pre-wrap text-foreground break-words">
-                  {formattedArguments}
-                </pre>
-              </div>
             ) : (
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground italic">
-                  No arguments required
-                </span>
+              <div className="mt-2 space-y-2">
+                {/* Show arguments if available */}
+                {hasArguments && (
+                  <div className="p-2 bg-primary/5 rounded text-xs font-mono border border-border/30 break-all overflow-wrap-anywhere">
+                    <div className="text-muted-foreground mb-1">Arguments:</div>
+                    <pre className="whitespace-pre-wrap text-foreground break-all overflow-wrap-anywhere">
+                      {formattedArguments}
+                    </pre>
+                  </div>
+                )}
+
+                {/* Show result content if available */}
+                {toolState.resultContent && (
+                    <div className={cn(
+                      "p-2 rounded text-xs border",
+                      effectiveStatus === "rejected"
+                        ? "bg-destructive/10 border-destructive/40 text-foreground"
+                        : "bg-muted/50 border-border/50 text-foreground"
+                    )}>
+                      <div className="text-muted-foreground mb-1">Result:</div>
+                      <div className="prose prose-sm dark:prose-invert max-w-none break-all overflow-wrap-anywhere [&_table]:w-full [&_table]:max-w-full [&_table]:table-fixed [&_td]:break-all [&_th]:break-all [&_td]:overflow-wrap-anywhere [&_th]:overflow-wrap-anywhere">
+                        <ReactMarkdown
+                          remarkPlugins={[
+                            remarkGfm,
+                            remarkBreaks,
+                            [remarkMath, { singleDollarTextMath: false }],
+                          ]}
+                          rehypePlugins={[rehypeRaw]}
+                        >
+                          {toolState.resultContent}
+                        </ReactMarkdown>
+                      </div>
+                    </div>
+                )}
+
+                {!hasArguments && !toolState.resultContent && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground italic">
+                      No arguments required
+                    </span>
+                  </div>
+                )}
               </div>
             )}
           </motion.div>

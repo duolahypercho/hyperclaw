@@ -158,10 +158,6 @@ const HyperchoFormInput = ({
   inputStyle?: React.CSSProperties;
 }) => {
   const { mobileScreen } = useInterim();
-  // Check if we're inside a dialog context
-  const isInDialog =
-    typeof window !== "undefined" &&
-    document.querySelector('[role="dialog"]') !== null;
 
   switch (config.type) {
     case "input":

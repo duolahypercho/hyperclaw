@@ -96,5 +96,5 @@ export interface InputContainerProps {
   onAddFiles?: (files: FileList | File[]) => Promise<void>;
 
   // Session management
-  sessionKey?: number;
+  sessionKey?: string;
 }

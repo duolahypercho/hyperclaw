@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Settings,
@@ -11,6 +11,8 @@ import {
   Edit3,
   Lock,
   X,
+  Plus,
+  MessageCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -39,6 +41,7 @@ interface DashboardHeaderProps {
   isEditMode: boolean;
   onToggleEditMode: () => void;
   onCancelEdit?: () => void;
+  onAddChatWidget?: () => void; // Simple callback to add a new chat widget
 }
 
 export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
@@ -49,6 +52,7 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
   isEditMode,
   onToggleEditMode,
   onCancelEdit,
+  onAddChatWidget,
 }) => {
   const [open, setOpen] = useState(false);
 
@@ -96,7 +100,7 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
                     </Button>
                   </DialogTrigger>
 
-                  <DialogContent className="sm:max-w-[500px] max-h-[600px] flex flex-col">
+                  <DialogContent className="sm:max-w-[500px] max-h-[80vh] flex flex-col">
                     <DialogHeader>
                       <DialogTitle className="flex items-center gap-2 text-xl">
                         <Settings className="w-5 h-5 text-primary" />
@@ -190,6 +194,36 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
                             This will restore the original widget positions and
                             sizes
                           </p>
+                        </div>
+                      </div>
+
+                      <Separator />
+
+                      {/* Add Chat Widget Section - Simple one-click add */}
+                      <div className="space-y-4">
+                        <div className="flex items-center gap-2">
+                          <MessageCircle className="w-4 h-4 text-primary" />
+                          <Label className="text-base font-semibold">
+                            Add Chat Widget
+                          </Label>
+                        </div>
+
+                        <div className="space-y-3">
+                          <p className="text-xs text-muted-foreground">
+                            Add another AI Assistant chat widget. Each widget maintains its own conversation and settings.
+                          </p>
+
+                          <Button
+                            variant="outline"
+                            onClick={() => {
+                              onAddChatWidget?.();
+                              setOpen(false);
+                            }}
+                            className="w-full justify-start gap-2"
+                          >
+                            <Plus className="w-4 h-4" />
+                            Add New Chat Widget
+                          </Button>
                         </div>
                       </div>
 

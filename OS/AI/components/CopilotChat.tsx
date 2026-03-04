@@ -195,7 +195,7 @@ const ToolActionsGroupMessage = ({
                       return (
                         <motion.div
                           key={id || `tool-action-fallback-${toolName}-${toolIndex}`}
-                          className="py-1.5 px-3 relative w-fit max-w-full transition-all duration-300 select-text break-words overflow-wrap-anywhere rounded-lg border bg-muted/40 border-border/50 text-muted-foreground"
+                          className="py-1.5 px-3 relative w-fit max-w-full transition-all duration-300 select-text break-words rounded-lg border bg-muted/40 border-border/50 text-muted-foreground"
                           initial={{ opacity: 0 }}
                           animate={{ opacity: 1 }}
                         >
@@ -394,7 +394,7 @@ const EnhancedMessageBubble = memo(
           >
             <div
               className={cn(
-                "py-1.5 px-3 relative w-fit transition-all duration-200 group select-text break-words overflow-wrap-anywhere font-medium",
+                "py-1.5 px-3 relative w-fit transition-all duration-200 group select-text break-words font-medium",
                 isUser
                   ? "bg-primary text-primary-foreground"
                   : "bg-muted border border-border/50"
@@ -694,7 +694,7 @@ export const CopilotChat = ({
     return messages.length > 0;
   }, [messages]);
   const [showScrollButton, setShowScrollButton] = useState(false);
-  const [sessionKey, setSessionKey] = useState(0);
+  const [sessionKey, setSessionKey] = useState<string>("");
   const [chatError, setChatError] = useState<ChatError | null>(null);
   const [regeneratingMessageId, setRegeneratingMessageId] = useState<
     string | null
@@ -1179,7 +1179,7 @@ export const CopilotChat = ({
   useEffect(() => {
     if (!showState) {
       setShowScrollButton(false);
-      setSessionKey(0);
+      setSessionKey("" + (Math.random() * 1000000));
       resetToolStates(); // Clear tool states when closing copanion
       setInputValue(""); // Clear input when closing
       // Clean up attachments when copanion is closed
@@ -1209,11 +1209,6 @@ export const CopilotChat = ({
       }
     };
   }, []);
-
-  // Memoize the last message to prevent unnecessary re-renders
-  const lastMessage = useMemo(() => {
-    return messages[messages.length - 1];
-  }, [messages.length]);
 
   // Scroll to bottom functionality
   const scrollAreaRef = useRef<HTMLDivElement>(null);

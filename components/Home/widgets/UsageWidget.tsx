@@ -264,6 +264,10 @@ const UsageWidgetContent = memo((props: CustomProps) => {
   // Track previous dates to detect changes
   const prevDatesRef = useRef({ startDate, endDate });
 
+  // Ref to access localUsage inside effects without re-triggering them
+  const localUsageRef = useRef(localUsage);
+  useEffect(() => { localUsageRef.current = localUsage; }, [localUsage]);
+
   // Load local usage data on mount
   useEffect(() => {
     async function loadLocal() {
@@ -286,6 +290,7 @@ const UsageWidgetContent = memo((props: CustomProps) => {
   }, []);
 
   // Merge OpenClaw data with local data when new data arrives
+  // NOTE: localUsage is read via ref to avoid infinite loop (effect updates localUsage)
   useEffect(() => {
     if (!usage && !sessionsUsage) return;
 
@@ -295,8 +300,8 @@ const UsageWidgetContent = memo((props: CustomProps) => {
         // Get OpenClaw daily data
         const openClawDaily = usage?.daily ?? [];
 
-        // Get existing local data
-        const localData = localUsage?.daily ?? {};
+        // Get existing local data via ref (not dependency)
+        const localData = localUsageRef.current?.daily ?? {};
 
         // Merge: for each date, keep the one with higher totalTokens (assuming more recent)
         const mergedDaily: LocalUsageData["daily"] = { ...localData };
@@ -335,7 +340,7 @@ const UsageWidgetContent = memo((props: CustomProps) => {
     }
 
     mergeAndSave();
-  }, [usage, sessionsUsage, localUsage]);
+  }, [usage, sessionsUsage]);
 
   // Calculate totals from merged data (local + OpenClaw)
   const getMergedTotals = useCallback(() => {
@@ -390,18 +395,34 @@ const UsageWidgetContent = memo((props: CustomProps) => {
     }
   }, [startDate, endDate, refetch]);
 
-  // Auto-refresh
+  // Auto-refresh (pauses when tab is hidden)
   useEffect(() => {
-    const interval = setInterval(() => {
-      refetch();
-    }, AUTO_REFRESH_INTERVAL);
+    let interval: ReturnType<typeof setInterval> | null = null;
 
-    return () => clearInterval(interval);
+    const start = () => {
+      if (!interval) interval = setInterval(() => refetch(), AUTO_REFRESH_INTERVAL);
+    };
+    const stop = () => {
+      if (interval) { clearInterval(interval); interval = null; }
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") start();
+      else stop();
+    };
+
+    if (document.visibilityState === "visible") start();
+    document.addEventListener("visibilitychange", onVisibility);
+
+    return () => {
+      stop();
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, [refetch]);
 
   const totals = getMergedTotals();
 
   const isInitialLoading = loading && !usage && !sessionsUsage && !localUsage;
+  const showError = error && !usage && !sessionsUsage && !localUsage;
 
   return (
     <motion.div
@@ -433,7 +454,7 @@ const UsageWidgetContent = memo((props: CustomProps) => {
                 ))}
               </div>
             </div>
-          ) : error && !usage && !sessionsUsage ? (
+          ) : showError ? (
             <div className="flex-1 flex flex-col items-center justify-center p-4 text-center">
               <BarChart3 className="w-8 h-8 text-muted-foreground/50 mb-2" />
               <p className="text-sm text-muted-foreground mb-3">

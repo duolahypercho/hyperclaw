@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, type ReactNode, useMemo } from "react";
+import { createContext, useContext, type ReactNode, useRef, useMemo } from "react";
 import { useOpenClaw } from "$/hooks/useOpenClaw";
 
 type OpenClawContextValue = ReturnType<typeof useOpenClaw>;
@@ -12,8 +12,38 @@ const OPENCLAW_AUTO_REFRESH_MS = 30000;
 
 export function OpenClawProvider({ children }: { children: ReactNode }) {
   const openClaw = useOpenClaw(OPENCLAW_AUTO_REFRESH_MS);
-  const value = useMemo(
-    () => openClaw,
+
+  // Keep function refs stable — they don't need to trigger re-renders of consumers
+  const fnsRef = useRef(openClaw);
+  fnsRef.current = openClaw;
+
+  // Only re-create context value when data fields actually change
+  const value = useMemo<OpenClawContextValue>(
+    () => ({
+      installed: openClaw.installed,
+      loading: openClaw.loading,
+      version: openClaw.version,
+      status: openClaw.status,
+      gatewayHealthy: openClaw.gatewayHealthy,
+      gatewayHealthError: openClaw.gatewayHealthError,
+      cronJobs: openClaw.cronJobs,
+      cronJobsJson: openClaw.cronJobsJson,
+      agents: openClaw.agents,
+      logs: openClaw.logs,
+      errors: openClaw.errors,
+      // Stable function references via ref — these never change identity
+      refreshAll: (...args: Parameters<typeof openClaw.refreshAll>) => fnsRef.current.refreshAll(...args),
+      fetchStatus: (...args: Parameters<typeof openClaw.fetchStatus>) => fnsRef.current.fetchStatus(...args),
+      fetchGatewayHealth: (...args: Parameters<typeof openClaw.fetchGatewayHealth>) => fnsRef.current.fetchGatewayHealth(...args),
+      fetchCronList: (...args: Parameters<typeof openClaw.fetchCronList>) => fnsRef.current.fetchCronList(...args),
+      fetchCronListJson: (...args: Parameters<typeof openClaw.fetchCronListJson>) => fnsRef.current.fetchCronListJson(...args),
+      fetchAgents: (...args: Parameters<typeof openClaw.fetchAgents>) => fnsRef.current.fetchAgents(...args),
+      fetchLogs: (...args: Parameters<typeof openClaw.fetchLogs>) => fnsRef.current.fetchLogs(...args),
+      runCommand: (...args: Parameters<typeof openClaw.runCommand>) => fnsRef.current.runCommand(...args),
+      sendMessage: (...args: Parameters<typeof openClaw.sendMessage>) => fnsRef.current.sendMessage(...args),
+      cronEnable: (...args: Parameters<typeof openClaw.cronEnable>) => fnsRef.current.cronEnable(...args),
+      cronDisable: (...args: Parameters<typeof openClaw.cronDisable>) => fnsRef.current.cronDisable(...args),
+    }),
     [
       openClaw.installed,
       openClaw.loading,
@@ -26,17 +56,6 @@ export function OpenClawProvider({ children }: { children: ReactNode }) {
       openClaw.agents,
       openClaw.logs,
       openClaw.errors,
-      openClaw.refreshAll,
-      openClaw.fetchStatus,
-      openClaw.fetchGatewayHealth,
-      openClaw.fetchCronList,
-      openClaw.fetchCronListJson,
-      openClaw.fetchAgents,
-      openClaw.fetchLogs,
-      openClaw.runCommand,
-      openClaw.sendMessage,
-      openClaw.cronEnable,
-      openClaw.cronDisable,
     ]
   );
   return (

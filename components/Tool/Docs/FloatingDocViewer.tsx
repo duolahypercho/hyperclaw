@@ -146,7 +146,7 @@ export function FloatingDocViewer() {
               value={content}
               onChange={(e) => setContent(e.target.value)}
               placeholder="Markdown content..."
-              className="w-full min-h-full p-3 bg-background text-sm font-mono text-foreground placeholder:text-muted-foreground focus:outline-none resize-none border-0 block"
+              className="w-full min-h-full p-3 bg-background text-sm font-mono customScrollbar2 text-foreground placeholder:text-muted-foreground focus:outline-none resize-none border-0 block"
               spellCheck={false}
             />
           </div>

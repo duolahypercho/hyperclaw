@@ -1,4 +1,4 @@
-import { createContext, ReactNode, useContext, useEffect, useState } from "react";
+import { createContext, ReactNode, useContext, useEffect, useMemo, useState } from "react";
 
 export interface exportedValue {
   mobileScreen: boolean | null;
@@ -81,13 +81,13 @@ export const InterimProvider = ({ children }: { children: ReactNode }) => {
     };
   }, []);
 
-  const value: exportedValue = {
+  const value: exportedValue = useMemo(() => ({
     mobileScreen,
     tabletScreen,
     screenSize,
     mobilePortrait,
     mobileLandscape,
-  };
+  }), [mobileScreen, tabletScreen, screenSize, mobilePortrait, mobileLandscape]);
 
   return (
     <>

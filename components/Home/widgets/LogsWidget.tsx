@@ -394,10 +394,20 @@ const LogsWidgetContent = memo((props: CustomProps) => {
   useEffect(() => {
     isMounted.current = true;
     fetchLogs(false);
-    const t = setInterval(() => fetchLogs(true), AUTO_REFRESH_MS);
+
+    // Pause polling when tab is hidden
+    let t: ReturnType<typeof setInterval> | null = null;
+    const start = () => { if (!t) t = setInterval(() => fetchLogs(true), AUTO_REFRESH_MS); };
+    const stop = () => { if (t) { clearInterval(t); t = null; } };
+    const onVisibility = () => { document.visibilityState === "visible" ? start() : stop(); };
+
+    if (document.visibilityState === "visible") start();
+    document.addEventListener("visibilitychange", onVisibility);
+
     return () => {
       isMounted.current = false;
-      clearInterval(t);
+      stop();
+      document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [fetchLogs]);
 

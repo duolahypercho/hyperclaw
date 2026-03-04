@@ -9,19 +9,18 @@ const WindowControls = () => {
   
     useEffect(() => {
       if (!isElectron) return;
-  
+
       // Check initial maximized state
       window.electronAPI?.isMaximized().then(setIsMaximized);
-  
-      // Listen for window state changes
+
+      // Listen for window resize events (covers maximize/restore)
       const checkMaximized = () => {
         window.electronAPI?.isMaximized().then(setIsMaximized);
       };
-  
-      // Check periodically (Electron doesn't have a direct event for this)
-      const interval = setInterval(checkMaximized, 100);
-  
-      return () => clearInterval(interval);
+
+      window.addEventListener("resize", checkMaximized);
+
+      return () => window.removeEventListener("resize", checkMaximized);
     }, [isElectron]);
   
     if (!isElectron) return null;

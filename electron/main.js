@@ -20,30 +20,6 @@ const { subtle } = require("node:crypto").webcrypto;
 
 const isDev = process.env.NODE_ENV === "development";
 
-// #region agent log
-const DEBUG_LOG_DIR = path.join(__dirname, "..", ".cursor");
-const DEBUG_LOG_PATH = path.join(DEBUG_LOG_DIR, "debug-d4447e.log");
-function debugLog(location, message, data, hypothesisId) {
-  const line =
-    JSON.stringify({
-      sessionId: "d4447e",
-      location,
-      message,
-      data: data || {},
-      hypothesisId,
-      timestamp: Date.now(),
-    }) + "\n";
-  try {
-    if (!fs.existsSync(DEBUG_LOG_DIR)) fs.mkdirSync(DEBUG_LOG_DIR, { recursive: true });
-    fs.appendFileSync(DEBUG_LOG_PATH, line, "utf8");
-  } catch (e) {
-    try {
-      const fallback = path.join(app.getPath("userData"), "debug-d4447e.log");
-      fs.appendFileSync(fallback, line, "utf8");
-    } catch (_) {}
-  }
-}
-// #endregion
 
 // Log crashes so we can debug "opens then closes" (run from Terminal to see output)
 function logCrash(label, err) {
@@ -376,24 +352,11 @@ function createWindow() {
       validatedURL,
       urlToLoad,
     });
-    // #region agent log
-    debugLog("main.js:did-fail-load", "page failed to load -> will load errorHtml", {
-      errorCode,
-      errorDescription,
-      validatedURL,
-    }, "H2");
-    // #endregion
     const errorHtml = `data:text/html,<html><body style="background:#000319;color:#BEC1DD;font-family:sans-serif;padding:40px;"><h1>Connection Error</h1><p>Failed to load: <b>${validatedURL}</b></p><p>Error: ${errorDescription} (Code: ${errorCode})</p><p>Attempted URL: <b>${urlToLoad}</b></p><p>Mode: ${isRemoteMode ? "Remote" : "Local"}</p></body></html>`;
     mainWindow.loadURL(errorHtml);
   });
 
   mainWindow.webContents.on("render-process-gone", (event, details) => {
-    // #region agent log
-    debugLog("main.js:render-process-gone", "renderer process crashed or killed", {
-      reason: details.reason,
-      exitCode: details.exitCode,
-    }, "H2");
-    // #endregion
     console.error("Renderer process gone:", details);
   });
 
@@ -500,9 +463,6 @@ function createWindow() {
         },
         show: false,
       });
-      // #region agent log
-      debugLog("main.js:setWindowOpenHandler child", "child.loadURL", { absoluteUrl }, "H2");
-      // #endregion
       child.loadURL(absoluteUrl, { userAgent: mainWindow.webContents.getUserAgent() }).catch((err) => {
         console.error("Child window load failed:", err);
         child.close();
@@ -533,17 +493,11 @@ function createWindow() {
     }
   });
 
-  // #region agent log
-  debugLog("main.js:createWindow initial", "mainWindow.loadURL(urlToLoad)", { urlToLoad }, "H2");
-  // #endregion
   mainWindow.loadURL(urlToLoad, {
     userAgent: mainWindow.webContents.getUserAgent(),
   }).catch((err) => {
     console.error("Load failed:", err);
     const errorHtml = `data:text/html,<html><body style="background:#000319;color:#BEC1DD;font-family:sans-serif;padding:40px;"><h1>Connection Error</h1><p>Error: ${err.message}</p><p>Attempted URL: <b>${urlToLoad}</b></p><p>Mode: ${isRemoteMode ? "Remote" : "Local"}</p><p>Please check your connection and ensure the server is accessible.</p></body></html>`;
-    // #region agent log
-    debugLog("main.js:createWindow load catch", "mainWindow.loadURL(errorHtml)", { url: errorHtml.slice(0, 80) }, "H2");
-    // #endregion
     mainWindow.loadURL(errorHtml);
   });
 
@@ -1496,7 +1450,7 @@ ipcMain.handle("openclaw:sign-connect-challenge", async (event, params) => {
       clientId: clientId || "gateway-client",
       clientMode: clientMode || "backend",
       role: role || "operator",
-      scopes: scopes || ["operator.read", "operator.write"],
+      scopes: scopes || ["operator.read", "operator.write", "operator.admin"],
       signedAtMs: signedAtMs,
       token,
       nonce,
@@ -1519,7 +1473,7 @@ ipcMain.handle("openclaw:sign-connect-challenge", async (event, params) => {
         mode: clientMode || "backend",
       },
       role: role || "operator",
-      scopes: scopes || ["operator.read", "operator.write"],
+      scopes: scopes || ["operator.read", "operator.write", "operator.admin"],
       deviceToken: deviceToken,
       error: null,
     };

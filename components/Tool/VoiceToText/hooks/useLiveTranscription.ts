@@ -131,12 +131,26 @@ export const useLiveTranscription = () => {
         stopAudioAnalysis();
     }, [stopAudioAnalysis]);
 
-    const startListening = useCallback(() => {
+    const startListening = useCallback(async () => {
         // Standard check for browser support
         const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
         if (!SpeechRecognition) {
             setError('Speech recognition is not supported in this browser');
             return;
+        }
+
+        // Request microphone permission first (required for speech recognition)
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            // Stop the stream immediately - we just wanted to get permission
+            stream.getTracks().forEach(track => track.stop());
+        } catch (permErr: any) {
+            if (permErr.name === 'NotAllowedError' || permErr.name === 'PermissionDeniedError') {
+                setError('Microphone access denied. Please allow microphone access in your browser settings and reload the page.');
+                return;
+            }
+            // Other permission errors - continue anyway, let speech recognition try
+            console.warn('Microphone permission error:', permErr);
         }
 
         // Stop any existing recognition
@@ -189,8 +203,29 @@ export const useLiveTranscription = () => {
 
         recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
             console.error('Speech recognition error:', event.error, event.message);
-            setError(`Speech recognition error: ${event.error}`);
+
+            // Provide helpful messages for specific errors
+            let userMessage: string;
+            switch (event.error) {
+                case 'not-allowed':
+                    userMessage = 'Microphone access denied. Please allow microphone access in your browser settings and reload the page.';
+                    break;
+                case 'no-speech':
+                    userMessage = 'No speech detected. Please try again.';
+                    break;
+                case 'audio-capture':
+                    userMessage = 'No microphone found. Please connect a microphone and try again.';
+                    break;
+                case 'network':
+                    userMessage = 'Network error. Please check your internet connection.';
+                    break;
+                default:
+                    userMessage = `Speech recognition error: ${event.error}`;
+            }
+
+            setError(userMessage);
             setIsListening(false);
+            stopAudioAnalysis();
             recognitionRef.current = null;
         };
 

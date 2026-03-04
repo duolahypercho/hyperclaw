@@ -49,8 +49,8 @@ const createMarkdownComponents = (isUser?: boolean): Components => {
           <code
             className={`text-sm ${isUser
                 ? "bg-primary-foreground/20 text-primary-foreground"
-                : "bg-muted/50 text-foreground"
-              } px-1.5 py-0.5 rounded-md font-mono`}
+                : "bg-primary/10 text-foreground"
+              } px-1.5 py-0.5 rounded-md`}
             {...props}
           >
             {children}
@@ -64,7 +64,7 @@ const createMarkdownComponents = (isUser?: boolean): Components => {
             } p-3 rounded-lg customScrollbar2 select-text`}
         >
           <pre
-            className={`text-sm font-mono ${isUser ? "text-primary-foreground" : "text-foreground"
+            className={`text-sm ${isUser ? "text-primary-foreground" : "text-foreground"
               } whitespace-pre-wrap`}
           >
             <code {...props}>{children}</code>
@@ -74,7 +74,7 @@ const createMarkdownComponents = (isUser?: boolean): Components => {
     },
     h1: ({ children, ...props }) => (
       <h1
-        className={`text-2xl font-bold my-4 select-text ${isUser ? "text-primary-foreground" : "text-foreground"
+        className={`text-xl font-medium my-4 select-text ${isUser ? "text-primary-foreground" : "text-foreground"
           }`}
         {...props}
       >
@@ -83,7 +83,7 @@ const createMarkdownComponents = (isUser?: boolean): Components => {
     ),
     h2: ({ children, ...props }) => (
       <h2
-        className={`text-xl font-semibold my-2 select-text ${isUser ? "text-primary-foreground" : "text-foreground"
+        className={`text-lg font-medium my-2 select-text ${isUser ? "text-primary-foreground" : "text-foreground"
           }`}
         {...props}
       >
@@ -92,7 +92,7 @@ const createMarkdownComponents = (isUser?: boolean): Components => {
     ),
     h3: ({ children, ...props }) => (
       <h3
-        className={`text-lg font-semibold my-2 select-text ${isUser ? "text-primary-foreground" : "text-foreground"
+        className={`text-md font-medium my-2 select-text ${isUser ? "text-primary-foreground" : "text-foreground"
           }`}
         {...props}
       >
@@ -101,7 +101,7 @@ const createMarkdownComponents = (isUser?: boolean): Components => {
     ),
     h4: ({ children, ...props }) => (
       <h4
-        className={`text-base font-semibold my-2 select-text ${isUser ? "text-primary-foreground" : "text-foreground"
+        className={`text-sm font-medium my-2 select-text ${isUser ? "text-primary-foreground" : "text-foreground"
           }`}
         {...props}
       >
@@ -110,7 +110,7 @@ const createMarkdownComponents = (isUser?: boolean): Components => {
     ),
     h5: ({ children, ...props }) => (
       <h5
-        className={`text-sm font-semibold my-2 select-text ${isUser ? "text-primary-foreground" : "text-foreground"
+        className={`text-xs font-medium my-2 select-text ${isUser ? "text-primary-foreground" : "text-foreground"
           }`}
         {...props}
       >
@@ -119,7 +119,7 @@ const createMarkdownComponents = (isUser?: boolean): Components => {
     ),
     h6: ({ children, ...props }) => (
       <h6
-        className={`text-xs font-semibold my-2 select-text ${isUser ? "text-primary-foreground" : "text-foreground"
+        className={`text-xs font-medium my-2 select-text ${isUser ? "text-primary-foreground" : "text-foreground"
           }`}
         {...props}
       >
@@ -128,7 +128,7 @@ const createMarkdownComponents = (isUser?: boolean): Components => {
     ),
     p: ({ children, ...props }) => (
       <p
-        className={`my-2 first:mt-0 text-sm last:mb-0 select-text break-words overflow-wrap-anywhere ${isUser ? "text-primary-foreground" : "text-foreground"
+        className={`my-2 first:mt-0 text-sm last:mb-0 select-text break-words ${isUser ? "text-primary-foreground" : "text-foreground"
           }`}
         {...props}
       >
@@ -156,8 +156,8 @@ const createMarkdownComponents = (isUser?: boolean): Components => {
     ),
     ul: ({ children, ...props }) => (
       <ul
-        className={`list-disc list-outside pl-6 my-1 space-y-1 text-sm leading-relaxed break-words overflow-wrap-anywhere ${isUser ? "text-primary-foreground" : "text-foreground"
-          } [&_ul]:pl-4 [&_ol]:pl-4`}
+        className={`list-disc list-outside pl-6 my-2 space-y-1 text-sm leading-relaxed break-words [&_ul]:ml-0 [&_ul]:mt-1 [&_ul]:list-[circle] [&_ul]:pl-5 [&_ol]:ml-0 [&_ol]:mt-1 [&_ol]:pl-5 ${isUser ? "text-primary-foreground" : "text-foreground"
+          }`}
         {...props}
       >
         {children}
@@ -165,8 +165,8 @@ const createMarkdownComponents = (isUser?: boolean): Components => {
     ),
     ol: ({ children, ...props }) => (
       <ol
-        className={`list-decimal list-outside pl-6 my-1 space-y-1 text-sm leading-relaxed break-words overflow-wrap-anywhere ${isUser ? "text-primary-foreground" : "text-foreground"
-          } [&_ul]:pl-4 [&_ol]:pl-4`}
+        className={`list-decimal list-outside pl-6 my-2 space-y-1 text-sm leading-relaxed break-words [&_ul]:ml-0 [&_ul]:mt-1 [&_ul]:pl-5 [&_ol]:ml-0 [&_ol]:mt-1 [&_ol]:pl-5 ${isUser ? "text-primary-foreground" : "text-foreground"
+          }`}
         {...props}
       >
         {children}
@@ -174,7 +174,7 @@ const createMarkdownComponents = (isUser?: boolean): Components => {
     ),
     li: ({ children, ...props }) => (
       <li
-        className={`mb-1 break-words overflow-wrap-anywhere [&>p]:my-0 [&>p]:inline ${isUser ? "text-primary-foreground" : "text-foreground"
+        className={`my-1 pl-0.5 break-words [&>p]:inline [&>ul]:mt-1 [&>ol]:mt-1 [&>p:not(:first-child)]:block [&>p:not(:first-child)]:pl-5 [&>p:not(:first-child)]:relative [&>p:not(:first-child)]:before:content-['•'] [&>p:not(:first-child)]:before:absolute [&>p:not(:first-child)]:before:left-0 ${isUser ? "text-primary-foreground" : "text-foreground"
           }`}
         {...props}
       >

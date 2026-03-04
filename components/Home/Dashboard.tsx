@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Responsive, WidthProvider, Layout } from "react-grid-layout";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
@@ -7,6 +7,24 @@ import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
 
 const ResponsiveGridLayout = WidthProvider(Responsive);
+
+// Widget config storage keys
+const WIDGET_CONFIGS_KEY = "dashboard-widget-configs";
+
+// Helper to load widget configs from localStorage
+const loadWidgetConfigs = (): Record<string, Record<string, unknown>> => {
+  try {
+    const saved = localStorage.getItem(WIDGET_CONFIGS_KEY);
+    return saved ? JSON.parse(saved) : {};
+  } catch {
+    return {};
+  }
+};
+
+// Helper to save widget configs to localStorage
+const saveWidgetConfigs = (configs: Record<string, Record<string, unknown>>): void => {
+  localStorage.setItem(WIDGET_CONFIGS_KEY, JSON.stringify(configs));
+};
 
 // Widget types
 export type WidgetType =
@@ -22,7 +40,8 @@ export type WidgetType =
   | "crons"
   | "docs"
   | "pixel-office"
-  | "usage";
+  | "usage"
+  | "gateway-chat";
 
 export interface Widget {
   id: string;
@@ -39,6 +58,7 @@ export interface Widget {
     y: number;
   };
   isResizable?: boolean; // New prop to control resizability
+  config?: Record<string, unknown>; // Widget-specific configuration
 }
 
 interface DashboardProps {
@@ -74,12 +94,60 @@ const WidgetWrapper: React.FC<CustomProps> = (props) => {
   return <WidgetComponent {...props} />;
 };
 
+// Static grid styles — extracted to avoid recreating on every render
+const DashboardGridStyles = React.memo(() => (
+  <>
+    <style jsx global>{`
+      .react-grid-item.react-draggable-dragging,
+      .react-grid-item.resizing {
+        user-select: none;
+        -webkit-user-select: none;
+        -moz-user-select: none;
+        -ms-user-select: none;
+      }
+      .react-grid-item.react-draggable-dragging *,
+      .react-grid-item.resizing * {
+        user-select: none;
+        -webkit-user-select: none;
+        -moz-user-select: none;
+        -ms-user-select: none;
+      }
+      .react-grid-item[data-resizable="false"] .react-resizable-handle {
+        display: none !important;
+      }
+    `}</style>
+    <style jsx global>{`
+      .react-grid-layout { position: relative; }
+      .react-grid-item { transition: all 200ms ease; transition-property: left, top, width, height; }
+      .react-grid-item.cssTransforms { transition-property: transform, width, height; }
+      .react-grid-item.resizing { transition: none; z-index: 100; }
+      .react-grid-item.react-draggable-dragging { transition: none; z-index: 100; }
+      .react-grid-item.dropping { visibility: hidden; }
+      .react-grid-item.react-grid-placeholder {
+        background: hsl(var(--primary) / 0.2); opacity: 0.2; transition-duration: 100ms;
+        z-index: 2; border-radius: 1rem; border: 2px dashed hsl(var(--primary));
+      }
+      .react-resizable-handle { position: absolute; width: 20px; height: 20px; }
+      .react-resizable-handle-se { bottom: 0; right: 0; cursor: se-resize; }
+      .react-resizable-handle::after {
+        content: ""; position: absolute; right: 3px; bottom: 3px; width: 5px; height: 5px;
+        border-right: 2px solid hsl(var(--muted-foreground) / 0.4);
+        border-bottom: 2px solid hsl(var(--muted-foreground) / 0.4);
+      }
+    `}</style>
+  </>
+));
+DashboardGridStyles.displayName = "DashboardGridStyles";
+
 interface DashboardProps {
   widgets: Widget[];
   className?: string;
   visibleWidgets?: string[];
   onResetLayout?: () => void;
   isEditMode?: boolean; // New prop for edit mode
+  onAddWidget?: (widget: Widget) => void; // Callback when a new widget is added
+  onRemoveWidget?: (widgetId: string) => void; // Callback when a widget is removed
+  onUpdateWidgetConfig?: (widgetId: string, config: Record<string, unknown>) => void; // Update widget config
 }
 
 export const Dashboard: React.FC<DashboardProps> = ({
@@ -88,6 +156,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
   visibleWidgets,
   onResetLayout,
   isEditMode = false,
+  onAddWidget,
+  onRemoveWidget,
+  onUpdateWidgetConfig,
 }) => {
   const [layouts, setLayouts] = useState<{ [key: string]: Layout[] }>(() => {
     // Load saved layout from localStorage
@@ -140,49 +211,123 @@ export const Dashboard: React.FC<DashboardProps> = ({
     return defaultLayouts;
   });
 
+  // Widget configs state - stored separately in localStorage
+  const [widgetConfigs, setWidgetConfigs] = useState<Record<string, Record<string, unknown>>>(() =>
+    loadWidgetConfigs()
+  );
+
+  // Helper to get merged config for a widget (default + persisted)
+  const getWidgetConfig = (widgetId: string, defaultConfig?: Record<string, unknown>): Record<string, unknown> => {
+    return {
+      ...defaultConfig,
+      ...widgetConfigs[widgetId],
+    };
+  };
+
+  // Save configs whenever they change
+  useEffect(() => {
+    saveWidgetConfigs(widgetConfigs);
+  }, [widgetConfigs]);
+
+  // Add a new widget instance with a unique ID
+  const addWidgetInstance = useCallback((widgetTemplate: Widget, customConfig?: Record<string, unknown>) => {
+    const timestamp = Date.now();
+    const newId = `${widgetTemplate.id}-${timestamp}`;
+    const newWidget: Widget = {
+      ...widgetTemplate,
+      id: newId,
+      title: `${widgetTemplate.title} ${timestamp.toString().slice(-4)}`,
+      config: customConfig || widgetTemplate.config,
+    };
+
+    // Add to widgets list
+    if (onAddWidget) {
+      onAddWidget(newWidget);
+    }
+
+    // Store the config
+    if (customConfig) {
+      setWidgetConfigs(prev => ({
+        ...prev,
+        [newId]: customConfig,
+      }));
+    }
+
+    return newId;
+  }, [onAddWidget]);
+
+  // Update widget config
+  const updateWidgetConfig = useCallback((widgetId: string, config: Record<string, unknown>) => {
+    setWidgetConfigs(prev => ({
+      ...prev,
+      [widgetId]: {
+        ...prev[widgetId],
+        ...config,
+      },
+    }));
+    if (onUpdateWidgetConfig) {
+      onUpdateWidgetConfig(widgetId, config);
+    }
+  }, [onUpdateWidgetConfig]);
+
+  // Remove widget and its config
+  const removeWidgetInstance = useCallback((widgetId: string) => {
+    setWidgetConfigs(prev => {
+      const { [widgetId]: _, ...rest } = prev;
+      return rest;
+    });
+    if (onRemoveWidget) {
+      onRemoveWidget(widgetId);
+    }
+  }, [onRemoveWidget]);
+
   const [maximizedWidget, setMaximizedWidget] = useState<string | null>(null);
 
   // Handle new widgets being added without resetting existing layout
+  // Only depends on widgets (not layouts) to avoid re-running on every layout change
+  const prevWidgetIdsRef = useRef<string>(widgets.map((w) => w.id).join(","));
   useEffect(() => {
-    const layoutWidgetIds = new Set(
-      Object.values(layouts)
-        .flat()
-        .map((l) => l.i)
-    );
+    const currentIds = widgets.map((w) => w.id).join(",");
+    if (currentIds === prevWidgetIdsRef.current) return;
+    prevWidgetIdsRef.current = currentIds;
 
-    // Check if there are new widgets that don't have layout entries
-    const newWidgets = widgets.filter((w) => !layoutWidgetIds.has(w.id));
+    setLayouts((prevLayouts) => {
+      const layoutWidgetIds = new Set(
+        Object.values(prevLayouts)
+          .flat()
+          .map((l) => l.i)
+      );
+      const newWidgets = widgets.filter((w) => !layoutWidgetIds.has(w.id));
+      if (newWidgets.length === 0) return prevLayouts;
 
-    if (newWidgets.length > 0) {
-      // Add default layouts for new widgets
-      setLayouts((prevLayouts) => {
-        const updatedLayouts: { [key: string]: Layout[] } = {};
-
-        Object.keys(prevLayouts).forEach((breakpoint) => {
-          const existingLayouts = prevLayouts[breakpoint];
-          const newLayouts = generateDefaultLayout(newWidgets);
-
-          // Find the next available position for new widgets
-          const maxY = Math.max(...existingLayouts.map((l) => l.y + l.h), 0);
-          const adjustedNewLayouts = newLayouts.map((layout, index) => ({
-            ...layout,
-            y: maxY + index * 8, // Stack new widgets vertically
-          }));
-
-          updatedLayouts[breakpoint] = [
-            ...existingLayouts,
-            ...adjustedNewLayouts,
-          ];
-        });
-
-        return updatedLayouts;
+      const updatedLayouts: { [key: string]: Layout[] } = {};
+      Object.keys(prevLayouts).forEach((breakpoint) => {
+        const existingLayouts = prevLayouts[breakpoint];
+        const newLayouts = generateDefaultLayout(newWidgets);
+        const maxY = Math.max(...existingLayouts.map((l) => l.y + l.h), 0);
+        const adjustedNewLayouts = newLayouts.map((layout, index) => ({
+          ...layout,
+          y: maxY + index * 8,
+        }));
+        updatedLayouts[breakpoint] = [
+          ...existingLayouts,
+          ...adjustedNewLayouts,
+        ];
       });
-    }
-  }, [widgets, layouts]);
+      return updatedLayouts;
+    });
+  }, [widgets]);
 
-  // Save layout to localStorage whenever it changes
+  // Save layout to localStorage whenever it changes (debounced)
+  const layoutSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    localStorage.setItem("dashboard-layout", JSON.stringify(layouts));
+    if (layoutSaveTimerRef.current) clearTimeout(layoutSaveTimerRef.current);
+    layoutSaveTimerRef.current = setTimeout(() => {
+      localStorage.setItem("dashboard-layout", JSON.stringify(layouts));
+    }, 500);
+    return () => {
+      if (layoutSaveTimerRef.current) clearTimeout(layoutSaveTimerRef.current);
+    };
   }, [layouts]);
 
   const handleLayoutChange = (
@@ -247,15 +392,24 @@ export const Dashboard: React.FC<DashboardProps> = ({
     setMaximizedWidget((prev) => (prev === widgetId ? null : widgetId));
   };
 
-  // Filter widgets based on visibility
-  const displayedWidgets = visibleWidgets
+  // Filter widgets based on visibility and merge configs with persisted configs
+  const displayedWidgets: Widget[] = (visibleWidgets
     ? widgets.filter((w) => visibleWidgets.includes(w.id))
-    : widgets;
+    : widgets).map((widget) => ({
+      ...widget,
+      config: getWidgetConfig(widget.id, widget.config),
+    }));
 
   // If a widget is maximized, show only that widget
   if (maximizedWidget) {
-    const widget = widgets.find((w) => w.id === maximizedWidget);
-    if (!widget) return null;
+    const baseWidget = widgets.find((w) => w.id === maximizedWidget);
+    if (!baseWidget) return null;
+
+    // Merge config for maximized widget
+    const widget: Widget = {
+      ...baseWidget,
+      config: getWidgetConfig(baseWidget.id, baseWidget.config),
+    };
 
     return (
       <div className={cn("h-full w-full p-4", className)}>
@@ -311,91 +465,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         ))}
       </ResponsiveGridLayout>
 
-      {/* Custom styles for react-grid-layout */}
-      <style jsx global>{`
-        /* Prevent text selection during drag/resize */
-        .react-grid-item.react-draggable-dragging,
-        .react-grid-item.resizing {
-          user-select: none;
-          -webkit-user-select: none;
-          -moz-user-select: none;
-          -ms-user-select: none;
-        }
-
-        .react-grid-item.react-draggable-dragging *,
-        .react-grid-item.resizing * {
-          user-select: none;
-          -webkit-user-select: none;
-          -moz-user-select: none;
-          -ms-user-select: none;
-        }
-
-        /* Hide resize handle for non-resizable widgets */
-        .react-grid-item[data-resizable="false"] .react-resizable-handle {
-          display: none !important;
-        }
-      `}</style>
-
-      <style jsx global>{`
-        .react-grid-layout {
-          position: relative;
-        }
-
-        .react-grid-item {
-          transition: all 200ms ease;
-          transition-property: left, top, width, height;
-        }
-
-        .react-grid-item.cssTransforms {
-          transition-property: transform, width, height;
-        }
-
-        .react-grid-item.resizing {
-          transition: none;
-          z-index: 100;
-        }
-
-        .react-grid-item.react-draggable-dragging {
-          transition: none;
-          z-index: 100;
-        }
-
-        .react-grid-item.dropping {
-          visibility: hidden;
-        }
-
-        .react-grid-item.react-grid-placeholder {
-          background: hsl(var(--primary) / 0.2);
-          opacity: 0.2;
-          transition-duration: 100ms;
-          z-index: 2;
-          border-radius: 1rem;
-          border: 2px dashed hsl(var(--primary));
-        }
-
-        .react-resizable-handle {
-          position: absolute;
-          width: 20px;
-          height: 20px;
-        }
-
-        .react-resizable-handle-se {
-          bottom: 0;
-          right: 0;
-          cursor: se-resize;
-        }
-
-        .react-resizable-handle::after {
-          content: "";
-          position: absolute;
-          right: 3px;
-          bottom: 3px;
-          width: 5px;
-          height: 5px;
-          border-right: 2px solid hsl(var(--muted-foreground) / 0.4);
-          border-bottom: 2px solid hsl(var(--muted-foreground) / 0.4);
-        }
-      `}</style>
+      <DashboardGridStyles />
     </div>
   );
 };

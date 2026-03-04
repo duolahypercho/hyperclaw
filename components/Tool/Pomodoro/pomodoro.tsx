@@ -8,12 +8,14 @@ import {
   Timer,
   Coffee,
   CheckCircle,
+  X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { usePomodoro } from "./pomoProvider";
 import { useTimer } from "$/Providers/TimerProv";
 import { isEqual } from "lodash";
+import { useOS } from "@OS/Provider/OSProv";
 
 import {
   FOCUS,
@@ -181,6 +183,7 @@ const Pomodoro = () => {
     handleReset,
     handleSkip,
   } = usePomodoro();
+  const { updateOSSettings } = useOS();
 
 
   if (!isTimerExists || isInitializing) {
@@ -237,9 +240,23 @@ const Pomodoro = () => {
 
   return (
     <div className="flex flex-col items-center justify-center w-full h-full p-4 relative">
-      {/* Settings Button */}
-      <SettingsPanel className="absolute top-2 right-2" />
-
+      {/* Header: Close + Settings side by side, same size */}
+      <div className="absolute top-2 right-2 flex items-center gap-1.5 pointer-events-none [&>*]:pointer-events-auto">
+        <SettingsPanel className="relative" />
+        <button
+          onClick={() => updateOSSettings({ pomodoro: false })}
+          aria-label="Close Pomodoro"
+          className="h-6 w-6 p-0 rounded-full flex items-center justify-center hover:bg-muted/50 transition-colors focus:outline-none group"
+        >
+          <motion.span
+            whileTap={{ scale: 0.88, rotate: 90 }}
+            whileHover={{ rotate: 90, scale: 1.1 }}
+            className="flex"
+          >
+            <X className="h-3 w-3 text-muted-foreground group-hover:text-foreground transition-colors" />
+          </motion.span>
+        </button>
+      </div>
       <AnimatePresence mode="wait">
         {showTransition ? (
           <PomodoroAnimation session={session} nextSession={nextSession} />

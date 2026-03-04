@@ -21,3 +21,7 @@ export {
   PixelOfficeCustomHeader,
 } from "./PixelOfficeWidget";
 export { default as UsageWidget, UsageCustomHeader } from "./UsageWidget";
+export {
+  default as GatewayChatWidget,
+  GatewayChatCustomHeader,
+} from "./GatewayChatWidget";

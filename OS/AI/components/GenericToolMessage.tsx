@@ -49,26 +49,8 @@ export const GenericToolMessage: React.FC<GenericToolMessageProps> = ({
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3 }}
     >
-      {/* Avatar */}
-      <div className="w-8 h-8 flex-shrink-0">
-        {showAvatar ? (
-          <Avatar className="w-8 h-8">
-            {botPic ? (
-              <AvatarImage src={getMediaUrl(botPic)} />
-            ) : assistantAvatar?.src ? (
-              <AvatarImage src={assistantAvatar.src} />
-            ) : null}
-            <AvatarFallback className="bg-primary/10 text-primary">
-              {assistantAvatar?.icon || <CopanionIcon className="w-4 h-4" />}
-            </AvatarFallback>
-          </Avatar>
-        ) : (
-          <div className="w-8 h-8 flex-shrink-0" />
-        )}
-      </div>
-
       {/* Tool Content */}
-      <div className="relative flex flex-col max-w-[85%] min-w-0 justify-start items-start">
+      <div className="relative flex flex-col justify-start items-start">
         <Renderer
           toolState={toolState}
           message={message}

@@ -72,6 +72,72 @@ export interface QueuedMessage {
   timestamp: number;
 }
 
+// ============================================
+// Chat-specific types (defined before GatewayClient class)
+// ============================================
+
+export type ChatMessageRole = "user" | "assistant" | "system" | "tool";
+
+export interface ChatMessageContentBlock {
+  type: "text" | "image";
+  text?: string;
+  source?: {
+    type: "base64";
+    media_type: string;
+    data: string;
+  };
+  mimeType?: string;
+  content?: string;
+}
+
+export interface ChatMessage {
+  role: ChatMessageRole;
+  content: ChatMessageContentBlock[] | string;
+  timestamp?: number;
+  id?: string;
+  name?: string;
+  tool_calls?: Array<{
+    id: string;
+    type: "function";
+    function: {
+      name: string;
+      arguments: string;
+    };
+  }>;
+}
+
+export interface ChatHistoryResponse {
+  messages?: ChatMessage[];
+  thinkingLevel?: string;
+}
+
+export interface ChatSendParams {
+  sessionKey: string;
+  message: string;
+  deliver?: boolean;
+  idempotencyKey?: string;
+  attachments?: Array<{
+    type: "image";
+    mimeType: string;
+    content: string;
+  }>;
+}
+
+export interface ChatAbortParams {
+  sessionKey: string;
+  runId?: string;
+}
+
+export type ChatEventState = "delta" | "final" | "aborted" | "error";
+
+export interface ChatEventPayload {
+  runId: string;
+  sessionKey: string;
+  state: ChatEventState;
+  message?: unknown;
+  errorMessage?: string;
+}
+
 const RECONNECT_DELAYS = [500, 1000, 2000, 4000, 8000, 15000];
 const MAX_QUEUE_SIZE = 100;
 const PING_INTERVAL_MS = 30000;
@@ -93,6 +159,7 @@ export class GatewayClient extends EventEmitter {
   private messageQueue: QueuedMessage[] = [];
   private lastPingPong = 0;
   private signedCredentials: { device: unknown; client: unknown; role: string; scopes: string[]; deviceToken?: string | null } | null = null;
+  private connectNonce: string | null = null;
 
   constructor() {
     super();
@@ -122,7 +189,6 @@ export class GatewayClient extends EventEmitter {
     if (!this.url) return;
 
     this.setState("connecting");
-    console.log("[GatewayClient] Connecting to:", this.url);
 
     try {
       this.ws = new WebSocket(this.url);
@@ -133,7 +199,6 @@ export class GatewayClient extends EventEmitter {
     }
 
     this.ws.onopen = () => {
-      console.log("[GatewayClient] Connected");
       this.reconnectAttempt = 0;
       this.startPing();
       this.authenticate();
@@ -162,61 +227,82 @@ export class GatewayClient extends EventEmitter {
         return;
       }
 
-      console.log("[GatewayClient] Connection closed:", ev.code, ev.reason);
       this.scheduleReconnect();
     };
   }
 
   private authenticate(): void {
-    // Wait for challenge from server
-    const checkChallenge = () => {
-      if (this.state !== "connected") return;
+    // Follow OpenClaw's pattern:
+    // 1. Send initial connect with client info (but no device) to trigger challenge
+    // 2. Wait for connect.challenge event
+    // 3. Sign with nonce and re-send with device
 
-      // Request challenge by sending empty connect to trigger server challenge
-      this.sendRaw({
-        type: "req",
-        id: randomId(),
-        method: "connect",
-        params: {},
-      });
-    };
+    // Clear any previous nonce
+    this.connectNonce = null;
+    this.signedCredentials = null;
 
-    // Try to get signed credentials from Electron
-    this.getSignedCredentials().then((creds) => {
-      if (!creds) {
-        checkChallenge();
-        return;
-      }
-      this.signedCredentials = creds;
-      this.sendRaw({
-        type: "req",
-        id: randomId(),
-        method: "connect",
-        params: {
-          minProtocol: 3,
-          maxProtocol: 3,
-          client: creds.client,
-          device: creds.device,
-          role: creds.role,
-          scopes: creds.scopes,
-          auth: creds.deviceToken ? { token: creds.deviceToken } : {},
-          locale: "en-US",
-          userAgent: "hyperclaw/1.0",
+    // Send initial connect request with client info (no device yet - this triggers challenge)
+    this.sendRaw({
+      type: "req",
+      id: randomId(),
+      method: "connect",
+      params: {
+        minProtocol: 3,
+        maxProtocol: 3,
+        client: {
+          id: "gateway-client",
+          version: "1.0.0",
+          platform: typeof navigator !== "undefined" ? navigator.platform : "web",
+          mode: "backend",
+          instanceId: randomId(),
         },
-      });
+        locale: "en-US",
+        userAgent: "hyperclaw/1.0",
+      },
     });
   }
 
-  private async getSignedCredentials(): Promise<{ device: unknown; client: unknown; role: string; scopes: string[]; deviceToken?: string | null } | null> {
+  private async authenticateWithSignedCredentials(): Promise<void> {
+    if (!this.connectNonce) {
+      console.error("[GatewayClient] No nonce available for signing");
+      return;
+    }
+
+    const creds = await this.getSignedCredentials(this.connectNonce);
+    if (!creds) {
+      console.error("[GatewayClient] Failed to get signed credentials");
+      return;
+    }
+
+    this.signedCredentials = creds;
+    this.sendRaw({
+      type: "req",
+      id: randomId(),
+      method: "connect",
+      params: {
+        minProtocol: 3,
+        maxProtocol: 3,
+        client: creds.client,
+        device: creds.device,
+        role: creds.role,
+        scopes: creds.scopes,
+        auth: creds.deviceToken ? { token: creds.deviceToken } : {},
+        locale: "en-US",
+        userAgent: "hyperclaw/1.0",
+      },
+    });
+  }
+
+  private async getSignedCredentials(nonce?: string): Promise<{ device: unknown; client: unknown; role: string; scopes: string[]; deviceToken?: string | null } | null> {
     if (typeof window !== "undefined" && (window as unknown as { electronAPI?: { openClaw?: { signConnectChallenge?: (params: unknown) => Promise<{ device: unknown; client: unknown; role: string; scopes: string[]; deviceToken?: string | null; error?: string }> } } }).electronAPI?.openClaw?.signConnectChallenge) {
       try {
         const result = await (window as unknown as { electronAPI: { openClaw: { signConnectChallenge: (params: unknown) => Promise<{ device: unknown; client: unknown; role: string; scopes: string[]; deviceToken?: string | null; error?: string }> } } }).electronAPI.openClaw.signConnectChallenge({
           clientId: "gateway-client",
           clientMode: "backend",
           role: "operator",
-          scopes: ["operator.read", "operator.write"],
+          scopes: ["operator.read", "operator.write", "operator.admin"],
           token: this.token,
-          nonce: randomId(),
+          nonce: nonce || randomId(),
         });
         if (result && !result.error && result.device && result.client) {
           return result;
@@ -236,10 +322,12 @@ export class GatewayClient extends EventEmitter {
       return;
     }
 
-    // Handle connect challenge
+    // Handle connect challenge - store nonce and sign credentials
     if (msg.type === "event" && msg.event === "connect.challenge") {
       const payload = msg.payload as { nonce?: string };
-      this.authenticateWithNonce(payload.nonce ?? "");
+      this.connectNonce = payload.nonce ?? null;
+      // Now sign with the nonce and re-send connect
+      void this.authenticateWithSignedCredentials();
       return;
     }
 
@@ -259,7 +347,15 @@ export class GatewayClient extends EventEmitter {
         if (msg.ok) {
           pending.resolve(msg.payload);
         } else {
-          pending.reject(new Error(msg.error || "Request failed"));
+          // Error can be a string or object { code, message }
+          const errorObj = msg.error as { code?: string; message?: string } | undefined;
+          if (typeof msg.error === "string") {
+            pending.reject(new Error(msg.error || "Request failed"));
+          } else {
+            // Object format: { code, message }
+            const errorMessage = errorObj?.message || errorObj?.code || "Request failed";
+            pending.reject(new Error(errorMessage));
+          }
         }
       }
       return;
@@ -267,46 +363,6 @@ export class GatewayClient extends EventEmitter {
 
     // Emit event for others to handle
     this.emit("message", msg);
-  }
-
-  private async authenticateWithNonce(nonce: string): Promise<void> {
-    let tokenToUse = this.token;
-    if ((tokenToUse == null || tokenToUse === "") && this.url) {
-      try {
-        const url = new URL(this.url);
-        tokenToUse = url.searchParams.get("token") ?? null;
-      } catch {
-        /* ignore */
-      }
-    }
-
-    const creds = await this.getSignedCredentials();
-    if (!creds) {
-      console.error("[GatewayClient] Failed to sign challenge");
-      return;
-    }
-
-    const authToken =
-      (tokenToUse && String(tokenToUse).trim()) ||
-      (creds.deviceToken && String(creds.deviceToken).trim()) ||
-      "";
-
-    this.sendRaw({
-      type: "req",
-      id: randomId(),
-      method: "connect",
-      params: {
-        minProtocol: 3,
-        maxProtocol: 3,
-        client: creds.client,
-        device: creds.device,
-        role: creds.role,
-        scopes: creds.scopes,
-        auth: authToken ? { token: authToken } : {},
-        locale: "en-US",
-        userAgent: "hyperclaw/1.0",
-      },
-    });
   }
 
   /** Send a request, queued if disconnected */
@@ -386,7 +442,6 @@ export class GatewayClient extends EventEmitter {
     const delay = RECONNECT_DELAYS[Math.min(this.reconnectAttempt, RECONNECT_DELAYS.length - 1)];
     this.reconnectAttempt++;
 
-    console.log(`[GatewayClient] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempt})`);
     this.emit("reconnecting", this.reconnectAttempt, delay);
 
     this.reconnectTimer = setTimeout(() => {
@@ -441,6 +496,101 @@ export class GatewayClient extends EventEmitter {
   /** Get queue size (for UI indicators) */
   getQueueSize(): number {
     return this.messageQueue.length;
+  }
+
+  // ============================================
+  // Chat-specific methods
+  // ============================================
+
+  /** Subscribe to chat events */
+  private chatEventHandlers: Set<(payload: ChatEventPayload) => void> = new Set();
+
+  /** Handle incoming chat events */
+  private handleChatEventMessage(msg: GatewayMessage): void {
+    if (msg.type === "event" && msg.event?.startsWith("chat.")) {
+      const payload = msg.payload as ChatEventPayload;
+      if (payload) {
+        this.chatEventHandlers.forEach((handler) => handler(payload));
+      }
+    }
+  }
+
+  /** Subscribe to chat events - returns unsubscribe function */
+  onChatEvent(callback: (payload: ChatEventPayload) => void): () => void {
+    this.chatEventHandlers.add(callback);
+    // Register message handler if first subscriber
+    if (this.chatEventHandlers.size === 1) {
+      this.on("message", this.handleChatEventMessage as EventCallback);
+    }
+    return () => {
+      this.chatEventHandlers.delete(callback);
+      if (this.chatEventHandlers.size === 0) {
+        this.off("message", this.handleChatEventMessage as EventCallback);
+      }
+    };
+  }
+
+  /** Send a chat message */
+  sendChatMessage(params: ChatSendParams): Promise<unknown> {
+    return this.request("chat.send", {
+      sessionKey: params.sessionKey,
+      message: params.message,
+      deliver: params.deliver ?? false,
+      idempotencyKey: params.idempotencyKey,
+      attachments: params.attachments,
+    });
+  }
+
+  /** Abort an in-progress chat run */
+  abortChat(params: ChatAbortParams): Promise<unknown> {
+    return this.request("chat.abort", {
+      sessionKey: params.sessionKey,
+      ...(params.runId && { runId: params.runId }),
+    });
+  }
+
+  /** Get chat history */
+  getChatHistory(sessionKey: string, limit: number = 200): Promise<ChatHistoryResponse> {
+    return this.request<ChatHistoryResponse>("chat.history", {
+      sessionKey,
+      limit,
+    });
+  }
+
+  // ============================================
+  // Session/Model methods
+  // ============================================
+
+  /** Get session details (including model) */
+  getSession(key: string): Promise<unknown> {
+    return this.request("sessions.get", { key });
+  }
+
+  /** Get session model by session key (via sessions.list) */
+  async getSessionModel(sessionKey: string): Promise<string | null> {
+    try {
+      // Parse agentId from session key (format: agent:xxx:...)
+      const parts = sessionKey.split(':');
+      if (parts.length < 2) return null;
+      const agentId = parts[1];
+
+      const result = await this.request<{ sessions?: Array<{ key: string; model?: string }> }>("sessions.list", { agentId, limit: 200 });
+      const session = result?.sessions?.find(s => s.key === sessionKey);
+      return session?.model || null;
+    } catch (error) {
+      console.warn("[GatewayClient] Failed to get session model:", error);
+      return null;
+    }
+  }
+
+  /** Patch session properties (including model) */
+  patchSession(key: string, patch: Record<string, unknown>): Promise<unknown> {
+    return this.request("sessions.patch", { key, ...patch });
+  }
+
+  /** List available models */
+  listModels(): Promise<{ models: Array<{ id: string; provider: string; displayName?: string }> }> {
+    return this.request("models.list", {});
   }
 }
 
