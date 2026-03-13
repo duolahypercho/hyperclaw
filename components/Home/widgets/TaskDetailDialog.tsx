@@ -11,6 +11,7 @@ import {
   ChevronUp,
   FileText,
   Bot,
+  MessageSquare,
 } from "lucide-react";
 import {
   Dialog,
@@ -28,6 +29,7 @@ import {
   fetchCronsFromBridge,
 } from "$/components/Tool/Crons/utils";
 import { getPendingTaskCronRuns } from "$/lib/task-cron-run-store";
+import { TranscriptViewer } from "./TranscriptViewer";
 import type { Task } from "$/components/Tool/TodoList/types";
 import type { CronRunRecord } from "$/types/electron";
 
@@ -66,6 +68,8 @@ export function TaskDetailDialog({
   );
   const [detailLoading, setDetailLoading] = useState(false);
   const hasAutoExpandedRef = useRef(false);
+  const [sessionKey, setSessionKey] = useState<string | null>(null);
+  const [transcriptOpen, setTranscriptOpen] = useState(false);
 
   const resolveJobId = useCallback(async (taskId: string): Promise<string | null> => {
     const pending = getPendingTaskCronRuns();
@@ -103,6 +107,7 @@ export function TaskDetailDialog({
       setJobId(null);
       setExpandedRunKey(null);
       setFullDetail(null);
+      setSessionKey(null);
       hasAutoExpandedRef.current = false;
       return;
     }
@@ -112,6 +117,22 @@ export function TaskDetailDialog({
       setJobId(jid);
       if (jid) loadRuns(jid);
     });
+    // Look up bridge task for sessionKey
+    fetch("/api/hyperclaw-bridge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "get-tasks" }),
+    })
+      .then((r) => r.json())
+      .then((tasks: any[]) => {
+        if (cancelled) return;
+        const bt = tasks.find(
+          (t: any) => t.id === task._id || t.id?.slice(0, 24) === task._id
+        );
+        const sk = bt?.data?.sessionKey ?? bt?.metadata?.sessionKey ?? null;
+        setSessionKey(sk);
+      })
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
@@ -219,6 +240,19 @@ export function TaskDetailDialog({
                 >
                   Open
                 </a>
+              </div>
+            )}
+            {sessionKey && (
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <MessageSquare className="h-3.5 w-3.5 shrink-0" />
+                <span>Session</span>
+                <button
+                  onClick={() => setTranscriptOpen(true)}
+                  className="text-primary ml-auto truncate max-w-[200px] hover:underline text-xs"
+                  title={sessionKey}
+                >
+                  View transcript
+                </button>
               </div>
             )}
             <div className="flex items-center gap-2 text-muted-foreground">
@@ -388,6 +422,12 @@ export function TaskDetailDialog({
           </ScrollArea>
         </div>
       </DialogContent>
+      <TranscriptViewer
+        open={transcriptOpen}
+        onOpenChange={setTranscriptOpen}
+        sessionKey={sessionKey}
+        label={task?.title}
+      />
     </Dialog>
   );
 }

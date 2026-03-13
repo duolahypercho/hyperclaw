@@ -1,9 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import Database from "better-sqlite3";
 
 const DEFAULT_DATA_DIR = path.join(os.homedir(), ".hyperclaw");
+
+// ── SQLite lazy-load (fallback to JSON if not available) ────────────────────
+let BetterSqlite3: any = null;
+try {
+  BetterSqlite3 = require("better-sqlite3");
+} catch {
+  // better-sqlite3 not available — will use JSON fallback
+}
 
 function generateTaskId(): string {
   const timestamp = Math.floor(Date.now() / 1000)
@@ -25,7 +32,9 @@ export class HyperClawBridge {
   private eventsPath: string;
   private commandsPath: string;
   private channelsPath: string;
-  private db: InstanceType<typeof Database> | null = null;
+  private sessionsDir: string;
+  private _db: any = null;
+  private _dbFailed = false;
 
   constructor(dataDir?: string) {
     this.dataDir = dataDir ?? DEFAULT_DATA_DIR;
@@ -33,34 +42,8 @@ export class HyperClawBridge {
     this.eventsPath = path.join(this.dataDir, "events.jsonl");
     this.commandsPath = path.join(this.dataDir, "commands.jsonl");
     this.channelsPath = path.join(this.dataDir, "channels.json");
-    this.initDB();
+    this.sessionsDir = path.join(this.dataDir, "sessions");
   }
-
-  // ── SQLite initialization ──────────────────────────────────────────────────
-
-  private initDB(): void {
-    try {
-      const dbPath = path.join(this.dataDir, "connector.db");
-      if (!fs.existsSync(dbPath)) {
-        // DB doesn't exist yet — connector hasn't run. Use JSON fallback.
-        return;
-      }
-      this.db = new Database(dbPath, { readonly: false });
-      this.db.pragma("journal_mode = WAL");
-      this.db.pragma("busy_timeout = 5000");
-      this.db.pragma("synchronous = NORMAL");
-      this.db.pragma("foreign_keys = ON");
-    } catch (err) {
-      console.error("[HyperClaw] SQLite init failed, falling back to JSON:", err);
-      this.db = null;
-    }
-  }
-
-  private get useSQLite(): boolean {
-    return this.db !== null;
-  }
-
-  // ── Directory helpers ──────────────────────────────────────────────────────
 
   private ensureDir(): void {
     if (!fs.existsSync(this.dataDir)) {
@@ -68,373 +51,7 @@ export class HyperClawBridge {
     }
   }
 
-  // ── Task operations ────────────────────────────────────────────────────────
-
-  addTask(task: {
-    title: string;
-    description?: string;
-    priority?: string;
-    status?: string;
-    agent?: string;
-    metadata?: Record<string, unknown>;
-  }): Record<string, unknown> {
-    const now = Date.now();
-    const id = generateTaskId();
-    const newTask: Record<string, unknown> = {
-      ...task,
-      id,
-      createdAt: new Date(now).toISOString(),
-      updatedAt: new Date(now).toISOString(),
-    };
-
-    if (this.useSQLite) {
-      try {
-        const { id: _id, createdAt: _ca, updatedAt: _ua, listId: _li, ...data } = newTask;
-        this.db!.prepare(
-          `INSERT INTO tasks (id, list_id, data, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`
-        ).run(id, null, JSON.stringify(data), now, now);
-        return newTask;
-      } catch (err) {
-        console.error("[HyperClaw] SQLite addTask error, falling back:", err);
-      }
-    }
-
-    // JSON fallback
-    const todo = this.readTodoDataJSON();
-    todo.tasks.push(newTask);
-    this.writeTodoDataJSON(todo);
-    return newTask;
-  }
-
-  getTasks(): Record<string, unknown>[] {
-    if (this.useSQLite) {
-      try {
-        const rows = this.db!.prepare(
-          `SELECT id, list_id, data, created_at, updated_at FROM tasks ORDER BY created_at ASC`
-        ).all() as { id: string; list_id: string | null; data: string; created_at: number; updated_at: number }[];
-
-        return rows.map((row) => {
-          const data = JSON.parse(row.data || "{}") as Record<string, unknown>;
-          data.id = row.id;
-          if (row.list_id) data.listId = row.list_id;
-          data.createdAt = new Date(row.created_at).toISOString();
-          data.updatedAt = new Date(row.updated_at).toISOString();
-          return data;
-        });
-      } catch (err) {
-        console.error("[HyperClaw] SQLite getTasks error, falling back:", err);
-      }
-    }
-
-    return this.readTodoDataJSON().tasks;
-  }
-
-  updateTask(id: string, patch: Record<string, unknown>): Record<string, unknown> | undefined {
-    if (this.useSQLite) {
-      try {
-        const resolvedId = this.resolveTaskId(id) ?? id;
-        const row = this.db!.prepare(
-          `SELECT list_id, data, created_at FROM tasks WHERE id = ?`
-        ).get(resolvedId) as { list_id: string | null; data: string; created_at: number } | undefined;
-
-        if (!row) return undefined;
-
-        const current = JSON.parse(row.data || "{}") as Record<string, unknown>;
-        let listId = row.list_id;
-
-        for (const [k, v] of Object.entries(patch)) {
-          if (k === "id" || k === "createdAt" || k === "updatedAt") continue;
-          if (k === "listId") {
-            listId = (v as string) || null;
-            continue;
-          }
-          current[k] = v;
-        }
-
-        const now = Date.now();
-        this.db!.prepare(
-          `UPDATE tasks SET list_id = ?, data = ?, updated_at = ? WHERE id = ?`
-        ).run(listId, JSON.stringify(current), now, resolvedId);
-
-        const result: Record<string, unknown> = { ...current, id: resolvedId };
-        if (listId) result.listId = listId;
-        result.createdAt = new Date(row.created_at).toISOString();
-        result.updatedAt = new Date(now).toISOString();
-        return result;
-      } catch (err) {
-        console.error("[HyperClaw] SQLite updateTask error, falling back:", err);
-      }
-    }
-
-    // JSON fallback
-    const todo = this.readTodoDataJSON();
-    const idx = todo.tasks.findIndex((t) => (t as { id?: string }).id === id);
-    if (idx === -1) return undefined;
-    const task = todo.tasks[idx] as Record<string, unknown>;
-    task.updatedAt = new Date().toISOString();
-    Object.assign(task, patch);
-    this.writeTodoDataJSON(todo);
-    return task;
-  }
-
-  /** Resolve a task ID — callers may pass the SQLite `id` or the MongoDB `_id` stored inside `data`. */
-  private resolveTaskId(id: string): string | undefined {
-    if (!this.db) return undefined;
-    // Try primary key first
-    const direct = this.db.prepare(`SELECT id FROM tasks WHERE id = ?`).get(id) as { id: string } | undefined;
-    if (direct) return direct.id;
-    // Fall back to MongoDB _id inside the data JSON
-    const byMongoId = this.db.prepare(
-      `SELECT id FROM tasks WHERE json_extract(data, '$._id') = ?`
-    ).get(id) as { id: string } | undefined;
-    return byMongoId?.id;
-  }
-
-  deleteTask(id: string): boolean {
-    if (this.useSQLite) {
-      try {
-        const resolvedId = this.resolveTaskId(id);
-        if (!resolvedId) return false;
-        const result = this.db!.prepare(`DELETE FROM tasks WHERE id = ?`).run(resolvedId);
-        return result.changes > 0;
-      } catch (err) {
-        console.error("[HyperClaw] SQLite deleteTask error, falling back:", err);
-      }
-    }
-
-    const todo = this.readTodoDataJSON();
-    const filtered = todo.tasks.filter((t) => (t as { id?: string }).id !== id);
-    if (filtered.length === todo.tasks.length) return false;
-    todo.tasks = filtered;
-    this.writeTodoDataJSON(todo);
-    return true;
-  }
-
-  // ── Events ─────────────────────────────────────────────────────────────────
-
-  emitEvent(type: string, data: Record<string, unknown>): void {
-    const now = Date.now();
-
-    if (this.useSQLite) {
-      try {
-        const entry = { type, source: "openclaw", ...data };
-        this.db!.prepare(
-          `INSERT INTO events (type, data, created_at) VALUES (?, ?, ?)`
-        ).run(type, JSON.stringify(entry), now);
-        return;
-      } catch (err) {
-        console.error("[HyperClaw] SQLite emitEvent error, falling back:", err);
-      }
-    }
-
-    // JSON fallback
-    this.ensureDir();
-    const entry = {
-      type,
-      timestamp: new Date(now).toISOString(),
-      source: "openclaw",
-      ...data,
-    };
-    fs.appendFileSync(this.eventsPath, JSON.stringify(entry) + "\n", "utf-8");
-  }
-
-  readCommands(): Record<string, unknown>[] {
-    if (this.useSQLite) {
-      try {
-        const rows = this.db!.prepare(
-          `SELECT id, COALESCE(type, '') as type, data, created_at
-           FROM commands WHERE processed = 0 ORDER BY created_at ASC LIMIT 50`
-        ).all() as { id: number; type: string; data: string; created_at: number }[];
-
-        // Mark as processed
-        const markStmt = this.db!.prepare(`UPDATE commands SET processed = 1 WHERE id = ?`);
-        for (const row of rows) {
-          markStmt.run(row.id);
-        }
-
-        return rows.map((row) => {
-          const data = JSON.parse(row.data || "{}") as Record<string, unknown>;
-          return {
-            id: row.id,
-            type: row.type,
-            timestamp: new Date(row.created_at).toISOString(),
-            ...data,
-          };
-        });
-      } catch (err) {
-        console.error("[HyperClaw] SQLite readCommands error, falling back:", err);
-      }
-    }
-
-    // JSON fallback
-    try {
-      if (!fs.existsSync(this.commandsPath)) return [];
-      const content = fs.readFileSync(this.commandsPath, "utf-8");
-      const lines = content.split("\n").filter(Boolean);
-      const commands = lines
-        .map((line) => {
-          try { return JSON.parse(line) as Record<string, unknown>; }
-          catch { return null; }
-        })
-        .filter((c): c is Record<string, unknown> => c != null);
-      fs.writeFileSync(this.commandsPath, "", "utf-8");
-      return commands;
-    } catch {
-      return [];
-    }
-  }
-
-  // ── Channel Management ─────────────────────────────────────────────────────
-
-  addChannel(channel: {
-    id: string;
-    name: string;
-    type: string;
-    kind: string;
-  }): Record<string, unknown> {
-    const channels = this.getChannels();
-    const exists = channels.find((c) => c.id === channel.id);
-    if (exists) return { ...exists, error: "Channel already exists" };
-
-    const newChannel = { ...channel, createdAt: new Date().toISOString() };
-    channels.push(newChannel);
-    this.writeChannels(channels);
-    return newChannel;
-  }
-
-  getChannels(): Record<string, unknown>[] {
-    if (this.useSQLite) {
-      try {
-        const val = this.kvGet("channels");
-        if (val) {
-          const parsed = JSON.parse(val);
-          return Array.isArray(parsed) ? parsed : [];
-        }
-        return [];
-      } catch { /* fall through */ }
-    }
-
-    return this.readChannelDataJSON().channels;
-  }
-
-  getChannel(id: string): Record<string, unknown> | undefined {
-    return this.getChannels().find((c) => c.id === id);
-  }
-
-  updateChannel(id: string, patch: Record<string, unknown>): Record<string, unknown> | undefined {
-    const channels = this.getChannels();
-    const idx = channels.findIndex((c) => c.id === id);
-    if (idx === -1) return undefined;
-    Object.assign(channels[idx], patch);
-    this.writeChannels(channels);
-    return channels[idx];
-  }
-
-  deleteChannel(id: string): boolean {
-    const channels = this.getChannels();
-    const filtered = channels.filter((c) => c.id !== id);
-    if (filtered.length === channels.length) return false;
-    this.writeChannels(filtered);
-    return true;
-  }
-
-  private writeChannels(channels: Record<string, unknown>[]): void {
-    if (this.useSQLite) {
-      try {
-        this.kvSet("channels", JSON.stringify(channels));
-        return;
-      } catch { /* fall through */ }
-    }
-
-    this.ensureDir();
-    fs.writeFileSync(this.channelsPath, JSON.stringify({ channels }, null, 2), "utf-8");
-  }
-
-  // ── Agents (SQLite-only) ───────────────────────────────────────────────────
-
-  getAgents(): Record<string, unknown>[] {
-    if (!this.useSQLite) return [];
-    try {
-      return this.db!.prepare(
-        `SELECT id, name, role, status, department, config, created_at, updated_at
-         FROM agents ORDER BY name ASC`
-      ).all() as Record<string, unknown>[];
-    } catch {
-      return [];
-    }
-  }
-
-  getAgent(id: string): Record<string, unknown> | undefined {
-    if (!this.useSQLite) return undefined;
-    try {
-      return this.db!.prepare(
-        `SELECT id, name, role, status, department, config, created_at, updated_at
-         FROM agents WHERE id = ?`
-      ).get(id) as Record<string, unknown> | undefined;
-    } catch {
-      return undefined;
-    }
-  }
-
-  // ── Actions (SQLite-only) ──────────────────────────────────────────────────
-
-  getRecentActions(limit = 50): Record<string, unknown>[] {
-    if (!this.useSQLite) return [];
-    try {
-      return this.db!.prepare(
-        `SELECT id, action_type, COALESCE(agent_id, '') as agent_id, status,
-                COALESCE(duration_ms, 0) as duration_ms, created_at
-         FROM actions ORDER BY created_at DESC LIMIT ?`
-      ).all(limit) as Record<string, unknown>[];
-    } catch {
-      return [];
-    }
-  }
-
-  getAgentActivity(): Record<string, unknown>[] {
-    if (!this.useSQLite) return [];
-    try {
-      return this.db!.prepare(
-        `SELECT * FROM v_agent_activity`
-      ).all() as Record<string, unknown>[];
-    } catch {
-      return [];
-    }
-  }
-
-  // ── Schema discovery (SQLite-only) ─────────────────────────────────────────
-
-  getSchema(): Record<string, unknown>[] {
-    if (!this.useSQLite) return [];
-    try {
-      return this.db!.prepare(
-        `SELECT table_name, column_name, description FROM _schema_doc ORDER BY table_name, sort_order`
-      ).all() as Record<string, unknown>[];
-    } catch {
-      return [];
-    }
-  }
-
-  // ── KV helpers ─────────────────────────────────────────────────────────────
-
-  private kvGet(key: string): string | undefined {
-    if (!this.db) return undefined;
-    const row = this.db.prepare(`SELECT value FROM kv WHERE key = ?`).get(key) as { value: string } | undefined;
-    return row?.value;
-  }
-
-  private kvSet(key: string, value: string): void {
-    if (!this.db) return;
-    const now = Date.now();
-    this.db.prepare(
-      `INSERT INTO kv (key, value, updated_at) VALUES (?, ?, ?)
-       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
-    ).run(key, value, now);
-  }
-
-  // ── JSON fallbacks ─────────────────────────────────────────────────────────
-
-  private readTodoDataJSON(): TodoData {
+  private readTodoData(): TodoData {
     try {
       if (!fs.existsSync(this.todoPath)) {
         return { tasks: [], lists: [], activeTaskId: null };
@@ -450,12 +67,90 @@ export class HyperClawBridge {
     }
   }
 
-  private writeTodoDataJSON(data: TodoData): void {
+  private writeTodoData(data: TodoData): void {
     this.ensureDir();
     fs.writeFileSync(this.todoPath, JSON.stringify(data, null, 2), "utf-8");
   }
 
-  private readChannelDataJSON(): ChannelData {
+  addTask(task: {
+    title: string;
+    description?: string;
+    priority?: string;
+    status?: string;
+    agent?: string;
+    metadata?: Record<string, unknown>;
+  }): Record<string, unknown> {
+    const todo = this.readTodoData();
+    const now = new Date().toISOString();
+    const newTask = {
+      ...task,
+      id: generateTaskId(),
+      createdAt: now,
+      updatedAt: now,
+    };
+    todo.tasks.push(newTask);
+    this.writeTodoData(todo);
+    return newTask;
+  }
+
+  getTasks(): Record<string, unknown>[] {
+    return this.readTodoData().tasks;
+  }
+
+  updateTask(id: string, patch: Record<string, unknown>): Record<string, unknown> | undefined {
+    const todo = this.readTodoData();
+    const idx = todo.tasks.findIndex((t) => (t as { id?: string }).id === id);
+    if (idx === -1) return undefined;
+    const task = todo.tasks[idx] as Record<string, unknown>;
+    task.updatedAt = new Date().toISOString();
+    Object.assign(task, patch);
+    this.writeTodoData(todo);
+    return task;
+  }
+
+  deleteTask(id: string): boolean {
+    const todo = this.readTodoData();
+    const filtered = todo.tasks.filter((t) => (t as { id?: string }).id !== id);
+    if (filtered.length === todo.tasks.length) return false;
+    todo.tasks = filtered;
+    this.writeTodoData(todo);
+    return true;
+  }
+
+  emitEvent(type: string, data: Record<string, unknown>): void {
+    this.ensureDir();
+    const entry = {
+      type,
+      timestamp: new Date().toISOString(),
+      source: "openclaw",
+      ...data,
+    };
+    fs.appendFileSync(this.eventsPath, JSON.stringify(entry) + "\n", "utf-8");
+  }
+
+  readCommands(): Record<string, unknown>[] {
+    try {
+      if (!fs.existsSync(this.commandsPath)) return [];
+      const content = fs.readFileSync(this.commandsPath, "utf-8");
+      const lines = content.split("\n").filter(Boolean);
+      const commands = lines
+        .map((line) => {
+          try {
+            return JSON.parse(line) as Record<string, unknown>;
+          } catch {
+            return null;
+          }
+        })
+        .filter((c): c is Record<string, unknown> => c != null);
+      fs.writeFileSync(this.commandsPath, "", "utf-8");
+      return commands;
+    } catch {
+      return [];
+    }
+  }
+
+  // ── Channel Management ─────────────────────────────────────────────────
+  private readChannelData(): ChannelData {
     try {
       if (!fs.existsSync(this.channelsPath)) {
         return { channels: [] };
@@ -466,6 +161,442 @@ export class HyperClawBridge {
       };
     } catch {
       return { channels: [] };
+    }
+  }
+
+  private writeChannelData(data: ChannelData): void {
+    this.ensureDir();
+    fs.writeFileSync(this.channelsPath, JSON.stringify(data, null, 2), "utf-8");
+  }
+
+  addChannel(channel: {
+    id: string;
+    name: string;
+    type: string;
+    kind: string;
+  }): Record<string, unknown> {
+    const data = this.readChannelData();
+    const now = new Date().toISOString();
+    const newChannel = {
+      ...channel,
+      createdAt: now,
+    };
+    const exists = data.channels.find((c: Record<string, unknown>) => c.id === channel.id);
+    if (exists) return { ...exists, error: "Channel already exists" };
+    data.channels.push(newChannel);
+    this.writeChannelData(data);
+    return newChannel;
+  }
+
+  getChannels(): Record<string, unknown>[] {
+    return this.readChannelData().channels;
+  }
+
+  getChannel(id: string): Record<string, unknown> | undefined {
+    const channels = this.readChannelData().channels;
+    return channels.find((c) => c.id === id) as Record<string, unknown> | undefined;
+  }
+
+  updateChannel(id: string, patch: Record<string, unknown>): Record<string, unknown> | undefined {
+    const data = this.readChannelData();
+    const idx = data.channels.findIndex((c) => c.id === id);
+    if (idx === -1) return undefined;
+    Object.assign(data.channels[idx], patch);
+    this.writeChannelData(data);
+    return data.channels[idx];
+  }
+
+  deleteChannel(id: string): boolean {
+    const data = this.readChannelData();
+    const initialLength = data.channels.length;
+    data.channels = data.channels.filter((c) => c.id !== id);
+    if (data.channels.length === initialLength) return false;
+    this.writeChannelData(data);
+    return true;
+  }
+
+  // ── Task OS: query / upsert / claim ─────────────────────────────────────
+
+  queryTasks(filters: {
+    agentId?: string;
+    agent?: string;
+    status?: string;
+    kind?: string;
+    limit?: number;
+    sort?: string;
+  }): Record<string, unknown>[] {
+    let tasks = this.readTodoData().tasks;
+    const agentFilter = filters.agentId || filters.agent;
+    if (agentFilter) {
+      tasks = tasks.filter(
+        (t) => t.agent === agentFilter || (t as any).agentId === agentFilter
+      );
+    }
+    if (filters.status) {
+      tasks = tasks.filter((t) => t.status === filters.status);
+    }
+    if (filters.kind) {
+      tasks = tasks.filter((t) => {
+        const d = t.data as Record<string, unknown> | undefined;
+        return (t as any).kind === filters.kind || d?.kind === filters.kind;
+      });
+    }
+    if (filters.sort === "oldest") {
+      tasks.sort((a, b) =>
+        String(a.createdAt ?? "").localeCompare(String(b.createdAt ?? ""))
+      );
+    } else {
+      tasks.sort((a, b) =>
+        String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? ""))
+      );
+    }
+    if (filters.limit && filters.limit > 0) {
+      tasks = tasks.slice(0, filters.limit);
+    }
+    return tasks;
+  }
+
+  upsertTask(params: {
+    externalId: string;
+    data: Record<string, unknown>;
+  }): Record<string, unknown> {
+    const todo = this.readTodoData();
+    const now = new Date().toISOString();
+
+    const idx = todo.tasks.findIndex((t) => {
+      const d = t.data as Record<string, unknown> | undefined;
+      return d?.external_id === params.externalId;
+    });
+
+    const incomingData =
+      (params.data.data as Record<string, unknown>) || {};
+    const mergedData = { ...incomingData, external_id: params.externalId };
+    const { data: _d, ...topFields } = params.data;
+
+    if (idx !== -1) {
+      const task = todo.tasks[idx] as Record<string, unknown>;
+      const existingData =
+        (task.data as Record<string, unknown>) || {};
+      Object.assign(task, topFields);
+      task.data = { ...existingData, ...mergedData };
+      task.updatedAt = now;
+      this.writeTodoData(todo);
+      return task;
+    }
+
+    const newTask: Record<string, unknown> = {
+      ...topFields,
+      id: generateTaskId(),
+      data: mergedData,
+      status: topFields.status || "pending",
+      priority: topFields.priority || "medium",
+      createdAt: now,
+      updatedAt: now,
+    };
+    todo.tasks.push(newTask);
+    this.writeTodoData(todo);
+    return newTask;
+  }
+
+  claimTask(params: {
+    id?: string;
+    externalId?: string;
+    claimant: string;
+    leaseSeconds: number;
+  }): { success: boolean; task?: Record<string, unknown>; reason?: string } {
+    const todo = this.readTodoData();
+    let idx = -1;
+
+    if (params.id) {
+      idx = todo.tasks.findIndex(
+        (t) => (t as { id?: string }).id === params.id
+      );
+    } else if (params.externalId) {
+      idx = todo.tasks.findIndex((t) => {
+        const d = t.data as Record<string, unknown> | undefined;
+        return d?.external_id === params.externalId;
+      });
+    }
+
+    if (idx === -1) {
+      return { success: false, reason: "Task not found" };
+    }
+
+    const task = todo.tasks[idx] as Record<string, unknown>;
+    const data = ((task.data as Record<string, unknown>) || {}) as Record<
+      string,
+      unknown
+    >;
+    const lease = data.lease as
+      | { claimedBy?: string; expiresAtMs?: number }
+      | undefined;
+    const now = Date.now();
+
+    if (lease && lease.expiresAtMs && lease.expiresAtMs > now) {
+      return {
+        success: false,
+        reason: `Already claimed by ${lease.claimedBy} until ${new Date(lease.expiresAtMs).toISOString()}`,
+        task,
+      };
+    }
+
+    data.lease = {
+      claimedBy: params.claimant,
+      expiresAtMs: now + params.leaseSeconds * 1000,
+    };
+    task.data = data;
+    task.updatedAt = new Date().toISOString();
+    this.writeTodoData(todo);
+    return { success: true, task };
+  }
+
+  // ── Sessions + Transcript Storage ───────────────────────────────────────
+
+  private getDb(): any {
+    if (this._db) return this._db;
+    if (this._dbFailed || !BetterSqlite3) {
+      this._dbFailed = true;
+      return null;
+    }
+    try {
+      const dbPath = path.join(this.dataDir, "connector.db");
+      this.ensureDir();
+      this._db = new BetterSqlite3(dbPath);
+      this._db.pragma("journal_mode = WAL");
+      this._db.exec(`
+        CREATE TABLE IF NOT EXISTS sessions (
+          session_key TEXT PRIMARY KEY,
+          agent_id TEXT,
+          label TEXT,
+          created_at_ms INTEGER NOT NULL,
+          updated_at_ms INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS session_messages (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          session_key TEXT NOT NULL,
+          run_id TEXT,
+          stream TEXT,
+          role TEXT,
+          content_json TEXT,
+          created_at_ms INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_sm_session_created
+          ON session_messages(session_key, created_at_ms);
+      `);
+      return this._db;
+    } catch {
+      this._dbFailed = true;
+      return null;
+    }
+  }
+
+  // ── JSON fallback helpers for sessions ──────────────────────────────────
+
+  private ensureSessionsDir(): void {
+    if (!fs.existsSync(this.sessionsDir)) {
+      fs.mkdirSync(this.sessionsDir, { recursive: true });
+    }
+  }
+
+  private sessionIndexPath(): string {
+    return path.join(this.sessionsDir, "index.json");
+  }
+
+  private readSessionIndex(): Record<string, unknown>[] {
+    try {
+      const p = this.sessionIndexPath();
+      if (!fs.existsSync(p)) return [];
+      const raw = JSON.parse(fs.readFileSync(p, "utf-8"));
+      return Array.isArray(raw.sessions) ? raw.sessions : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private writeSessionIndex(sessions: Record<string, unknown>[]): void {
+    this.ensureSessionsDir();
+    fs.writeFileSync(
+      this.sessionIndexPath(),
+      JSON.stringify({ sessions }, null, 2),
+      "utf-8"
+    );
+  }
+
+  private sessionMessagesPath(sessionKey: string): string {
+    const safe = sessionKey.replace(/[^a-zA-Z0-9_-]/g, "_");
+    return path.join(this.sessionsDir, `${safe}.jsonl`);
+  }
+
+  // ── Public session methods ──────────────────────────────────────────────
+
+  sessionUpsert(params: {
+    sessionKey: string;
+    agentId?: string;
+    label?: string;
+  }): Record<string, unknown> {
+    const now = Date.now();
+    const db = this.getDb();
+
+    if (db) {
+      const existing = db
+        .prepare("SELECT * FROM sessions WHERE session_key = ?")
+        .get(params.sessionKey);
+      if (existing) {
+        db.prepare(
+          "UPDATE sessions SET agent_id = COALESCE(?, agent_id), label = COALESCE(?, label), updated_at_ms = ? WHERE session_key = ?"
+        ).run(
+          params.agentId ?? null,
+          params.label ?? null,
+          now,
+          params.sessionKey
+        );
+      } else {
+        db.prepare(
+          "INSERT INTO sessions (session_key, agent_id, label, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?)"
+        ).run(
+          params.sessionKey,
+          params.agentId ?? null,
+          params.label ?? null,
+          now,
+          now
+        );
+      }
+      return db
+        .prepare("SELECT * FROM sessions WHERE session_key = ?")
+        .get(params.sessionKey) as Record<string, unknown>;
+    }
+
+    // JSON fallback
+    const sessions = this.readSessionIndex();
+    const idx = sessions.findIndex(
+      (s) => s.session_key === params.sessionKey
+    );
+    if (idx !== -1) {
+      if (params.agentId !== undefined) sessions[idx].agent_id = params.agentId;
+      if (params.label !== undefined) sessions[idx].label = params.label;
+      sessions[idx].updated_at_ms = now;
+      this.writeSessionIndex(sessions);
+      return sessions[idx];
+    }
+    const newSession: Record<string, unknown> = {
+      session_key: params.sessionKey,
+      agent_id: params.agentId ?? null,
+      label: params.label ?? null,
+      created_at_ms: now,
+      updated_at_ms: now,
+    };
+    sessions.push(newSession);
+    this.writeSessionIndex(sessions);
+    return newSession;
+  }
+
+  sessionAppendMessages(
+    sessionKey: string,
+    messages: {
+      runId?: string;
+      stream?: string;
+      role?: string;
+      content: unknown;
+    }[]
+  ): { count: number } {
+    const now = Date.now();
+    const db = this.getDb();
+
+    if (db) {
+      const insert = db.prepare(
+        "INSERT INTO session_messages (session_key, run_id, stream, role, content_json, created_at_ms) VALUES (?, ?, ?, ?, ?, ?)"
+      );
+      const tx = db.transaction(() => {
+        for (const msg of messages) {
+          insert.run(
+            sessionKey,
+            msg.runId ?? null,
+            msg.stream ?? null,
+            msg.role ?? null,
+            JSON.stringify(msg.content),
+            now
+          );
+        }
+      });
+      tx();
+      // Touch session updated_at_ms
+      db.prepare(
+        "UPDATE sessions SET updated_at_ms = ? WHERE session_key = ?"
+      ).run(now, sessionKey);
+      return { count: messages.length };
+    }
+
+    // JSON fallback
+    this.ensureSessionsDir();
+    const fpath = this.sessionMessagesPath(sessionKey);
+    const lines = messages.map((msg) =>
+      JSON.stringify({
+        session_key: sessionKey,
+        run_id: msg.runId ?? null,
+        stream: msg.stream ?? null,
+        role: msg.role ?? null,
+        content: msg.content,
+        created_at_ms: now,
+      })
+    );
+    fs.appendFileSync(fpath, lines.join("\n") + "\n", "utf-8");
+    return { count: messages.length };
+  }
+
+  sessionGetMessages(
+    sessionKey: string,
+    opts?: { runId?: string; limit?: number; offset?: number }
+  ): Record<string, unknown>[] {
+    const db = this.getDb();
+
+    if (db) {
+      let sql =
+        "SELECT * FROM session_messages WHERE session_key = ?";
+      const binds: unknown[] = [sessionKey];
+      if (opts?.runId) {
+        sql += " AND run_id = ?";
+        binds.push(opts.runId);
+      }
+      sql += " ORDER BY created_at_ms ASC, id ASC";
+      if (opts?.limit) {
+        sql += " LIMIT ?";
+        binds.push(opts.limit);
+        if (opts?.offset) {
+          sql += " OFFSET ?";
+          binds.push(opts.offset);
+        }
+      }
+      return db.prepare(sql).all(...binds) as Record<string, unknown>[];
+    }
+
+    // JSON fallback
+    const fpath = this.sessionMessagesPath(sessionKey);
+    if (!fs.existsSync(fpath)) return [];
+    try {
+      const content = fs.readFileSync(fpath, "utf-8");
+      let msgs = content
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => {
+          try {
+            return JSON.parse(line) as Record<string, unknown>;
+          } catch {
+            return null;
+          }
+        })
+        .filter((m): m is Record<string, unknown> => m != null);
+      if (opts?.runId) {
+        msgs = msgs.filter((m) => m.run_id === opts.runId);
+      }
+      const start = opts?.offset ?? 0;
+      if (opts?.limit) {
+        msgs = msgs.slice(start, start + opts.limit);
+      } else if (start > 0) {
+        msgs = msgs.slice(start);
+      }
+      return msgs;
+    } catch {
+      return [];
     }
   }
 }
