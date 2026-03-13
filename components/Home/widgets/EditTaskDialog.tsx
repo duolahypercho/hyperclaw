@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useCallback, useEffect } from "react";
+import React, { useState, useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Pencil, Bot, Loader2 } from "lucide-react";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
@@ -81,6 +81,18 @@ export function EditTaskDialog({
 
   // Defer rendering Select items until first open
   const [agentSelectReady, setAgentSelectReady] = useState(false);
+  const descRef = useRef<HTMLTextAreaElement>(null);
+  const MAX_DESC_PX = 320;
+
+  useLayoutEffect(() => {
+    const el = descRef.current;
+    if (!el) return;
+    el.style.overflow = "hidden";
+    el.style.height = "auto";
+    const next = Math.min(el.scrollHeight, MAX_DESC_PX);
+    el.style.height = `${next}px`;
+    el.style.overflow = el.scrollHeight > MAX_DESC_PX ? "auto" : "hidden";
+  }, [description]);
 
   // Re-sync local state when task prop changes
   useEffect(() => {
@@ -266,11 +278,12 @@ export function EditTaskDialog({
                 Prompt description
               </Label>
               <Textarea
+                ref={descRef}
                 id="edit-task-desc"
                 placeholder="Add a description..."
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                className="min-h-[60px] text-sm resize-none bg-muted/30 border-border/60"
+                className="min-h-[60px] text-sm resize-none bg-muted/30 border-border/60 transition-[height] duration-150 ease-out"
                 rows={2}
               />
             </div>

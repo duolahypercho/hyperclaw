@@ -57,6 +57,132 @@ const IGNORE_DIRS = ["browser", "node_modules", "skills", "memory"];
 const DATA_DIR = path.join(os.homedir(), ".hyperclaw");
 const DAILY_SUMMARIES_DIR = path.join(DATA_DIR, "daily-summaries");
 const TODO_DATA_PATH = path.join(DATA_DIR, "todo.json");
+const LAYOUTS_JSON_PATH = path.join(DATA_DIR, "dashboard-layouts.json");
+
+/* ── Dashboard Layout persistence (SQLite primary, JSON fallback) ──── */
+
+interface DashboardLayoutRow {
+  id: string;
+  name: string;
+  createdAt: number;
+  layout: string;
+  visibleWidgets: string[];
+  widgetConfigs: string;
+}
+
+function getLayoutsDb(): any | null {
+  try {
+    // Dynamic require hidden from Webpack static analysis
+    const mod = "better-sqlite3";
+    const Database = require(mod);
+    const dbPath = path.join(DATA_DIR, "connector.db");
+    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+    const db = new Database(dbPath);
+    db.exec(`CREATE TABLE IF NOT EXISTS dashboard_layouts (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      layout TEXT NOT NULL DEFAULT '{}',
+      visible_widgets TEXT NOT NULL DEFAULT '[]',
+      widget_configs TEXT NOT NULL DEFAULT '{}'
+    )`);
+    return db;
+  } catch { return null; }
+}
+
+function readLayoutsJson(): DashboardLayoutRow[] {
+  try {
+    if (!fs.existsSync(LAYOUTS_JSON_PATH)) return [];
+    return JSON.parse(fs.readFileSync(LAYOUTS_JSON_PATH, "utf-8"));
+  } catch { return []; }
+}
+
+function writeLayoutsJson(layouts: DashboardLayoutRow[]) {
+  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.writeFileSync(LAYOUTS_JSON_PATH, JSON.stringify(layouts, null, 2), "utf-8");
+}
+
+function readDashboardLayouts(): DashboardLayoutRow[] {
+  const db = getLayoutsDb();
+  if (db) {
+    try {
+      const rows = db.prepare("SELECT * FROM dashboard_layouts ORDER BY created_at ASC").all() as any[];
+      db.close();
+      return rows.map((r: any) => ({
+        id: r.id,
+        name: r.name,
+        createdAt: r.created_at,
+        layout: r.layout,
+        visibleWidgets: JSON.parse(r.visible_widgets || "[]"),
+        widgetConfigs: r.widget_configs,
+      }));
+    } catch { db.close(); }
+  }
+  return readLayoutsJson();
+}
+
+function upsertDashboardLayout(entry: DashboardLayoutRow) {
+  const db = getLayoutsDb();
+  if (db) {
+    try {
+      db.prepare(`INSERT OR REPLACE INTO dashboard_layouts (id, name, created_at, layout, visible_widgets, widget_configs)
+        VALUES (?, ?, ?, ?, ?, ?)`).run(
+        entry.id, entry.name, entry.createdAt, entry.layout,
+        JSON.stringify(entry.visibleWidgets), entry.widgetConfigs,
+      );
+      db.close();
+      return;
+    } catch { db.close(); }
+  }
+  // JSON fallback
+  const layouts = readLayoutsJson();
+  const idx = layouts.findIndex((l) => l.id === entry.id);
+  if (idx >= 0) layouts[idx] = entry; else layouts.push(entry);
+  writeLayoutsJson(layouts);
+}
+
+function updateDashboardLayout(id: string, fields: Record<string, any>) {
+  const db = getLayoutsDb();
+  if (db) {
+    try {
+      const sets: string[] = [];
+      const vals: any[] = [];
+      if (fields.name !== undefined) { sets.push("name = ?"); vals.push(fields.name); }
+      if (fields.layout !== undefined) { sets.push("layout = ?"); vals.push(fields.layout); }
+      if (fields.visibleWidgets !== undefined) { sets.push("visible_widgets = ?"); vals.push(JSON.stringify(fields.visibleWidgets)); }
+      if (fields.widgetConfigs !== undefined) { sets.push("widget_configs = ?"); vals.push(fields.widgetConfigs); }
+      if (sets.length) {
+        vals.push(id);
+        db.prepare(`UPDATE dashboard_layouts SET ${sets.join(", ")} WHERE id = ?`).run(...vals);
+      }
+      db.close();
+      return;
+    } catch { db.close(); }
+  }
+  // JSON fallback
+  const layouts = readLayoutsJson();
+  const layout = layouts.find((l) => l.id === id);
+  if (layout) {
+    if (fields.name !== undefined) layout.name = fields.name;
+    if (fields.layout !== undefined) layout.layout = fields.layout;
+    if (fields.visibleWidgets !== undefined) layout.visibleWidgets = fields.visibleWidgets;
+    if (fields.widgetConfigs !== undefined) layout.widgetConfigs = fields.widgetConfigs;
+    writeLayoutsJson(layouts);
+  }
+}
+
+function deleteDashboardLayout(id: string) {
+  const db = getLayoutsDb();
+  if (db) {
+    try {
+      db.prepare("DELETE FROM dashboard_layouts WHERE id = ?").run(id);
+      db.close();
+      return;
+    } catch { db.close(); }
+  }
+  // JSON fallback
+  writeLayoutsJson(readLayoutsJson().filter((l) => l.id !== id));
+}
 
 // 24-char hex string compatible with MongoDB ObjectId format (used by TodoList backend).
 function generateTaskId(): string {
@@ -1696,6 +1822,34 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!sessionKey) return res.status(400).json({ error: "sessionKey required" });
       const msgs = readSessionMessages(sessionKey, { runId: sRunId, limit: sLimit, offset: sOffset });
       return res.json({ messages: msgs });
+    }
+
+    /* ── Dashboard Layouts (SQLite → JSON file fallback) ──────────── */
+
+    case "get-layouts": {
+      return res.json({ success: true, data: readDashboardLayouts() });
+    }
+
+    case "save-layout": {
+      const { id, name, layout, visibleWidgets, widgetConfigs } = req.body;
+      if (!id || !name) return res.status(400).json({ error: "id and name required" });
+      const entry = { id, name, createdAt: Date.now(), layout: layout ?? "{}", visibleWidgets: visibleWidgets ?? [], widgetConfigs: widgetConfigs ?? "{}" };
+      upsertDashboardLayout(entry);
+      return res.json({ success: true });
+    }
+
+    case "update-layout": {
+      const { id: updateId, ...fields } = req.body;
+      if (!updateId) return res.status(400).json({ error: "id required" });
+      updateDashboardLayout(updateId, fields);
+      return res.json({ success: true });
+    }
+
+    case "delete-layout": {
+      const { id: deleteId } = req.body;
+      if (!deleteId) return res.status(400).json({ error: "id required" });
+      deleteDashboardLayout(deleteId);
+      return res.json({ success: true });
     }
 
     default:

@@ -283,11 +283,7 @@ const UsageWidgetContent = memo((props: CustomProps) => {
     loadLocal();
   }, []);
 
-  // Set 7-day range on mount
-  useEffect(() => {
-    // Only apply preset on initial mount
-    applyPreset(7);
-  }, []);
+  // Default is "today" from usageProvider — no preset override needed
 
   // Merge OpenClaw data with local data when new data arrives
   // NOTE: localUsage is read via ref to avoid infinite loop (effect updates localUsage)
@@ -342,29 +338,27 @@ const UsageWidgetContent = memo((props: CustomProps) => {
     mergeAndSave();
   }, [usage, sessionsUsage]);
 
-  // Calculate totals from merged local cache (which includes OpenClaw data merged per-day)
-  // This ensures historical data persists even if OpenClaw resets its usage tracking
-  const getMergedTotals = useCallback(() => {
-    const localDaily = localUsage?.daily ?? {};
+  // Totals: prefer sessions.usage (primary, matches OpenClaw), then usage.cost, then local cache
+  const totalsData = useMemo(() => {
+    // Primary: sessions.usage totals (complete token counts including cache reads)
+    const liveTotals = sessionsUsage?.totals ?? usage?.totals;
+    if (liveTotals) {
+      return {
+        inputTokens: liveTotals.input,
+        outputTokens: liveTotals.output,
+        totalTokens: liveTotals.totalTokens,
+        totalCost: liveTotals.totalCost ?? 0,
+      };
+    }
 
+    // Fallback: local cache (historical persistence when gateway is unavailable)
+    const localDaily = localUsage?.daily ?? {};
     if (Object.keys(localDaily).length === 0) {
-      // No merged data yet — fall back to raw OpenClaw totals if available
-      const openClawTotals = sessionsUsage?.totals ?? usage?.totals;
-      if (openClawTotals) {
-        return {
-          inputTokens: openClawTotals.input,
-          outputTokens: openClawTotals.output,
-          totalTokens: openClawTotals.totalTokens,
-          totalCost: openClawTotals.totalCost ?? 0,
-        };
-      }
       return { inputTokens: 0, outputTokens: 0, totalTokens: 0, totalCost: 0 };
     }
 
-    // Sum from merged daily data within the selected date range
     const start = new Date(startDate);
     const end = new Date(endDate);
-
     let input = 0, output = 0, totalTokens = 0, totalCost = 0;
 
     for (const [date, data] of Object.entries(localDaily)) {
@@ -378,7 +372,7 @@ const UsageWidgetContent = memo((props: CustomProps) => {
     }
 
     return { inputTokens: input, outputTokens: output, totalTokens, totalCost };
-  }, [localUsage, sessionsUsage, usage, startDate, endDate]);
+  }, [sessionsUsage, usage, localUsage, startDate, endDate]);
 
   // Refetch when dates change
   useEffect(() => {
@@ -417,7 +411,7 @@ const UsageWidgetContent = memo((props: CustomProps) => {
     };
   }, [refetch]);
 
-  const totals = getMergedTotals();
+  const totals = totalsData;
 
   const isInitialLoading = loading && !usage && !sessionsUsage && !localUsage;
   const showError = error && !usage && !sessionsUsage && !localUsage;

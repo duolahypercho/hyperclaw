@@ -109,25 +109,6 @@ export function UsageProvider({ children }: { children: ReactNode }) {
       } else {
         setUsage(usageCost ?? null);
         setSessionsUsage(sessions ?? null);
-        // Debug: log data sources to detect sessions.usage failures
-        if (!sessions && usageCost?.totals) {
-          console.warn(
-            "[Usage] sessions.usage returned null — falling back to usage.cost totals.",
-            "usage.cost tokens:", usageCost.totals.totalTokens,
-            "cost:", usageCost.totals.totalCost
-          );
-        }
-        if (sessions?.totals && usageCost?.totals) {
-          const diff = Math.abs(sessions.totals.totalTokens - usageCost.totals.totalTokens);
-          if (diff > sessions.totals.totalTokens * 0.05) {
-            console.warn(
-              "[Usage] Totals mismatch — sessions.usage:",
-              sessions.totals.totalTokens, "tokens /$" + sessions.totals.totalCost.toFixed(2),
-              "| usage.cost:",
-              usageCost.totals.totalTokens, "tokens /$" + usageCost.totals.totalCost.toFixed(2)
-            );
-          }
-        }
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load gateway usage");

@@ -943,41 +943,8 @@ export interface SessionsUsageResult {
   };
 }
 
-/** Fetch usage cost from the gateway via WebSocket (usage.cost).
- * Same design as OpenClaw: pass startDate/endDate and optional timeZone for date interpretation.
- * If startDate/endDate omitted, gateway uses default range (e.g. last 30 days).
- * When includeDateInterpretation is false (e.g. legacy gateway), mode/utcOffset are omitted.
- */
-export async function getUsageCostWs(params?: {
-  startDate?: string;
-  endDate?: string;
-  timeZone?: "local" | "utc";
-  detail?: "off" | "tokens" | "full";
-  includeDateInterpretation?: boolean;
-}): Promise<UsageCostPayload> {
-  const { connected } = getGatewayConnectionState();
-  if (!connected) {
-    return { error: "Gateway not connected" } as UsageCostPayload;
-  }
-
-  const requestParams: Record<string, unknown> = {};
-  if (params?.detail) requestParams.detail = params.detail;
-  if (params?.startDate) requestParams.startDate = params.startDate;
-  if (params?.endDate) requestParams.endDate = params.endDate;
-  const tz = params?.timeZone ?? "local";
-  const includeDateInterpretation = params?.includeDateInterpretation !== false;
-  const dateInterpretation = buildDateInterpretationParams(tz, includeDateInterpretation);
-  if (dateInterpretation) {
-    requestParams.mode = dateInterpretation.mode;
-    if (dateInterpretation.utcOffset) requestParams.utcOffset = dateInterpretation.utcOffset;
-  }
-
-  const payload = await gatewayConnection.request<UsageCostPayload>("usage.cost", requestParams);
-  return payload ?? {};
-}
-
 /** Tracks whether the current gateway supports sessions.usage.
- * After a timeout/failure, skip future calls until reconnection. */
+ * After an "unknown method" error, skip future calls until reconnection. */
 let _sessionsUsageSupported: boolean | null = null;
 
 // Reset the flag when the gateway reconnects (new gateway may support it)
@@ -988,105 +955,17 @@ subscribeGatewayConnection(() => {
   }
 });
 
-/** Fetch sessions usage from the gateway via WebSocket (sessions.usage).
- * Same design as OpenClaw: startDate, endDate, timeZone, limit, includeContextWeight.
- * When includeDateInterpretation is false (e.g. legacy gateway), mode/utcOffset are omitted.
- */
-export async function getSessionsUsageWs(params: {
-  startDate: string;
-  endDate: string;
-  timeZone?: "local" | "utc";
-  limit?: number;
-  includeContextWeight?: boolean;
-  includeDateInterpretation?: boolean;
-}): Promise<SessionsUsageResult | null> {
-  const { connected } = getGatewayConnectionState();
-  if (!connected) {
-    console.warn("[Gateway WS] sessions.usage skipped: not connected");
-    return null;
-  }
-
-  // Skip if we already know the gateway doesn't support this
-  if (_sessionsUsageSupported === false) {
-    console.warn("[Gateway WS] sessions.usage skipped: permanently disabled (_sessionsUsageSupported=false)");
-    return null;
-  }
-
-  const includeDateInterpretation = params.includeDateInterpretation !== false;
-  const dateInterpretation = buildDateInterpretationParams(
-    params.timeZone ?? "local",
-    includeDateInterpretation
-  );
-  const requestParams: Record<string, unknown> = {
-    startDate: params.startDate,
-    endDate: params.endDate,
-    limit: params.limit ?? 1000,
-    includeContextWeight: params.includeContextWeight ?? true,
-  };
-  if (dateInterpretation) {
-    requestParams.mode = dateInterpretation.mode;
-    if (dateInterpretation.utcOffset) requestParams.utcOffset = dateInterpretation.utcOffset;
-  }
-
-  console.log("[Gateway WS] sessions.usage requesting:", { ...requestParams, includeDateInterpretation });
-
-  try {
-    const payload = await gatewayConnection.request<SessionsUsageResult>("sessions.usage", requestParams, 60000);
-    _sessionsUsageSupported = true;
-    console.log("[Gateway WS] sessions.usage success:",
-      payload?.totals ? `${payload.totals.totalTokens} tokens / $${payload.totals.totalCost}` : "no totals",
-      `(${payload?.sessions?.length ?? 0} sessions)`
-    );
-    return payload ?? null;
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    // Only mark as permanently unsupported if the gateway explicitly rejects the method.
-    // Transient errors (timeouts, disconnects) should not disable future calls.
-    if (msg.includes("unknown method")) {
-      _sessionsUsageSupported = false;
-      console.warn("[Gateway WS] sessions.usage not supported by this gateway, skipping future calls");
-    } else {
-      console.warn("[Gateway WS] sessions.usage error:", msg, { includeDateInterpretation, params: requestParams });
-    }
-    return null;
-  }
-}
-
-/** Load both usage.cost and sessions.usage in parallel (same design as OpenClaw control UI).
- * Uses legacy fallback: if gateway rejects mode/utcOffset, retries without and remembers per gateway.
- * Returns cost payload and sessions result; sessions may be null if gateway does not support sessions.usage.
+/** Load both usage.cost and sessions.usage in parallel.
+ * Matches OpenClaw's exact pattern (controllers/usage.ts):
+ *   - Both requests via client.request() — errors propagate from both
+ *   - Legacy fallback: if gateway rejects mode/utcOffset, retry both without
+ *   - sessions.usage is primary (totals), usage.cost is secondary (daily chart)
  */
 export async function loadUsageWs(params: UsageFetchParams): Promise<{
   usageCost: UsageCostPayload;
   sessionsUsage: SessionsUsageResult | null;
 }> {
   const { startDate, endDate, timeZone = "local", limit = 1000 } = params;
-
-  let gatewayKey = LEGACY_USAGE_DATE_PARAMS_DEFAULT_GATEWAY_KEY;
-  try {
-    const config = await getGatewayConfig();
-    gatewayKey = normalizeGatewayCompatibilityKey(config.gatewayUrl);
-  } catch {
-    /* use default key */
-  }
-
-  const runRequests = (includeDateInterpretation: boolean) =>
-    Promise.all([
-      getUsageCostWs({
-        startDate,
-        endDate,
-        timeZone,
-        includeDateInterpretation,
-      }),
-      getSessionsUsageWs({
-        startDate,
-        endDate,
-        timeZone,
-        limit,
-        includeContextWeight: true,
-        includeDateInterpretation,
-      }),
-    ]);
 
   const { connected } = getGatewayConnectionState();
   if (!connected) {
@@ -1096,37 +975,98 @@ export async function loadUsageWs(params: UsageFetchParams): Promise<{
     };
   }
 
-  const includeDateInterpretation = shouldSendLegacyDateInterpretation(gatewayKey);
+  let gatewayKey = LEGACY_USAGE_DATE_PARAMS_DEFAULT_GATEWAY_KEY;
   try {
-    const [usageCost, sessionsUsage] = await runRequests(includeDateInterpretation);
+    const config = await getGatewayConfig();
+    gatewayKey = normalizeGatewayCompatibilityKey(config.gatewayUrl);
+  } catch {
+    /* use default key */
+  }
 
-    // If sessions.usage failed but usage.cost succeeded, the legacy retry above
-    // never fires (sessions catches its own errors). Retry sessions independently
-    // without date interpretation params in case mode/utcOffset caused the failure.
-    if (!sessionsUsage && includeDateInterpretation) {
-      const retriedSessions = await getSessionsUsageWs({
+  // Mirrors OpenClaw: both requests in Promise.all, errors propagate from both
+  const runUsageRequests = async (includeDateInterpretation: boolean) => {
+    const dateInterpretation = buildDateInterpretationParams(timeZone, includeDateInterpretation);
+    return await Promise.all([
+      gatewayConnection.request<SessionsUsageResult>("sessions.usage", {
         startDate,
         endDate,
-        timeZone,
+        ...dateInterpretation,
         limit,
         includeContextWeight: true,
-        includeDateInterpretation: false,
+      }, 60000),
+      gatewayConnection.request<UsageCostPayload>("usage.cost", {
+        startDate,
+        endDate,
+        ...dateInterpretation,
+      }),
+    ]);
+  };
+
+  // If we already know sessions.usage isn't supported, only fetch usage.cost
+  if (_sessionsUsageSupported === false) {
+    try {
+      const dateInterpretation = buildDateInterpretationParams(
+        timeZone,
+        shouldSendLegacyDateInterpretation(gatewayKey),
+      );
+      const usageCost = await gatewayConnection.request<UsageCostPayload>("usage.cost", {
+        startDate,
+        endDate,
+        ...dateInterpretation,
       });
-      if (retriedSessions) {
-        return { usageCost: usageCost ?? {}, sessionsUsage: retriedSessions };
+      return { usageCost: usageCost ?? ({} as UsageCostPayload), sessionsUsage: null };
+    } catch {
+      return { usageCost: {} as UsageCostPayload, sessionsUsage: null };
+    }
+  }
+
+  const includeDateInterpretation = shouldSendLegacyDateInterpretation(gatewayKey);
+  try {
+    const [sessionsResult, costResult] = await runUsageRequests(includeDateInterpretation);
+    _sessionsUsageSupported = true;
+    return {
+      usageCost: costResult ?? ({} as UsageCostPayload),
+      sessionsUsage: sessionsResult ?? null,
+    };
+  } catch (err) {
+    // Legacy fallback: if gateway rejects mode/utcOffset, retry both without
+    if (includeDateInterpretation && isLegacyDateInterpretationUnsupportedError(err)) {
+      rememberLegacyDateInterpretation(gatewayKey);
+      try {
+        const [sessionsResult, costResult] = await runUsageRequests(false);
+        _sessionsUsageSupported = true;
+        return {
+          usageCost: costResult ?? ({} as UsageCostPayload),
+          sessionsUsage: sessionsResult ?? null,
+        };
+      } catch (retryErr) {
+        // If retry also fails, check if sessions.usage is unsupported
+        const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+        if (retryMsg.includes("unknown method")) {
+          _sessionsUsageSupported = false;
+        }
+        throw retryErr;
       }
     }
 
-    return { usageCost: usageCost ?? {}, sessionsUsage };
-  } catch (err) {
-    if (
-      includeDateInterpretation &&
-      isLegacyDateInterpretationUnsupportedError(err)
-    ) {
-      rememberLegacyDateInterpretation(gatewayKey);
-      const [usageCost, sessionsUsage] = await runRequests(false);
-      return { usageCost: usageCost ?? {}, sessionsUsage };
+    // Check if sessions.usage specifically is unsupported
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("unknown method")) {
+      _sessionsUsageSupported = false;
+      // sessions.usage not supported — fall back to usage.cost only
+      try {
+        const dateInterpretation = buildDateInterpretationParams(timeZone, includeDateInterpretation);
+        const usageCost = await gatewayConnection.request<UsageCostPayload>("usage.cost", {
+          startDate,
+          endDate,
+          ...dateInterpretation,
+        });
+        return { usageCost: usageCost ?? ({} as UsageCostPayload), sessionsUsage: null };
+      } catch {
+        return { usageCost: {} as UsageCostPayload, sessionsUsage: null };
+      }
     }
+
     throw err;
   }
 }

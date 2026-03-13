@@ -286,6 +286,22 @@ export default function Home() {
     };
   }, [visibleWidgets]);
 
+  // Listen for layout-applied event (from navbar LayoutSwitcher)
+  useEffect(() => {
+    const handleLayoutApplied = () => {
+      // Re-read visible widgets from localStorage (just written by applyLayout)
+      const saved = localStorage.getItem("dashboard-visible-widgets");
+      if (saved) {
+        try { setVisibleWidgets(JSON.parse(saved)); } catch {}
+      }
+      // Force dashboard remount so it picks up the new grid layout + configs
+      setResetKey((k) => k + 1);
+    };
+
+    window.addEventListener("dashboard-layout-applied", handleLayoutApplied);
+    return () => window.removeEventListener("dashboard-layout-applied", handleLayoutApplied);
+  }, []);
+
   const handleToggleWidget = (widgetId: string) => {
     setVisibleWidgets((prev) =>
       prev.includes(widgetId)
