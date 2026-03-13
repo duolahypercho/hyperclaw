@@ -28,6 +28,7 @@ import {
   Square,
   Cpu,
 } from "lucide-react";
+import * as Tooltip from "@radix-ui/react-tooltip";
 import { getMediaUrl } from "$/utils";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/components/ui/use-toast";
@@ -42,6 +43,98 @@ import {
   AttachmentUnion,
 } from "@OS/AI/components/Chat";
 import { useLiveTranscription, VoiceController } from "$/components/Tool/VoiceToText";
+
+/** Circular context window usage indicator — hover for details */
+const ContextWindowIndicator: React.FC<{ used: number; total: number }> = ({ used, total }) => {
+  const percentage = Math.min((used / total) * 100, 100);
+  const remaining = Math.max(total - used, 0);
+  const radius = 6;
+  const circumference = 2 * Math.PI * radius;
+  const strokeDashoffset = circumference - (percentage / 100) * circumference;
+
+  const fmt = (n: number) => {
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+    if (n >= 1_000) return `${Math.round(n / 1_000)}k`;
+    return `${n}`;
+  };
+
+  const strokeColor =
+    percentage >= 90 ? "stroke-red-500" :
+    percentage >= 70 ? "stroke-yellow-500" :
+    "stroke-emerald-500";
+
+  const textColor =
+    percentage >= 90 ? "text-red-500" :
+    percentage >= 70 ? "text-yellow-500" :
+    "text-emerald-500";
+
+  return (
+    <Tooltip.Provider delayDuration={200}>
+      <Tooltip.Root>
+        <Tooltip.Trigger asChild>
+          <button
+            type="button"
+            className="h-7 w-7 p-0 flex items-center justify-center rounded-md hover:bg-primary/10 transition-colors"
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" className="transform -rotate-90">
+              <circle cx="8" cy="8" r={radius} fill="none" className="stroke-muted-foreground/20" strokeWidth="2" />
+              <circle
+                cx="8" cy="8" r={radius} fill="none"
+                className={cn("transition-all duration-500", strokeColor)}
+                strokeWidth="2" strokeLinecap="round"
+                strokeDasharray={circumference} strokeDashoffset={strokeDashoffset}
+              />
+            </svg>
+          </button>
+        </Tooltip.Trigger>
+        <Tooltip.Portal>
+          <Tooltip.Content
+            side="top"
+            sideOffset={8}
+            className="z-[1000] rounded-lg border border-primary/20 bg-popover/95 backdrop-blur-sm px-3 py-2.5 shadow-lg animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95"
+          >
+            <div className="flex flex-col gap-2 min-w-[160px]">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-foreground">Context Window</span>
+                <span className={cn("text-xs font-semibold", textColor)}>
+                  {Math.round(percentage)}%
+                </span>
+              </div>
+
+              <div className="w-full h-1.5 rounded-full bg-muted-foreground/15 overflow-hidden">
+                <div
+                  className={cn(
+                    "h-full rounded-full transition-all duration-500",
+                    percentage >= 90 ? "bg-red-500" :
+                    percentage >= 70 ? "bg-yellow-500" :
+                    "bg-emerald-500"
+                  )}
+                  style={{ width: `${percentage}%` }}
+                />
+              </div>
+
+              <div className="flex flex-col gap-0.5 text-[11px]">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Used</span>
+                  <span className="font-medium text-foreground">{fmt(used)} tokens</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Remaining</span>
+                  <span className="font-medium text-foreground">{fmt(remaining)} tokens</span>
+                </div>
+                <div className="flex justify-between border-t border-solid border-l-0 border-r-0 border-b-0 border-border/50 pt-1 mt-0.5">
+                  <span className="text-muted-foreground">Limit</span>
+                  <span className="font-medium text-foreground">{fmt(total)} tokens</span>
+                </div>
+              </div>
+            </div>
+            <Tooltip.Arrow className="fill-popover/95" />
+          </Tooltip.Content>
+        </Tooltip.Portal>
+      </Tooltip.Root>
+    </Tooltip.Provider>
+  );
+};
 
 export const InputContainer: React.FC<InputContainerProps> = ({
   onSendMessage,
@@ -76,6 +169,8 @@ export const InputContainer: React.FC<InputContainerProps> = ({
   onAddFiles,
   sessionKey,
   onStopGeneration,
+  tokenUsage,
+  contextLimit,
 }) => {
   const [inputValue, setInputValue] = useState("");
   const [isComposing, setIsComposing] = useState(false);
@@ -113,7 +208,7 @@ export const InputContainer: React.FC<InputContainerProps> = ({
     { id: "claude-haiku-4-5", provider: "anthropic", displayName: "Claude Haiku 4.5" },
   ]);
   const [currentModel, setCurrentModel] = useState<string>("claude-opus-4-6");
-  const [isLoadingModels, setIsLoadingModels] = useState(false);
+  const [isLoadingModels, setIsLoadingModels] = useState(true);
   const [modelsLoadedFromGateway, setModelsLoadedFromGateway] = useState(false);
   const isControlled = controlledValue !== undefined;
   const currentValue = isControlled ? controlledValue : inputValue;
@@ -184,26 +279,25 @@ export const InputContainer: React.FC<InputContainerProps> = ({
           onAttachmentsChange(attachments);
         }
       } else {
-        if (typeof attachments === "function") {
-          const newAttachments = attachments(currentAttachments);
-          const internal = newAttachments.filter(
+        // Use functional updater to avoid stale closure issues
+        // (e.g. async processFile holding old setCurrentAttachments ref)
+        setInternalAttachments((prev) => {
+          const newAttachments =
+            typeof attachments === "function"
+              ? attachments(prev)
+              : attachments;
+          return newAttachments.filter(
             (a): a is InternalAttachment => "file" in a
           );
-          setInternalAttachments(internal);
-        } else {
-          const internal = attachments.filter(
-            (a): a is InternalAttachment => "file" in a
-          );
-          setInternalAttachments(internal);
-        }
+        });
       }
     },
     [onAttachmentsChange, currentAttachments]
   );
 
   const isInputDisabled = useMemo(
-    () => disabled || isLoading || isSending,
-    [disabled, isLoading, isSending]
+    () => disabled,
+    [disabled]
   );
 
   const isUploading = useMemo(
@@ -277,11 +371,11 @@ export const InputContainer: React.FC<InputContainerProps> = ({
     const currentInputValue = currentValue;
     const attachmentsToSend = [...currentAttachments];
 
-    // Clear input immediately for better UX
+    // Clear input and attachments immediately for better UX
     if (!isControlled) {
       setInputValue("");
-      setCurrentAttachments([]);
     }
+    setCurrentAttachments([]);
 
     try {
       await onSendMessage(
@@ -322,8 +416,8 @@ export const InputContainer: React.FC<InputContainerProps> = ({
       // Restore input on error so user can retry
       if (!isControlled) {
         setInputValue(currentInputValue);
-        setCurrentAttachments(attachmentsToSend);
       }
+      setCurrentAttachments(attachmentsToSend);
     }
   };
 
@@ -484,7 +578,7 @@ export const InputContainer: React.FC<InputContainerProps> = ({
 
     // Check for text/plain first using synchronous method to decide whether to prevent default
     const textData = event.clipboardData.getData("text/plain");
-    const hasLongText = textData.length > 500;
+    const hasLongText = textData.length > 50000;
 
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
@@ -714,9 +808,35 @@ export const InputContainer: React.FC<InputContainerProps> = ({
 
   const renderActionButton = useCallback(() => {
     const baseClassName = cn("h-8 w-8 p-0 transition-all duration-200", buttonClassName);
+    const hasInput = currentValue.trim().length > 0 || currentAttachments.length > 0;
 
-    // Stop generation button
+    // When loading: show send button if user typed (queues via parent), otherwise stop button
     if (isLoading && onStopGeneration) {
+      if (hasInput) {
+        return (
+          <div className="flex items-center gap-1">
+            <Button
+              onClick={onStopGeneration}
+              size="sm"
+              variant="destructive"
+              className={baseClassName}
+            >
+              <Square className="w-4 h-4 fill-current" />
+            </Button>
+            <Button
+              onClick={handleSendMessage}
+              disabled={!canSend || isInputDisabled || isUploading}
+              size="sm"
+              className={cn(
+                baseClassName,
+                (isInputDisabled || isUploading) && "opacity-50 cursor-not-allowed"
+              )}
+            >
+              <Send className="w-4 h-4" />
+            </Button>
+          </div>
+        );
+      }
       return (
         <Button
           onClick={onStopGeneration}
@@ -730,7 +850,7 @@ export const InputContainer: React.FC<InputContainerProps> = ({
     }
 
     // Mic button when input is empty
-    if (currentValue.trim().length === 0 && currentAttachments.length === 0) {
+    if (!hasInput) {
       return (
         <Button
           size="sm"
@@ -809,7 +929,12 @@ export const InputContainer: React.FC<InputContainerProps> = ({
         className="flex flex-row items-end justify-between w-full"
       >
         <div className="flex flex-row items-end gap-0">
-          {showActions && availableModels.length > 0 && (
+          {showActions && (isLoadingModels && !modelsLoadedFromGateway ? (
+            <div className="flex items-center gap-1.5 h-[30px] px-2">
+              <div className="w-3 h-3 rounded-sm bg-muted-foreground/20 animate-pulse" />
+              <div className="w-[80px] h-3 rounded bg-muted-foreground/20 animate-pulse" />
+            </div>
+          ) : availableModels.length > 0 ? (
             <Popover open={isPopoverOpen} onOpenChange={setIsPopoverOpen}>
               <PopoverTrigger asChild>
                 <Button
@@ -817,7 +942,11 @@ export const InputContainer: React.FC<InputContainerProps> = ({
                   size="sm"
                   className="h-fit py-1.5 px-2 gap-1.5 text-xs font-normal hover:bg-primary/10 transition-colors"
                 >
-                  <Cpu className="w-3 h-3" />
+                  {isLoadingModels ? (
+                    <RefreshCw className="w-3 h-3 animate-spin" />
+                  ) : (
+                    <Cpu className="w-3 h-3" />
+                  )}
                   <span className="max-w-[100px] truncate">
                     {currentModel ? currentModel.split('/').pop() || currentModel : "Select Model"}
                   </span>
@@ -861,7 +990,7 @@ export const InputContainer: React.FC<InputContainerProps> = ({
                 </div>
               </PopoverContent>
             </Popover>
-          )}
+          ) : null)}
           {showEmojiPicker && (
             <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
               <Smile className="w-4 h-4" />
@@ -870,6 +999,10 @@ export const InputContainer: React.FC<InputContainerProps> = ({
         </div>
         <div className="flex flex-row items-end gap-1">
           <div className="flex items-end gap-1 relative">
+            {/* Context window usage indicator */}
+            {tokenUsage != null && contextLimit != null && contextLimit > 0 && (
+              <ContextWindowIndicator used={tokenUsage} total={contextLimit} />
+            )}
             {/* File picker button */}
             {showAttachments && (
               <Button
@@ -893,12 +1026,16 @@ export const InputContainer: React.FC<InputContainerProps> = ({
     isPopoverOpen,
     availableModels,
     currentModel,
+    isLoadingModels,
+    modelsLoadedFromGateway,
     handleModelChange,
     setIsPopoverOpen,
     showEmojiPicker,
     showAttachments,
     isInputDisabled,
     renderActionButton,
+    tokenUsage,
+    contextLimit,
   ]);
 
   return (
@@ -1028,9 +1165,7 @@ export const InputContainer: React.FC<InputContainerProps> = ({
               placeholder={
                 isUploading
                     ? "Uploading files... Please wait..."
-                    : isInputDisabled
-                      ? "Please wait for AI to finish responding..."
-                      : placeholder
+                    : placeholder
               }
               className="w-full resize-none border-none shadow-none bg-transparent focus-visible:outline-none focus-visible:ring-0 focus-visible:ring-offset-0 p-0 rounded-none disabled:cursor-not-allowed customScrollbar2"
             />

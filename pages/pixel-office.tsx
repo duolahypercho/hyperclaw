@@ -55,7 +55,7 @@ const PixelOfficePage = () => {
             <p className="mb-4 font-mono text-sm text-muted-foreground">
               Your AI team in a retro office sim. Data from{" "}
               <code className="rounded bg-black-200 px-1.5 py-0.5 text-primary">
-                /api/hyperclaw-bridge
+                bridge
               </code>{" "}
               (get-team + get-crons). Polls every 5s.
             </p>

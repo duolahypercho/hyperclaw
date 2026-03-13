@@ -90,6 +90,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
     getGatewayConfig: () => ipcRenderer.invoke("hyperclaw:get-gateway-config"),
     testGatewayConnection: (host, port) => ipcRenderer.invoke("hyperclaw:test-gateway-connection", { host, port }),
 
+    // Hub configuration (thin client mode)
+    getHubConfig: () => ipcRenderer.sendSync("hyperclaw:get-hub-config-sync"),
+    setHubConfig: (config) => ipcRenderer.invoke("hyperclaw:set-hub-config", config),
+
     onEvent: (callback) => {
       if (typeof callback !== "function") return;
       ipcRenderer.on("hyperclaw:event", (event, data) => callback(data));

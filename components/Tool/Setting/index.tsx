@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect } from "react";
 import { InteractApp } from "@OS/InteractApp";
 import { AppSchema, SidebarItem } from "@OS/Layout/types";
-import { User, Shield, Bell, LogOut, Moon, CreditCard, Bot } from "lucide-react";
+import { User, Shield, Bell, LogOut, Moon, CreditCard, Bot, Monitor } from "lucide-react";
 import General from "./pages/general";
 import Theme from "./pages/theme";
 import Privacy from "./pages/privacy";
@@ -10,6 +10,7 @@ import Notifications from "./pages/notifications";
 import Hyperclaw from "./pages/copanion";
 import Payment from "./pages/payment";
 import AIAccess from "./pages/ai-access";
+import DevicesSettings from "./pages/devices";
 import { AnimatePresence } from "framer-motion";
 import { CopanionIcon } from "@OS/assets/copanion";
 import { useOS } from "@OS/Provider/OSProv";
@@ -18,6 +19,7 @@ const sectionList = [
   { id: "general", title: "General", icon: User },
   { id: "copanion", title: "Hyperclaw", icon: CopanionIcon },
   { id: "ai-access", title: "AI Access", icon: Bot },
+  { id: "devices", title: "Devices", icon: Monitor },
   { id: "payment", title: "Subscription", icon: CreditCard },
   { id: "theme", title: "Theme", icon: Moon },
   { id: "privacy", title: "Privacy", icon: Shield },
@@ -29,6 +31,7 @@ const sectionComponents: Record<string, React.ReactNode> = {
   general: <General />,
   copanion: <Hyperclaw />,
   "ai-access": <AIAccess />,
+  devices: <DevicesSettings />,
   payment: <Payment />,
   theme: <Theme />,
   privacy: <Privacy />,

@@ -17,7 +17,8 @@ import remarkMath from "remark-math";
 import rehypeRaw from "rehype-raw";
 import HyperchoTooltip from "$/components/UI/HyperchoTooltip";
 import CopanionIcon from "@OS/assets/copanion";
-import { useGatewayChat, GatewayChatMessage } from "@OS/AI/core/hook/use-gateway-chat";
+import { useGatewayChat, GatewayChatMessage, GatewayChatAttachment } from "@OS/AI/core/hook/use-gateway-chat";
+import type { AttachmentType } from "@OS/AI/components/Chat";
 import { gatewayConnection } from "$/lib/openclaw-gateway-ws";
 import { InputContainer } from "@OS/AI/components/InputContainer";
 import createMarkdownComponents from "@OS/AI/components/createMarkdownComponents";
@@ -93,7 +94,7 @@ const ToolResultMessage: React.FC<{
       </div>
 
       <div className="relative flex flex-col max-w-[85%] min-w-0 justify-start items-start">
-        <div className="py-1.5 px-3 relative w-fit max-w-full transition-all duration-200 text-sm group select-text break-words rounded-lg border bg-muted/40 border-border/50">
+        <div className="py-1.5 px-3 relative w-fit max-w-full transition-all duration-200 text-sm group select-text break-words rounded-lg border border-border/50">
           {toolResults.map((result, index) => (
             <div key={result.toolCallId || index} className="space-y-1">
               <div className="text-xs font-medium text-muted-foreground">
@@ -169,7 +170,7 @@ const ToolActionsGroupMessage: React.FC<{
             onClick={() => setOpen((v) => !v)}
             className={cn(
               "py-1.5 px-3 relative w-fit max-w-full transition-all duration-300 select-none rounded-lg border",
-              "bg-muted border-border/50 text-muted-foreground hover:text-foreground/80 hover:border-primary/50"
+              "border-border/50 text-muted-foreground hover:text-foreground/80 hover:border-primary/50"
             )}
             style={{
               borderTopRightRadius: "10px",
@@ -208,7 +209,7 @@ const ToolActionsGroupMessage: React.FC<{
                       return (
                         <motion.div
                           key={id || `tool-action-fallback-${toolName}-${toolIndex}`}
-                          className="py-1.5 px-3 relative w-fit max-w-full transition-all duration-300 select-text break-words rounded-lg border bg-muted/40 border-border/50 text-muted-foreground"
+                          className="py-1.5 px-3 relative w-fit max-w-full transition-all duration-300 select-text break-words rounded-lg border border-border/50 text-muted-foreground"
                           initial={{ opacity: 0 }}
                           animate={{ opacity: 1 }}
                         >
@@ -368,7 +369,7 @@ const MessageBubble: React.FC<{
             "py-1.5 px-3 relative w-fit transition-all duration-200 text-sm group select-text break-words font-normal",
             isUser
               ? "bg-primary text-primary-foreground"
-              : "bg-muted/40 border border-border/50"
+              : "border border-border/50"
           )}
           style={{
             borderTopRightRadius: isUser ? "0px" : "10px",
@@ -473,46 +474,13 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [inputValue, setInputValue] = useState("");
   const [sessionKeyState, setSessionKeyState] = useState(sessionKey || "default");
-  console.log("sessionKeyState", sessionKeyState);
 
   // Sync sessionKey prop with internal state and reload when it changes
   useEffect(() => {
     if (sessionKey && sessionKey !== sessionKeyState) {
-      console.log("[GatewayChat] Session key prop changed, updating state:", sessionKey);
       setSessionKeyState(sessionKey);
-      // Clear chat when session changes
     }
   }, [sessionKey, sessionKeyState]);
-
-  // Debug: Get current session model info
-  useEffect(() => {
-    const fetchSessionModel = async () => {
-      if (!sessionKeyState || !gatewayConnection.connected) return;
-
-      console.log("[GatewayChat] Fetching session model for:", sessionKeyState);
-
-      try {
-        // Try to get session details
-        const sessionInfo = await gatewayConnection.getSession(sessionKeyState);
-        console.log("[GatewayChat] Session info:", sessionInfo);
-
-        // Try different response formats
-        const session = sessionInfo as { model?: string; session?: { model?: string } };
-        const model = session?.model || session?.session?.model;
-        if (model) {
-          console.log("[GatewayChat] Current session model:", model);
-        } else {
-          console.log("[GatewayChat] No model found in session info");
-        }
-      } catch (error) {
-        console.log("[GatewayChat] Could not get session model:", error);
-      }
-    };
-
-    // Wait a bit for connection to be established
-    const timer = setTimeout(fetchSessionModel, 1000);
-    return () => clearTimeout(timer);
-  }, [sessionKeyState]);
 
   // Use the gateway chat hook
   const {
@@ -524,6 +492,7 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
     stopGeneration,
     loadChatHistory,
     clearChat,
+    setSessionKey: setHookSessionKey,
   } = useGatewayChat({
     sessionKey: sessionKeyState,
     autoConnect,
@@ -565,61 +534,39 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
     setShowScrollButton(!isAtBottom);
   }, []);
 
-  // Handle send message
+  // Handle send message with attachment support
   const handleSendMessage = useCallback(
-    async (message: string) => {
-      if (!message.trim()) return;
+    async (message: string, attachments?: AttachmentType[]) => {
+      if (!message.trim() && (!attachments || attachments.length === 0)) return;
       setInputValue("");
-      await sendMessage(message);
+
+      const gatewayAttachments: GatewayChatAttachment[] | undefined = attachments?.length
+        ? attachments.map((att) => {
+            const dataUrl = att.url || "";
+            const mimeMatch = dataUrl.match(/^data:([^;]+);/);
+            const mimeType = mimeMatch?.[1] || `${att.type}/*`;
+            return { id: att.id, type: att.type, mimeType, name: att.name, dataUrl };
+          })
+        : undefined;
+
+      await sendMessage(message, gatewayAttachments);
     },
     [sendMessage]
   );
 
   // Handle copy
   const handleCopy = useCallback((message: GatewayChatMessage) => {
-    console.log("[GatewayChat] Copy message:", message.id);
+    navigator.clipboard.writeText(message.content || "");
   }, []);
 
-  // Handle regenerate
-  const handleRegenerate = useCallback((messageId: string) => {
-    console.log("[GatewayChat] Regenerate message:", messageId);
-    // Regeneration would require the gateway to support it
-  }, []);
+  // Handle regenerate — resend the last user message
+  const handleRegenerate = useCallback((_messageId: string) => {
+    const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
+    if (!lastUserMsg?.content) return;
+    sendMessage(lastUserMsg.content);
+  }, [messages, sendMessage]);
 
   const hasChatStarted = messages.length > 0;
-
-  // Debug: Log messages state changes
-  useEffect(() => {
-    console.log("[GatewayChat] Messages updated, count:", messages.length);
-    messages.forEach((msg, idx) => {
-      if (idx < 15) { // Only log first 15 to avoid spam
-        console.log(`[GatewayChat] Message[${idx}]:`, {
-          id: msg.id?.substring(0, 8),
-          role: msg.role,
-          content: msg.content?.substring(0, 80),
-          thinking: msg.thinking?.substring(0, 50),
-          toolCalls: msg.toolCalls?.length,
-          toolCallsId: msg.toolCalls?.[0]?.id?.substring(0, 20),
-          toolResults: msg.toolResults?.length,
-          toolResultsId: msg.toolResults?.[0]?.toolCallId?.substring(0, 20),
-        });
-      }
-    });
-  }, [messages]);
-
-  // Debug: Log tool states
-  useEffect(() => {
-    console.log("[GatewayChat] ToolStates updated, count:", toolStates.size);
-    toolStates.forEach((state, id) => {
-      console.log(`[GatewayChat] ToolState[${id}]:`, {
-        toolName: state.toolName,
-        toolCallId: state.toolCallId,
-        status: state.status,
-        resultContent: state.resultContent?.substring(0, 50),
-        arguments: state.arguments?.substring(0, 100),
-      });
-    });
-  }, [toolStates]);
 
   // Helper to check if message has tool calls
   const hasToolCalls = (message: GatewayChatMessage): boolean => {
@@ -657,50 +604,55 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
                   <CopanionIcon className="w-5 h-5" />
                 </AvatarFallback>
               </Avatar>
-              {/* Connection indicator */}
-              <div
-                className={cn(
-                  "absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-background",
-                  isConnected ? "bg-green-500" : "bg-red-500"
-                )}
-              />
+              {/* Connection status dot — matches navbar user avatar style */}
+              <span className="absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-background shadow-sm">
+                <span
+                  className={cn(
+                    "h-2.5 w-2.5 rounded-full transition-all duration-300",
+                    isConnected
+                      ? "bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.6)]"
+                      : isLoading
+                        ? "bg-amber-500/80 animate-pulse"
+                        : "bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.6)]"
+                  )}
+                />
+              </span>
             </div>
             <div>
               <CardTitle>{personality.name || "Copanion"}</CardTitle>
               <p className="text-xs text-muted-foreground">
-                {isConnected ? "Connected" : "Disconnected"}
+                {isConnected ? "Online" : isLoading ? "Connecting..." : "Offline"}
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1">
+            <HyperchoTooltip value="Reload Chat">
+              <Button
+                variant="ghost"
+                size="iconSm"
+                onClick={loadChatHistory}
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+              </Button>
+            </HyperchoTooltip>
+
             <HyperchoTooltip value="New Chat">
               <Button
                 variant="ghost"
                 size="iconSm"
-                onClick={clearChat}
+                onClick={() => {
+                  // Parse agentId from current session key (format: agent:{id}:rest)
+                  const parts = sessionKeyState.split(":");
+                  const agentId = parts.length >= 2 && parts[0] === "agent" ? parts[1] : "default";
+                  // Generate a new unique session key so the old session is preserved
+                  const newKey = `agent:${agentId}:chat-${Date.now()}`;
+                  setSessionKeyState(newKey);
+                  setHookSessionKey(newKey);
+                }}
                 disabled={!hasChatStarted || isLoading}
               >
-                <Plus className="w-4 h-4" />
-              </Button>
-            </HyperchoTooltip>
-
-            <HyperchoTooltip value={isConnected ? "Connected" : "Click to reconnect"}>
-              <Button
-                variant="ghost"
-                size="iconSm"
-                onClick={() => {
-                  if (!isConnected) {
-                    // Reconnect logic handled by hook
-                  }
-                }}
-              >
-                <div
-                  className={cn(
-                    "w-2 h-2 rounded-full",
-                    isConnected ? "bg-green-500" : "bg-red-500"
-                  )}
-                />
+                <Plus className="w-3.5 h-3.5" />
               </Button>
             </HyperchoTooltip>
           </div>
@@ -733,8 +685,8 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
                   }}
                   assistantAvatar={{
                     src: getMediaUrl(personality.coverPhoto),
-                    fallback: personality.name?.slice(0, 2) || "Co",
-                    alt: personality.name || "Copanion",
+                    fallback: (typeof personality.name === "string" ? personality.name : "").slice(0, 2) || "Co",
+                    alt: (typeof personality.name === "string" ? personality.name : "") || "Copanion",
                   }}
                   personality={personality}
                   onSuggestionClick={handleSendMessage}
@@ -905,12 +857,15 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
             disabled={!isConnected || isLoading}
             isLoading={isLoading}
             isSending={isLoading}
-            showAttachments={false}
+            showAttachments={true}
             showVoiceInput={false}
             showEmojiPicker={false}
             showActions={true}
             autoResize={true}
             allowEmptySend={false}
+            maxAttachments={5}
+            maxFileSize={5 * 1024 * 1024}
+            allowedFileTypes={["image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml", "image/bmp"]}
             sessionKey={sessionKeyState}
             onStopGeneration={stopGeneration}
             value={inputValue}

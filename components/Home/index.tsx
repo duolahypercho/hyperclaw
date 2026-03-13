@@ -11,6 +11,7 @@ import {
   PixelOfficeWidget,
   UsageWidget,
   GatewayChatWidget,
+  StatusWidget,
 } from "$/components/Home/widgets";
 import { useOS } from "@OS/Provider/OSProv";
 import { useToast } from "@/components/ui/use-toast";
@@ -95,6 +96,14 @@ export default function Home() {
         icon: usageTool?.icon || null,
         component: UsageWidget,
         defaultValue: { w: 8, h: 3, minW: 6, minH: 3, x: 12, y: 15 },
+      },
+{
+        id: "agent-status",
+        type: "agent-status",
+        title: "Agent Status",
+        icon: null,
+        component: StatusWidget,
+        defaultValue: { w: 6, h: 4, minW: 4, minH: 3, x: 14, y: 0 },
       },
       {
         id: "gateway-chat",

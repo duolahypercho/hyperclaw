@@ -109,6 +109,25 @@ export function UsageProvider({ children }: { children: ReactNode }) {
       } else {
         setUsage(usageCost ?? null);
         setSessionsUsage(sessions ?? null);
+        // Debug: log data sources to detect sessions.usage failures
+        if (!sessions && usageCost?.totals) {
+          console.warn(
+            "[Usage] sessions.usage returned null — falling back to usage.cost totals.",
+            "usage.cost tokens:", usageCost.totals.totalTokens,
+            "cost:", usageCost.totals.totalCost
+          );
+        }
+        if (sessions?.totals && usageCost?.totals) {
+          const diff = Math.abs(sessions.totals.totalTokens - usageCost.totals.totalTokens);
+          if (diff > sessions.totals.totalTokens * 0.05) {
+            console.warn(
+              "[Usage] Totals mismatch — sessions.usage:",
+              sessions.totals.totalTokens, "tokens /$" + sessions.totals.totalCost.toFixed(2),
+              "| usage.cost:",
+              usageCost.totals.totalTokens, "tokens /$" + usageCost.totals.totalCost.toFixed(2)
+            );
+          }
+        }
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load gateway usage");
@@ -282,8 +301,18 @@ export function UsageProvider({ children }: { children: ReactNode }) {
 
   const sessionsLimitReached = (sessionsUsage?.sessions?.length ?? 0) >= 1000;
 
+  // Initial load — retry once after a short delay if gateway was still connecting
+  const initialLoadDone = useRef(false);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    load();
+    if (initialLoadDone.current) return;
+    initialLoadDone.current = true;
+    load().then(() => {
+      retryTimerRef.current = setTimeout(() => { load(); }, 3000);
+    });
+    return () => {
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+    };
   }, []);
 
   useEffect(() => {

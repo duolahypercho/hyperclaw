@@ -2,6 +2,7 @@ import React, { useEffect, memo, useRef, useState, useCallback } from "react";
 import { useOS, useCopanionChatOS } from "@OS/Provider/OSProv";
 import Pomodoro from "$/components/Tool/Pomodoro/pomodoroAppLayout";
 import DocsAppLayout from "$/components/Tool/Docs/DocsAppLayout";
+import FloatingChatAppLayout from "$/components/Tool/FloatingChat/FloatingChatAppLayout";
 import Navbar from "$/components/navbar";
 import { useRouter } from "next/router";
 import { TodoListProvider } from "$/components/Tool/TodoList/provider/todolistProvider";
@@ -144,6 +145,7 @@ const DesktopLayout = ({ children }: any) => {
         {/* Floating components */}
         <Pomodoro />
         <DocsAppLayout />
+        <FloatingChatAppLayout />
       </div>
       
       {/* Guidance/Onboarding System */}

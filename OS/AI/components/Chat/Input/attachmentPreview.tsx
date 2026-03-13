@@ -44,14 +44,14 @@ export const AttachmentPreview = ({
           <Loader2 className="w-4 h-4 animate-spin" />
         </div>
       )}
-      {attachment.type.startsWith("image/") && attachment.preview ? (
+      {(attachment.type === "image" || attachment.type.startsWith("image/")) && attachment.preview ? (
         <img
           src={attachment.preview}
           alt={attachment.name}
-          className="w-3 h-3 rounded object-cover"
+          className="w-10 h-10 rounded object-cover flex-shrink-0"
         />
       ) : (
-        <div className="w-3 h-3 flex items-center justify-center">
+        <div className="w-5 h-5 flex items-center justify-center flex-shrink-0">
           {getIcon()}
         </div>
       )}

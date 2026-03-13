@@ -1,22 +1,16 @@
 "use client";
 
-import React, { useState, useCallback, useEffect, useRef, memo, useMemo } from "react";
+import React, { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { CustomProps } from "$/components/Home/widgets/types/widgets";
-import { GripVertical, X, Plus, Paperclip } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { X, Paperclip, Pencil } from "lucide-react";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { useGatewayChat, GatewayChatMessage } from "@OS/AI/core/hook/use-gateway-chat";
+import { useGatewayChat, GatewayChatMessage, GatewayChatAttachment } from "@OS/AI/core/hook/use-gateway-chat";
 import { gatewayConnection } from "$/lib/openclaw-gateway-ws";
 import { useUser } from "$/Providers/UserProv";
 import { useOpenClawContext } from "$/Providers/OpenClawProv";
-import type { OpenClawRegistryAgent } from "$/types/electron";
-import ReactMarkdown, { Options } from "react-markdown";
-import remarkGfm from "remark-gfm";
-import remarkMath from "remark-math";
-import remarkBreaks from "remark-breaks";
-import rehypeRaw from "rehype-raw";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import CopanionIcon from "@OS/assets/copanion";
 import { getMediaUrl } from "$/utils";
@@ -24,665 +18,22 @@ import {
   AnimatedThinkingText,
   ChatLoadingSkeleton,
   EmptyState,
-  Suggestions,
-  AttachmentMessage,
 } from "@OS/AI/components/Chat";
+import type { AttachmentType } from "@OS/AI/components/Chat";
 import { InputContainer } from "@OS/AI/components/InputContainer";
 import { useFocusMode } from "./hooks/useFocusMode";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
-  Accordion,
-  AccordionContent,
-  AccordionItem,
-  AccordionTrigger,
-} from "@/components/ui/accordion";
-import * as Collapsible from "@radix-ui/react-collapsible";
-import { ChevronDown, Check, RefreshCw, MessageCircle, ChevronRight } from "lucide-react";
-import SessionHistoryDropdown from "$/components/SessionHistoryDropdown";
 import { useUnifiedToolState } from "@OS/AI/components/hooks/useUnifiedToolState";
-import { GenericToolMessage } from "@OS/AI/components/GenericToolMessage";
-import { toolRegistry, UnifiedToolState } from "@OS/AI/components/ToolRegistry";
-import createMarkdownComponents from "@OS/AI/components/createMarkdownComponents";
-import { C } from "@upstash/redis/zmscore-C3G81zLz";
+import { useAgentIdentity, resolveAvatarUrl, isAvatarText } from "$/hooks/useAgentIdentity";
 
-// Helper function to determine if avatar should be shown
-function shouldShowAvatarLocal(messages: GatewayChatMessage[], index: number): boolean {
-  if (index === 0) return true;
-  const prevMsg = messages[index - 1];
-  const currMsg = messages[index];
-  if (!prevMsg || !currMsg) return true;
-  return prevMsg.role !== currMsg.role;
-}
+import { GatewayChatCustomHeader } from "./gateway-chat/GatewayChatHeader";
+import { EnhancedMessageBubble, shouldShowAvatarLocal } from "./gateway-chat/EnhancedMessageBubble";
+import { GroupedToolActions } from "./gateway-chat/GroupedToolActions";
+import { mergeToolCallsWithResults } from "./gateway-chat/mergeToolCallsWithResults";
+import { exportChatAsMarkdown } from "./gateway-chat/exportChat";
+import { SlashCommandMenu } from "./gateway-chat/SlashCommandMenu";
+import { SLASH_COMMANDS, type SlashCommand } from "./gateway-chat/slashCommands";
 
-// Helper function to determine if message actions should be shown
-function shouldShowMessageActionsLocal(message: GatewayChatMessage, isLoading: boolean): boolean {
-  if (isLoading) return false;
-  return message.role === "assistant" && !!message.content?.trim();
-}
-
-// Memoized ReactMarkdown component for better performance
-const MemoizedReactMarkdown: React.FC<Options> = memo(
-  ReactMarkdown,
-  (prevProps, nextProps) =>
-    prevProps.children === nextProps.children &&
-    prevProps.components === nextProps.components
-);
-
-// Custom Header for GatewayChat Widget - matches CopilotChat header style
-interface GatewayChatHeaderProps extends CustomProps {
-  onAgentChange?: (agentId: string) => void;
-  onSessionChange?: (sessionKey: string) => void;
-  onNewChat?: () => void;
-  onFetchSessions?: () => void;
-  currentAgentId?: string;
-  selectedSessionKey?: string;
-  sessions?: Array<{ key: string; label?: string; updatedAt?: number }>;
-  sessionsLoading?: boolean;
-  sessionsError?: string | null;
-}
-
-export const GatewayChatCustomHeader: React.FC<GatewayChatHeaderProps> = ({
-  widget,
-  isEditMode,
-  onAgentChange,
-  onSessionChange,
-  onNewChat,
-  onFetchSessions,
-  currentAgentId,
-  selectedSessionKey,
-  sessions = [],
-  sessionsLoading = false,
-  sessionsError = null,
-}) => {
-  // Get OpenClaw agents from provider
-  const { agents } = useOpenClawContext();
-
-  // Get agent from config or use first available
-  const config = widget.config as Record<string, unknown> | undefined;
-  const configAgentId = config?.agentId as string | undefined;
-  const selectedAgent = currentAgentId
-    ? agents.find(a => a.id === currentAgentId)
-    : configAgentId
-      ? agents.find(a => a.id === configAgentId)
-      : agents[0];
-
-  const agent = selectedAgent || { id: "main", name: "General Assistant", status: "active" };
-
-  return (
-    <CardHeader className="pb-3 border-b border-border/50">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          {isEditMode && (
-            <div className="cursor-move h-7 w-7 flex items-center justify-center flex-shrink-0">
-              <GripVertical className="w-3.5 h-3.5 text-muted-foreground" />
-            </div>
-          )}
-          <div className="relative">
-            <Avatar className="w-10 h-10">
-              <AvatarFallback className="bg-primary/10 text-primary">
-                <span className="text-xl">🤖</span>
-              </AvatarFallback>
-            </Avatar>
-          </div>
-          <div className="flex flex-col">
-            {agents.length > 1 ? (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <button className="flex items-center gap-1 hover:opacity-80 transition-opacity text-left">
-                    <CardTitle className="text-sm">{agent.name}</CardTitle>
-                    <ChevronDown className="w-3 h-3 text-muted-foreground" />
-                  </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-48">
-                  {agents.map((a) => (
-                    <DropdownMenuItem
-                      key={a.id}
-                      onClick={() => onAgentChange?.(a.id)}
-                      className="flex items-center justify-between cursor-pointer"
-                    >
-                      <span>{a.name}</span>
-                      {a.id === (currentAgentId || configAgentId || agents[0]?.id) && (
-                        <Check className="w-3 h-3" />
-                      )}
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            ) : (
-              <CardTitle className="text-sm">{agent.name}</CardTitle>
-            )}
-          </div>
-        </div>
-
-        {/* Session selector */}
-        <div className="flex items-center gap-2">
-          {/* Connection status indicator */}
-          <div className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-muted/50">
-            <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-            <span className="text-xs text-muted-foreground">Online</span>
-          </div>
-
-          {/* Session History Dropdown */}
-          <SessionHistoryDropdown
-            sessions={sessions}
-            isLoading={sessionsLoading}
-            error={sessionsError}
-            currentSessionKey={selectedSessionKey}
-            onLoadSession={onSessionChange || (() => {})}
-            onNewChat={onNewChat || (() => {})}
-            onFetchSessions={onFetchSessions || (() => {})}
-          />
-        </div>
-      </div>
-    </CardHeader>
-  );
-};
-
-const memoizedMarkdownComponents = {
-  user: createMarkdownComponents(true),
-  assistant: createMarkdownComponents(false),
-};
-
-// Enhanced message bubble - matches CopilotChat styling
-const EnhancedMessageBubble = memo(
-  ({
-    message,
-    isUser,
-    showAvatar = true,
-    onCopy,
-    isLoading = false,
-    botPic,
-    userPic,
-    toolStates,
-    toggleToolExpansion,
-  }: {
-    message: GatewayChatMessage;
-    isUser: boolean;
-    showAvatar?: boolean;
-    onCopy?: (message: GatewayChatMessage) => void;
-    isLoading?: boolean;
-    botPic?: string;
-    userPic?: { src?: string; fallback: string; alt?: string };
-    toolStates?: Map<string, UnifiedToolState>;
-    toggleToolExpansion?: (messageId: string) => void;
-  }) => {
-    const defaultIcon = isUser ? (
-      <span className="text-xs">U</span>
-    ) : (
-      <CopanionIcon className="w-4 h-4" />
-    );
-
-    if (message.role === "system" || message.role === "tool") {
-      return null;
-    }
-
-    // Handle assistant messages with tool calls using GenericToolMessage
-    if (
-      message.role === "assistant" &&
-      (message as any).toolCalls?.length > 0
-    ) {
-      const messageId = message.id || "";
-      const toolState = toolStates?.get(messageId);
-
-      if (toolState && toggleToolExpansion) {
-        return (
-          <GenericToolMessage
-            toolState={toolState}
-            message={message as any}
-            onToggleExpand={() => toggleToolExpansion(messageId)}
-            assistantAvatar={undefined}
-            botPic={botPic}
-            showAvatar={showAvatar}
-          />
-        );
-      }
-    }
-
-    const content = isUser
-      ? message.content || ""
-      : message.content || "";
-    const hasTextContent = content.trim();
-
-    // If no content and not loading, return null early
-    if (!hasTextContent && !isLoading) {
-      return null;
-    }
-
-    // Check for content blocks (thinking, tool calls, etc.)
-    const contentBlocks = (message as any).contentBlocks;
-
-    const renderContent = () => {
-      // Show loading/thinking state
-      if (isLoading && !message.content?.trim()) {
-        return (
-          <div className="flex items-center">
-            <AnimatedThinkingText />
-          </div>
-        );
-      }
-
-      // If we have content blocks, render them
-      if (contentBlocks && contentBlocks.length > 0) {
-        return (
-          <div className="space-y-2">
-            {contentBlocks.map((block: any, index: number) => {
-              // Render thinking block (matching ThinkingToolRenderer style)
-              if (block.type === "thinking" && block.thinking) {
-                return (
-                  <motion.div
-                    key={`thinking-${index}`}
-                    className="relative w-full transition-all duration-300 select-text break-all overflow-wrap-anywhere rounded-lg border bg-muted/40 border-border/50 text-muted-foreground hover:text-foreground/80"
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    style={{
-                      borderTopRightRadius: "10px",
-                      borderBottomRightRadius: "10px",
-                      borderTopLeftRadius: "0px",
-                      borderBottomLeftRadius: "10px",
-                    }}
-                  >
-                    <Accordion type="single" collapsible defaultValue="">
-                      <AccordionItem value="thoughts" className="border-0">
-                        <AccordionTrigger className="flex items-center gap-2 justify-start py-0 px-0 text-xs font-medium hover:no-underline [&>svg]:h-3 [&>svg]:w-3 [&[data-state=open]>svg]:rotate-180">
-                          <span className="text-muted-foreground hover:text-foreground/80">
-                            Thoughts
-                          </span>
-                        </AccordionTrigger>
-                        <AccordionContent className="px-0 pb-0 pt-0">
-                          <div className="p-3 bg-primary/5 rounded-lg border border-primary/20">
-                            <div className="text-xs text-foreground/80 leading-relaxed prose prose-sm dark:prose-invert max-w-none">
-                              <MemoizedReactMarkdown
-                                components={memoizedMarkdownComponents.assistant}
-                                remarkPlugins={[
-                                  remarkGfm,
-                                  remarkBreaks,
-                                  [remarkMath, { singleDollarTextMath: false }],
-                                ]}
-                                rehypePlugins={[rehypeRaw]}
-                              >
-                                {block.thinking}
-                              </MemoizedReactMarkdown>
-                            </div>
-                          </div>
-                        </AccordionContent>
-                      </AccordionItem>
-                    </Accordion>
-                  </motion.div>
-                );
-              }
-
-              // Render tool result block (only if not merged into toolCall)
-              if (block.type === "toolResult") {
-                return (
-                  <div key={`toolresult-${index}`} className={cn(
-                    "p-2 rounded-md text-xs font-mono break-all overflow-wrap-anywhere",
-                    block.isError ? "bg-red-500/10 text-red-500" : "bg-muted/50 text-muted-foreground"
-                  )}>
-                    <div className="flex items-center gap-1 mb-1 text-[10px] uppercase opacity-70">
-                      <span>Result:</span>
-                      <span className="font-semibold">{block.toolName}</span>
-                    </div>
-                    <pre className="whitespace-pre-wrap">{block.content}</pre>
-                  </div>
-                );
-              }
-
-              // Render text block
-              if (block.type === "text" && block.text) {
-                const processedContent = block.text.replace(/<(\w+)>/g, "@$1");
-                return (
-                  <MemoizedReactMarkdown
-                    key={`text-${index}`}
-                    components={
-                      isUser
-                        ? memoizedMarkdownComponents.user
-                        : memoizedMarkdownComponents.assistant
-                    }
-                    remarkPlugins={[remarkGfm, remarkBreaks, [remarkMath, { singleDollarTextMath: false }]]}
-                    rehypePlugins={[rehypeRaw]}
-                  >
-                    {processedContent}
-                  </MemoizedReactMarkdown>
-                );
-              }
-
-              return null;
-            })}
-          </div>
-        );
-      }
-
-      // Fallback to simple content rendering
-      // Pre-process content to handle unknown HTML tags like <username>
-      const processedContent = content.replace(/<(\w+)>/g, "@$1");
-
-      return (
-        <MemoizedReactMarkdown
-          components={
-            isUser
-              ? memoizedMarkdownComponents.user
-              : memoizedMarkdownComponents.assistant
-          }
-          remarkPlugins={[remarkGfm, remarkBreaks, [remarkMath, { singleDollarTextMath: false }]]}
-          rehypePlugins={[rehypeRaw]}
-        >
-          {processedContent}
-        </MemoizedReactMarkdown>
-      );
-    };
-
-    return (
-      <motion.div
-        className={cn(
-          "flex gap-3 group",
-          isUser ? "justify-end" : "justify-start"
-        )}
-      >
-        {!isUser && (
-          <div className="w-8 h-8 flex-shrink-0">
-            {showAvatar ? (
-              <Avatar className="w-8 h-8">
-                {botPic ? (
-                  <AvatarImage src={getMediaUrl(botPic)} />
-                ) : null}
-                <AvatarFallback className="bg-primary/10 text-primary">
-                  {defaultIcon}
-                </AvatarFallback>
-              </Avatar>
-            ) : (
-              // Invisible spacer to maintain alignment
-              <div className="w-8 h-8 flex-shrink-0" />
-            )}
-          </div>
-        )}
-
-        <div
-          className={cn(
-            "relative flex flex-col max-w-[85%] min-w-0",
-            isUser ? "justify-end items-end" : "justify-start items-start"
-          )}
-        >
-          <div
-            className={cn(
-              "py-1.5 px-3 relative w-full max-w-full transition-all duration-200 group select-text break-all overflow-wrap-anywhere font-normal text-sm",
-              isUser
-                ? "bg-primary text-primary-foreground"
-                : "bg-muted border border-border/50"
-            )}
-            style={{
-              borderTopRightRadius: isUser ? "0px" : "10px",
-              borderBottomRightRadius: isUser ? "10px" : "10px",
-              borderTopLeftRadius: isUser ? "10px" : "0px",
-              borderBottomLeftRadius: isUser ? "10px" : "10px",
-            }}
-          >
-            {renderContent()}
-          </div>
-
-          {/* Message actions - show on hover */}
-          {shouldShowMessageActionsLocal(message, isLoading) && !isUser && (
-            <div className="flex items-center gap-1 mt-1 ml-3 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-              <Button
-                variant="ghost"
-                size="iconSm"
-                onClick={() => onCopy?.(message)}
-                className="h-6 w-6"
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="12"
-                  height="12"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
-                  <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
-                </svg>
-              </Button>
-            </div>
-          )}
-        </div>
-
-        {isUser && (
-          <div className="w-8 h-8 flex-shrink-0">
-            {showAvatar ? (
-              <Avatar className="w-8 h-8">
-                {userPic?.src && (
-                  <AvatarImage src={userPic.src} alt={userPic.alt} />
-                )}
-                <AvatarFallback className="bg-secondary">
-                  {defaultIcon}
-                </AvatarFallback>
-              </Avatar>
-            ) : (
-              // Invisible spacer to maintain alignment
-              <div className="w-8 h-8 flex-shrink-0" />
-            )}
-          </div>
-        )}
-      </motion.div>
-    );
-  },
-  (prevProps, nextProps) => {
-    return (
-      prevProps.message.content === nextProps.message.content &&
-      prevProps.message.role === nextProps.message.role &&
-      prevProps.isLoading === nextProps.isLoading &&
-      prevProps.showAvatar === nextProps.showAvatar &&
-      prevProps.userPic?.src === nextProps.userPic?.src &&
-      prevProps.toolStates === nextProps.toolStates
-    );
-  }
-);
-
-// Grouped Tool Actions - handles accordion state for multiple tool messages
-const GroupedToolActions: React.FC<{
-  toolMessages: GatewayChatMessage[];
-  toolStates?: Map<string, UnifiedToolState>;
-  toggleToolExpansion?: (messageId: string) => void;
-  showAvatar: boolean;
-  index: number;
-  shouldShowAvatar: (index: number) => boolean;
-}> = ({ toolMessages, toolStates, toggleToolExpansion, showAvatar, index, shouldShowAvatar }) => {
-  const [groupOpen, setGroupOpen] = useState(false);
-
-  return (
-    <Collapsible.Root
-      open={groupOpen}
-      onOpenChange={setGroupOpen}
-    >
-      <div className="flex gap-3 justify-start">
-        {/* Avatar */}
-        <div className="w-8 h-8 flex-shrink-0">
-          {showAvatar ? (
-            <Avatar className="w-8 h-8">
-              <AvatarFallback className="bg-primary/10 text-primary">
-                <CopanionIcon className="w-4 h-4" />
-              </AvatarFallback>
-            </Avatar>
-          ) : (
-            <div className="w-8 h-8 flex-shrink-0" />
-          )}
-        </div>
-
-        <div className="relative flex flex-col max-w-[85%] min-w-0 justify-start items-start">
-          {/* Group Header Button */}
-          <Collapsible.Trigger asChild>
-            <button
-              type="button"
-              className={cn(
-                "py-1.5 px-3 relative w-fit transition-all duration-300 select-none rounded-lg border break-all overflow-wrap-anywhere",
-                "bg-muted/40 border-border/50 text-muted-foreground hover:text-foreground/80 hover:border-primary/50"
-              )}
-              style={{
-                borderTopRightRadius: "10px",
-                borderBottomRightRadius: "10px",
-                borderTopLeftRadius: "0px",
-                borderBottomLeftRadius: "10px",
-              }}
-            >
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-medium">
-                  {toolMessages.length} action{toolMessages.length === 1 ? "" : "s"}
-                </span>
-                <motion.div
-                  animate={{ rotate: groupOpen ? 90 : 0 }}
-                  transition={{ duration: 0.2 }}
-                >
-                  <ChevronRight className="w-3 h-3" />
-                </motion.div>
-              </div>
-            </button>
-          </Collapsible.Trigger>
-
-          {/* Expanded Content */}
-          <Collapsible.Content>
-            <motion.div
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: "auto", opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              transition={{ duration: 0.25, ease: "easeInOut" }}
-              className="overflow-x-auto overflow-y-hidden"
-            >
-              <div className="mt-2 space-y-2">
-                {toolMessages.map((toolMsg, msgIdx) => {
-                  const msgId = toolMsg.id || "";
-                  const state = toolStates?.get(msgId);
-
-                  if (state && toggleToolExpansion) {
-                    return (
-                      <GenericToolMessage
-                        key={msgId || msgIdx}
-                        toolState={state}
-                        message={toolMsg as any}
-                        onToggleExpand={() => toggleToolExpansion(msgId)}
-                        assistantAvatar={undefined}
-                        botPic={undefined}
-                        showAvatar={false}
-                      />
-                    );
-                  }
-
-                  // Fallback: simple display
-                  const toolName = toolMsg.toolCalls?.[0]?.function?.name || "action";
-                  return (
-                    <motion.div
-                      key={msgId || `tool-fallback-${msgIdx}`}
-                      className="py-1.5 px-3 relative w-fit max-w-full transition-all duration-300 select-text break-all overflow-wrap-anywhere rounded-lg border bg-muted/40 border-border/50 text-muted-foreground"
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                    >
-                      <span className="text-xs font-medium">{toolName}</span>
-                    </motion.div>
-                  );
-                })}
-              </div>
-            </motion.div>
-          </Collapsible.Content>
-        </div>
-      </div>
-    </Collapsible.Root>
-  );
-};
-
-// Helper to merge tool calls with their results from subsequent toolResult messages
-// Matching logic from useUnifiedToolState.ts
-function mergeToolCallsWithResults(
-  messages: GatewayChatMessage[]
-): GatewayChatMessage[] {
-  const merged: GatewayChatMessage[] = [];
-
-  for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i];
-
-    // Skip tool result messages - they'll be merged
-    if ((msg.role as string) === "toolResult" || msg.role === "tool") {
-      continue;
-    }
-
-    // Check if this is an assistant message with tool calls
-    const hasToolCalls = (msg.toolCalls?.length || 0) > 0 || (msg.contentBlocks?.some((b: any) => b.type === "toolCall") || false);
-
-    if (msg.role === "assistant" && hasToolCalls) {
-      // Find tool results for this message's tool calls
-      const toolCalls = msg.toolCalls || [];
-      const contentBlocks = msg.contentBlocks?.filter((b: any) => b.type === "toolCall") || [];
-
-      // Merge tool results from subsequent messages
-      const mergedToolCalls = toolCalls.map((tc) => {
-        const toolId = tc.id || tc.function?.name || "";
-
-        // Find matching tool result message - check both "tool" and "toolResult" roles
-        // Also check both top-level toolCallId and toolResults[0].toolCallId
-        const toolResultMsg = messages.find((m) => {
-          const role = m.role as string;
-          if (role !== "tool" && role !== "toolResult") return false;
-          const msgToolCallId = (m as any).toolCallId || (m as any).toolResults?.[0]?.toolCallId;
-          return msgToolCallId === toolId;
-        });
-
-        // Extract content from both "tool" and "toolResult" roles
-        // For toolResult: content is in toolResults[0].content
-        // For tool: content is in top-level content
-        const resultContent = toolResultMsg
-          ? ((toolResultMsg as any).toolResults?.[0]?.content || (toolResultMsg as any).content)
-          : undefined;
-        const resultIsError = toolResultMsg
-          ? ((toolResultMsg as any).toolResults?.[0]?.isError || (toolResultMsg as any).isError || false)
-          : false;
-
-        return {
-          ...tc,
-          result: resultContent,
-          isError: resultIsError,
-        };
-      });
-
-      // Merge content blocks with results
-      const mergedContentBlocks = contentBlocks.map((block: any) => {
-        const toolId = block.id;
-        const toolResultMsg = messages.find((m) => {
-          const role = m.role as string;
-          if (role !== "tool" && role !== "toolResult") return false;
-          const msgToolCallId = (m as any).toolCallId || (m as any).toolResults?.[0]?.toolCallId;
-          return msgToolCallId === toolId;
-        });
-
-        return {
-          ...block,
-          result: toolResultMsg
-            ? ((toolResultMsg as any).toolResults?.[0]?.content || (toolResultMsg as any).content)
-            : undefined,
-          isError: toolResultMsg
-            ? ((toolResultMsg as any).toolResults?.[0]?.isError || (toolResultMsg as any).isError || false)
-            : false,
-        };
-      });
-
-      merged.push({
-        ...msg,
-        toolCalls: mergedToolCalls as any,
-        contentBlocks: [
-          ...(msg.contentBlocks?.filter((b: any) => b.type !== "toolCall") || []),
-          ...mergedContentBlocks,
-        ],
-      } as GatewayChatMessage);
-    } else {
-      merged.push(msg);
-    }
-  }
-
-  return merged;
-}
+export { GatewayChatCustomHeader };
 
 // GatewayChat Widget Content - matches CopilotChat UI
 const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
@@ -690,7 +41,7 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
   const { isFocusModeActive } = useFocusMode();
 
   // Get OpenClaw agents from provider
-  const { agents } = useOpenClawContext();
+  const { agents, loading: agentsLoading } = useOpenClawContext();
 
   // Get agent config from widget config or use default (first available agent)
   const config = widget.config as Record<string, unknown> | undefined;
@@ -722,12 +73,13 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
   // Input field state - persisted per widget
   const [inputValue, setInputValue] = useState<string>(persistedState.inputValue || "");
 
+  // Slash command menu state
+  const [slashMenuVisible, setSlashMenuVisible] = useState(false);
+  const [slashQuery, setSlashQuery] = useState("");
+
   // Track if user has manually selected an agent
   const [userHasSelectedAgent, setUserHasSelectedAgent] = useState(!!persistedState.agentId);
 
-  // Debug logging
-  useEffect(() => {
-  }, [selectedAgentId, configAgentId, userHasSelectedAgent]);
 
   // Sessions state - initialize with configSessionKey/persisted if provided
   const [sessions, setSessions] = useState<Array<{ key: string; label?: string; updatedAt?: number }>>([]);
@@ -761,11 +113,32 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
     };
   }, [widgetStorageKey, selectedAgentId, selectedSessionKey, inputValue]);
 
-  // Use selectedAgentId from state if available, otherwise fall back to config or first agent
-  // Once user has selected an agent, always use that selection
-  const currentAgentId = userHasSelectedAgent
-    ? (selectedAgentId || agents[0]?.id || "main")
-    : (selectedAgentId || configAgentId || agents[0]?.id || "main");
+  // Resolve the effective agent ID.  Priority:
+  // 1. User's explicit selection (persisted or in-session)
+  // 2. Widget config
+  // 3. First available agent from the registry
+  // 4. Fallback "main"
+  // IMPORTANT: Once resolved, we lock it via a ref so that agents list re-fetches
+  // don't cause the ID to bounce back to a different agent.
+  const resolvedAgentIdRef = useRef<string | undefined>(selectedAgentId);
+  const currentAgentId = useMemo(() => {
+    // If user explicitly selected an agent, always honour it
+    if (userHasSelectedAgent && selectedAgentId) {
+      resolvedAgentIdRef.current = selectedAgentId;
+      return selectedAgentId;
+    }
+    // If we already resolved an ID, keep it — even if agents list is temporarily empty (loading)
+    if (resolvedAgentIdRef.current) {
+      if (agents.length === 0 || agents.find(a => a.id === resolvedAgentIdRef.current)) {
+        return resolvedAgentIdRef.current;
+      }
+    }
+    // Resolve for the first time
+    const id = selectedAgentId || configAgentId || agents[0]?.id || "main";
+    resolvedAgentIdRef.current = id;
+    return id;
+  }, [userHasSelectedAgent, selectedAgentId, configAgentId, agents]);
+
   const currentAgent = agents.find(a => a.id === currentAgentId) || { id: "main", name: "General Assistant", icon: "🤖", coverPhoto: "" };
 
   // Generate session key - use selected session or create new one
@@ -792,26 +165,52 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
   // Unified tool state management - handles ALL tool types!
   const { toolStates, toggleToolExpansion, resetToolStates } = useUnifiedToolState(messages as any);
 
-  // Reload chat history when session changes (including new sessions)
-  // Track previous session key to avoid double-loading
-  const prevSessionKeyRef = useRef<string | undefined>(undefined);
+  // Keep the hook's internal session key in sync with the widget's computed
+  // sessionKey. The hook uses a ref internally, so it won't update unless we
+  // explicitly call setSessionKey(). This handles agent resolution, session
+  // switches, and initial prop changes that happen after the first render.
+  useEffect(() => {
+    setSessionKey(sessionKey);
+  }, [sessionKey, setSessionKey]);
+
+  // Show skeleton until agents are loaded, WS is connected, and first history load completes.
+  // Once true, never resets — subsequent session switches keep existing UI visible.
+  const initialLoadDoneRef = useRef(false);
+  const [initialReady, setInitialReady] = useState(false);
 
   useEffect(() => {
-    // Skip initial render
-    if (!sessionKey || sessionKey === prevSessionKeyRef.current) {
-      return;
+    if (initialLoadDoneRef.current) return; // already done, never re-show skeleton
+    if (!agentsLoading && isConnected) {
+      // Agents loaded + connected — mark ready after a tick so history load can start
+      loadChatHistory().finally(() => {
+        initialLoadDoneRef.current = true;
+        setInitialReady(true);
+      });
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentsLoading, isConnected]);
 
-    prevSessionKeyRef.current = sessionKey;
+  // Reload chat history when session changes or connection is established
+  const prevSessionKeyRef = useRef<string | undefined>(undefined);
+  const prevConnectedRef = useRef<boolean>(false);
 
-    // Load history when connected and we have a valid session key
-    // This handles both existing sessions (selectedSessionKey) and new sessions
-    if (isConnected && sessionKey) {
-      loadChatHistory();
+  useEffect(() => {
+    const sessionChanged = sessionKey && sessionKey !== prevSessionKeyRef.current;
+    const justConnected = isConnected && !prevConnectedRef.current;
+
+    prevConnectedRef.current = isConnected;
+
+    if (!sessionKey) return;
+
+    if (sessionChanged || justConnected) {
+      prevSessionKeyRef.current = sessionKey;
+      if (isConnected && initialLoadDoneRef.current) {
+        loadChatHistory();
+      }
     }
   }, [isConnected, loadChatHistory, sessionKey]);
 
-  // Fetch sessions when agent changes
+  // Fetch sessions when agent changes or connection is established
   useEffect(() => {
     const fetchSessions = async () => {
       if (!gatewayConnection.isConnected()) return;
@@ -827,8 +226,16 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
       }
     };
     fetchSessions();
-    // Reset session selection when agent changes
-    setSelectedSessionKey(undefined);
+  }, [currentAgentId, isConnected]);
+
+  // Reset session selection ONLY when agent actually changes
+  // (not on connection toggles, which would wipe the user's session during heartbeats)
+  const prevAgentIdForResetRef = useRef(currentAgentId);
+  useEffect(() => {
+    if (prevAgentIdForResetRef.current !== currentAgentId) {
+      prevAgentIdForResetRef.current = currentAgentId;
+      setSelectedSessionKey(undefined);
+    }
   }, [currentAgentId]);
 
   // Manual fetch sessions callback (for dropdown)
@@ -847,11 +254,24 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
     }
   }, [currentAgentId]);
 
-  // New chat callback
-  const handleNewChat = useCallback(() => {
-    setSelectedSessionKey(undefined);
-    clearChat();
-  }, [clearChat]);
+  // New chat — create a brand new session key so the old session is preserved
+  const handleNewChat = useCallback(async () => {
+    const newKey = `agent:${currentAgentId}:chat-${Date.now()}`;
+    setSelectedSessionKey(newKey);
+    setSessionKey(newKey);
+    // Refresh session list so the previous session appears in history
+    if (gatewayConnection.isConnected()) {
+      try {
+        const result = await gatewayConnection.listSessions(currentAgentId, 50);
+        setSessions(result.sessions || []);
+      } catch {}
+    }
+  }, [setSessionKey, currentAgentId]);
+
+  // Reload chat — re-fetch messages from server
+  const handleReloadChat = useCallback(() => {
+    loadChatHistory();
+  }, [loadChatHistory]);
 
   // Get user info for avatar
   const { userInfo } = useUser();
@@ -859,8 +279,14 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
   // Local state
   const [inputAreaHeight, setInputAreaHeight] = useState(100);
   const [showScrollButton, setShowScrollButton] = useState(false);
+  const [quotedMessage, setQuotedMessage] = useState<GatewayChatMessage | null>(null);
   const inputAreaRef = useRef<HTMLDivElement>(null);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
+
+  // Message queue — messages queued while AI is still generating
+  const [messageQueue, setMessageQueue] = useState<
+    Array<{ id: string; text: string; displayText: string; attachments?: GatewayChatAttachment[] }>
+  >([]);
 
   // Handle agent change - properly reset all state for new agent
   const handleAgentChange = useCallback((agentId: string) => {
@@ -871,6 +297,8 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
     const newSessionKey = `agent:${agentId}:main`;
     setSessionKey(newSessionKey); // This will clear state in the hook
   }, [setSessionKey]);
+
+  // Note: StatusWidget now opens a floating chat popout instead of switching this widget
 
   // Handle session change - clear and prepare for new session
   const handleSessionChange = useCallback(async (newSessionKey: string) => {
@@ -889,35 +317,76 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
   // Merge tool calls with their results
   const mergedMessages = useMemo(() => mergeToolCallsWithResults(messages), [messages]);
 
-  // Measure input area height
+  // Export chat as markdown file download
+  const handleExport = useCallback(() => {
+    exportChatAsMarkdown(mergedMessages, currentAgent.name);
+  }, [mergedMessages, currentAgent.name]);
+
+  // Measure input area height using ResizeObserver for reliable tracking
   useEffect(() => {
-    const measureInputHeight = (): void => {
-      if (inputAreaRef.current) {
-        const height = inputAreaRef.current.offsetHeight;
+    const el = inputAreaRef.current;
+    if (!el) return;
+
+    const measure = () => {
+      const height = el.offsetHeight;
+      if (height > 0) {
         setInputAreaHeight(height + 10);
       }
     };
 
-    measureInputHeight();
-    window.addEventListener("resize", measureInputHeight);
+    // ResizeObserver fires when element size changes (including hidden→visible)
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    measure();
 
-    const timeoutId = setTimeout(measureInputHeight, 100);
+    return () => ro.disconnect();
+  }, [initialReady]);
 
-    return () => {
-      window.removeEventListener("resize", measureInputHeight);
-      clearTimeout(timeoutId);
-    };
-  }, [messages.length]);
-
-  // Handle send
-  const handleSend = useCallback(
-    async (message: string) => {
-      if (!message.trim()) return;
-      setInputValue("");
-      await sendMessage(message);
+  // Convert AttachmentType to GatewayChatAttachment (shared helper)
+  const toGatewayAttachments = useCallback(
+    (attachments?: AttachmentType[]): GatewayChatAttachment[] | undefined => {
+      if (!attachments?.length) return undefined;
+      return attachments.map((att) => {
+        const dataUrl = att.url || "";
+        const mimeMatch = dataUrl.match(/^data:([^;]+);/);
+        const mimeType = mimeMatch?.[1] || `${att.type}/*`;
+        return { id: att.id, type: att.type, mimeType, name: att.name, dataUrl };
+      });
     },
-    [sendMessage]
+    []
   );
+
+  // Auto-send next queued message when AI finishes generating
+  const prevLoadingRef2 = useRef(isLoading);
+  useEffect(() => {
+    if (prevLoadingRef2.current && !isLoading && messageQueue.length > 0) {
+      const [next, ...rest] = messageQueue;
+      setMessageQueue(rest);
+      sendMessage(next.text, next.attachments);
+    }
+    prevLoadingRef2.current = isLoading;
+  }, [isLoading, messageQueue, sendMessage]);
+
+  // Queue handlers
+  const handleEditQueueItem = useCallback(
+    (id: string) => {
+      const item = messageQueue.find((m) => m.id === id);
+      if (item) {
+        setInputValue(item.displayText);
+        setMessageQueue((prev) => prev.filter((m) => m.id !== id));
+      }
+    },
+    [messageQueue]
+  );
+
+  const handleDeleteQueueItem = useCallback((id: string) => {
+    setMessageQueue((prev) => prev.filter((m) => m.id !== id));
+  }, []);
+
+  // Handle reply — set quoted message
+  const handleReply = useCallback((message: GatewayChatMessage) => {
+    setQuotedMessage(message);
+  }, []);
 
   // Handle copy
   const handleCopy = useCallback((message: GatewayChatMessage) => {
@@ -941,20 +410,43 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
     }
   }, []);
 
-  // Scroll to bottom every time messages change
-  useEffect(() => {
-    if (messages.length > 0) {
-      requestAnimationFrame(() => {
-        scrollToBottom(false);
-      });
-    }
-  }, [messages.length, scrollToBottom]);
-
-  // Auto-scroll when new messages arrive - but only if user is already near bottom
-  // or if this is a new message (not a history reload)
+  // Auto-scroll only when user is near bottom AND the new message is user text
+  // or assistant text (not tool actions). Tool actions accumulate rapidly and
+  // scrolling to each one is disorienting.
   const prevMessagesLengthRef = useRef<number>(0);
+  useEffect(() => {
+    const prevLen = prevMessagesLengthRef.current;
 
-  // Note: Auto-scroll removed - using flex-col-reverse to show newest messages at bottom
+    if (messages.length <= prevLen) {
+      prevMessagesLengthRef.current = messages.length;
+      return;
+    }
+
+    // Bulk history load (session switch): previous was 0 or empty, now has many messages.
+    // Always scroll to bottom so the user sees the latest messages.
+    if (prevLen === 0 && messages.length > 1) {
+      prevMessagesLengthRef.current = messages.length;
+      // Double rAF to ensure React has committed the DOM
+      requestAnimationFrame(() => requestAnimationFrame(() => scrollToBottom(false)));
+      return;
+    }
+
+    const newMsg = messages[messages.length - 1];
+    const isToolAction = newMsg?.toolCalls?.length || newMsg?.toolResults?.length;
+
+    // Always scroll for user messages (just sent). For assistant messages,
+    // only scroll if user is already near the bottom.
+    if (newMsg?.role === "user") {
+      requestAnimationFrame(() => scrollToBottom(false));
+    } else if (!isToolAction && scrollAreaRef.current) {
+      const el = scrollAreaRef.current;
+      const nearBottom = el.scrollHeight - el.scrollTop <= el.clientHeight + 150;
+      if (nearBottom) {
+        requestAnimationFrame(() => scrollToBottom(false));
+      }
+    }
+    prevMessagesLengthRef.current = messages.length;
+  }, [messages.length, messages, scrollToBottom]);
 
   // Drag and drop handlers
   const handleDragEnter = useCallback((e: React.DragEvent) => {
@@ -1020,11 +512,122 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
     setInputValue("");
   }, [isLoading, clearChat]);
 
-  // Determine if avatar should be shown
-  const shouldShowAvatarCallback = useCallback(
-    (index: number) => shouldShowAvatarLocal(messages, index),
-    [messages]
+  // Slash command menu — show/hide based on input value
+  useEffect(() => {
+    if (inputValue.startsWith("/")) {
+      setSlashMenuVisible(true);
+      setSlashQuery(inputValue);
+    } else {
+      setSlashMenuVisible(false);
+      setSlashQuery("");
+    }
+  }, [inputValue]);
+
+  // Execute a slash command and clear the input
+  const handleSlashCommand = useCallback(
+    (cmd: SlashCommand) => {
+      setSlashMenuVisible(false);
+      setInputValue("");
+
+      switch (cmd.name) {
+        case "/new":
+          handleNewChat();
+          break;
+        case "/clear":
+          reset();
+          break;
+        case "/stop":
+          stopGeneration();
+          break;
+        case "/export":
+          handleExport();
+          break;
+        case "/reload":
+          handleReloadChat();
+          break;
+        default:
+          break;
+      }
+    },
+    [handleNewChat, reset, stopGeneration, handleExport, handleReloadChat]
   );
+
+  // Handle send — queues the message if AI is still generating
+  const handleSend = useCallback(
+    async (message: string, attachments?: AttachmentType[]) => {
+      if (!message.trim() && (!attachments || attachments.length === 0)) return;
+
+      // Intercept slash commands — if the trimmed input matches a known command, execute it
+      const trimmed = message.trim();
+      if (trimmed.startsWith("/")) {
+        const matched = SLASH_COMMANDS.find(
+          (cmd) => cmd.name === trimmed || trimmed.startsWith(cmd.name + " ")
+        );
+        if (matched) {
+          handleSlashCommand(matched);
+          return;
+        }
+      }
+
+      const displayText = trimmed;
+
+      // Prepend quoted message as blockquote context
+      let finalMessage = message;
+      if (quotedMessage) {
+        const quoted = quotedMessage.content.trim();
+        const quotedLines = quoted.split("\n").map((l) => `> ${l}`).join("\n");
+        const sender = quotedMessage.role === "user" ? "User" : "Assistant";
+        finalMessage = `Replying to ${sender}:\n${quotedLines}\n\n${message}`;
+        setQuotedMessage(null);
+      }
+
+      const gatewayAttachments = toGatewayAttachments(attachments);
+
+      // If AI is generating, queue the message instead of sending
+      if (isLoading) {
+        setMessageQueue((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            text: finalMessage,
+            displayText,
+            attachments: gatewayAttachments,
+          },
+        ]);
+        setInputValue("");
+        return;
+      }
+
+      setInputValue("");
+      await sendMessage(finalMessage, gatewayAttachments);
+    },
+    [sendMessage, quotedMessage, isLoading, toGatewayAttachments, handleSlashCommand]
+  );
+
+  // Determine if avatar should be shown (use mergedMessages since rendering iterates over it)
+  const shouldShowAvatarCallback = useCallback(
+    (index: number) => shouldShowAvatarLocal(mergedMessages, index),
+    [mergedMessages]
+  );
+
+  // Estimate token usage from messages (rough: ~4 chars per token)
+  const estimatedTokenUsage = useMemo(() => {
+    let chars = 0;
+    for (const msg of mergedMessages) {
+      chars += (msg.content || "").length;
+      if ((msg as any).toolCalls) {
+        for (const tc of (msg as any).toolCalls) {
+          chars += (tc.function?.arguments || tc.arguments || "").length;
+          chars += (tc.result || "").length;
+        }
+      }
+    }
+    return Math.round(chars / 4);
+  }, [mergedMessages]);
+
+  // Context window limit — session keys don't contain model names, so we
+  // use a reasonable default. Actual usage comes from token estimation below.
+  const contextLimit = 200_000;
 
   // Get user avatar from user profile
   const userAvatar = {
@@ -1033,11 +636,15 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
     alt: userInfo?.username || "User",
   };
 
-  // Get assistant avatar
+  // Get agent identity from OpenClaw (avatar, name, emoji)
+  const agentIdentity = useAgentIdentity(currentAgentId);
+  const agentNameStr = agentIdentity?.name || (typeof currentAgent.name === "string" ? currentAgent.name : "");
+  const agentAvatarUrl = resolveAvatarUrl(agentIdentity?.avatar);
+  const agentAvatarText = isAvatarText(agentIdentity?.avatar) ? agentIdentity!.avatar! : undefined;
   const assistantAvatar = {
-    src: undefined,
-    fallback: currentAgent.name?.slice(0, 2).toUpperCase() || "AI",
-    alt: currentAgent.name || "AI Assistant",
+    src: agentAvatarUrl,
+    fallback: agentAvatarText || agentIdentity?.emoji || agentNameStr.slice(0, 2).toUpperCase() || "AI",
+    alt: agentNameStr || "AI Assistant",
   };
 
   return (
@@ -1106,10 +713,13 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
           selectedSessionKey={selectedSessionKey}
           onSessionChange={handleSessionChange}
           onNewChat={handleNewChat}
+          onReloadChat={handleReloadChat}
+          onExport={handleExport}
           onFetchSessions={fetchSessions}
           sessions={sessions}
           sessionsLoading={sessionsLoading}
           sessionsError={sessionsError}
+          isConnected={isConnected}
         />
 
         <div className="flex flex-col w-full flex-1 p-0 overflow-hidden">
@@ -1118,10 +728,16 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
             <CardContent
               ref={scrollAreaRef}
               onScroll={checkScrollPosition}
-              className="flex-1 min-h-0 p-0 overflow-y-auto overflow-x-auto customScrollbar2"
+              className="flex-1 min-h-0 p-0 overflow-y-auto overflow-x-hidden customScrollbar2"
             >
-              <div className="p-4">
-                <div className="space-y-2">
+              {!initialReady ? (
+                <div className="p-4">
+                  <ChatLoadingSkeleton />
+                </div>
+              ) : (
+              <>
+              <div className="p-4 min-w-0">
+                <div className="space-y-2 min-w-0 overflow-hidden">
                   {/* Error display */}
                   {error && (
                     <div className="p-2 rounded bg-red-50 border border-red-200 text-red-700 text-xs">
@@ -1129,17 +745,7 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
                     </div>
                   )}
 
-                  {!isConnected ? (
-                    <div className="flex flex-col items-center justify-center h-64 text-center">
-                      <div className="text-3xl mb-2">🔌</div>
-                      <p className="text-sm text-muted-foreground">
-                        Connecting to gateway...
-                      </p>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        Make sure OpenClaw gateway is running
-                      </p>
-                    </div>
-                  ) : messages.length === 0 ? (
+                  {messages.length === 0 ? (
                     <EmptyState
                       userAvatar={userAvatar}
                       assistantAvatar={assistantAvatar}
@@ -1182,8 +788,9 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
                               j++;
                             }
 
-                            // If we have 2+ tool messages, group them in an accordion
-                            if (toolMessages.length >= 2) {
+                            // Always group tool messages (even 1) to prevent component
+                            // tree restructuring when new tools arrive (avoids remount blink)
+                            if (toolMessages.length >= 1) {
                               // Use accordion pattern - shows summary header that expands to show all tools
                               nodes.push(
                                 <GroupedToolActions
@@ -1194,6 +801,7 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
                                   showAvatar={shouldShowAvatarCallback(index)}
                                   index={index}
                                   shouldShowAvatar={shouldShowAvatarCallback}
+                                  assistantAvatar={assistantAvatar}
                                 />
                               );
 
@@ -1210,18 +818,70 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
                               isUser={message.role === "user"}
                               showAvatar={shouldShowAvatarCallback(index)}
                               onCopy={handleCopy}
+                              onReply={handleReply}
                               isLoading={
                                 isLoading &&
                                 index === mergedMessages.length - 1 &&
                                 message.role === "assistant" &&
                                 !message.content.trim()
                               }
-                              botPic={undefined}
+                              botPic={agentAvatarUrl}
                               userPic={userAvatar}
+                              assistantAvatar={assistantAvatar}
                               toolStates={toolStates}
                               toggleToolExpansion={toggleToolExpansion}
                             />
                           );
+                        }
+
+                        // Show status indicator while agent is working.
+                        // Always visible during loading (even after tool calls) so the user
+                        // knows the agent is still active. Text adapts to the current phase.
+                        if (isLoading) {
+                          const lastMsg = mergedMessages[mergedMessages.length - 1];
+                          const lastIsEmptyAssistant = lastMsg?.role === "assistant" && !lastMsg.content?.trim() && !(lastMsg as any).toolCalls?.length;
+                          // Skip indicator when the last message is an empty assistant (shows its own thinking)
+                          // OR when the assistant is actively streaming text (the text IS the response)
+                          const lastIsStreamingText = lastMsg?.role === "assistant" && lastMsg.content?.trim() && !(lastMsg as any).toolCalls?.length;
+                          if (!lastIsEmptyAssistant && !lastIsStreamingText) {
+                            // Only count tools from the current turn (after the last user message)
+                            const lastUserIdx = mergedMessages.reduce((acc, m, i) => m.role === "user" ? i : acc, -1);
+                            const currentTurn = lastUserIdx >= 0 ? mergedMessages.slice(lastUserIdx + 1) : mergedMessages;
+                            const toolCallCount = currentTurn.filter(m =>
+                              m.role === "assistant" && (m as any).toolCalls?.length > 0
+                            ).length;
+
+                            let thinkingText = "AI is thinking";
+                            if (toolCallCount > 0) {
+                              thinkingText = `Executed ${toolCallCount} action${toolCallCount > 1 ? "s" : ""} — working`;
+                            }
+
+                            nodes.push(
+                              <motion.div
+                                key="thinking-indicator"
+                                className="flex gap-3 justify-start"
+                                initial={{ opacity: 0, y: 8 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                transition={{ duration: 0.3, delay: 0.15, ease: "easeOut" }}
+                              >
+                                <div className="w-8 h-8 flex-shrink-0">
+                                  <Avatar className="w-8 h-8">
+                                    {assistantAvatar?.src ? (
+                                      <AvatarImage src={assistantAvatar.src} alt={assistantAvatar.alt} />
+                                    ) : null}
+                                    <AvatarFallback className="bg-primary/10 text-primary">
+                                      {assistantAvatar?.fallback
+                                        ? <span className="text-xs">{assistantAvatar.fallback}</span>
+                                        : <CopanionIcon className="w-4 h-4" />}
+                                    </AvatarFallback>
+                                  </Avatar>
+                                </div>
+                                <div className="flex items-center py-1.5">
+                                  <AnimatedThinkingText text={thinkingText} />
+                                </div>
+                              </motion.div>
+                            );
+                          }
                         }
 
                         return nodes;
@@ -1233,11 +893,13 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
 
                 {/* Scroll to bottom reference */}
                 <div style={{ height: `${inputAreaHeight}px` }} />
+              </>
+              )}
             </CardContent>
 
             {/* Scroll to bottom button - hidden */}
             <AnimatePresence>
-              {false && (
+              {showScrollButton && (
                 <motion.div
                   initial={{ opacity: 0, scale: 0.8, y: 20 }}
                   animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -1268,34 +930,137 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
               )}
             </AnimatePresence>
 
-            {/* Input Area */}
+            {/* Input Area — hidden until initial data is ready */}
             <div
               ref={inputAreaRef}
-              className="absolute bottom-0 left-0 right-0 p-4 bg-transparent pointer-events-none"
+              className={cn(
+                "absolute bottom-0 left-0 right-0 p-4 bg-transparent pointer-events-none",
+                !initialReady && "hidden"
+              )}
             >
-              <InputContainer
-                onSendMessage={handleSend}
-                placeholder={`Ask ${currentAgent.name} anything...`}
-                disabled={isLoading}
-                isLoading={isLoading}
-                isSending={isLoading}
-                showAttachments={false}
-                showVoiceInput={false}
-                showEmojiPicker={false}
-                showActions={true}
-                autoResize={true}
-                allowEmptySend={false}
-                maxAttachments={0}
-                maxFileSize={0}
-                allowedFileTypes={[]}
-                attachments={[]}
-                onAttachmentsChange={() => {}}
-                onAddFiles={async () => {}}
-                sessionKey={sessionKey}
-                onStopGeneration={stopGeneration}
-                value={inputValue}
-                onChange={setInputValue}
-              />
+              {/* Quoted message preview */}
+              <AnimatePresence>
+                {quotedMessage && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 10 }}
+                    className="pointer-events-auto mb-2 flex items-start gap-2 px-3 py-2 rounded-lg border border-primary/30 bg-background/90 backdrop-blur-sm"
+                  >
+                    <div className="flex-shrink-0 w-1 self-stretch rounded-full bg-primary/50" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[10px] font-medium text-muted-foreground mb-0.5">
+                        Replying to {quotedMessage.role === "user" ? "yourself" : "assistant"}
+                      </p>
+                      <p className="text-xs text-foreground/80 line-clamp-2">
+                        {quotedMessage.content?.slice(0, 150) || "..."}
+                      </p>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="iconSm"
+                      onClick={() => setQuotedMessage(null)}
+                      className="h-5 w-5 flex-shrink-0 pointer-events-auto"
+                    >
+                      <X className="w-3 h-3" />
+                    </Button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {/* Message Queue — shows queued messages above input while AI generates */}
+              <AnimatePresence>
+                {messageQueue.length > 0 && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 8 }}
+                    transition={{ duration: 0.2 }}
+                    className="pointer-events-auto mb-2 space-y-1.5"
+                  >
+                    <div className="flex items-center gap-2 px-1">
+                      <div className="h-px flex-1 bg-border/40" />
+                      <span className="text-[10px] font-medium text-muted-foreground/70 uppercase tracking-wider">
+                        {messageQueue.length} queued
+                      </span>
+                      <div className="h-px flex-1 bg-border/40" />
+                    </div>
+                    {messageQueue.map((item, index) => (
+                      <motion.div
+                        key={item.id}
+                        initial={{ opacity: 0, x: -8 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        exit={{ opacity: 0, x: 8, height: 0 }}
+                        transition={{ delay: index * 0.04 }}
+                        className="flex items-center gap-2 px-3 py-2 rounded-lg border border-border/50 bg-background/90 backdrop-blur-sm group hover:border-primary/30 transition-colors"
+                      >
+                        <span className="flex-shrink-0 text-[10px] text-muted-foreground/40 font-mono tabular-nums w-4 text-center">
+                          {index + 1}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs text-foreground/80 line-clamp-2">
+                            {item.displayText}
+                          </p>
+                          {item.attachments && item.attachments.length > 0 && (
+                            <p className="text-[10px] text-muted-foreground/60 mt-0.5">
+                              {item.attachments.length} attachment{item.attachments.length > 1 ? "s" : ""}
+                            </p>
+                          )}
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="iconSm"
+                          onClick={() => handleEditQueueItem(item.id)}
+                          className="h-6 w-6 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                          title="Edit"
+                        >
+                          <Pencil className="w-3 h-3" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="iconSm"
+                          onClick={() => handleDeleteQueueItem(item.id)}
+                          className="h-6 w-6 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-destructive"
+                          title="Remove"
+                        >
+                          <X className="w-3 h-3" />
+                        </Button>
+                      </motion.div>
+                    ))}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {/* Slash command autocomplete menu + input */}
+              <div className="relative pointer-events-auto">
+                <SlashCommandMenu
+                  query={slashQuery}
+                  onSelect={handleSlashCommand}
+                  visible={slashMenuVisible}
+                  onClose={() => setSlashMenuVisible(false)}
+                />
+                <InputContainer
+                  onSendMessage={handleSend}
+                  placeholder={`Ask ${currentAgent.name} anything...`}
+                  isLoading={isLoading}
+                  isSending={isLoading}
+                  showAttachments={true}
+                  showVoiceInput={false}
+                  showEmojiPicker={false}
+                  showActions={true}
+                  autoResize={true}
+                  allowEmptySend={false}
+                  maxAttachments={5}
+                  maxFileSize={5 * 1024 * 1024}
+                  allowedFileTypes={["image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml", "image/bmp"]}
+                  sessionKey={sessionKey}
+                  onStopGeneration={stopGeneration}
+                  value={inputValue}
+                  onChange={setInputValue}
+                  tokenUsage={estimatedTokenUsage}
+                  contextLimit={contextLimit}
+                />
+              </div>
             </div>
           </div>
         </div>

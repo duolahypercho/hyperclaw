@@ -161,6 +161,10 @@ export class GatewayClient extends EventEmitter {
   private signedCredentials: { device: unknown; client: unknown; role: string; scopes: string[]; deviceToken?: string | null } | null = null;
   private connectNonce: string | null = null;
 
+  // Hub mode: route through hub dashboard WebSocket instead of direct gateway
+  private hubMode = false;
+  private hubDeviceId: string | null = null;
+
   constructor() {
     super();
     this.lastPingPong = Date.now();
@@ -171,8 +175,8 @@ export class GatewayClient extends EventEmitter {
     return this.state;
   }
 
-  /** Connect to gateway */
-  connect(url: string, token?: string | null): void {
+  /** Connect to gateway (or hub dashboard WebSocket in hub mode) */
+  connect(url: string, token?: string | null, options?: { hubMode?: boolean; hubDeviceId?: string }): void {
     if (this.state === "connected" || this.state === "connecting") {
       if (this.url === url && this.token === (token ?? null)) {
         return; // Already connecting to same endpoint
@@ -182,6 +186,8 @@ export class GatewayClient extends EventEmitter {
 
     this.url = url;
     this.token = token ?? null;
+    this.hubMode = options?.hubMode ?? false;
+    this.hubDeviceId = options?.hubDeviceId ?? null;
     this.doConnect();
   }
 
@@ -190,8 +196,13 @@ export class GatewayClient extends EventEmitter {
 
     this.setState("connecting");
 
+    // In hub mode, connect to the hub's dashboard WebSocket
+    const wsUrl = this.hubMode
+      ? this.buildHubWsUrl()
+      : this.url;
+
     try {
-      this.ws = new WebSocket(this.url);
+      this.ws = new WebSocket(wsUrl);
     } catch (e) {
       console.error("[GatewayClient] WebSocket creation failed:", e);
       this.scheduleReconnect();
@@ -201,7 +212,14 @@ export class GatewayClient extends EventEmitter {
     this.ws.onopen = () => {
       this.reconnectAttempt = 0;
       this.startPing();
-      this.authenticate();
+      if (this.hubMode) {
+        // Hub mode: JWT is in query param, no local auth needed
+        this.setState("connected");
+        this.flushMessageQueue();
+        this.emit("connected");
+      } else {
+        this.authenticate();
+      }
     };
 
     this.ws.onmessage = (ev: MessageEvent) => {
@@ -380,7 +398,22 @@ export class GatewayClient extends EventEmitter {
         resolve: (v: unknown) => resolve(v as T),
         reject
       });
-      this.sendRaw({ type: "req", id, method, params });
+
+      // In hub mode, wrap with deviceId and requestType for hub routing
+      if (this.hubMode && this.hubDeviceId) {
+        this.sendRaw({
+          type: "req",
+          id,
+          method,
+          params: {
+            ...params,
+            deviceId: this.hubDeviceId,
+            requestType: method,
+          },
+        });
+      } else {
+        this.sendRaw({ type: "req", id, method, params });
+      }
 
       // Timeout after 30s
       setTimeout(() => {
@@ -471,6 +504,15 @@ export class GatewayClient extends EventEmitter {
       clearInterval(this.pingTimer);
       this.pingTimer = null;
     }
+  }
+
+  /** Build WebSocket URL for hub dashboard mode */
+  private buildHubWsUrl(): string {
+    // Convert HTTP(S) hub URL to WS(S) + dashboard path
+    const base = this.url.replace(/^http/, "ws");
+    const wsBase = base.endsWith("/") ? base.slice(0, -1) : base;
+    const tokenParam = this.token ? `token=${encodeURIComponent(this.token)}` : "";
+    return `${wsBase}/ws/dashboard${tokenParam ? `?${tokenParam}` : ""}`;
   }
 
   /** Disconnect cleanly */
@@ -605,8 +647,11 @@ export function getGatewayClient(): GatewayClient {
 }
 
 // Convenience functions matching previous API
-export function connectGatewayWs(url: string, options?: { token?: string | null }): void {
-  getGatewayClient().connect(url, options?.token);
+export function connectGatewayWs(url: string, options?: { token?: string | null; hubMode?: boolean; hubDeviceId?: string }): void {
+  getGatewayClient().connect(url, options?.token, {
+    hubMode: options?.hubMode,
+    hubDeviceId: options?.hubDeviceId,
+  });
 }
 
 export function disconnectGatewayWs(): void {
@@ -627,20 +672,36 @@ export function subscribeGatewayConnection(cb: () => void): () => void {
   return () => client.off("stateChange", cb);
 }
 
-export async function getGatewayConfig(): Promise<{ gatewayUrl: string; token: string | null }> {
-  let gatewayUrl = "http://127.0.0.1:18789";
-  let token: string | null = null;
-
-  if (typeof window !== "undefined" && (window as unknown as { electronAPI?: { openClaw?: { getGatewayConnectUrl?: () => Promise<{ gatewayUrl: string; token: string }> } } }).electronAPI?.openClaw?.getGatewayConnectUrl) {
-    try {
-      const config = await (window as unknown as { electronAPI: { openClaw: { getGatewayConnectUrl: () => Promise<{ gatewayUrl: string; token: string }> } } }).electronAPI.openClaw.getGatewayConnectUrl();
-      gatewayUrl = config.gatewayUrl || gatewayUrl;
-      token = config.token;
-    } catch (e) {
-      console.warn("[GatewayClient] Failed to get config:", e);
+export async function getGatewayConfig(): Promise<{ gatewayUrl: string; token: string | null; hubMode?: boolean; hubDeviceId?: string }> {
+  // Priority 1: Hub config from window cache or Electron preload
+  if (typeof window !== "undefined") {
+    const w = window as unknown as {
+      electronAPI?: { hyperClawBridge?: { getHubConfig?: () => { enabled: boolean; url: string; deviceId: string; jwt?: string } | null } };
+      __hubConfig?: { enabled: boolean; url: string; deviceId: string; jwt?: string };
+    };
+    const hubCfg = w.__hubConfig?.enabled ? w.__hubConfig : w.electronAPI?.hyperClawBridge?.getHubConfig?.();
+    if (hubCfg?.enabled && hubCfg.url && hubCfg.deviceId) {
+      return { gatewayUrl: hubCfg.url, token: hubCfg.jwt ?? null, hubMode: true, hubDeviceId: hubCfg.deviceId };
     }
   }
-  return { gatewayUrl, token };
+
+  // Priority 2: Hub direct — use env var + session
+  try {
+    const { getHubApiUrl, getUserToken, getActiveDeviceId } = await import("$/lib/hub-direct");
+    const hubUrl = getHubApiUrl();
+    const token = await getUserToken();
+    if (hubUrl && token) {
+      const deviceId = await getActiveDeviceId(token);
+      if (deviceId) {
+        return { gatewayUrl: hubUrl, token, hubMode: true, hubDeviceId: deviceId };
+      }
+    }
+  } catch {
+    /* hub not available */
+  }
+
+  // No hub configured — gateway not available
+  return { gatewayUrl: "", token: null };
 }
 
 export function buildGatewayWsUrl(gatewayUrl: string, token?: string | null): string {

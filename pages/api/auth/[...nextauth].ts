@@ -45,7 +45,7 @@ export const authOptions = (req: any, res: any) => {
                 profilePic: string;
                 _id: string;
                 Verified: boolean;
-                channel: { _id?: string };
+                channel: { _id?: string; tier?: string };
                 Firstname: string;
                 Lastname: string;
                 username: string;
@@ -66,7 +66,11 @@ export const authOptions = (req: any, res: any) => {
               deleteCookie(`hypercho_user_token`, { req, res, path: "/" });
               if (userId) {
                 // set the new id to the cookie
-                const newToken = Jwt.sign(userId, process.env.NEXTAUTH_SECRET!);
+                const newToken = Jwt.sign(
+                  { sub: userId, tier: channel?.tier || "free" },
+                  process.env.NEXTAUTH_SECRET!,
+                  { expiresIn: "30d" }
+                );
                 setCookie(`hypercho_user_token`, newToken, {
                   req,
                   res,
@@ -130,7 +134,11 @@ export const authOptions = (req: any, res: any) => {
           }
           // User data was fetched from backend successfully
           const userData = anyUser.userData;
-          const newToken = Jwt.sign(userData._id, process.env.NEXTAUTH_SECRET!);
+          const newToken = Jwt.sign(
+            { sub: userData._id, tier: userData.channel?.tier || "free" },
+            process.env.NEXTAUTH_SECRET!,
+            { expiresIn: "30d" }
+          );
           token.token = newToken;
           token.userId = userData._id;
           token.Firstname = userData.Firstname;
@@ -157,7 +165,11 @@ export const authOptions = (req: any, res: any) => {
         // Handle Credentials sign-in
         if (user && account?.provider === "credentials") {
           // Create the JWT token here
-          const newToken = Jwt.sign(user.userId, process.env.NEXTAUTH_SECRET!);
+          const newToken = Jwt.sign(
+            { sub: user.userId, tier: user.channel?.tier || "free" },
+            process.env.NEXTAUTH_SECRET!,
+            { expiresIn: "30d" }
+          );
           token.token = newToken; // Add the token to the JWT
           token.userId = user.userId;
           token.Firstname = user.Firstname;

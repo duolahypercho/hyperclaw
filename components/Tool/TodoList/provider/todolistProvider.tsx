@@ -12,6 +12,7 @@ import { cronAdd, fetchCronsFromBridge } from "$/components/Tool/Crons/utils";
 import { addRunningJobId } from "$/lib/crons-running-store";
 import { addPendingTaskCronRun } from "$/lib/task-cron-run-store";
 import { useCronTaskStatusPoll } from "../hooks/useCronTaskStatusPoll";
+import { useTaskSync } from "../hooks/useTaskSync";
 
 const OBJECT_ID_RE = /^[0-9a-f]{24}$/i;
 
@@ -241,6 +242,7 @@ interface exportedValue {
     ignore?: boolean;
   }) => Promise<TaskDetailsType | undefined>;
   fetchTasksForWeek: (startDate: Date, endDate: Date) => Promise<Task[]>;
+  refetchTasks: () => Promise<void>;
   appSchema: AppSchema;
 }
 
@@ -302,6 +304,7 @@ const initialState: exportedValue = {
   fetchTasksForWeek: () => {
     return Promise.resolve([]);
   },
+  refetchTasks: () => Promise.resolve(),
   appSchema: defaultAppSchema,
 };
 
@@ -1366,6 +1369,74 @@ export function TodoListProvider({ children, inMiniMode }: Props) {
     [currentTab, listId, lists]
   );
 
+  /**
+   * Re-fetch tasks from the backend for the current tab without resetting UI
+   * state (loading spinners, selected task, etc.). Used by useTaskSync to
+   * reconcile after external mutations (AI agent tool calls, other devices).
+   *
+   * Optimistic tasks added within the last 10 s are preserved so they don't
+   * flicker out while the server indexes them.
+   */
+  const refetchTasks = useCallback(async () => {
+    try {
+      let serverTasks: Task[];
+
+      if (currentTab.startsWith("list:")) {
+        const lid = currentTab.split(":")[1];
+        if (!lid) return;
+        const res = await getTodoTaskByListAPI(lid);
+        if (res.status !== 200) return;
+        serverTasks = res.data;
+      } else if (currentTab === "kanban") {
+        const res = await getTodoTaskAPI("task" as TabType);
+        if (res.status !== 200) return;
+        serverTasks = res.data;
+      } else if (currentTab === "calendar") {
+        const startDate = getDateForDay(0);
+        const endDate = getDateForDay(6);
+        const [calendarRes, listRes] = await Promise.all([
+          getTodoTaskAPI("calendar" as TabType, {
+            startDate: startDate.toISOString(),
+            endDate: endDate.toISOString(),
+          }),
+          getTodoTaskAPI("list" as TabType),
+        ]);
+        serverTasks = [
+          ...new Map(
+            [...(calendarRes.data || []), ...(listRes.data || [])].map(
+              (task) => [task._id, task]
+            )
+          ).values(),
+        ].sort((a, b) => a.order - b.order);
+      } else {
+        const res = await getTodoTaskAPI(currentTab as TabType);
+        if (res.status !== 200) return;
+        serverTasks = res.data;
+      }
+
+      // Reconcile: keep optimistic tasks (created < 10 s ago) that the
+      // server doesn't know about yet so they don't flicker away.
+      const serverIds = new Set(serverTasks.map((t) => t._id));
+      const recentThreshold = Date.now() - 10_000;
+
+      setTasks((prev) => {
+        const optimistic = prev.filter(
+          (t) =>
+            !serverIds.has(t._id) &&
+            t.createdAt &&
+            new Date(t.createdAt).getTime() > recentThreshold
+        );
+        return optimistic.length > 0
+          ? [...serverTasks, ...optimistic]
+          : serverTasks;
+      });
+    } catch {
+      /* silent — sync failure is non-fatal */
+    }
+  }, [currentTab]);
+
+  useTaskSync(refetchTasks);
+
   const handleEditTask = useCallback(
     async (
       id: string,
@@ -1900,7 +1971,14 @@ export function TodoListProvider({ children, inMiniMode }: Props) {
       const toggleActiveTaskAPIResponse = results[1] as { status: number } | undefined;
 
       if (getTodoTaskByIdAPIResponse.status !== 200) {
-        throw new Error("Failed to get task details");
+        // Task may have been deleted externally (e.g. by an agent) — clear selection
+        setSelectedTask(undefined);
+        setDescendantContent([]);
+        setDescendantContentTaskId(undefined);
+        setInProgressTask(undefined);
+        setTaskLoading(false);
+        updateAppSettings("todo-list", { detail: false });
+        return;
       }
 
       if (!viewOnly && toggleActiveTaskAPIResponse?.status !== 200) {
@@ -2457,6 +2535,7 @@ export function TodoListProvider({ children, inMiniMode }: Props) {
       handleDragEndLists,
       handleSelectTask,
       fetchTasksForWeek,
+      refetchTasks,
       handleTaskWorkflow,
     }),
     [

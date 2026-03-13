@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
 import type { HyperClawTask, BridgeEvent, BridgeCommand } from "$/types/electron";
 
 export type BridgeDebug = {
-  bridgeType: "electron" | "api";
+  bridgeType: "electron" | "hub";
   lastError: string | null;
   lastFetchAt: string | null;
   taskCount: number;
@@ -10,12 +11,7 @@ export type BridgeDebug = {
 };
 
 async function apiFetch(action: string, body?: Record<string, unknown>) {
-  const res = await fetch("/api/hyperclaw-bridge", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action, ...body }),
-  });
-  return res.json();
+  return bridgeInvoke(action, body);
 }
 
 function getElectronBridge() {
@@ -34,7 +30,7 @@ export function useHyperClawBridge(pollIntervalMs = 15_000) {
   const [lastError, setLastError] = useState<string | null>(null);
   const [lastFetchAt, setLastFetchAt] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const bridgeType: "electron" | "api" = typeof window !== "undefined" && getElectronBridge() ? "electron" : "api";
+  const bridgeType: "electron" | "hub" = typeof window !== "undefined" && getElectronBridge() ? "electron" : "hub";
 
   const fetchTasks = useCallback(async () => {
     setLastError(null);
@@ -71,7 +67,7 @@ export function useHyperClawBridge(pollIntervalMs = 15_000) {
       if (bridge) {
         newTask = await bridge.addTask(task);
       } else {
-        newTask = await apiFetch("add-task", { task });
+        newTask = (await apiFetch("add-task", { task })) as HyperClawTask;
       }
       setTasks((prev) => [...prev, newTask]);
       return newTask;
@@ -109,7 +105,7 @@ export function useHyperClawBridge(pollIntervalMs = 15_000) {
     if (bridge) {
       updated = await bridge.updateTask(id, patch);
     } else {
-      updated = await apiFetch("update-task", { id, patch });
+      updated = (await apiFetch("update-task", { id, patch })) as HyperClawTask;
     }
     if (updated) {
       setTasks((prev) => prev.map((t) => (t.id === id ? updated! : t)));
@@ -138,7 +134,7 @@ export function useHyperClawBridge(pollIntervalMs = 15_000) {
     // Dev fallback: poll for events
     const poll = async () => {
       try {
-        const evts = await apiFetch("get-events");
+        const evts = (await apiFetch("get-events")) as BridgeEvent[];
         setEvents(evts);
       } catch {}
     };

@@ -342,28 +342,26 @@ const UsageWidgetContent = memo((props: CustomProps) => {
     mergeAndSave();
   }, [usage, sessionsUsage]);
 
-  // Calculate totals from merged data (local + OpenClaw)
+  // Calculate totals from merged local cache (which includes OpenClaw data merged per-day)
+  // This ensures historical data persists even if OpenClaw resets its usage tracking
   const getMergedTotals = useCallback(() => {
     const localDaily = localUsage?.daily ?? {};
 
-    // Start with OpenClaw totals
-    const openClawTotals = sessionsUsage?.totals ?? usage?.totals;
-
-    if (!openClawTotals && Object.keys(localDaily).length === 0) {
+    if (Object.keys(localDaily).length === 0) {
+      // No merged data yet — fall back to raw OpenClaw totals if available
+      const openClawTotals = sessionsUsage?.totals ?? usage?.totals;
+      if (openClawTotals) {
+        return {
+          inputTokens: openClawTotals.input,
+          outputTokens: openClawTotals.output,
+          totalTokens: openClawTotals.totalTokens,
+          totalCost: openClawTotals.totalCost ?? 0,
+        };
+      }
       return { inputTokens: 0, outputTokens: 0, totalTokens: 0, totalCost: 0 };
     }
 
-    // If we have OpenClaw data, use it (it's more recent)
-    if (openClawTotals) {
-      return {
-        inputTokens: openClawTotals.input,
-        outputTokens: openClawTotals.output,
-        totalTokens: openClawTotals.totalTokens,
-        totalCost: openClawTotals.totalCost ?? 0,
-      };
-    }
-
-    // Otherwise use local data for the date range
+    // Sum from merged daily data within the selected date range
     const start = new Date(startDate);
     const end = new Date(endDate);
 

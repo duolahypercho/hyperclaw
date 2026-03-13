@@ -22,6 +22,45 @@ import {
 import { useDialog } from "@OS/Layout/Dialog/DialogContext";
 import { useInteractApp } from "@OS/Provider/InteractAppProv";
 
+/** Renders the icon slot: avatarUrl > emoji > icon component.
+ *  Falls back to emoji/icon if the avatar image fails to load. */
+const ItemIcon: React.FC<{ item: SidebarItem; isActive?: boolean; className?: string }> = ({
+  item,
+  isActive,
+  className,
+}) => {
+  const [imgError, setImgError] = useState(false);
+
+  // Reset error state when the URL changes
+  const prevUrl = useRef(item.avatarUrl);
+  if (prevUrl.current !== item.avatarUrl) {
+    prevUrl.current = item.avatarUrl;
+    if (imgError) setImgError(false);
+  }
+
+  if (item.avatarUrl && !imgError) {
+    return (
+      <img
+        src={item.avatarUrl}
+        alt=""
+        onError={() => setImgError(true)}
+        className={cn("w-4 h-4 flex-shrink-0 rounded-full object-cover", className)}
+      />
+    );
+  }
+  if (item.emoji) {
+    return <span className={cn("text-sm flex-shrink-0 leading-none", className)}>{item.emoji}</span>;
+  }
+  if (item.icon) {
+    return (
+      <item.icon
+        className={cn("w-4 h-4 flex-shrink-0", isActive ? "text-primary" : "text-muted-foreground", className)}
+      />
+    );
+  }
+  return null;
+};
+
 const isActiveItem = (item: SidebarItem, currentActiveTab: string) => {
   if (typeof currentActiveTab === "string") {
     if (currentActiveTab === item.id) return true;
@@ -229,9 +268,7 @@ const SidebarNavItem: React.FC<{
               open ? "rotate-90" : "rotate-0"
             )}
           />
-          {item.icon && (
-            <item.icon className={cn("w-4 h-4 flex-shrink-0", isActive ? "text-primary" : "text-muted-foreground")} />
-          )}
+          <ItemIcon item={item} isActive={isActive} />
           <span className="truncate line-clamp-1">{item.title}</span>
           {item.contextMenu && (
             <div
@@ -270,9 +307,7 @@ const SidebarNavItem: React.FC<{
                 open ? "rotate-0" : "rotate-90"
               )}
             />
-            {item.icon && (
-              <item.icon className={cn("w-4 h-4 flex-shrink-0", isActive ? "text-primary" : "text-muted-foreground")} />
-            )}
+            <ItemIcon item={item} isActive={isActive} />
             <span className="truncate line-clamp-1">{item.title}</span>
             {item.contextMenu && (
               <div
@@ -327,9 +362,7 @@ const SidebarNavItem: React.FC<{
               item.disabled && "text-muted-foreground/50 cursor-not-allowed hover:bg-transparent"
             )}
           >
-            {item.icon && (
-              <item.icon className={cn("w-4 h-4 flex-shrink-0", item.subtitle && "mt-0.5", isActive ? "text-primary" : "text-muted-foreground")} />
-            )}
+            <ItemIcon item={item} isActive={isActive} className={item.subtitle ? "mt-0.5" : undefined} />
             <span className={cn("flex-1 min-w-0 flex flex-col items-start gap-0.5", item.contextMenu && "pr-1")}>
               <span className="truncate w-full text-left">{item.title}</span>
               {item.subtitle && (
@@ -370,9 +403,7 @@ const SidebarNavItem: React.FC<{
             item.disabled && "text-muted-foreground/50 cursor-not-allowed hover:bg-transparent"
           )}
         >
-          {item.icon && (
-            <item.icon className={cn("w-4 h-4 flex-shrink-0", item.subtitle && "mt-0.5", isActive ? "text-primary" : "text-muted-foreground")} />
-          )}
+          <ItemIcon item={item} isActive={isActive} className={item.subtitle ? "mt-0.5" : undefined} />
           <span className={cn("flex-1 min-w-0 flex flex-col items-start gap-0.5", item.contextMenu && "pr-1")}>
             <span className="truncate w-full text-left">{item.title}</span>
             {item.subtitle && (

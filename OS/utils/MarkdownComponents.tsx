@@ -52,4 +52,27 @@ export const markdownComponents: Components = {
       className="my-[0.6em] h-[1px] bg-gray-100 px-3 transition-opacity duration-1000"
     />
   ),
+  table: ({ node, ...props }) => (
+    <div className="overflow-auto my-3 rounded-lg customScrollbar2">
+      <table {...props} className="w-full text-sm" />
+    </div>
+  ),
+  thead: ({ node, ...props }) => (
+    <thead {...props} className="bg-muted/50" />
+  ),
+  tbody: ({ node, ...props }) => (
+    <tbody {...props} className="divide-y divide-border" />
+  ),
+  tr: ({ node, ...props }) => (
+    <tr {...props} className="border-b border-border last:border-b-0" />
+  ),
+  th: ({ node, ...props }) => (
+    <th
+      {...props}
+      className="px-3 py-2 text-left text-xs font-semibold text-foreground/80 border border-border"
+    />
+  ),
+  td: ({ node, ...props }) => (
+    <td {...props} className="px-3 py-2 text-sm text-foreground/90 border border-border" />
+  ),
 };

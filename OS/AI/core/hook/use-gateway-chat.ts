@@ -3,9 +3,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import {
   connectGatewayWs,
-  disconnectGatewayWs,
   getGatewayConfig,
-  buildGatewayWsUrl,
   getGatewayConnectionState,
   subscribeGatewayConnection,
   gatewayConnection,
@@ -76,6 +74,8 @@ export interface GatewayChatMessage {
     toolName?: string;
     isError?: boolean;
   }>;
+  // Attachments sent with user messages (images, files)
+  attachments?: GatewayChatAttachment[];
 }
 
 export interface GatewayChatAttachment {
@@ -142,6 +142,144 @@ function extractText(message: unknown): string | null {
   }
 
   return null;
+}
+
+// Normalize content for fuzzy comparison — the server sometimes returns the
+// same message with slightly different whitespace (e.g. single vs double newline).
+function normalizeForCompare(s: string): string {
+  return s.replace(/\s+/g, " ").trim();
+}
+
+// Helper to deduplicate messages by ID (keeps last occurrence) AND by
+// consecutive content (the server sometimes returns the same assistant message
+// multiple times with different UUIDs).
+function deduplicateMessages(messages: GatewayChatMessage[]): GatewayChatMessage[] {
+  // Pass 1: ID-based dedup (keep last occurrence)
+  const seen = new Set<string>();
+  const idDeduped: GatewayChatMessage[] = [];
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (!seen.has(messages[i].id)) {
+      seen.add(messages[i].id);
+      idDeduped.push(messages[i]);
+    }
+  }
+  idDeduped.reverse();
+
+  // Pass 2: Collapse consecutive messages with the same role + content.
+  // This catches server-side duplicates that have different IDs but identical
+  // content (e.g. the same final assistant response returned 3 times).
+  // Uses fuzzy comparison to handle whitespace differences.
+  const result: GatewayChatMessage[] = [];
+  for (const msg of idDeduped) {
+    const prev = result[result.length - 1];
+    if (
+      prev &&
+      prev.role === msg.role &&
+      prev.content.trim() !== "" &&
+      normalizeForCompare(prev.content) === normalizeForCompare(msg.content) &&
+      // Don't collapse tool-call messages — they may legitimately repeat
+      !prev.toolCalls?.length &&
+      !msg.toolCalls?.length
+    ) {
+      continue; // skip duplicate
+    }
+    result.push(msg);
+  }
+  return result;
+}
+
+// Helper to merge history into current messages.
+// Uses the server's history order as canonical (correct conversation sequence).
+// Preserves existing object references when content is unchanged to prevent
+// React re-renders (avoids the "flash" on final reconciliation).
+// Streaming-only messages (not yet in history) are appended at the end.
+function mergeHistoryIntoMessages(
+  current: GatewayChatMessage[],
+  history: GatewayChatMessage[]
+): GatewayChatMessage[] | null {
+  const currentMap = new Map<string, GatewayChatMessage>();
+  for (const msg of current) {
+    currentMap.set(msg.id, msg);
+  }
+
+  // Track which current messages have been "claimed" by a history match.
+  // A current message can only be claimed once (prevents double-matching
+  // when the same content appears legitimately in multiple messages).
+  const claimedCurrentIds = new Set<string>();
+  let hasChanges = false;
+
+  // Build merged list using history order (server's canonical ordering).
+  // Use existing current references when possible to prevent re-renders.
+  const merged: GatewayChatMessage[] = [];
+
+  for (const histMsg of history) {
+    // 1. Try exact ID match (tool calls have stable IDs via toolCallId)
+    const currentVersion = currentMap.get(histMsg.id);
+    if (currentVersion && !claimedCurrentIds.has(histMsg.id)) {
+      claimedCurrentIds.add(histMsg.id);
+      const contentChanged = currentVersion.content !== histMsg.content;
+      const toolResultsChanged =
+        JSON.stringify(currentVersion.toolResults) !== JSON.stringify(histMsg.toolResults);
+      if (contentChanged || toolResultsChanged) {
+        merged.push(histMsg);
+        hasChanges = true;
+      } else {
+        merged.push(currentVersion); // preserve reference
+      }
+      continue;
+    }
+
+    // 2. Content-based dedup for ALL roles.
+    // The server returns DIFFERENT UUIDs for text messages on every history
+    // call, so ID matching never works for them. Content match is the only
+    // reliable bridge between streaming and history.
+    // We iterate current (not a Map) and pick the FIRST unclaimed match to
+    // handle repeated identical content (e.g. "can you try it?" twice).
+    let contentMatch: GatewayChatMessage | undefined;
+    if (histMsg.content.trim()) {
+      const histNorm = normalizeForCompare(histMsg.content);
+      for (const cm of current) {
+        if (
+          !claimedCurrentIds.has(cm.id) &&
+          cm.role === histMsg.role &&
+          normalizeForCompare(cm.content) === histNorm
+        ) {
+          contentMatch = cm;
+          break;
+        }
+      }
+    }
+
+    if (contentMatch) {
+      claimedCurrentIds.add(contentMatch.id);
+      merged.push(contentMatch); // preserve reference
+    } else {
+      merged.push(histMsg);
+      hasChanges = true;
+    }
+  }
+
+  // Append ONLY current-only messages that come AFTER the last matched message.
+  // History is a sliding window (e.g. last 200 messages). Older current messages
+  // that fell off the window would otherwise accumulate as "unclaimed" on every
+  // merge, causing the message list to grow unboundedly (200 → 202 → 204 → ...).
+  // Messages after the last match are genuinely new (in-flight streaming events).
+  let lastMatchedIdx = -1;
+  for (let i = current.length - 1; i >= 0; i--) {
+    if (claimedCurrentIds.has(current[i].id)) {
+      lastMatchedIdx = i;
+      break;
+    }
+  }
+  for (let i = lastMatchedIdx + 1; i < current.length; i++) {
+    if (!claimedCurrentIds.has(current[i].id)) {
+      merged.push(current[i]);
+    }
+  }
+
+  if (!hasChanges && merged.length === current.length) return null;
+
+  return merged;
 }
 
 // Helper to normalize message to our format
@@ -301,8 +439,18 @@ function normalizeMessage(message: unknown): GatewayChatMessage | null {
     content = toolContent;
   }
 
+  // Use tool call ID as stable message ID — ensures streaming and history
+  // versions of the same tool call share the same React key / dedup ID.
+  let stableId = id;
+  if (role === "assistant" && toolCalls && toolCalls.length > 0 && toolCalls[0].id) {
+    stableId = toolCalls[0].id;
+  }
+  if ((role === "toolResult" || role === "tool") && toolResults && toolResults.length > 0 && toolResults[0].toolCallId) {
+    stableId = `result-${toolResults[0].toolCallId}`;
+  }
+
   return {
-    id,
+    id: stableId,
     role: role as ChatMessageRole,
     content: content || "",
     timestamp,
@@ -322,27 +470,41 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Use a REF to store the session key - this prevents unwanted resets when parent re-renders
-  // The key insight: we only update this ref when the user explicitly changes agents/sessions
+  // Use a REF to store the session key — callbacks always read the latest value
+  // without needing to be recreated. A parallel state variable drives re-renders
+  // for the returned sessionKey value.
   const sessionKeyRef = useRef<string>(initialSessionKey || "default");
-  const sessionKeyFromPropRef = useRef<string>(initialSessionKey || "default");
+  const [sessionKeyState, setSessionKeyState] = useState<string>(initialSessionKey || "default");
+
+  // Sync ref + state when the prop changes (e.g. after async session resolution).
+  // This must run before other effects so they read the correct key.
+  const prevPropKeyRef = useRef<string>(initialSessionKey || "default");
+  if (initialSessionKey && initialSessionKey !== prevPropKeyRef.current) {
+    prevPropKeyRef.current = initialSessionKey;
+    // Delegate to handleSessionChange so messages are cleared for the new session
+    if (initialSessionKey !== sessionKeyRef.current) {
+      sessionKeyRef.current = initialSessionKey;
+      // We can't call handleSessionChange here (it's not defined yet), so
+      // inline the same reset logic. setSessionKeyState will trigger re-render.
+      setSessionKeyState(initialSessionKey);
+      setMessages([]);
+      setIsLoading(false);
+      setError(null);
+    }
+  }
 
   // Track if we've already processed an event (for deduplication)
   const processedEventSeqRef = useRef<Set<string>>(new Set());
 
-  // Update the ref when prop changes, but only clear state on explicit user changes
-  const effectiveSessionKey = sessionKeyRef.current;
-
-  // Check if session key changed (from user action, not from parent re-render)
-  useEffect(() => {
-    sessionKeyFromPropRef.current = initialSessionKey || "default";
-  }, [initialSessionKey]);
+  // Read session key from ref — always current, no stale closures.
+  const getSessionKey = useCallback(() => sessionKeyRef.current, []);
 
   // Only clear state when the session key actually changes (user action)
   const handleSessionChange = useCallback((newSessionKey: string) => {
     const oldKey = sessionKeyRef.current;
     if (oldKey !== newSessionKey) {
       sessionKeyRef.current = newSessionKey;
+      setSessionKeyState(newSessionKey);
       // Clear state for new session
       setMessages([]);
       setIsLoading(false);
@@ -350,6 +512,10 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       currentRunIdRef.current = null;
       streamContentRef.current = "";
       processedEventSeqRef.current.clear();
+      if (finalDebounceRef.current) {
+        clearTimeout(finalDebounceRef.current);
+        finalDebounceRef.current = null;
+      }
     }
   }, []);
 
@@ -357,36 +523,98 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
   const currentRunIdRef = useRef<string | null>(null);
   const streamContentRef = useRef<string>("");
   const unsubscribeRef = useRef<(() => void) | null>(null);
+  const loadingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const finalDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const idleReloadRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Handle incoming chat events (matching OpenClaw's handleChatEvent)
+  // Shared helper: fetch history and merge into current messages.
+  // Optionally auto-finalizes if the last message is a completed assistant text.
+  const mergeHistoryAndMaybeFinalize = useCallback((autoFinalize: boolean) => {
+    gatewayConnection.getChatHistory(sessionKeyRef.current).then((response) => {
+      if (!response.messages?.length) return;
+      const loaded: GatewayChatMessage[] = [];
+      for (const m of response.messages) {
+        const norm = normalizeMessage(m);
+        if (norm) loaded.push(norm);
+      }
+      const deduped = deduplicateMessages(loaded);
+      setMessages((prev) => {
+        const merged = mergeHistoryIntoMessages(prev, deduped);
+        return merged ?? prev;
+      });
+      if (autoFinalize) {
+        const lastMsg = deduped[deduped.length - 1];
+        if (lastMsg?.role === "assistant" && !lastMsg.toolCalls?.length && lastMsg.content?.trim()) {
+          currentRunIdRef.current = null;
+          setIsLoading(false);
+        }
+      }
+    }).catch(() => {});
+  }, []);
+
+  // Shared helper: start (or restart) the 3s finalization debounce.
+  const startFinalizeDebounce = useCallback(() => {
+    if (finalDebounceRef.current) clearTimeout(finalDebounceRef.current);
+    finalDebounceRef.current = setTimeout(() => {
+      currentRunIdRef.current = null;
+      setIsLoading(false);
+      mergeHistoryAndMaybeFinalize(false);
+    }, 3000);
+  }, [mergeHistoryAndMaybeFinalize]);
+
+  // Handle incoming chat events
   const handleChatEvent = useCallback((payload: ChatEventPayload) => {
-
-    // Deduplicate events using runId + state as key
-    const eventKey = `${payload.runId}:${payload.state}`;
-    if (processedEventSeqRef.current.has(eventKey)) {
-      return;
+    // Deduplicate terminal events (final/aborted/error) to prevent double-processing.
+    if (payload.state !== "delta") {
+      const eventKey = `${payload.runId}:${payload.state}`;
+      if (processedEventSeqRef.current.has(eventKey)) return;
+      processedEventSeqRef.current.add(eventKey);
     }
-    processedEventSeqRef.current.add(eventKey);
 
-    if (payload.sessionKey !== effectiveSessionKey) {
-      return;
-    }
+    // Allow events through when sessionKey is missing (some agent events
+    // don't include it). Only reject if it's explicitly a different session.
+    if (payload.sessionKey && payload.sessionKey !== sessionKeyRef.current) return;
 
     if (payload.state === "delta") {
+      // Late-arriving deltas re-activate the conversation after premature finalization.
+      if (currentRunIdRef.current === null && payload.runId) {
+        currentRunIdRef.current = payload.runId;
+        setIsLoading(true);
+      }
+
+      // Manage timers when conversation is active (including just-reactivated).
+      if (currentRunIdRef.current !== null) {
+        // Reset idle reload — after 8s of silence, check history for completion.
+        if (idleReloadRef.current) clearTimeout(idleReloadRef.current);
+        idleReloadRef.current = setTimeout(() => {
+          if (currentRunIdRef.current === null) return;
+          mergeHistoryAndMaybeFinalize(true);
+        }, 8000);
+
+        // If a finalize debounce is running, restart it — late deltas extend
+        // the window but finalization still fires 3s after the last event.
+        if (finalDebounceRef.current) {
+          startFinalizeDebounce();
+        }
+      }
 
       // Check if this is a tool event
       const msg = payload.message as Record<string, unknown> | undefined;
       const role = msg?.role as string | undefined;
 
-      if (role === "toolResult") {
+      if (role === "toolResult" || role === "tool") {
         // Handle tool result - add as separate message
-        const toolCallId = msg?.toolCallId as string | undefined;
-        const toolName = msg?.toolName as string | undefined;
-        const content = typeof msg?.content === "string" ? msg.content : "";
-        const isError = msg?.isError as boolean | undefined;
+        // Support multiple field name conventions
+        const toolResultEntry = Array.isArray(msg?.toolResults) ? (msg.toolResults as any[])[0] : undefined;
+        const toolCallId = (msg?.toolCallId || msg?.tool_call_id || toolResultEntry?.toolCallId) as string | undefined;
+        const toolName = (msg?.toolName || msg?.tool_name || msg?.name || toolResultEntry?.toolName) as string | undefined;
+        const rawContent = toolResultEntry?.content !== undefined ? toolResultEntry.content : msg?.content;
+        const content = typeof rawContent === "string" ? rawContent : "";
+        const isError = (msg?.isError || toolResultEntry?.isError) as boolean | undefined;
 
+        const resultMsgId = `result-${toolCallId || uuidv4()}`;
         const toolResultMsg: GatewayChatMessage = {
-          id: toolCallId || uuidv4(),
+          id: resultMsgId,
           role: "toolResult",
           content,
           timestamp: Date.now(),
@@ -397,64 +625,170 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
             isError: isError || false,
           }],
         };
-        setMessages((prev) => [...prev, toolResultMsg]);
-        return;
-      }
-
-      if (role === "assistant" && msg?.tool_calls) {
-        // Handle tool call - update last assistant message with tool calls
-        const toolCalls = msg.tool_calls as Array<{
-          id: string;
-          type?: string;
-          function?: { name: string; arguments: string };
-          name?: string;
-          arguments?: string;
-        }>;
-
-        const normalizedToolCalls = toolCalls?.map((tc) => ({
-          id: tc.id,
-          type: tc.type || "function",
-          function: tc.function || { name: tc.name || "", arguments: tc.arguments || "{}" },
-          name: tc.function?.name || tc.name || "",
-          arguments: tc.function?.arguments || tc.arguments || "{}",
-        }));
-
         setMessages((prev) => {
-          const lastMsg = prev[prev.length - 1];
-          if (lastMsg && lastMsg.role === "assistant") {
-            return [...prev.slice(0, -1), { ...lastMsg, toolCalls: normalizedToolCalls }];
+          // Avoid duplicates — update if already exists
+          const existingIdx = prev.findIndex((m) => m.id === resultMsgId);
+          if (existingIdx !== -1) {
+            const existing = prev[existingIdx] as any;
+            // Skip update if content hasn't changed to prevent infinite render loops
+            if (existing.content === content && existing.toolResults?.[0]?.isError === (isError || false)) {
+              return prev;
+            }
+            const updated = [...prev];
+            updated[existingIdx] = toolResultMsg;
+            return updated;
           }
-          // Create new assistant message with tool calls
-          return [...prev, {
-            id: payload.runId || uuidv4(),
-            role: "assistant" as ChatMessageRole,
-            content: "",
-            timestamp: Date.now(),
-            toolCalls: normalizedToolCalls,
-          }];
+          // Insert before any trailing assistant text messages — tool results
+          // logically precede the final text even if events arrive out of order.
+          // Use a timestamp just before the text so history merge sorting preserves order.
+          let insertIdx = prev.length;
+          for (let i = prev.length - 1; i >= 0; i--) {
+            if (prev[i].role === "assistant" && !prev[i].toolCalls?.length && prev[i].content?.trim()) {
+              insertIdx = i;
+            } else {
+              break;
+            }
+          }
+          if (insertIdx < prev.length) {
+            toolResultMsg.timestamp = prev[insertIdx].timestamp - 1;
+          }
+          return [...prev.slice(0, insertIdx), toolResultMsg, ...prev.slice(insertIdx)];
         });
+
         return;
       }
 
-      // Regular text delta - streaming content update
+      // Handle tool calls in any format:
+      // - OpenAI: msg.tool_calls
+      // - camelCase: msg.toolCalls
+      // - contentBlocks: msg.contentBlocks with type "toolCall"
+      // - Anthropic: msg.content array with type "tool_use"
+      if (role === "assistant") {
+        const rawToolCalls = msg?.tool_calls || msg?.toolCalls;
+        const contentBlockToolCalls = Array.isArray(msg?.contentBlocks)
+          ? (msg.contentBlocks as any[]).filter((b: any) => b?.type === "toolCall" && b?.id && b?.name)
+          : [];
+        const contentToolUse = Array.isArray(msg?.content)
+          ? (msg.content as any[]).filter((b: any) => b?.type === "tool_use" && b?.id && b?.name)
+          : [];
+
+        const hasToolCalls = rawToolCalls || contentBlockToolCalls.length > 0 || contentToolUse.length > 0;
+
+        if (hasToolCalls) {
+          let normalizedToolCalls: Array<{
+            id: string;
+            type: string;
+            function: { name: string; arguments: string };
+            name: string;
+            arguments: string;
+          }> = [];
+
+          const stringifyArgs = (v: unknown): string =>
+            typeof v === "string" ? v : JSON.stringify(v || {});
+
+          if (rawToolCalls) {
+            normalizedToolCalls = (rawToolCalls as any[]).map((tc: any) => ({
+              id: tc.id || uuidv4(),
+              type: tc.type || "function",
+              function: tc.function || { name: tc.name || "", arguments: stringifyArgs(tc.arguments) },
+              name: tc.function?.name || tc.name || "",
+              arguments: tc.function?.arguments || stringifyArgs(tc.arguments),
+            }));
+          } else if (contentBlockToolCalls.length > 0) {
+            normalizedToolCalls = contentBlockToolCalls.map((b: any) => ({
+              id: b.id,
+              type: "function",
+              function: { name: b.name, arguments: stringifyArgs(b.arguments) },
+              name: b.name,
+              arguments: stringifyArgs(b.arguments),
+            }));
+          } else if (contentToolUse.length > 0) {
+            normalizedToolCalls = contentToolUse.map((b: any) => ({
+              id: b.id,
+              type: "function",
+              function: { name: b.name, arguments: stringifyArgs(b.input) },
+              name: b.name,
+              arguments: stringifyArgs(b.input),
+            }));
+          }
+
+          if (normalizedToolCalls.length > 0) {
+            // Use first toolCallId as the message id so it's stable and unique per tool call
+            const toolCallMsgId = normalizedToolCalls[0].id || payload.runId || uuidv4();
+
+            setMessages((prev) => {
+              // Check if we already have a message for this exact tool call
+              const existingIdx = prev.findIndex((m) => m.id === toolCallMsgId);
+              if (existingIdx !== -1) {
+                // Skip update if tool calls haven't changed to prevent unnecessary re-renders
+                const existingCalls = (prev[existingIdx] as any).toolCalls;
+                if (existingCalls && JSON.stringify(existingCalls) === JSON.stringify(normalizedToolCalls)) {
+                  return prev;
+                }
+                const updated = [...prev];
+                updated[existingIdx] = { ...updated[existingIdx], toolCalls: normalizedToolCalls };
+                return updated;
+              }
+              // Insert before any trailing assistant text messages — tool calls
+              // logically precede the final text even if events arrive out of order.
+              // Use a timestamp just before the text so history merge sorting preserves order.
+              let insertIdx = prev.length;
+              for (let i = prev.length - 1; i >= 0; i--) {
+                if (prev[i].role === "assistant" && !prev[i].toolCalls?.length && prev[i].content?.trim()) {
+                  insertIdx = i;
+                } else {
+                  break;
+                }
+              }
+              const toolTimestamp = insertIdx < prev.length ? prev[insertIdx].timestamp - 1 : Date.now();
+              return [...prev.slice(0, insertIdx), {
+                id: toolCallMsgId,
+                role: "assistant" as ChatMessageRole,
+                content: "",
+                timestamp: toolTimestamp,
+                toolCalls: normalizedToolCalls,
+              }, ...prev.slice(insertIdx)];
+            });
+            return;
+          }
+        }
+      }
+
+      // Regular text delta - streaming content update.
+      // Match by runId so subagent text doesn't overwrite the parent agent's text.
       const text = extractText(payload.message);
       if (typeof text === "string") {
         streamContentRef.current = text;
 
         setMessages((prev) => {
-          // Update the last assistant message or create a new one
-          const lastMsg = prev[prev.length - 1];
-          if (lastMsg && lastMsg.role === "assistant") {
-            return [
-              ...prev.slice(0, -1),
-              { ...lastMsg, content: text },
-            ];
+          // Find an existing text message from THIS runId (not just the last message)
+          const runId = payload.runId || "";
+          const ownIdx = prev.findIndex(
+            (m) => m.role === "assistant" && !m.toolCalls?.length &&
+              (m.id === runId || m.id?.startsWith(runId + "-cont"))
+          );
+
+          if (ownIdx !== -1) {
+            // Update existing message from this runId
+            const updated = [...prev];
+            updated[ownIdx] = { ...prev[ownIdx], content: text };
+            return updated;
           }
-          // Create new assistant message
+
+          // No existing message for this runId — create one.
+          // Use a unique ID — the same runId may already be used for an earlier
+          // text segment (before tool calls), so suffix to avoid key collisions.
+          const baseId = runId || uuidv4();
+          let msgId = baseId;
+          let suffix = 0;
+          while (prev.some((m) => m.id === msgId)) {
+            suffix++;
+            msgId = `${baseId}-cont${suffix}`;
+          }
           return [
             ...prev,
             {
-              id: payload.runId || uuidv4(),
+              id: msgId,
               role: "assistant" as ChatMessageRole,
               content: text,
               timestamp: Date.now(),
@@ -463,71 +797,16 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
         });
       }
     } else if (payload.state === "final") {
-
-      // If final has no message, reload history from server (matching OpenClaw's behavior)
-      // This handles cases where the agent response comes through a different channel
-      if (!payload.message || typeof payload.message !== "object") {
-        // Reload history in background
-        gatewayConnection.getChatHistory(effectiveSessionKey).then((response) => {
-          if (response.messages && response.messages.length > 0) {
-            const loadedMessages: GatewayChatMessage[] = [];
-            for (const msg of response.messages) {
-              const normalized = normalizeMessage(msg);
-              if (normalized) {
-                loadedMessages.push(normalized);
-              }
-            }
-            setMessages(loadedMessages);
-            setIsLoading(false);
-          }
-        }).catch((err) => {
-          console.error("[GatewayChat] Failed to reload history:", err);
-          setIsLoading(false);
-        });
-      }
-
-      // Final message - try to normalize it
-      let normalized = normalizeMessage(payload.message);
-
-      // If final message is empty/undefined but we have streaming content, use that
-      if (!normalized || !normalized.content) {
-        const streamedText = streamContentRef.current;
-        if (streamedText && streamedText.trim()) {
-          normalized = {
-            id: payload.runId || uuidv4(),
-            role: "assistant" as ChatMessageRole,
-            content: streamedText,
-            timestamp: Date.now(),
-          };
-        }
-      }
-
-      if (normalized && normalized.content) {
-        setMessages((prev) => {
-          // Replace the streaming message with final one
-          const lastMsg = prev[prev.length - 1];
-          if (lastMsg && lastMsg.role === "assistant" && lastMsg.id === payload.runId) {
-            return [...prev.slice(0, -1), normalized!];
-          }
-          return [...prev, normalized!];
-        });
-      } else {
-        // Final message is truly empty - still clean up the streaming message if exists
-        setMessages((prev) => {
-          const lastMsg = prev[prev.length - 1];
-          if (lastMsg && lastMsg.role === "assistant" && lastMsg.id === payload.runId) {
-            // Keep the streaming content if no final content
-            const existingContent = lastMsg.content || streamContentRef.current;
-            if (existingContent) {
-              return [...prev.slice(0, -1), { ...lastMsg, content: existingContent }];
-            }
-          }
-          return prev;
-        });
-      }
+      // Don't touch messages here. The streaming deltas already built the
+      // message content. The history merge (fired by the debounce below)
+      // will reconcile with the server's authoritative version.
+      // Processing the final event's message was causing duplicates because
+      // the server assigns different IDs and whitespace on every call.
       streamContentRef.current = "";
-      currentRunIdRef.current = null;
-      setIsLoading(false);
+
+      // Every lifecycle "end" (from any agent) restarts the 3s debounce.
+      // If another agent is still active, its next delta will extend it.
+      startFinalizeDebounce();
     } else if (payload.state === "aborted") {
       // User stopped generation - keep partial content
       const streamedText = streamContentRef.current;
@@ -555,13 +834,39 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       currentRunIdRef.current = null;
       setIsLoading(false);
     } else if (payload.state === "error") {
-      // Error state
       setError(payload.errorMessage || "Chat error");
       streamContentRef.current = "";
+      mergeHistoryAndMaybeFinalize(false);
       currentRunIdRef.current = null;
       setIsLoading(false);
+      if (idleReloadRef.current) {
+        clearTimeout(idleReloadRef.current);
+        idleReloadRef.current = null;
+      }
+      if (loadingTimeoutRef.current) {
+        clearTimeout(loadingTimeoutRef.current);
+        loadingTimeoutRef.current = null;
+      }
     }
-  }, [effectiveSessionKey]);
+  }, [mergeHistoryAndMaybeFinalize, startFinalizeDebounce]);
+
+  // Shared: fetch history and replace messages (used on connect + reconnect)
+  const fetchAndSetHistory = useCallback(async () => {
+    if (!gatewayConnection.isConnected()) return;
+    try {
+      const response = await gatewayConnection.getChatHistory(getSessionKey());
+      const loaded: GatewayChatMessage[] = [];
+      if (response.messages) {
+        for (const msg of response.messages) {
+          const normalized = normalizeMessage(msg);
+          if (normalized) loaded.push(normalized);
+        }
+      }
+      setMessages(deduplicateMessages(loaded));
+    } catch (err) {
+      console.error("[GatewayChat] Failed to load history:", err);
+    }
+  }, [getSessionKey]);
 
   // Subscribe to gateway connection state
   useEffect(() => {
@@ -571,34 +876,8 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       const state = getGatewayConnectionState();
       setIsConnected(state.connected);
 
-      // Load chat history when connection is established
       if (state.connected && !previousConnected) {
-        // Load history after a short delay to ensure connection is fully established
-        setTimeout(async () => {
-          if (gatewayConnection.isConnected()) {
-            try {
-              const response = await gatewayConnection.getChatHistory(effectiveSessionKey);
-              const loadedMessages: GatewayChatMessage[] = [];
-
-              if (response.messages) {
-                for (let i = 0; i < response.messages.length; i++) {
-                  const msg = response.messages[i] as any;
-                  // Log raw message structure for first few messages
-                  if (i < 10) {
-                  }
-                  const normalized = normalizeMessage(msg);
-                  if (normalized) {
-                    loadedMessages.push(normalized);
-                  }
-                }
-              }
-
-              setMessages(loadedMessages);
-            } catch (err) {
-              console.error("[GatewayChat] Failed to load history:", err);
-            }
-          }
-        }, 500);
+        setTimeout(() => fetchAndSetHistory(), 500);
       }
 
       if (!state.connected) {
@@ -609,36 +888,74 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
 
     const unsubscribe = subscribeGatewayConnection(handleStateChange);
 
+    // Check current state immediately — if WS is already connected (e.g. by useOpenClaw),
+    // the subscription won't fire since there's no state change.
+    const currentState = getGatewayConnectionState();
+    if (currentState.connected) {
+      setIsConnected(true);
+      if (!previousConnected) {
+        previousConnected = true;
+        setTimeout(() => fetchAndSetHistory(), 500);
+      }
+    }
+
     return () => {
       unsubscribe();
     };
-  }, [effectiveSessionKey]);
+  }, [fetchAndSetHistory]);
 
-  // Subscribe to chat events
+  // Keep a stable ref to the latest handleChatEvent so the subscription
+  // never tears down/re-subscribes (which caused a gap where events were lost).
+  const handleChatEventRef = useRef(handleChatEvent);
+  handleChatEventRef.current = handleChatEvent;
+
+  // Subscribe to chat events — stable, runs only once
   useEffect(() => {
-    unsubscribeRef.current = gatewayConnection.onChatEvent(handleChatEvent);
+    const stableHandler = (payload: ChatEventPayload) => handleChatEventRef.current(payload);
+    unsubscribeRef.current = gatewayConnection.onChatEvent(stableHandler);
 
     return () => {
       if (unsubscribeRef.current) {
         unsubscribeRef.current();
       }
+      if (idleReloadRef.current) {
+        clearTimeout(idleReloadRef.current);
+      }
     };
-  }, [handleChatEvent]);
+  }, []);
 
-  // Connect to gateway
+  // No polling during generation — real-time streaming events (text deltas +
+  // tool events via caps: ["tool-events"]) handle live updates. The debounced
+  // final handler reloads full history once the agent finishes.
+
+  // Connect to gateway — piggyback on existing singleton connection if available.
+  // The singleton is typically established by useOpenClaw (hub-aware, Electron-aware).
+  // Only attempt our own connection if the singleton is not connected.
   const connect = useCallback(async () => {
+    // If singleton is already connected (by useOpenClaw or prior call), just sync state
+    if (gatewayConnection.isConnected()) {
+      setIsConnected(true);
+      return;
+    }
     try {
-      const { gatewayUrl, token } = await getGatewayConfig();
-      const wsUrl = buildGatewayWsUrl(gatewayUrl, token);
-      connectGatewayWs(wsUrl, { token });
+      const config = await getGatewayConfig();
+      if (!config.gatewayUrl) {
+        setError("No hub configured");
+        return;
+      }
+      connectGatewayWs(config.gatewayUrl, {
+        token: config.token,
+        hubMode: config.hubMode,
+        hubDeviceId: config.hubDeviceId,
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to connect");
     }
   }, []);
 
-  // Disconnect from gateway
+  // Disconnect — do NOT kill the singleton WS, just unsubscribe from state.
+  // The singleton is shared with useOpenClaw and other consumers.
   const disconnect = useCallback(() => {
-    disconnectGatewayWs();
     setIsConnected(false);
   }, []);
 
@@ -646,31 +963,15 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
   const loadChatHistory = useCallback(async () => {
     setIsLoading(true);
     setError(null);
-
     try {
-      const response = await gatewayConnection.getChatHistory(effectiveSessionKey);
-
-      const loadedMessages: GatewayChatMessage[] = [];
-
-      if (response.messages) {
-        for (let i = 0; i < response.messages.length; i++) {
-          const msg = response.messages[i];
-          const normalized = normalizeMessage(msg);
-          if (normalized) {
-            loadedMessages.push(normalized);
-          }
-        }
-      } else {
-      }
-
-      setMessages(loadedMessages);
+      await fetchAndSetHistory();
     } catch (err) {
-      console.error("[GatewayChat] loadChatHistory: Error:", err);
+      console.error("[GatewayChat] loadChatHistory error:", err);
       setError(err instanceof Error ? err.message : "Failed to load history");
     } finally {
       setIsLoading(false);
     }
-  }, [effectiveSessionKey]);
+  }, [fetchAndSetHistory]);
 
   // Send a message
   const sendMessage = useCallback(async (content: string, attachments?: GatewayChatAttachment[]) => {
@@ -680,13 +981,30 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
 
     if (!gatewayConnection.isConnected()) {
       try {
-        const { gatewayUrl, token } = await getGatewayConfig();
-        const wsUrl = buildGatewayWsUrl(gatewayUrl, token);
-        connectGatewayWs(wsUrl, { token });
-        // Wait for connection
-        await new Promise(resolve => setTimeout(resolve, 1500));
+        const config = await getGatewayConfig();
+        if (!config.gatewayUrl) {
+          setError("No hub configured");
+          return;
+        }
+        connectGatewayWs(config.gatewayUrl, {
+          token: config.token,
+          hubMode: config.hubMode,
+          hubDeviceId: config.hubDeviceId,
+        });
+        // Wait for connection (max 5s) using state subscription
+        await new Promise<void>((resolve, reject) => {
+          const timeout = setTimeout(() => { unsub(); reject(new Error("Connection timeout")); }, 5000);
+          const unsub = subscribeGatewayConnection(() => {
+            const s = getGatewayConnectionState();
+            if (s.connected) { clearTimeout(timeout); unsub(); resolve(); }
+            else if (s.error) { clearTimeout(timeout); unsub(); reject(new Error(s.error)); }
+          });
+          // Check immediately in case already connected
+          if (gatewayConnection.isConnected()) { clearTimeout(timeout); unsub(); resolve(); }
+        });
       } catch (e) {
-        console.error("[GatewayChat] Auto-connect failed:", e);
+        setError(e instanceof Error ? e.message : "Auto-connect failed");
+        return;
       }
     }
 
@@ -696,6 +1014,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       role: "user",
       content: content.trim(),
       timestamp: now,
+      attachments: attachments?.length ? attachments : undefined,
     };
 
     // Optimistically add user message
@@ -704,17 +1023,27 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
     // Generate runId for this conversation
     const runId = uuidv4();
 
-    // Add empty assistant message to show thinking animation
-    const thinkingMessage: GatewayChatMessage = {
-      id: runId,
-      role: "assistant",
-      content: "",
-      timestamp: now,
-    };
-    setMessages((prev) => [...prev, thinkingMessage]);
+    // Don't add an empty assistant "thinking" placeholder — it would get an
+    // early timestamp and sort before tool actions. The GatewayChatWidget's
+    // thinking indicator handles the "AI is thinking" state via isLoading.
+    // Text content is appended when it actually arrives (after tools).
 
     setIsLoading(true);
     setError(null);
+
+    // Clear any idle reload timer from previous conversation
+    if (idleReloadRef.current) {
+      clearTimeout(idleReloadRef.current);
+      idleReloadRef.current = null;
+    }
+
+    // Safety timeout: reset isLoading if no terminal event arrives within 5 min
+    if (loadingTimeoutRef.current) clearTimeout(loadingTimeoutRef.current);
+    loadingTimeoutRef.current = setTimeout(() => {
+      currentRunIdRef.current = null;
+      setIsLoading(false);
+      mergeHistoryAndMaybeFinalize(false);
+    }, 300_000);
 
     currentRunIdRef.current = runId;
     streamContentRef.current = "";
@@ -728,7 +1057,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       }));
 
       await gatewayConnection.sendChatMessage({
-        sessionKey: effectiveSessionKey,
+        sessionKey: getSessionKey(),
         message: content.trim(),
         deliver: false,
         idempotencyKey: runId,
@@ -755,7 +1084,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       currentRunIdRef.current = null;
       setIsLoading(false);
     }
-  }, [effectiveSessionKey]);
+  }, [getSessionKey, mergeHistoryAndMaybeFinalize]);
 
   // Stop generation
   const stopGeneration = useCallback(async () => {
@@ -765,13 +1094,13 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
 
     try {
       await gatewayConnection.abortChat({
-        sessionKey: effectiveSessionKey,
+        sessionKey: getSessionKey(),
         runId: currentRunIdRef.current || undefined,
       });
     } catch (err) {
       console.error("Failed to abort chat:", err);
     }
-  }, [effectiveSessionKey]);
+  }, [getSessionKey]);
 
   // Clear chat
   const clearChat = useCallback(() => {
@@ -779,7 +1108,25 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
     setError(null);
     streamContentRef.current = "";
     currentRunIdRef.current = null;
+    if (finalDebounceRef.current) {
+      clearTimeout(finalDebounceRef.current);
+      finalDebounceRef.current = null;
+    }
   }, []);
+
+  // Clear loading/finalize timeouts when isLoading becomes false
+  useEffect(() => {
+    if (!isLoading) {
+      if (loadingTimeoutRef.current) {
+        clearTimeout(loadingTimeoutRef.current);
+        loadingTimeoutRef.current = null;
+      }
+      if (finalDebounceRef.current) {
+        clearTimeout(finalDebounceRef.current);
+        finalDebounceRef.current = null;
+      }
+    }
+  }, [isLoading]);
 
   // Auto-connect on mount
   useEffect(() => {
@@ -797,7 +1144,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
     isLoading,
     isConnected,
     error,
-    sessionKey: effectiveSessionKey,
+    sessionKey: sessionKeyState,
     sendMessage,
     stopGeneration,
     loadChatHistory,
@@ -810,7 +1157,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
     isLoading,
     isConnected,
     error,
-    effectiveSessionKey,
+    sessionKeyState,
     sendMessage,
     stopGeneration,
     loadChatHistory,

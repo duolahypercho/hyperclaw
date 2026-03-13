@@ -41,7 +41,8 @@ export type WidgetType =
   | "docs"
   | "pixel-office"
   | "usage"
-  | "gateway-chat";
+  | "gateway-chat"
+  | "agent-status";
 
 export interface Widget {
   id: string;
@@ -98,6 +99,7 @@ const WidgetWrapper: React.FC<CustomProps> = (props) => {
 const DashboardGridStyles = React.memo(() => (
   <>
     <style jsx global>{`
+      /* Prevent text selection during drag/resize */
       .react-grid-item.react-draggable-dragging,
       .react-grid-item.resizing {
         user-select: none;
@@ -112,8 +114,23 @@ const DashboardGridStyles = React.memo(() => (
         -moz-user-select: none;
         -ms-user-select: none;
       }
+      /* In edit mode, disable text selection on the entire grid to prevent
+         selection starting before the dragging class is applied */
+      .dashboard-edit-mode {
+        user-select: none;
+        -webkit-user-select: none;
+        -moz-user-select: none;
+        -ms-user-select: none;
+      }
       .react-grid-item[data-resizable="false"] .react-resizable-handle {
         display: none !important;
+      }
+      /* Prevent inner widget scroll from bubbling to the outer dashboard */
+      .react-grid-item [data-radix-scroll-area-viewport],
+      .react-grid-item .overflow-auto,
+      .react-grid-item .overflow-y-auto,
+      .react-grid-item .customScrollbar2 {
+        overscroll-behavior: contain;
       }
     `}</style>
     <style jsx global>{`
@@ -433,7 +450,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
   return (
     <div
-      className={cn("h-full w-full overflow-auto customScrollbar2", className)}
+      className={cn(
+        "h-full w-full overflow-auto customScrollbar2",
+        isEditMode && "dashboard-edit-mode",
+        className
+      )}
+      style={{ overscrollBehavior: "contain" }}
     >
       <ResponsiveGridLayout
         className="layout"

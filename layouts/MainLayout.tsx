@@ -1,4 +1,4 @@
-import React, { useRef, useEffect } from "react";
+import React, { useRef, useEffect, useState, useCallback } from "react";
 import { NextPage } from "next/types";
 import { AssistantProvider } from "../Providers/AssistantProv";
 import { useOS } from "@OS/Provider/OSProv";
@@ -15,9 +15,10 @@ import {
   VirtualCrons,
   VirtualPixelOffice,
   VirtualDocs,
-  VirtualAgents,
   VirtualUsage,
   VirtualOpenClaw,
+  VirtualApprovals,
+  VirtualOrgChart,
 } from "$/components/Tool/VirtualToolComponents";
 import { TimerProvider } from "$/Providers/TimerProv";
 import { useInterim } from "$/Providers/InterimProv";
@@ -28,12 +29,18 @@ import { useUser } from "$/Providers/UserProv";
 import Loading from "$/components/Loading";
 import { PricingModalProvider, usePricingModal } from "$/Providers/PricingModalProv";
 import PricingModal from "$/components/Navigation/PricingModal";
+import { useDevices } from "$/hooks/useDevices";
+import DeviceSetup from "$/components/Onboarding/DeviceSetup";
 
 const MainLayout = ({ children }: any) => {
   const { mobileScreen, tabletScreen } = useInterim();
   const { publicTools } = useOS();
   const { status } = useUser();
   const hasBeenAuthenticatedRef = useRef(false);
+  const [setupSkipped, setSetupSkipped] = useState(false);
+
+  // Check devices from hub
+  const { needsSetup, loading: devicesLoading, refetch: refetchDevices } = useDevices();
 
   // Use the professional auth guard hook
   const { isLoading, isRedirecting } = useAuthGuard({
@@ -54,6 +61,14 @@ const MainLayout = ({ children }: any) => {
   const showAppWithLayout =
     status === "authenticated" || (hasBeenAuthenticatedRef.current && status === "loading");
 
+  // Show onboarding if: authenticated + no devices + not skipped
+  const showOnboarding = showAppWithLayout && needsSetup && !devicesLoading && !setupSkipped;
+
+  const handleSetupComplete = useCallback(() => {
+    setSetupSkipped(true);
+    refetchDevices();
+  }, [refetchDevices]);
+
   // Define virtual routes for instant navigation
   const virtualRoutes = [
     {
@@ -72,10 +87,11 @@ const MainLayout = ({ children }: any) => {
     { path: "/Tool/Memory", component: VirtualMemory, name: "Memory" },
     { path: "/Tool/Crons", component: VirtualCrons, name: "Cron Jobs" },
     { path: "/Tool/OpenClaw", component: VirtualOpenClaw, name: "OpenClaw" },
-    { path: "/Tool/Agents", component: VirtualAgents, name: "Agents" },
-    { path: "/Tool/PixelOffice", component: VirtualPixelOffice, name: "AI Agent Office" },
+{ path: "/Tool/PixelOffice", component: VirtualPixelOffice, name: "AI Agent Office" },
     { path: "/Tool/Docs", component: VirtualDocs, name: "Docs" },
     { path: "/Tool/Usage", component: VirtualUsage, name: "Token Usage" },
+    { path: "/Tool/Approvals", component: VirtualApprovals, name: "Approvals" },
+    { path: "/Tool/OrgChart", component: VirtualOrgChart, name: "Org Chart" },
     { path: "/Settings", component: VirtualSettings, name: "Settings" },
   ];
 
@@ -90,6 +106,11 @@ const MainLayout = ({ children }: any) => {
 
   if (!showAppWithLayout) {
     return <>{children}</>;
+  }
+
+  // Show onboarding for browser users with no devices
+  if (showOnboarding) {
+    return <DeviceSetup onComplete={handleSetupComplete} />;
   }
 
   return (

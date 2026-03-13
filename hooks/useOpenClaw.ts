@@ -1,13 +1,14 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
+import { hubCommand } from "$/lib/hub-direct";
 import {
   getRunningJobIds,
   removeRunningJobIds,
   getRunningJobStartedAt,
 } from "$/lib/crons-running-store";
 import {
-  buildGatewayWsUrl,
   connectGatewayWs,
+  getGatewayConfig,
   getGatewayConnectionState,
   subscribeGatewayConnection,
 } from "$/lib/openclaw-gateway-ws";
@@ -50,58 +51,92 @@ const initialState: OpenClawState = {
   errors: {},
 };
 
-async function apiFetch(action: string, args?: string) {
-  const res = await fetch("/api/openclaw", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action, args }),
-  });
-  return res.json();
+/**
+ * Hub-based API: all operations route through hubCommand which
+ * calls the Hub API directly from the browser (no serverless proxy).
+ */
+/**
+ * Normalize a hub response into { success, data?, error? }.
+ * hubCommand → unwrapHubResponse strips the hub envelope, so responses may be:
+ *   - Raw data (array, object without "success") from bridge actions like get-crons, get-config
+ *   - Bridge envelope { success: true, data: ... } from actions like list-agents
+ *   - Error envelope { success: false, error: "..." }
+ */
+function wrapHubResult(res: unknown): { success: boolean; data?: unknown; error?: string } {
+  if (res && typeof res === "object" && "success" in (res as Record<string, unknown>)) {
+    const r = res as { success: boolean; data?: unknown; error?: string };
+    return r;
+  }
+  if (res && typeof res === "object" && "error" in (res as Record<string, unknown>)) {
+    return { success: false, error: (res as { error: string }).error };
+  }
+  // Raw data (array or plain object) — treat as success
+  return { success: true, data: res };
 }
 
-async function apiGatewayHealth(): Promise<OpenClawGatewayHealthResult> {
-  const res = await apiFetch("gateway-health");
-  return {
-    healthy: res.healthy === true,
-    error: res.error,
-  };
-}
-
-async function apiMessageSend(params: OpenClawMessageSendParams): Promise<OpenClawMessageSendResult> {
-  const res = await fetch("/api/openclaw", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "message-send", params }),
-  });
-  return res.json();
-}
-
-const httpFallback: OpenClawAPI = {
-  checkInstalled: () => apiFetch("check-installed"),
-  getStatus: () => apiFetch("status"),
-  getGatewayHealth: () => apiGatewayHealth(),
-  sendMessage: (params) => apiMessageSend(params),
-  getCronList: () => apiFetch("cron-list"),
-  getCronListJson: () => apiFetch("cron-list-json"),
-  getAgentList: () => apiFetch("agent-list"),
-  runCommand: (args: string) => apiFetch("run-command", args),
-  cronEnable: (id: string) => apiFetch("cron-enable", id),
-  cronDisable: (id: string) => apiFetch("cron-disable", id),
+const hubApi: OpenClawAPI = {
+  checkInstalled: async () => {
+    return { installed: true, version: "remote" };
+  },
+  getStatus: async () => {
+    const res = await hubCommand({ action: "get-config" });
+    const w = wrapHubResult(res);
+    return {
+      success: w.success,
+      data: typeof w.data === "string" ? w.data : (w.data != null ? JSON.stringify(w.data) : undefined),
+      error: w.error,
+    };
+  },
+  getGatewayHealth: async () => {
+    return { healthy: true, error: undefined };
+  },
+  sendMessage: async (params) => {
+    const res = await hubCommand({ action: "send-command", command: params });
+    const w = wrapHubResult(res);
+    return { success: w.success, error: w.error };
+  },
+  getCronList: async () => {
+    const res = await hubCommand({ action: "get-crons" });
+    const w = wrapHubResult(res);
+    // Text cron list not available via hub; return success with null data
+    return { success: w.success, data: undefined, error: w.error };
+  },
+  getCronListJson: async () => {
+    const res = await hubCommand({ action: "get-crons" });
+    const w = wrapHubResult(res);
+    return { success: w.success, data: w.data as { jobs: OpenClawCronJobJson[] } | undefined, error: w.error };
+  },
+  getAgentList: async () => {
+    const res = await hubCommand({ action: "list-agents" });
+    return wrapHubResult(res) as any;
+  },
+  runCommand: async (args: string) => {
+    const res = await hubCommand({ action: "send-command", command: args });
+    return wrapHubResult(res) as OpenClawCommandResult;
+  },
+  cronEnable: async (id: string) => {
+    const res = await hubCommand({ action: "cron-edit", cronEditJobId: id, cronEditParams: { enabled: true } });
+    return wrapHubResult(res) as OpenClawCommandResult;
+  },
+  cronDisable: async (id: string) => {
+    const res = await hubCommand({ action: "cron-edit", cronEditJobId: id, cronEditParams: { enabled: false } });
+    return wrapHubResult(res) as OpenClawCommandResult;
+  },
 };
 
 function getApi(): OpenClawAPI {
+  // Priority 1: Electron IPC
   if (typeof window !== "undefined" && window.electronAPI?.openClaw) {
     return window.electronAPI.openClaw;
   }
-  return httpFallback;
+  // Priority 2: Hub direct
+  return hubApi;
 }
 
-// Module-level single-flight: only one refresh across all useOpenClaw instances (prevents concurrent IPC burst)
+// Module-level single-flight: only one refresh across all useOpenClaw instances
 let globalRefreshInProgress = false;
-// Cooldown after a refresh completes: avoid starting another refresh immediately (second run was crashing renderer)
 const REFRESH_COOLDOWN_MS = 8000;
 let lastRefreshEndAt = 0;
-// Cache install result so we skip checkInstalled() on subsequent refreshes (second checkInstalled was crashing renderer)
 let cachedInstalled: boolean | null = null;
 
 export function useOpenClaw(autoRefreshMs = 0) {
@@ -140,13 +175,35 @@ export function useOpenClaw(autoRefreshMs = 0) {
 
   const fetchGatewayHealth = useCallback(async () => {
     const api = getApi();
-    // In Electron: use persistent gateway WebSocket (stays open, no repeated pings)
-    if (typeof window !== "undefined" && window.electronAPI?.openClaw?.getGatewayConnectUrl) {
+
+    const connectAndWait = (wsUrl: string, options: Parameters<typeof connectGatewayWs>[1]) => {
+      return new Promise<{ connected: boolean; error: string | null }>((resolve) => {
+        const existing = getGatewayConnectionState();
+        if (existing.connected) { resolve(existing); return; }
+        connectGatewayWs(wsUrl, options);
+        const immediate = getGatewayConnectionState();
+        if (immediate.connected) { resolve(immediate); return; }
+        const timeout = setTimeout(() => { unsub(); resolve(getGatewayConnectionState()); }, 8000);
+        const unsub = subscribeGatewayConnection(() => {
+          const state = getGatewayConnectionState();
+          if (state.connected || state.error) {
+            clearTimeout(timeout);
+            unsub();
+            resolve(state);
+          }
+        });
+      });
+    };
+
+    const config = await getGatewayConfig();
+
+    if (config.gatewayUrl && config.hubMode) {
       try {
-        const { gatewayUrl, token } = await window.electronAPI.openClaw.getGatewayConnectUrl();
-        const wsUrl = buildGatewayWsUrl(gatewayUrl || "http://127.0.0.1:18789", token);
-        connectGatewayWs(wsUrl, { token });
-        const { connected, error } = getGatewayConnectionState();
+        const { connected, error } = await connectAndWait(config.gatewayUrl, {
+          token: config.token,
+          hubMode: true,
+          hubDeviceId: config.hubDeviceId,
+        });
         setPartial({
           gatewayHealthy: connected,
           gatewayHealthError: connected ? null : (error ?? "Not connected"),
@@ -154,13 +211,10 @@ export function useOpenClaw(autoRefreshMs = 0) {
         });
         return;
       } catch {
-        /* fall through to CLI */
+        /* fall through */
       }
     }
-    if (!api.getGatewayHealth) {
-      setPartial({ gatewayHealthy: null, gatewayHealthError: null });
-      return;
-    }
+
     try {
       const res = await api.getGatewayHealth();
       setPartial({
@@ -189,7 +243,6 @@ export function useOpenClaw(autoRefreshMs = 0) {
   const fetchCronListJson = useCallback(async () => {
     const api = getApi();
     const res = await api.getCronListJson();
-    // Backend normalizes to data.jobs; accept array or data.jobs for resilience
     const jobs =
       res.success && res.data
         ? (Array.isArray(res.data) ? res.data : res.data.jobs)
@@ -216,7 +269,6 @@ export function useOpenClaw(autoRefreshMs = 0) {
   }, []);
 
   const fetchAgents = useCallback(async () => {
-    // Use same source as Agents page: list-agents (openclaw agents list / openclaw.json)
     try {
       const res = (await bridgeInvoke("list-agents", {})) as {
         success?: boolean;
@@ -227,9 +279,8 @@ export function useOpenClaw(autoRefreshMs = 0) {
         return;
       }
     } catch {
-      /* fall through to getAgentList fallback */
+      /* fall through */
     }
-    // Fallback: workspace subdirs (different source, map to registry shape)
     const api = getApi();
     const res = await api.getAgentList();
     if (res.success && res.data) {
@@ -268,7 +319,6 @@ export function useOpenClaw(autoRefreshMs = 0) {
         setState((prev) => ({ ...prev, logs: null, errors: { ...prev.errors, logs: err } }));
         return;
       }
-      // API returns the log array directly: [{ time, level, message }, ...]
       let logText: string | null = null;
       if (Array.isArray(json)) {
         logText = json
@@ -293,19 +343,16 @@ export function useOpenClaw(autoRefreshMs = 0) {
     if (Date.now() - lastRefreshEndAt < REFRESH_COOLDOWN_MS) return;
     refreshInProgressRef.current = true;
     globalRefreshInProgress = true;
-    // Use immediate setPartial for loading state - user needs instant feedback
     setPartial({ loading: true });
     const errMsg = (e: unknown) => (e instanceof Error ? e.message : "Failed");
 
     try {
-      // 1) Load cron data first (file-based, fast) and show list immediately
       const api = getApi();
       const [cronListRes, cronJsonRes] = await Promise.all([
         api.getCronList().catch((e) => ({ success: false as const, error: errMsg(e) })),
         api.getCronListJson().catch((e) => ({ success: false as const, error: errMsg(e), data: undefined })),
       ]);
 
-      // Batch all cron-related updates into single state change using functional update
       setState((prev) => {
         const cronUpdates: Partial<OpenClawState> = {};
 
@@ -337,7 +384,6 @@ export function useOpenClaw(autoRefreshMs = 0) {
       refreshInProgressRef.current = false;
       globalRefreshInProgress = false;
 
-      // 2) Run install check, gateway, status, agents in background (don't block UI)
       let isInstalled: boolean;
       if (cachedInstalled !== null) {
         isInstalled = cachedInstalled;
@@ -388,9 +434,8 @@ export function useOpenClaw(autoRefreshMs = 0) {
     });
   }, []);  // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Sync UI with persistent gateway WebSocket state (Electron: one connection, no repeated pings)
   useEffect(() => {
-    if (typeof window === "undefined" || !window.electronAPI?.openClaw?.getGatewayConnectUrl) return;
+    if (typeof window === "undefined") return;
     const unsub = subscribeGatewayConnection(() => {
       const { connected, error } = getGatewayConnectionState();
       setPartial({
@@ -401,21 +446,18 @@ export function useOpenClaw(autoRefreshMs = 0) {
     return unsub;
   }, [setPartial]);
 
-  // Cron running poll: match latest run by runAtMs close to our "Run now" time; remove when that run is finished.
   useEffect(() => {
-    const CRON_POLL_MS = 5_000; // 5 seconds - fast updates without lag
+    const CRON_POLL_MS = 5_000;
     const DEBUG = typeof window !== "undefined" && (window as unknown as { __CRON_POLL_DEBUG?: boolean }).__CRON_POLL_DEBUG !== false;
     const debugLog = (...args: unknown[]) => DEBUG && console.log("[cron-poll]", ...args);
-    // Run is "ours" if runAtMs is within this window of when we clicked Run now (clock skew + delay)
-    const WINDOW_BEFORE_MS = 10_000;   // 10s before (clock skew)
-    const WINDOW_AFTER_MS = 300_000;   // 5 min after (run can start a bit later)
-    const RECENT_MS = 120_000;         // if no startedAt (legacy): treat run as ours if within 2 min
+    const WINDOW_BEFORE_MS = 10_000;
+    const WINDOW_AFTER_MS = 300_000;
+    const RECENT_MS = 120_000;
 
     const checkRunningCrons = async () => {
       const currentIds = getRunningJobIds();
       if (currentIds.length === 0) return;
 
-      // Parallelize all IPC calls - much faster than serial
       const results = await Promise.allSettled(
         currentIds.map(jobId =>
           bridgeInvoke("get-cron-runs-for-job", {
@@ -426,7 +468,6 @@ export function useOpenClaw(autoRefreshMs = 0) {
         )
       );
 
-      // Process results
       for (const settled of results) {
         if (settled.status !== "fulfilled") continue;
 
@@ -455,7 +496,6 @@ export function useOpenClaw(autoRefreshMs = 0) {
 
     debugLog("start interval (time-based runAtMs)", CRON_POLL_MS, "ms. Disable: window.__CRON_POLL_DEBUG = false");
 
-    // Pause cron poll when tab is hidden
     let intervalId: ReturnType<typeof setInterval> | null = null;
     const start = () => { if (!intervalId) intervalId = setInterval(checkRunningCrons, CRON_POLL_MS); };
     const stop = () => { if (intervalId) { clearInterval(intervalId); intervalId = null; } };
@@ -471,7 +511,6 @@ export function useOpenClaw(autoRefreshMs = 0) {
 
   useEffect(() => {
     if (autoRefreshMs > 0 && state.installed) {
-      // Pause auto-refresh when tab is hidden
       const startRefresh = () => {
         if (!intervalRef.current) {
           intervalRef.current = setInterval(() => {

@@ -25,3 +25,7 @@ export {
   default as GatewayChatWidget,
   GatewayChatCustomHeader,
 } from "./GatewayChatWidget";
+export {
+  default as StatusWidget,
+  StatusCustomHeader,
+} from "./StatusWidget";

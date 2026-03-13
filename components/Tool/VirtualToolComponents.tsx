@@ -12,8 +12,10 @@ import {
   Clock,
   LayoutGrid,
   FileText,
-  Bot,
   BarChart3,
+  Monitor,
+  Shield,
+  Network,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
@@ -323,6 +325,13 @@ const VirtualToolBase: React.FC<VirtualToolProps> = ({
         { text: "Validating settings" },
         { text: "Ready to configure" },
       ],
+      "Org Chart": [
+        { text: "Loading agent hierarchy" },
+        { text: "Resolving team structure" },
+        { text: "Syncing task assignments" },
+        { text: "Building organization view" },
+        { text: "Ready to visualize" },
+      ],
     };
 
     return toolSpecificStates[tool] || baseStates;
@@ -494,14 +503,6 @@ export const VirtualDocs: React.FC = () => (
   />
 );
 
-export const VirtualAgents: React.FC = () => (
-  <VirtualToolBase
-    toolName="Agents"
-    description="List agents and edit agent files (memory.md, soul.md, etc.)"
-    icon={<Bot />}
-  />
-);
-
 export const VirtualUsage: React.FC = () => (
   <VirtualToolBase
     toolName="Token Usage"
@@ -515,5 +516,29 @@ export const VirtualOpenClaw: React.FC = () => (
     toolName="OpenClaw"
     description="Browse and edit your OpenClaw workspace"
     icon={<FolderOpen />}
+  />
+);
+
+export const VirtualDevices: React.FC = () => (
+  <VirtualToolBase
+    toolName="Devices"
+    description="Manage your connected gateway devices"
+    icon={<Monitor />}
+  />
+);
+
+export const VirtualApprovals: React.FC = () => (
+  <VirtualToolBase
+    toolName="Approvals"
+    description="Review and approve dangerous operations"
+    icon={<Shield />}
+  />
+);
+
+export const VirtualOrgChart: React.FC = () => (
+  <VirtualToolBase
+    toolName="Org Chart"
+    description="Visualize your AI agent team hierarchy and delegation"
+    icon={<Network />}
   />
 );

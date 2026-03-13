@@ -3,7 +3,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { AppSchema } from "@OS/Layout/types";
 import { FileText, FolderOpen, RefreshCw, Sparkles } from "lucide-react";
-import { useHyperClawBridge } from "$/hooks/useHyperClawBridge";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
 import {
   groupFilesByDate,
@@ -86,13 +85,19 @@ async function fetchBridge(body: Record<string, unknown>) {
 
 /** List all memory sources (each folder with a /memory subfolder) and their files. Uses identity.md Name for tags. */
 async function listOpenClawMemory(): Promise<MemoryFile[]> {
-  const json = (await fetchBridge({ action: "list-openclaw-memory" })) as {
+  const raw = await fetchBridge({ action: "list-openclaw-memory" });
+  console.log("[Memory] listOpenClawMemory raw response:", JSON.stringify(raw).slice(0, 500));
+  const json = raw as {
     success?: boolean;
     data?: MemorySourceFromBridge[];
   };
-  if (!json.success || !Array.isArray(json.data)) return [];
+  if (!json.success || !Array.isArray(json.data)) {
+    console.warn("[Memory] listOpenClawMemory: success=", json.success, "data type=", typeof json.data, Array.isArray(json.data));
+    return [];
+  }
   const files: MemoryFile[] = [];
   for (const source of json.data as MemorySourceFromBridge[]) {
+    if (!source.files) continue;
     for (const f of source.files) {
       files.push({
         name: f.name,
@@ -136,7 +141,6 @@ export function MemoryProvider({ children }: { children: React.ReactNode }) {
   const contentSearchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [todaySummaryLoading, setTodaySummaryLoading] = useState(false);
   const [processingAllSummaries, setProcessingAllSummaries] = useState(false);
-  const { sendCommand } = useHyperClawBridge(0);
 
   function getLast7DaysRange(): { startDate: string; endDate: string } {
     const end = new Date();
@@ -152,9 +156,12 @@ export function MemoryProvider({ children }: { children: React.ReactNode }) {
     setLoading(true);
     setError(null);
     try {
+      console.log("[Memory] refresh: calling listOpenClawMemory...");
       const data = await listOpenClawMemory();
+      console.log("[Memory] refresh: got", data.length, "files", data.slice(0, 3));
       setFiles(data);
     } catch (err: unknown) {
+      console.error("[Memory] refresh error:", err);
       setError(err instanceof Error ? err.message : "Failed to load memory files");
     } finally {
       setLoading(false);
@@ -213,13 +220,15 @@ export function MemoryProvider({ children }: { children: React.ReactNode }) {
   // ── When a single file is selected, load its content ────────────────────
   useEffect(() => {
     if (!selectedFile?.path) return;
-    readOpenClawDoc(selectedFile.path).then((content) => {
-      if (content != null) {
-        setSelectedFile((prev) =>
-          prev?.path === selectedFile.path ? { ...prev, content } : prev
-        );
-      }
-    });
+    readOpenClawDoc(selectedFile.path)
+      .then((content) => {
+        if (content != null) {
+          setSelectedFile((prev) =>
+            prev?.path === selectedFile.path ? { ...prev, content } : prev
+          );
+        }
+      })
+      .catch(() => {});
   }, [selectedFile?.path]);
 
   // ── When a day is selected, load all files for that day and merge ───────
@@ -239,6 +248,7 @@ export function MemoryProvider({ children }: { children: React.ReactNode }) {
           .join("\n\n---\n\n");
         setMergedDayContent(merged);
       })
+      .catch(() => setMergedDayContent(null))
       .finally(() => setMergedDayLoading(false));
   }, [selectedDayEntry]);
 
