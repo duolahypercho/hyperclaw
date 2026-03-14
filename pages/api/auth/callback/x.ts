@@ -55,7 +55,7 @@ export default async function handler(
     // Get user ID from cookie
     const userToken = getCookie("hypercho_user_token", cookieOptions);
 
-    const userId = verifyUserString(userToken as string) as string;
+    const userId = verifyUserString(userToken as string);
 
     if (!userId) {
       throw new Error(`User not found`);

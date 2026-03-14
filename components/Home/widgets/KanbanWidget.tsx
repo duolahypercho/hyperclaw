@@ -49,6 +49,8 @@ import { Task } from "$/components/Tool/TodoList/types";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
 import {
   gatewayConnection,
+  getGatewayConnectionState,
+  subscribeGatewayConnection,
   type ChatEventPayload,
 } from "$/lib/openclaw-gateway-ws";
 import { useAgentIdentities, resolveAvatarUrl, isAvatarText } from "$/hooks/useAgentIdentity";
@@ -1464,6 +1466,29 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
     fetchOrg();
     const interval = setInterval(fetchOrg, 30_000);
     return () => { cancelled = true; clearInterval(interval); };
+  }, []);
+
+  // Re-fetch org data when gateway (re)connects — handles race where widget
+  // mounts before the hub WebSocket is established on a remote machine.
+  useEffect(() => {
+    return subscribeGatewayConnection(() => {
+      if (getGatewayConnectionState().connected) {
+        (async () => {
+          try {
+            const res = (await bridgeInvoke("get-org-status", {})) as OrgChartData & { success?: boolean };
+            if (res && (res as { success?: boolean }).success !== false) {
+              setOrgData({
+                nodes: res.nodes ?? [],
+                edges: res.edges ?? [],
+                tasks: res.tasks ?? [],
+                departments: res.departments ?? [],
+              });
+            }
+          } catch { /* ignore */ }
+          setOrgLoading(false);
+        })();
+      }
+    });
   }, []);
 
   // Real-time agent events via Gateway WebSocket (like StatusWidget)

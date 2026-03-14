@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { hubFetch } from "$/lib/hub-direct";
+import { useUser } from "$/Providers/UserProv";
 
 interface PairingInfo {
   token: string;
@@ -24,6 +25,7 @@ interface DeviceSetupProps {
 }
 
 export default function DeviceSetup({ onComplete }: DeviceSetupProps) {
+  const { logout } = useUser();
   const [step, setStep] = useState<"setup" | "waiting">("setup");
   const [error, setError] = useState<string | null>(null);
   const [pairing, setPairing] = useState<PairingInfo | null>(null);
@@ -226,12 +228,17 @@ export default function DeviceSetup({ onComplete }: DeviceSetupProps) {
               </div>
 
               {error && (
-                <p className="text-xs text-destructive bg-destructive/10 rounded-md px-3 py-2">
-                  {error}
-                  <button onClick={initDevice} className="ml-2 underline">
-                    Retry
-                  </button>
-                </p>
+                <div className="text-xs text-destructive bg-destructive/10 rounded-md px-3 py-2 space-y-2">
+                  <p>{error}</p>
+                  <div className="flex items-center gap-3">
+                    <button onClick={initDevice} className="underline">
+                      Retry
+                    </button>
+                    <button onClick={logout} className="underline">
+                      Log out
+                    </button>
+                  </div>
+                </div>
               )}
 
               {creating && (

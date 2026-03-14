@@ -110,6 +110,77 @@ function unwrapHubResponse(raw: unknown): unknown {
   return unwrapped;
 }
 
+// --- Gateway connection helper ---
+// Shares a single connection-wait promise across concurrent callers.
+let _gwReadyPromise: Promise<boolean> | null = null;
+
+/**
+ * Ensure the gateway WebSocket is connected in hub mode.
+ * If already connected → returns true immediately.
+ * If connecting → waits up to 5s for connection.
+ * If not connecting → initiates connection with cached credentials, then waits.
+ */
+async function ensureGatewayConnected(): Promise<boolean> {
+  if (_gwReadyPromise) return _gwReadyPromise;
+
+  _gwReadyPromise = (async () => {
+    try {
+      if (typeof WebSocket === "undefined") return false; // SSR / Node.js
+
+      const {
+        gatewayConnection,
+        connectGatewayWs,
+        subscribeGatewayConnection,
+      } = await import("$/lib/openclaw-gateway-ws");
+
+      if (gatewayConnection.connected && gatewayConnection.hubMode) return true;
+
+      // Initiate connection if not already connecting
+      if (!gatewayConnection.wsUrl) {
+        const token = await getUserToken();
+        if (!token) return false;
+        const deviceId = await getActiveDeviceId(token);
+        if (!deviceId) return false;
+        connectGatewayWs(HUB_API_URL, {
+          token,
+          hubMode: true,
+          hubDeviceId: deviceId,
+        });
+      }
+
+      // Check again after possible connect call
+      if (!gatewayConnection.wsUrl) return false;
+      if (gatewayConnection.connected && gatewayConnection.hubMode) return true;
+
+      // Wait for connection (max 5s)
+      return new Promise<boolean>((resolve) => {
+        const timeout = setTimeout(() => {
+          unsub();
+          resolve(false);
+        }, 5000);
+        const unsub = subscribeGatewayConnection(() => {
+          if (gatewayConnection.connected && gatewayConnection.hubMode) {
+            clearTimeout(timeout);
+            unsub();
+            resolve(true);
+          } else if (!gatewayConnection.ws && !gatewayConnection.wsUrl) {
+            // Connection attempt ended without success
+            clearTimeout(timeout);
+            unsub();
+            resolve(false);
+          }
+        });
+      });
+    } catch {
+      return false;
+    } finally {
+      _gwReadyPromise = null;
+    }
+  })();
+
+  return _gwReadyPromise;
+}
+
 // --- Hub command (bridge actions) ---
 // Uses the dashboard WebSocket (gateway connection) when available,
 // falls back to REST API.
@@ -119,7 +190,16 @@ export async function hubCommand(
   // Try gateway WebSocket first (it's already connected in hub mode)
   try {
     const { gatewayConnection } = await import("$/lib/openclaw-gateway-ws");
+
+    // Already connected — use WS immediately
     if (gatewayConnection.connected && gatewayConnection.hubMode) {
+      const res = await gatewayConnection.request("bridge", body);
+      return unwrapHubResponse(res);
+    }
+
+    // Not connected — wait for pending connection or initiate one
+    const ready = await ensureGatewayConnected();
+    if (ready && gatewayConnection.connected && gatewayConnection.hubMode) {
       const res = await gatewayConnection.request("bridge", body);
       return unwrapHubResponse(res);
     }

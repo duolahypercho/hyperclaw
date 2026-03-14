@@ -13,6 +13,10 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
+import {
+  subscribeGatewayConnection,
+  getGatewayConnectionState,
+} from "$/lib/openclaw-gateway-ws";
 import { useFocusMode } from "./hooks/useFocusMode";
 import { cn } from "@/lib/utils";
 
@@ -22,11 +26,15 @@ const AUTO_REFRESH_MS = 15_000;
 export type LogEntry = { time?: string; level?: string; message?: string; tags?: string[] };
 
 async function fetchLogsFromBridge(lines: number): Promise<{ data: LogEntry[] | string; error?: string }> {
-  const json = await bridgeInvoke("get-logs", { lines });
-  const err = (json as { error?: string })?.error;
-  if (err) return { data: [], error: err };
-  const data = Array.isArray(json) ? json : ((json as { data?: LogEntry[] })?.data ?? []);
-  return { data };
+  try {
+    const json = await bridgeInvoke("get-logs", { lines });
+    const err = (json as { error?: string })?.error;
+    if (err) return { data: [], error: err };
+    const data = Array.isArray(json) ? json : ((json as { data?: LogEntry[] })?.data ?? []);
+    return { data };
+  } catch (e) {
+    return { data: [], error: e instanceof Error ? e.message : "Failed to fetch logs" };
+  }
 }
 
 function formatTime(iso?: string): string {
@@ -409,6 +417,16 @@ const LogsWidgetContent = memo((props: CustomProps) => {
       stop();
       document.removeEventListener("visibilitychange", onVisibility);
     };
+  }, [fetchLogs]);
+
+  // Re-fetch when gateway (re)connects — handles race where widget
+  // mounts before the hub WebSocket is established on a remote machine.
+  useEffect(() => {
+    return subscribeGatewayConnection(() => {
+      if (getGatewayConnectionState().connected) {
+        fetchLogs(true);
+      }
+    });
   }, [fetchLogs]);
 
   const rawEntries = Array.isArray(logs) ? logs : [];
