@@ -78,8 +78,6 @@ export function AddTaskDialog({
   const [channelOptions, setChannelOptions] = useState<ChannelOption[]>([]);
   const [dataLoading, setDataLoading] = useState(false);
 
-  // Defer rendering Select items until first open
-  const [agentSelectReady, setAgentSelectReady] = useState(false);
   const descRef = useRef<HTMLTextAreaElement>(null);
   const MAX_DESC_PX = 320;
 
@@ -200,6 +198,7 @@ export function AddTaskDialog({
         title: trimmedTitle,
         description: description.trim() || undefined,
         assignedAgent: agentObj?.name ?? undefined,
+        assignedAgentId: agentObj?.id ?? undefined,
         delivery,
       });
       onSuccess?.();
@@ -255,20 +254,6 @@ export function AddTaskDialog({
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="add-task-desc" className="text-xs font-medium">
-                Prompt description
-              </Label>
-              <Textarea
-                ref={descRef}
-                id="add-task-desc"
-                placeholder="Add a description..."
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                className="min-h-[60px] text-sm resize-none bg-muted/30 border-border/60 transition-[height] duration-150 ease-out"
-                rows={2}
-              />
-            </div>
-            <div className="space-y-2">
               <Label className="text-xs font-medium flex items-center gap-1.5">
                 <Bot className="w-3.5 h-3.5 text-muted-foreground" />
                 Assigned agent
@@ -278,7 +263,6 @@ export function AddTaskDialog({
                 onValueChange={(v) =>
                   setAssignedAgent(v === "__none__" ? "" : v)
                 }
-                onOpenChange={(o) => { if (o) setAgentSelectReady(true); }}
                 disabled={dataLoading}
               >
                 <SelectTrigger className="h-9 bg-muted/30 border-border/60">
@@ -292,7 +276,7 @@ export function AddTaskDialog({
                   <SelectItem value="__none__" className="text-xs text-muted-foreground">
                     None
                   </SelectItem>
-                  {agentSelectReady && agents.map((agent) => {
+                  {agents.map((agent) => {
                     const label = agent.name || agent.id || "Unnamed";
                     return (
                       <SelectItem
@@ -314,6 +298,20 @@ export function AddTaskDialog({
                   })}
                 </SelectContent>
               </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="add-task-desc" className="text-xs font-medium">
+                Prompt description
+              </Label>
+              <Textarea
+                ref={descRef}
+                id="add-task-desc"
+                placeholder="Add a description..."
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                className="min-h-[120px] text-sm bg-muted/30 border-border/60 transition-[height] duration-150 ease-out"
+                rows={4}
+              />
             </div>
             <div className="space-y-2">
               <Label className="text-xs font-medium">Delivery</Label>

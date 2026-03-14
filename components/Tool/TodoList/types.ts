@@ -4,7 +4,7 @@ import { RecurrenceRule } from "@/components/recurrence_filter";
 export interface Task {
   _id: string;
   title: string;
-  status: "pending" | "completed" | "in_progress" | "blocked";
+  status: "pending" | "completed" | "in_progress" | "blocked" | "cancelled";
   starred: boolean;
   listId?: string;
   order: number;
@@ -20,8 +20,10 @@ export interface Task {
   };
   recurrence: RecurrenceRule;
   statistics: TaskStatistics;
-  /** Optional agent (e.g. tool or AI) assigned to this task */
+  /** Optional display name of the agent (e.g. Elon) assigned to this task */
   assignedAgent?: string;
+  /** Optional canonical agent id (e.g. elon) assigned to this task */
+  assignedAgentId?: string;
   /** Optional URL to a linked document */
   linkedDocumentUrl?: string;
 }
@@ -36,7 +38,7 @@ export interface TaskStatistics {
 export interface Step {
   _id: string;
   title: string;
-  status: "pending" | "completed" | "in_progress" | "blocked";
+  status: "pending" | "completed" | "in_progress" | "blocked" | "cancelled";
   finishedAt?: Date;
 }
 
@@ -50,7 +52,7 @@ export interface details {
 export interface TaskDetails {
   _id: string;
   title: string;
-  status: "pending" | "completed" | "in_progress" | "blocked";
+  status: "pending" | "completed" | "in_progress" | "blocked" | "cancelled";
   starred: boolean;
   listId: string;
   order: number;
@@ -62,6 +64,9 @@ export interface TaskDetails {
   statistics: TaskStatistics;
   dueDate?: Date;
   recurrence: RecurrenceRule;
+  assignedAgent?: string;
+  assignedAgentId?: string;
+  linkedDocumentUrl?: string;
 }
 
 export interface List {

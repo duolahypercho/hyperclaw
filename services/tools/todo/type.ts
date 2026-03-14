@@ -20,6 +20,7 @@ export interface AddTodoTaskRequest {
   dueDate?: Date;
   recurrence?: RecurrenceRule;
   assignedAgent?: string;
+  assignedAgentId?: string;
   linkedDocumentUrl?: string;
   /** Optional delivery channel for announcing task result (e.g. when run by cron) */
   delivery?: {
@@ -48,7 +49,7 @@ export interface PromoteToTaskRequest {
 export interface UpdateTodoTaskRequest {
   id: string;
   title?: string;
-  status?: "pending" | "completed" | "in_progress" | "blocked";
+  status?: "pending" | "completed" | "in_progress" | "blocked" | "cancelled";
   order?: number;
   listId?: string;
   description?: string;
@@ -56,6 +57,7 @@ export interface UpdateTodoTaskRequest {
   starred?: boolean;
   myDay?: boolean;
   assignedAgent?: string;
+  assignedAgentId?: string;
   linkedDocumentUrl?: string;
 }
 
@@ -76,7 +78,7 @@ export interface UpdateTodoTaskStepRequest {
   id: string;
   stepId?: string;
   title?: string;
-  status?: "pending" | "completed" | "in_progress" | "blocked";
+  status?: "pending" | "completed" | "in_progress" | "blocked" | "cancelled";
 }
 
 export interface DeleteTodoTaskRequest {

@@ -5,6 +5,10 @@ import os from "os";
 import { execSync, exec, spawn } from "child_process";
 import { promisify } from "util";
 
+// Bypass webpack bundling for native addons — eval("require") resolves at runtime
+declare const __webpack_require__: undefined | ((id: string) => unknown);
+const nativeRequire = typeof __webpack_require__ === "function" ? eval("require") : require;
+
 // ── Session storage (JSON-file fallback; matches extension bridge) ──────────
 const SESSIONS_DIR = path.join(os.homedir(), ".hyperclaw", "sessions");
 
@@ -20,7 +24,7 @@ function sessionMessagesFilePath(sessionKey: string): string {
 function readSessionMessages(sessionKey: string, opts?: { runId?: string; limit?: number; offset?: number }): Record<string, unknown>[] {
   // Try SQLite first
   try {
-    const Database = require("better-sqlite3");
+    const Database = nativeRequire("better-sqlite3");
     const dbPath = path.join(os.homedir(), ".hyperclaw", "connector.db");
     if (fs.existsSync(dbPath)) {
       const db = new Database(dbPath, { readonly: true });
@@ -72,9 +76,7 @@ interface DashboardLayoutRow {
 
 function getLayoutsDb(): any | null {
   try {
-    // Dynamic require hidden from Webpack static analysis
-    const mod = "better-sqlite3";
-    const Database = require(mod);
+    const Database = nativeRequire("better-sqlite3");
     const dbPath = path.join(DATA_DIR, "connector.db");
     if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
     const db = new Database(dbPath);
@@ -213,22 +215,146 @@ function ensureDir() {
 }
 
 type TodoData = { tasks: Record<string, unknown>[]; lists: unknown[]; activeTaskId: string | null };
+interface TaskRow { id: string; list_id: string; data: string; created_at: number; updated_at: number }
+interface TaskListRow { id: string; data: string; created_at: number; updated_at: number }
+
+function taskToRow(task: Record<string, unknown>): TaskRow {
+  const id = String(task._id ?? task.id ?? generateTaskId());
+  const list_id = String(task.listId ?? task.list_id ?? "");
+  const created_at = task.createdAt ? new Date(String(task.createdAt)).getTime() : Date.now();
+  const updated_at = task.updatedAt ? new Date(String(task.updatedAt)).getTime() : Date.now();
+  const { _id: _a, id: _b, listId: _c, list_id: _d, createdAt: _e, updatedAt: _f, created_at: _g, updated_at: _h, ...rest } = task;
+  return { id, list_id, data: JSON.stringify(rest), created_at, updated_at };
+}
+
+function rowToTask(row: TaskRow): Record<string, unknown> {
+  let data: Record<string, unknown> = {};
+  try { data = JSON.parse(row.data || "{}"); } catch { /* ignore */ }
+  return { ...data, id: row.id, _id: row.id, listId: row.list_id || "", createdAt: new Date(row.created_at).toISOString(), updatedAt: new Date(row.updated_at).toISOString() };
+}
+
+function listToRow(list: Record<string, unknown>): TaskListRow {
+  const id = String(list._id ?? list.id ?? generateTaskId());
+  const { _id: _a, id: _b, ...rest } = list;
+  return { id, data: JSON.stringify(rest), created_at: Date.now(), updated_at: Date.now() };
+}
+
+function rowToList(row: TaskListRow): Record<string, unknown> {
+  let data: Record<string, unknown> = {};
+  try { data = JSON.parse(row.data || "{}"); } catch { /* ignore */ }
+  return { ...data, _id: row.id, id: row.id };
+}
+
+/** Open SQLite for task operations (returns null if unavailable) */
+function getTaskDb(): any {
+  try {
+    const Database = nativeRequire("better-sqlite3");
+    const dbPath = path.join(DATA_DIR, "connector.db");
+    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+    const db = new Database(dbPath);
+    db.pragma("journal_mode = WAL");
+    db.pragma("busy_timeout = 5000");
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, list_id TEXT, data TEXT NOT NULL DEFAULT '{}', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS task_lists (id TEXT PRIMARY KEY, data TEXT NOT NULL DEFAULT '{}', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS task_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, agent_id TEXT, type TEXT NOT NULL DEFAULT 'progress', content TEXT NOT NULL, metadata TEXT DEFAULT '{}', created_at INTEGER NOT NULL);
+      CREATE INDEX IF NOT EXISTS idx_task_logs_task ON task_logs(task_id);
+      CREATE INDEX IF NOT EXISTS idx_task_logs_created ON task_logs(created_at);
+      CREATE TABLE IF NOT EXISTS task_sessions (task_id TEXT NOT NULL, session_key TEXT NOT NULL, linked_at INTEGER NOT NULL, PRIMARY KEY (task_id, session_key));
+      CREATE INDEX IF NOT EXISTS idx_task_sessions_session ON task_sessions(session_key);
+      CREATE TABLE IF NOT EXISTS sessions (session_key TEXT PRIMARY KEY, agent_id TEXT, label TEXT, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS session_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, session_key TEXT NOT NULL, run_id TEXT, stream TEXT, role TEXT, content_json TEXT, created_at_ms INTEGER NOT NULL);
+      CREATE INDEX IF NOT EXISTS idx_sm_session_created ON session_messages(session_key, created_at_ms);
+      CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL);
+    `);
+    // One-time JSON migration
+    const flag = db.prepare("SELECT value FROM kv WHERE key = ?").get("migrated:todo_json_api");
+    if (!flag) {
+      if (fs.existsSync(TODO_DATA_PATH)) {
+        try {
+          const raw = JSON.parse(fs.readFileSync(TODO_DATA_PATH, "utf-8"));
+          const count = (db.prepare("SELECT count(*) as c FROM tasks").get() as { c: number }).c;
+          if (count === 0 && Array.isArray(raw.tasks) && raw.tasks.length > 0) {
+            const ins = db.prepare("INSERT OR IGNORE INTO tasks (id, list_id, data, created_at, updated_at) VALUES (?, ?, ?, ?, ?)");
+            const insL = db.prepare("INSERT OR IGNORE INTO task_lists (id, data, created_at, updated_at) VALUES (?, ?, ?, ?)");
+            const tx = db.transaction(() => {
+              for (const t of raw.tasks) { const r = taskToRow(t); ins.run(r.id, r.list_id, r.data, r.created_at, r.updated_at); }
+              if (Array.isArray(raw.lists)) for (const l of raw.lists) { const r = listToRow(l); insL.run(r.id, r.data, r.created_at, r.updated_at); }
+              if (raw.activeTaskId) db.prepare("INSERT OR REPLACE INTO kv (key, value, updated_at) VALUES (?, ?, ?)").run("activeTaskId", raw.activeTaskId, Date.now());
+            });
+            tx();
+          }
+        } catch { /* migration failed, will retry */ }
+      }
+      db.prepare("INSERT OR REPLACE INTO kv (key, value, updated_at) VALUES (?, ?, ?)").run("migrated:todo_json_api", "1", Date.now());
+    }
+    return db;
+  } catch { return null; }
+}
 
 function readTodoData(): TodoData {
+  const db = getTaskDb();
+  if (db) {
+    try {
+      const tasks = (db.prepare("SELECT * FROM tasks ORDER BY created_at DESC").all() as TaskRow[]).map(rowToTask);
+      const lists = (db.prepare("SELECT * FROM task_lists ORDER BY created_at ASC").all() as TaskListRow[]).map(rowToList);
+      const active = db.prepare("SELECT value FROM kv WHERE key = ?").get("activeTaskId") as { value: string } | undefined;
+      db.close();
+      return { tasks, lists, activeTaskId: active?.value || null };
+    } catch { db.close(); }
+  }
+  // JSON fallback
   try {
     if (!fs.existsSync(TODO_DATA_PATH)) return { tasks: [], lists: [], activeTaskId: null };
     const raw = JSON.parse(fs.readFileSync(TODO_DATA_PATH, "utf-8"));
-    return {
-      tasks: Array.isArray(raw.tasks) ? raw.tasks : [],
-      lists: Array.isArray(raw.lists) ? raw.lists : [],
-      activeTaskId: raw.activeTaskId ?? null,
-    };
-  } catch {
-    return { tasks: [], lists: [], activeTaskId: null };
-  }
+    return { tasks: Array.isArray(raw.tasks) ? raw.tasks : [], lists: Array.isArray(raw.lists) ? raw.lists : [], activeTaskId: raw.activeTaskId ?? null };
+  } catch { return { tasks: [], lists: [], activeTaskId: null }; }
 }
 
 function writeTodoData(data: TodoData) {
+  const db = getTaskDb();
+  if (db) {
+    try {
+      const tx = db.transaction(() => {
+        // Collect incoming task IDs so we can remove stale rows without wiping the whole table
+        const incomingIds = new Set<string>();
+        const upsert = db.prepare(
+          "INSERT OR REPLACE INTO tasks (id, list_id, data, created_at, updated_at) VALUES (?, ?, ?, ?, ?)"
+        );
+        for (const t of data.tasks) {
+          const r = taskToRow(t);
+          incomingIds.add(r.id);
+          upsert.run(r.id, r.list_id, r.data, r.created_at, r.updated_at);
+        }
+        // Delete tasks that are no longer in the incoming set
+        const existing = db.prepare("SELECT id FROM tasks").all() as { id: string }[];
+        const del = db.prepare("DELETE FROM tasks WHERE id = ?");
+        for (const row of existing) {
+          if (!incomingIds.has(row.id)) del.run(row.id);
+        }
+        // Lists — same upsert approach
+        const incomingListIds = new Set<string>();
+        const upsertL = db.prepare(
+          "INSERT OR REPLACE INTO task_lists (id, data, created_at, updated_at) VALUES (?, ?, ?, ?)"
+        );
+        for (const l of data.lists as Record<string, unknown>[]) {
+          const r = listToRow(l);
+          incomingListIds.add(r.id);
+          upsertL.run(r.id, r.data, r.created_at, r.updated_at);
+        }
+        const existingLists = db.prepare("SELECT id FROM task_lists").all() as { id: string }[];
+        const delL = db.prepare("DELETE FROM task_lists WHERE id = ?");
+        for (const row of existingLists) {
+          if (!incomingListIds.has(row.id)) delL.run(row.id);
+        }
+        db.prepare("INSERT OR REPLACE INTO kv (key, value, updated_at) VALUES (?, ?, ?)").run("activeTaskId", data.activeTaskId ?? "", Date.now());
+      });
+      tx();
+      db.close();
+      return;
+    } catch { db.close(); }
+  }
+  // JSON fallback
   fs.writeFileSync(TODO_DATA_PATH, JSON.stringify(data, null, 2), "utf-8");
 }
 
@@ -1419,20 +1545,11 @@ function runOpenClawArgs(args: string[], timeoutMs = 20000): Promise<{ stdout: s
  * Writes to ~/.hyperclaw/daily-summaries/ per day.
  */
 async function triggerOpenClawProcessCommands(): Promise<{ success: boolean; error?: string }> {
-  const cwd = fs.existsSync(OPENCLAW_DIR) ? OPENCLAW_DIR : os.homedir();
-  const escaped = PROCESS_COMMANDS_MESSAGE.replace(/'/g, "'\"'\"'");
-  const cmd = `openclaw agent --message '${escaped}'`;
   try {
-    await execAsync(cmd, {
-      cwd,
-      env: { ...process.env, FORCE_COLOR: "0" },
-      timeout: OPENCLAW_AGENT_TIMEOUT_MS,
-      maxBuffer: 2 * 1024 * 1024,
-    });
+    await runOpenClawArgs(["agent", "--message", PROCESS_COMMANDS_MESSAGE], OPENCLAW_AGENT_TIMEOUT_MS);
     return { success: true };
   } catch (e: unknown) {
-    const err = e as { message?: string; stderr?: string; killed?: boolean };
-    const msg = err?.message || err?.stderr || String(e);
+    const msg = e instanceof Error ? e.message : String(e);
     return { success: false, error: msg };
   }
 }
@@ -1449,15 +1566,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.json(result);
     }
     case "get-todo-data": {
-      try {
-        if (!fs.existsSync(TODO_DATA_PATH)) return res.json({ tasks: [], lists: [], activeTaskId: null });
-        const raw = JSON.parse(fs.readFileSync(TODO_DATA_PATH, "utf-8"));
-        return res.json(raw);
-      } catch { return res.json({ tasks: [], lists: [], activeTaskId: null }); }
+      return res.json(readTodoData());
     }
     case "save-todo-data": {
       try {
-        fs.writeFileSync(TODO_DATA_PATH, JSON.stringify(todoData ?? { tasks: [], lists: [], activeTaskId: null }, null, 2), "utf-8");
+        writeTodoData(todoData ?? { tasks: [], lists: [], activeTaskId: null });
         return res.json({ success: true });
       } catch (e: any) {
         return res.json({ success: false, error: e?.message || String(e) });
@@ -1467,22 +1580,42 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.json(readTodoData().tasks);
     }
     case "add-task": {
-      const todo = readTodoData();
+      const db = getTaskDb();
       const now = new Date().toISOString();
-      const existingId = task?.id && /^[0-9a-f]{24}$/i.test(String(task.id)) ? String(task.id) : null;
-      const newTask = {
-        ...task,
-        id: existingId ?? generateTaskId(),
-        createdAt: now,
-        updatedAt: now,
-      };
+      const taskId = (task?.id && /^[0-9a-f]{24}$/i.test(String(task.id))) ? String(task.id) : generateTaskId();
+      const newTask = { ...task, id: taskId, _id: taskId, createdAt: now, updatedAt: now };
+      if (db) {
+        try {
+          const r = taskToRow(newTask);
+          db.prepare("INSERT INTO tasks (id, list_id, data, created_at, updated_at) VALUES (?, ?, ?, ?, ?)").run(r.id, r.list_id, r.data, r.created_at, r.updated_at);
+          db.close();
+          return res.json(newTask);
+        } catch { db.close(); }
+      }
+      const todo = readTodoData();
       todo.tasks.push(newTask);
       writeTodoData(todo);
       return res.json(newTask);
     }
     case "update-task": {
+      const db = getTaskDb();
+      if (db) {
+        try {
+          const row = db.prepare("SELECT * FROM tasks WHERE id = ?").get(id) as TaskRow | undefined;
+          if (!row) { db.close(); return res.json(null); }
+          const task = rowToTask(row);
+          const now = Date.now();
+          if (patch?.status === "completed" && task.status !== "completed") patch.finishedAt = new Date(now).toISOString();
+          else if (patch?.status && patch.status !== "completed" && task.status === "completed") patch.finishedAt = null;
+          Object.assign(task, patch);
+          const updated = taskToRow(task);
+          db.prepare("UPDATE tasks SET list_id = ?, data = ?, updated_at = ? WHERE id = ?").run(updated.list_id, updated.data, now, id);
+          db.close();
+          return res.json(rowToTask({ ...updated, id, created_at: row.created_at, updated_at: now }));
+        } catch { db.close(); }
+      }
       const todo = readTodoData();
-      const idx = todo.tasks.findIndex((t) => t.id === id);
+      const idx = todo.tasks.findIndex((t) => t.id === id || t._id === id);
       if (idx === -1) return res.json(null);
       todo.tasks[idx].updatedAt = new Date().toISOString();
       Object.assign(todo.tasks[idx], patch);
@@ -1490,12 +1623,95 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.json(todo.tasks[idx]);
     }
     case "delete-task": {
+      const db = getTaskDb();
+      if (db) {
+        try {
+          const result = db.prepare("DELETE FROM tasks WHERE id = ?").run(id);
+          if (result.changes > 0) {
+            db.prepare("DELETE FROM task_logs WHERE task_id = ?").run(id);
+            db.prepare("DELETE FROM task_sessions WHERE task_id = ?").run(id);
+          }
+          db.close();
+          return res.json({ success: result.changes > 0 });
+        } catch { db.close(); }
+      }
       const todo = readTodoData();
-      const filtered = todo.tasks.filter((t) => t.id !== id);
+      const filtered = todo.tasks.filter((t) => t.id !== id && t._id !== id);
       if (filtered.length === todo.tasks.length) return res.json({ success: false });
       todo.tasks = filtered;
       writeTodoData(todo);
       return res.json({ success: true });
+    }
+    // ── Task Logs ────────────────────────────────────────────────────
+    case "append-task-log": {
+      const db = getTaskDb();
+      if (!db) return res.json({ error: "SQLite not available" });
+      try {
+        const { taskId: tId, agentId: aId, type: logType, content: logContent, metadata: logMeta } = req.body;
+        const now = Date.now();
+        const result = db.prepare(
+          "INSERT INTO task_logs (task_id, agent_id, type, content, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+        ).run(tId, aId ?? null, logType ?? "progress", logContent, JSON.stringify(logMeta ?? {}), now);
+        db.close();
+        return res.json({ id: Number(result.lastInsertRowid), task_id: tId, type: logType ?? "progress", content: logContent, created_at: now });
+      } catch (e: any) { db.close(); return res.json({ error: e?.message }); }
+    }
+    case "get-task-logs": {
+      const db = getTaskDb();
+      if (!db) return res.json([]);
+      try {
+        const { taskId: tId, agentId: logAgentId, type: logType, limit: logLimit, offset: logOffset } = req.body;
+        let sql = "SELECT * FROM task_logs WHERE task_id = ?";
+        const binds: unknown[] = [tId];
+        if (logType) { sql += " AND type = ?"; binds.push(logType); }
+        sql += " ORDER BY created_at DESC";
+        if (logLimit) { sql += " LIMIT ?"; binds.push(logLimit); if (logOffset) { sql += " OFFSET ?"; binds.push(logOffset); } }
+        let rows = db.prepare(sql).all(...binds) as any[];
+        // Fallback: if no logs found for this task ID and an agentId is provided,
+        // search for orphaned logs by agent (covers cases where task IDs were reset)
+        if (rows.length === 0 && logAgentId) {
+          let fallbackSql = "SELECT * FROM task_logs WHERE LOWER(agent_id) = LOWER(?)";
+          const fallbackBinds: unknown[] = [logAgentId];
+          if (logType) { fallbackSql += " AND type = ?"; fallbackBinds.push(logType); }
+          fallbackSql += " ORDER BY created_at DESC LIMIT ?";
+          fallbackBinds.push(logLimit || 50);
+          rows = db.prepare(fallbackSql).all(...fallbackBinds) as any[];
+        }
+        db.close();
+        return res.json(rows.map((r: any) => ({ ...r, metadata: (() => { try { return JSON.parse(r.metadata || "{}"); } catch { return {}; } })() })));
+      } catch { db.close(); return res.json([]); }
+    }
+    // ── Task-Session Links ───────────────────────────────────────────
+    case "link-task-session": {
+      const db = getTaskDb();
+      if (!db) return res.json({ success: false });
+      try {
+        const { taskId: tId, sessionKey: sKey } = req.body;
+        db.prepare("INSERT OR IGNORE INTO task_sessions (task_id, session_key, linked_at) VALUES (?, ?, ?)").run(tId, sKey, Date.now());
+        db.close();
+        return res.json({ success: true });
+      } catch { db.close(); return res.json({ success: false }); }
+    }
+    case "get-task-sessions": {
+      const db = getTaskDb();
+      if (!db) return res.json([]);
+      try {
+        const { taskId: tId, agentId: sessAgentId } = req.body;
+        let rows = db.prepare(
+          `SELECT ts.session_key, ts.linked_at, s.agent_id, s.label, s.created_at_ms, s.updated_at_ms
+           FROM task_sessions ts LEFT JOIN sessions s ON s.session_key = ts.session_key
+           WHERE ts.task_id = ? ORDER BY ts.linked_at DESC`
+        ).all(tId);
+        // Fallback: if no sessions found and agentId provided, find sessions by agent
+        if (rows.length === 0 && sessAgentId) {
+          rows = db.prepare(
+            `SELECT s.session_key, s.created_at_ms as linked_at, s.agent_id, s.label, s.created_at_ms, s.updated_at_ms
+             FROM sessions s WHERE LOWER(s.agent_id) = LOWER(?) ORDER BY s.updated_at_ms DESC LIMIT 20`
+          ).all(sessAgentId);
+        }
+        db.close();
+        return res.json(rows);
+      } catch (e) { db.close(); return res.json([]); }
     }
     case "send-command": {
       const entry = {

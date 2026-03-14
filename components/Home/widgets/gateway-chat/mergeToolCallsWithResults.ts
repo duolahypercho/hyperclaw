@@ -1,9 +1,21 @@
 import { GatewayChatMessage } from "@OS/AI/core/hook/use-gateway-chat";
 
+// Cache previous merge results so unchanged messages keep the same reference,
+// preventing unnecessary re-renders in memoized child components.
+let prevInputRef: GatewayChatMessage[] | null = null;
+let prevOutputRef: GatewayChatMessage[] | null = null;
+const mergedCache = new Map<string, GatewayChatMessage>();
+
 export function mergeToolCallsWithResults(
   messages: GatewayChatMessage[]
 ): GatewayChatMessage[] {
+  // Fast path: exact same input array → exact same output
+  if (messages === prevInputRef && prevOutputRef) {
+    return prevOutputRef;
+  }
+
   const merged: GatewayChatMessage[] = [];
+  const nextCache = new Map<string, GatewayChatMessage>();
 
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
@@ -25,8 +37,6 @@ export function mergeToolCallsWithResults(
       const mergedToolCalls = toolCalls.map((tc) => {
         const toolId = tc.id || tc.function?.name || "";
 
-        // Find matching tool result message - check both "tool" and "toolResult" roles
-        // Also check both top-level toolCallId and toolResults[0].toolCallId
         const toolResultMsg = messages.find((m) => {
           const role = m.role as string;
           if (role !== "tool" && role !== "toolResult") return false;
@@ -34,9 +44,6 @@ export function mergeToolCallsWithResults(
           return msgToolCallId === toolId;
         });
 
-        // Extract content from both "tool" and "toolResult" roles
-        // For toolResult: content is in toolResults[0].content
-        // For tool: content is in top-level content
         const resultContent = toolResultMsg
           ? ((toolResultMsg as any).toolResults?.[0]?.content || (toolResultMsg as any).content)
           : undefined;
@@ -72,18 +79,39 @@ export function mergeToolCallsWithResults(
         };
       });
 
-      merged.push({
+      const newMsg = {
         ...msg,
         toolCalls: mergedToolCalls as any,
         contentBlocks: [
           ...(msg.contentBlocks?.filter((b: any) => b.type !== "toolCall") || []),
           ...mergedContentBlocks,
         ],
-      } as GatewayChatMessage);
+      } as GatewayChatMessage;
+
+      // Reuse cached object if content is identical (prevents child re-renders)
+      const cacheKey = msg.id || `idx-${i}`;
+      const cached = mergedCache.get(cacheKey);
+      if (cached && cached.content === newMsg.content &&
+          JSON.stringify(cached.toolCalls) === JSON.stringify(newMsg.toolCalls)) {
+        merged.push(cached);
+        nextCache.set(cacheKey, cached);
+      } else {
+        merged.push(newMsg);
+        nextCache.set(cacheKey, newMsg);
+      }
     } else {
       merged.push(msg);
+      // Cache non-tool messages too so reference stays stable
+      const cacheKey = msg.id || `idx-${i}`;
+      nextCache.set(cacheKey, msg);
     }
   }
+
+  // Update caches
+  mergedCache.clear();
+  nextCache.forEach((v, k) => mergedCache.set(k, v));
+  prevInputRef = messages;
+  prevOutputRef = merged;
 
   return merged;
 }

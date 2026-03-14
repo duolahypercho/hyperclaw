@@ -7,7 +7,7 @@ interface TaskButtonProps {
   task: Task;
   onStatusChange: (
     id: string,
-    status: "pending" | "completed" | "in_progress" | "blocked"
+    status: "pending" | "completed" | "in_progress" | "blocked" | "cancelled"
   ) => void;
   setIsJustCompleted?: (value: boolean) => void;
   size?: "small" | "medium" | "large";

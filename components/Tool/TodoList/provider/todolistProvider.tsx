@@ -139,6 +139,7 @@ interface exportedValue {
     existingId,
     source,
     assignedAgent,
+    assignedAgentId,
     linkedDocumentUrl,
     delivery,
   }: {
@@ -155,6 +156,7 @@ interface exportedValue {
     /** When 'bridge', task came from ~/.hyperclaw/todo.json — do not write back to bridge (avoids loop) */
     source?: "app" | "bridge";
     assignedAgent?: string;
+    assignedAgentId?: string;
     linkedDocumentUrl?: string;
     /** Optional delivery channel for announcing result (e.g. when task is run by cron) */
     delivery?: { announce?: boolean; channel?: string; to?: string };
@@ -162,7 +164,7 @@ interface exportedValue {
   handleDeleteTask: (id: string, ignore?: boolean) => void;
   handleStatusChange: (
     id: string,
-    status: "pending" | "completed" | "in_progress" | "blocked",
+    status: "pending" | "completed" | "in_progress" | "blocked" | "cancelled",
     ignore?: boolean
   ) => void;
   handleEditList: (
@@ -464,7 +466,7 @@ export function TodoListProvider({ children, inMiniMode }: Props) {
 
   const handleStatusChange = async (
     id: string,
-    status: "pending" | "completed" | "in_progress" | "blocked",
+    status: "pending" | "completed" | "in_progress" | "blocked" | "cancelled",
     ignore?: boolean
   ) => {
     try {
@@ -491,7 +493,8 @@ export function TodoListProvider({ children, inMiniMode }: Props) {
       }
 
       // Create a one-shot cron that runs immediately, then deletes itself
-      if (isNowInProgress && taskBeforeUpdate?.assignedAgent && !wasInProgress) {
+      const assignedAgentTarget = taskBeforeUpdate?.assignedAgentId || taskBeforeUpdate?.assignedAgent;
+      if (isNowInProgress && assignedAgentTarget && !wasInProgress) {
         const t = taskBeforeUpdate;
         const message = [
           `Work on task: ${t.title || ""}`,
@@ -506,7 +509,7 @@ export function TodoListProvider({ children, inMiniMode }: Props) {
           name: jobName,
           at: new Date().toISOString(),
           session: "isolated",
-          agent: t.assignedAgent,
+          agent: assignedAgentTarget,
           message,
           deleteAfterRun: true,
         }).catch(console.error);
@@ -563,6 +566,7 @@ export function TodoListProvider({ children, inMiniMode }: Props) {
       ignore = false,
       existingId,
       assignedAgent,
+      assignedAgentId,
       linkedDocumentUrl,
       delivery,
     }: {
@@ -576,6 +580,7 @@ export function TodoListProvider({ children, inMiniMode }: Props) {
       ignore?: boolean;
       existingId?: string;
       assignedAgent?: string;
+      assignedAgentId?: string;
       linkedDocumentUrl?: string;
       delivery?: { announce?: boolean; channel?: string; to?: string };
     }): Promise<any> => {
@@ -605,6 +610,7 @@ export function TodoListProvider({ children, inMiniMode }: Props) {
                 skippedCount: 0,
               },
               assignedAgent: assignedAgent?.trim() || undefined,
+              assignedAgentId: assignedAgentId?.trim() || undefined,
               linkedDocumentUrl: linkedDocumentUrl?.trim() || undefined,
             },
           ]);
@@ -621,6 +627,7 @@ export function TodoListProvider({ children, inMiniMode }: Props) {
           dueDate: date,
           recurrence: recurrence,
           assignedAgent: assignedAgent?.trim() || undefined,
+          assignedAgentId: assignedAgentId?.trim() || undefined,
           linkedDocumentUrl: linkedDocumentUrl?.trim() || undefined,
           delivery,
         });
@@ -1312,7 +1319,7 @@ export function TodoListProvider({ children, inMiniMode }: Props) {
         setSelectedTask(undefined);
 
         if (tab === "kanban") {
-          const todoTaskAPIResponse = await getTodoTaskAPI("task" as TabType);
+          const todoTaskAPIResponse = await getTodoTaskAPI("kanban" as TabType);
           if (todoTaskAPIResponse.status !== 200) {
             throw new Error("Failed to get tasks");
           }
@@ -1388,7 +1395,7 @@ export function TodoListProvider({ children, inMiniMode }: Props) {
         if (res.status !== 200) return;
         serverTasks = res.data;
       } else if (currentTab === "kanban") {
-        const res = await getTodoTaskAPI("task" as TabType);
+        const res = await getTodoTaskAPI("kanban" as TabType);
         if (res.status !== 200) return;
         serverTasks = res.data;
       } else if (currentTab === "calendar") {
@@ -1786,7 +1793,7 @@ export function TodoListProvider({ children, inMiniMode }: Props) {
 
       if (router.pathname === "/dashboard") {
         const [tabPromise, activeTaskPromise] = await Promise.all([
-          handleTabChange("task" as TabType, undefined, true),
+          handleTabChange("kanban" as TabType, undefined, true),
           getActiveTask(),
         ]);
 

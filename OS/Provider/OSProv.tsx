@@ -150,10 +150,12 @@ interface DocsFloatingContextType {
 interface FloatingChatContextType {
   showState: boolean;
   agentId: string | null;
-  openChat: (agentId: string) => void;
+  sessionKey: string | null;
+  openChat: (agentId: string, sessionKey?: string) => void;
   closeChat: () => void;
   isMounted: boolean;
 }
+
 
 const MusicPlayerContext = createContext<MusicPlayerContextType | undefined>(
   undefined
@@ -277,12 +279,16 @@ export const OSProvider: React.FC<OSProviderProps> = ({ children }) => {
 
   // Floating chat window: agentId when open, null when closed
   const [floatingChatAgentId, setFloatingChatAgentId] = useState<string | null>(null);
-  const openFloatingChat = useCallback((agentId: string) => {
+  const [floatingChatSessionKey, setFloatingChatSessionKey] = useState<string | null>(null);
+  const openFloatingChat = useCallback((agentId: string, sessionKey?: string) => {
     setFloatingChatAgentId(agentId);
+    setFloatingChatSessionKey(sessionKey ?? null);
   }, []);
   const closeFloatingChat = useCallback(() => {
     setFloatingChatAgentId(null);
+    setFloatingChatSessionKey(null);
   }, []);
+
 
   // Memoize updateOSSettings to prevent recreation
   const updateOSSettings = useCallback(
@@ -716,12 +722,14 @@ export const OSProvider: React.FC<OSProviderProps> = ({ children }) => {
     () => ({
       showState: floatingChatAgentId !== null,
       agentId: floatingChatAgentId,
+      sessionKey: floatingChatSessionKey,
       openChat: openFloatingChat,
       closeChat: closeFloatingChat,
       isMounted,
     }),
-    [floatingChatAgentId, openFloatingChat, closeFloatingChat, isMounted]
+    [floatingChatAgentId, floatingChatSessionKey, openFloatingChat, closeFloatingChat, isMounted]
   );
+
 
   return (
     <OSContext.Provider value={value}>
@@ -820,6 +828,7 @@ export const useFloatingChatOS = () => {
   }
   return context;
 };
+
 
 export const useMenuOS = () => {
   const context = useContext(MenuContext);

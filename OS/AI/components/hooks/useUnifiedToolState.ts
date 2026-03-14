@@ -97,58 +97,16 @@ export const useUnifiedToolState = (messages: Message[]) => {
       // Process each message
       messages.forEach((message) => {
         // Handle assistant messages with tool calls
+        // Process ALL tool calls per message (keyed by toolCallId, like OpenClaw)
         if (
           message.role === "assistant" &&
           (message as any).toolCalls?.length > 0
         ) {
-          const id = message.id || "";
+          const msgId = message.id || "";
           const messageId = (message as any).messageId || "";
-          const toolCall = (message as any).toolCalls[0];
-          const normalizedArguments = normalizeToolArguments(
-            toolCall.function.arguments
-          );
+          const allToolCalls = (message as any).toolCalls as any[];
 
-          const existingState = newToolStates.get(id);
-
-          // Check if there's already a tool result
-          const toolCallId = toolCall.id;
-          const toolResultMessage = messages.find(
-            (msg) => {
-              const msgRole = (msg as any).role;
-              return (msgRole === "tool" || msgRole === "toolResult") &&
-                ((msg as any).toolCallId === toolCallId || (msg as any).toolResults?.[0]?.toolCallId === toolCallId);
-            }
-          );
-
-          const hasToolResult = !!toolResultMessage;
-
-          // Get tool config for custom parsing
-          const toolConfig = toolRegistry.getConfig(toolCall.function.name);
-
-          // Parse arguments using custom parser if available
-          let parsedArguments = normalizedArguments;
-          if (toolConfig?.parseArguments) {
-            try {
-              parsedArguments = JSON.stringify(
-                toolConfig.parseArguments(normalizedArguments)
-              );
-            } catch (e) {
-              // Use normalized arguments as fallback
-            }
-          }
-
-          // Extract metadata from arguments
-          let metadata: Record<string, any> = {};
-          try {
-            const parsed = JSON.parse(parsedArguments);
-            if (typeof parsed === "object" && parsed !== null) {
-              metadata = parsed;
-            }
-          } catch (e) {
-            // No metadata
-          }
-
-          // Determine status
+          // Determine message-level status once
           let statusCode: MessageStatusCode = MessageStatusCode.Pending;
           if (message.expired) {
             statusCode = MessageStatusCode.Failed;
@@ -171,76 +129,122 @@ export const useUnifiedToolState = (messages: Message[]) => {
             }
           }
 
-          // Convert to ToolStatus
-          const status = messageStatusToToolStatus(
-            statusCode,
-            hasToolResult,
-            message.expired
-          );
+          for (const toolCall of allToolCalls) {
+            const toolCallId = toolCall.id || toolCall.function?.name || "";
+            const normalizedArguments = normalizeToolArguments(
+              toolCall.function?.arguments || toolCall.arguments || ""
+            );
 
-          if (existingState) {
-            // Don't downgrade from terminal states (completed/rejected/expired)
-            const isTerminal = existingState.status === "completed" ||
-              existingState.status === "rejected" ||
-              existingState.status === "expired";
-            const effectiveStatus = isTerminal ? existingState.status : status;
+            const existingState = newToolStates.get(toolCallId);
 
-            // Update only if arguments or status actually changed
-            if (
-              existingState.arguments !== parsedArguments ||
-              existingState.status !== effectiveStatus
-            ) {
-              newToolStates.set(id, {
-                ...existingState,
-                arguments: parsedArguments,
-                status: effectiveStatus,
-                metadata,
-              });
-              hasChanges = true;
-            }
-          } else {
-            // Create new state
-            const newState: UnifiedToolState = {
-              id,
-              messageId,
-              toolCallId,
-              toolName: toolCall.function.name,
-              status,
-              arguments: parsedArguments,
-              metadata,
-              isExpanded: false,
-            };
+            // Check if there's already a tool result for this specific tool call
+            const toolResultMessage = messages.find(
+              (msg) => {
+                const msgRole = (msg as any).role;
+                return (msgRole === "tool" || msgRole === "toolResult") &&
+                  ((msg as any).toolCallId === toolCallId || (msg as any).toolResults?.[0]?.toolCallId === toolCallId);
+              }
+            );
 
-            // If tool result already exists, include it
-            if (hasToolResult && toolResultMessage) {
-              const isRejected = isToolRejected(toolResultMessage.content);
-              const isResultError = (toolResultMessage as any).toolResults?.[0]?.isError ||
-                (toolResultMessage as any).isError || false;
-              newState.resultContent = toolResultMessage.content;
-              newState.rejectionMessage = extractRejectionMessage(
-                toolResultMessage.content
-              );
-              if (message.expired) {
-                newState.status = "expired";
-              } else if (isRejected || isResultError) {
-                newState.status = "rejected";
-              } else {
-                newState.status = "completed";
+            const hasToolResult = !!toolResultMessage;
+
+            // Get tool config for custom parsing
+            const toolName = toolCall.function?.name || toolCall.name || "";
+            const toolConfig = toolRegistry.getConfig(toolName);
+
+            // Parse arguments using custom parser if available
+            let parsedArguments = normalizedArguments;
+            if (toolConfig?.parseArguments) {
+              try {
+                parsedArguments = JSON.stringify(
+                  toolConfig.parseArguments(normalizedArguments)
+                );
+              } catch (e) {
+                // Use normalized arguments as fallback
               }
             }
 
-            newToolStates.set(id, newState);
-            hasChanges = true;
+            // Extract metadata from arguments
+            let metadata: Record<string, any> = {};
+            try {
+              const parsed = JSON.parse(parsedArguments);
+              if (typeof parsed === "object" && parsed !== null) {
+                metadata = parsed;
+              }
+            } catch (e) {
+              // No metadata
+            }
+
+            // Convert to ToolStatus
+            const status = messageStatusToToolStatus(
+              statusCode,
+              hasToolResult,
+              message.expired
+            );
+
+            if (existingState) {
+              // Don't downgrade from terminal states (completed/rejected/expired)
+              const isTerminal = existingState.status === "completed" ||
+                existingState.status === "rejected" ||
+                existingState.status === "expired";
+              const effectiveStatus = isTerminal ? existingState.status : status;
+
+              // Update only if arguments or status actually changed
+              if (
+                existingState.arguments !== parsedArguments ||
+                existingState.status !== effectiveStatus
+              ) {
+                newToolStates.set(toolCallId, {
+                  ...existingState,
+                  arguments: parsedArguments,
+                  status: effectiveStatus,
+                  metadata,
+                });
+                hasChanges = true;
+              }
+            } else {
+              // Create new state
+              const newState: UnifiedToolState = {
+                id: msgId,
+                messageId,
+                toolCallId,
+                toolName,
+                status,
+                arguments: parsedArguments,
+                metadata,
+                isExpanded: false,
+              };
+
+              // If tool result already exists, include it
+              if (hasToolResult && toolResultMessage) {
+                const isRejected = isToolRejected(toolResultMessage.content);
+                const isResultError = (toolResultMessage as any).toolResults?.[0]?.isError ||
+                  (toolResultMessage as any).isError || false;
+                newState.resultContent = toolResultMessage.content;
+                newState.rejectionMessage = extractRejectionMessage(
+                  toolResultMessage.content
+                );
+                if (message.expired) {
+                  newState.status = "expired";
+                } else if (isRejected || isResultError) {
+                  newState.status = "rejected";
+                } else {
+                  newState.status = "completed";
+                }
+              }
+
+              newToolStates.set(toolCallId, newState);
+              hasChanges = true;
+            }
           }
         }
 
-        // Handle tool result messages
+        // Handle tool result messages — find the matching toolCallId and update its state
         const msgRole = (message as any).role;
         if (msgRole === "tool" || msgRole === "toolResult") {
-          const matchingAssistant = findMatchingAssistant(message);
-          if (matchingAssistant) {
-            const assistantId = matchingAssistant.id || "";
-            const toolState = newToolStates.get(assistantId);
+          const resultToolCallId = (message as any).toolCallId || (message as any).toolResults?.[0]?.toolCallId;
+          if (resultToolCallId) {
+            const toolState = newToolStates.get(resultToolCallId);
 
             if (toolState) {
               const toolResultContent = (message as any).toolResults?.[0]?.content || message.content;
@@ -248,10 +252,12 @@ export const useUnifiedToolState = (messages: Message[]) => {
               const isRejected = isToolRejected(toolResultContent);
               const rejectionMessage = extractRejectionMessage(toolResultContent);
 
-              // Determine final status directly — no more setTimeout dance.
-              // The executing→completed animation is handled by the UI components.
+              // Find the original assistant message for expired check
+              const matchingAssistant = findMatchingAssistant(message);
+
+              // Determine final status directly
               let finalStatus: ToolStatus;
-              if ((matchingAssistant as any).expired) {
+              if ((matchingAssistant as any)?.expired) {
                 finalStatus = "expired";
               } else if (isRejected || isError) {
                 finalStatus = "rejected";
@@ -260,7 +266,7 @@ export const useUnifiedToolState = (messages: Message[]) => {
               }
 
               if (toolState.status !== finalStatus || toolState.resultContent !== toolResultContent) {
-                newToolStates.set(assistantId, {
+                newToolStates.set(resultToolCallId, {
                   ...toolState,
                   status: finalStatus,
                   resultContent: toolResultContent,

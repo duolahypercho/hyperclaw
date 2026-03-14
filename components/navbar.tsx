@@ -169,9 +169,178 @@ const LayoutSwitcher: React.FC = () => {
 
   const activeName = layouts.find((l) => l.id === activeId)?.name;
 
+  const dropdown = open && dropPos ? createPortal(
+    <AnimatePresence>
+      <motion.div
+        ref={popoverRef}
+        initial={{ opacity: 0, y: -4, scale: 0.97 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={{ opacity: 0, y: -4, scale: 0.97 }}
+        transition={{ duration: 0.12 }}
+        className="fixed w-[240px] rounded-lg border border-border bg-card shadow-xl"
+        style={{ zIndex: 99999, top: dropPos.top, right: dropPos.right }}
+      >
+        {/* Header */}
+        <div className="px-3 py-2 border-b border-border/50">
+          <div className="text-[11px] font-semibold text-foreground">Dashboard Layouts</div>
+          <div className="text-[9px] text-muted-foreground">Switch, save, or edit your layouts</div>
+        </div>
+
+        {/* Layout list */}
+        <div className="max-h-[220px] overflow-y-auto customScrollbar2 py-1">
+          {layouts.length === 0 && !saving && (
+            <div className="text-[10px] text-muted-foreground/50 text-center py-5">
+              No saved layouts yet
+            </div>
+          )}
+          {layouts.map((layout) => {
+            const isActive = activeId === layout.id;
+            const isEditing = editingId === layout.id;
+
+            if (isEditing) {
+              return (
+                <div key={layout.id} className="flex items-center gap-1 px-2 py-1">
+                  <Input
+                    ref={editRef}
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleRename(layout.id);
+                      if (e.key === "Escape") { setEditingId(null); setEditName(""); }
+                    }}
+                    className="h-7 text-[11px] flex-1 bg-muted/30 border-border/60"
+                  />
+                  <Button
+                    variant="ghost" size="iconSm"
+                    className="h-7 w-7 shrink-0 text-primary hover:bg-primary/10"
+                    onClick={() => handleRename(layout.id)}
+                    disabled={!editName.trim()}
+                  >
+                    <Check className="w-3 h-3" />
+                  </Button>
+                  <Button
+                    variant="ghost" size="iconSm"
+                    className="h-7 w-7 shrink-0 text-muted-foreground"
+                    onClick={() => { setEditingId(null); setEditName(""); }}
+                  >
+                    <X className="w-3 h-3" />
+                  </Button>
+                </div>
+              );
+            }
+
+            return (
+              <div
+                key={layout.id}
+                className={cn(
+                  "group flex items-center gap-2 px-3 py-1.5 cursor-pointer transition-colors",
+                  isActive
+                    ? "bg-primary/10 text-foreground"
+                    : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+                )}
+                onClick={() => handleApply(layout)}
+              >
+                <div className={cn(
+                  "w-1.5 h-1.5 rounded-full shrink-0",
+                  isActive ? "bg-primary" : "bg-muted-foreground/30"
+                )} />
+                <div className="min-w-0 flex-1">
+                  <div className="text-[11px] font-medium truncate">
+                    {layout.name}
+                  </div>
+                  <div className="text-[9px] text-muted-foreground">
+                    {layout.visibleWidgets.length} widgets
+                  </div>
+                </div>
+                <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleOverwrite(layout);
+                    }}
+                    className="p-1 hover:bg-muted rounded transition-colors"
+                    title="Overwrite with current layout"
+                  >
+                    <Save className="w-3 h-3 text-muted-foreground" />
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setEditingId(layout.id);
+                      setEditName(layout.name);
+                    }}
+                    className="p-1 hover:bg-muted rounded transition-colors"
+                    title="Rename"
+                  >
+                    <Pencil className="w-3 h-3 text-muted-foreground" />
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDelete(layout.id);
+                    }}
+                    className="p-1 hover:bg-destructive/10 rounded transition-colors"
+                    title="Delete"
+                  >
+                    <Trash2 className="w-3 h-3 text-destructive" />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Save current layout */}
+        <div className="border-t border-border/50 px-2 py-2">
+          {saving ? (
+            <div className="flex items-center gap-1.5">
+              <Input
+                ref={inputRef}
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleSave();
+                  if (e.key === "Escape") { setSaving(false); setNewName(""); }
+                }}
+                placeholder="Layout name..."
+                className="h-7 text-[11px] flex-1 bg-muted/30 border-border/60"
+              />
+              <Button
+                variant="ghost" size="iconSm"
+                className="h-7 w-7 shrink-0 text-primary hover:bg-primary/10"
+                onClick={handleSave}
+                disabled={!newName.trim()}
+              >
+                <Check className="w-3 h-3" />
+              </Button>
+              <Button
+                variant="ghost" size="iconSm"
+                className="h-7 w-7 shrink-0 text-muted-foreground"
+                onClick={() => { setSaving(false); setNewName(""); }}
+              >
+                <X className="w-3 h-3" />
+              </Button>
+            </div>
+          ) : (
+            <Button
+              variant="outline"
+              className="w-full h-7 text-[11px] gap-1.5 font-medium"
+              onClick={() => setSaving(true)}
+            >
+              <Save className="w-3 h-3" />
+              Save current layout
+            </Button>
+          )}
+        </div>
+      </motion.div>
+    </AnimatePresence>,
+    document.body
+  ) : null;
+
   return (
-    <div className="relative" ref={popoverRef}>
+    <>
       <button
+        ref={triggerRef}
         onClick={() => { setOpen((p) => !p); setSaving(false); setNewName(""); setEditingId(null); }}
         className={cn(
           "flex items-center gap-1.5 h-8 pl-2 pr-1.5 rounded-md border text-[11px] transition-colors",
@@ -186,173 +355,8 @@ const LayoutSwitcher: React.FC = () => {
         </span>
         <ChevronDown className={cn("w-3 h-3 text-muted-foreground transition-transform", open && "rotate-180")} />
       </button>
-
-      <AnimatePresence>
-        {open && (
-          <motion.div
-            initial={{ opacity: 0, y: -4, scale: 0.97 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -4, scale: 0.97 }}
-            transition={{ duration: 0.12 }}
-            className="absolute right-0 top-full mt-1.5 w-[240px] rounded-lg border border-border bg-card shadow-xl"
-            style={{ zIndex: 9999 }}
-          >
-            {/* Header */}
-            <div className="px-3 py-2 border-b border-border/50">
-              <div className="text-[11px] font-semibold text-foreground">Dashboard Layouts</div>
-              <div className="text-[9px] text-muted-foreground">Switch, save, or edit your layouts</div>
-            </div>
-
-            {/* Layout list */}
-            <div className="max-h-[220px] overflow-y-auto customScrollbar2 py-1">
-              {layouts.length === 0 && !saving && (
-                <div className="text-[10px] text-muted-foreground/50 text-center py-5">
-                  No saved layouts yet
-                </div>
-              )}
-              {layouts.map((layout) => {
-                const isActive = activeId === layout.id;
-                const isEditing = editingId === layout.id;
-
-                if (isEditing) {
-                  return (
-                    <div key={layout.id} className="flex items-center gap-1 px-2 py-1">
-                      <Input
-                        ref={editRef}
-                        value={editName}
-                        onChange={(e) => setEditName(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") handleRename(layout.id);
-                          if (e.key === "Escape") { setEditingId(null); setEditName(""); }
-                        }}
-                        className="h-7 text-[11px] flex-1 bg-muted/30 border-border/60"
-                      />
-                      <Button
-                        variant="ghost" size="iconSm"
-                        className="h-7 w-7 shrink-0 text-primary hover:bg-primary/10"
-                        onClick={() => handleRename(layout.id)}
-                        disabled={!editName.trim()}
-                      >
-                        <Check className="w-3 h-3" />
-                      </Button>
-                      <Button
-                        variant="ghost" size="iconSm"
-                        className="h-7 w-7 shrink-0 text-muted-foreground"
-                        onClick={() => { setEditingId(null); setEditName(""); }}
-                      >
-                        <X className="w-3 h-3" />
-                      </Button>
-                    </div>
-                  );
-                }
-
-                return (
-                  <div
-                    key={layout.id}
-                    className={cn(
-                      "group flex items-center gap-2 px-3 py-1.5 cursor-pointer transition-colors",
-                      isActive
-                        ? "bg-primary/10 text-foreground"
-                        : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
-                    )}
-                    onClick={() => handleApply(layout)}
-                  >
-                    <div className={cn(
-                      "w-1.5 h-1.5 rounded-full shrink-0",
-                      isActive ? "bg-primary" : "bg-muted-foreground/30"
-                    )} />
-                    <div className="min-w-0 flex-1">
-                      <div className="text-[11px] font-medium truncate">
-                        {layout.name}
-                      </div>
-                      <div className="text-[9px] text-muted-foreground">
-                        {layout.visibleWidgets.length} widgets
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleOverwrite(layout);
-                        }}
-                        className="p-1 hover:bg-muted rounded transition-colors"
-                        title="Overwrite with current layout"
-                      >
-                        <Save className="w-3 h-3 text-muted-foreground" />
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setEditingId(layout.id);
-                          setEditName(layout.name);
-                        }}
-                        className="p-1 hover:bg-muted rounded transition-colors"
-                        title="Rename"
-                      >
-                        <Pencil className="w-3 h-3 text-muted-foreground" />
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleDelete(layout.id);
-                        }}
-                        className="p-1 hover:bg-destructive/10 rounded transition-colors"
-                        title="Delete"
-                      >
-                        <Trash2 className="w-3 h-3 text-destructive" />
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Save current layout */}
-            <div className="border-t border-border/50 px-2 py-2">
-              {saving ? (
-                <div className="flex items-center gap-1.5">
-                  <Input
-                    ref={inputRef}
-                    value={newName}
-                    onChange={(e) => setNewName(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") handleSave();
-                      if (e.key === "Escape") { setSaving(false); setNewName(""); }
-                    }}
-                    placeholder="Layout name..."
-                    className="h-7 text-[11px] flex-1 bg-muted/30 border-border/60"
-                  />
-                  <Button
-                    variant="ghost" size="iconSm"
-                    className="h-7 w-7 shrink-0 text-primary hover:bg-primary/10"
-                    onClick={handleSave}
-                    disabled={!newName.trim()}
-                  >
-                    <Check className="w-3 h-3" />
-                  </Button>
-                  <Button
-                    variant="ghost" size="iconSm"
-                    className="h-7 w-7 shrink-0 text-muted-foreground"
-                    onClick={() => { setSaving(false); setNewName(""); }}
-                  >
-                    <X className="w-3 h-3" />
-                  </Button>
-                </div>
-              ) : (
-                <Button
-                  variant="outline"
-                  className="w-full h-7 text-[11px] gap-1.5 font-medium"
-                  onClick={() => setSaving(true)}
-                >
-                  <Save className="w-3 h-3" />
-                  Save current layout
-                </Button>
-              )}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
+      {dropdown}
+    </>
   );
 };
 

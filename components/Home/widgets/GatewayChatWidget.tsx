@@ -283,6 +283,9 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
   const inputAreaRef = useRef<HTMLDivElement>(null);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
 
+  // Cache for chain-breaker text-only messages to prevent re-renders
+  const chainBreakerCacheRef = useRef<Map<string, GatewayChatMessage>>(new Map());
+
   // Message queue — messages queued while AI is still generating
   const [messageQueue, setMessageQueue] = useState<
     Array<{ id: string; text: string; displayText: string; attachments?: GatewayChatAttachment[] }>
@@ -432,13 +435,12 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
     }
 
     const newMsg = messages[messages.length - 1];
-    const isToolAction = newMsg?.toolCalls?.length || newMsg?.toolResults?.length;
 
-    // Always scroll for user messages (just sent). For assistant messages,
-    // only scroll if user is already near the bottom.
+    // Always scroll for user messages (just sent). For all other messages
+    // (including tool actions), scroll if user is already near the bottom.
     if (newMsg?.role === "user") {
       requestAnimationFrame(() => scrollToBottom(false));
-    } else if (!isToolAction && scrollAreaRef.current) {
+    } else if (scrollAreaRef.current) {
       const el = scrollAreaRef.current;
       const nearBottom = el.scrollHeight - el.scrollTop <= el.clientHeight + 150;
       if (nearBottom) {
@@ -760,38 +762,62 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
                       isLoadingSuggestions={false}
                     />
                   ) : (
-                    <AnimatePresence>
+                    <>
                       {(() => {
                         const nodes: React.ReactNode[] = [];
 
+                        // Helper: does this assistant message contain tool calls?
+                        const msgHasToolCalls = (m: GatewayChatMessage) =>
+                          m.role === "assistant" &&
+                          ((m as any).toolCalls?.length > 0 || (m as any).contentBlocks?.some((b: any) => b.type === "toolCall"));
+
                         for (let index = 0; index < mergedMessages.length; index++) {
                           const message = mergedMessages[index];
-                          const isToolMessage = message.role === "assistant" &&
-                            ((message as any).toolCalls?.length > 0 || (message as any).contentBlocks?.some((b: any) => b.type === "toolCall"));
+                          const isToolMessage = msgHasToolCalls(message);
 
-                          // Group consecutive tool call messages
+                          // Skip text-only assistant messages when another assistant message follows.
+                          // Only the LAST assistant message in a turn is the final response —
+                          // everything before it (preamble, intermediate narration) is skipped.
+                          if (!isToolMessage && message.role === "assistant" && message.content?.trim()) {
+                            const next = mergedMessages[index + 1];
+                            if (next && next.role === "assistant") {
+                              continue;
+                            }
+                          }
+
+                          // Deduplicate: skip text-only assistant messages with identical content
+                          // to the previous message (gateway sometimes sends same text twice).
+                          // Never skip tool messages — different tool calls can share narration text.
+                          if (!isToolMessage && message.role === "assistant" && message.content?.trim() && index > 0) {
+                            const prev = mergedMessages[index - 1];
+                            if (prev.role === "assistant" && prev.content?.trim() === message.content.trim()) {
+                              continue;
+                            }
+                          }
+
+                          // Group consecutive tool messages into "N actions".
+                          // Collect greedily. If a tool message has content, include it
+                          // in the group but show its message text after and break the chain.
                           if (isToolMessage) {
                             const toolMessages: GatewayChatMessage[] = [];
                             let j = index;
+                            let chainBreakerContent: string | null = null;
+                            let chainBreakerKey: string = "";
 
                             while (j < mergedMessages.length) {
                               const m = mergedMessages[j];
-                              const isToolResultMsg = m.role === "tool" || (m.role as string) === "toolResult";
-                              const isToolMsg = m.role === "assistant" &&
-                                ((m as any).toolCalls?.length > 0 || (m as any).contentBlocks?.some((b: any) => b.type === "toolCall"));
-
-                              if (isToolResultMsg || !isToolMsg) {
-                                break;
-                              }
-
+                              if (!msgHasToolCalls(m)) break;
                               toolMessages.push(m);
                               j++;
+                              // Tool with content breaks the chain
+                              if (m.content?.trim()) {
+                                chainBreakerContent = m.content;
+                                chainBreakerKey = m.id || `chain-${j}`;
+                                break;
+                              }
                             }
 
-                            // Always group tool messages (even 1) to prevent component
-                            // tree restructuring when new tools arrive (avoids remount blink)
                             if (toolMessages.length >= 1) {
-                              // Use accordion pattern - shows summary header that expands to show all tools
                               nodes.push(
                                 <GroupedToolActions
                                   key={`tool-actions-${index}`}
@@ -799,18 +825,46 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
                                   toolStates={toolStates}
                                   toggleToolExpansion={toggleToolExpansion}
                                   showAvatar={shouldShowAvatarCallback(index)}
-                                  index={index}
-                                  shouldShowAvatar={shouldShowAvatarCallback}
                                   assistantAvatar={assistantAvatar}
                                 />
                               );
+
+                              // Show the message that broke the chain (text-only, no tool actions)
+                              if (chainBreakerContent) {
+                                // Reuse cached text-only message to prevent re-renders
+                                const cacheKey = `chain-${chainBreakerKey}`;
+                                let textOnly = chainBreakerCacheRef.current.get(cacheKey);
+                                if (!textOnly || textOnly.content !== chainBreakerContent) {
+                                  textOnly = {
+                                    id: chainBreakerKey,
+                                    role: "assistant",
+                                    content: chainBreakerContent,
+                                    timestamp: 0,
+                                  };
+                                  chainBreakerCacheRef.current.set(cacheKey, textOnly);
+                                }
+                                nodes.push(
+                                  <EnhancedMessageBubble
+                                    key={`tool-text-${chainBreakerKey}`}
+                                    message={textOnly}
+                                    isUser={false}
+                                    showAvatar={false}
+                                    onCopy={handleCopy}
+                                    onReply={handleReply}
+                                    isLoading={false}
+                                    botPic={agentAvatarUrl}
+                                    userPic={userAvatar}
+                                    assistantAvatar={assistantAvatar}
+                                  />
+                                );
+                              }
 
                               index = j - 1;
                               continue;
                             }
                           }
 
-                          // Single message
+                          // Regular message (user text, assistant text, etc.)
                           nodes.push(
                             <EnhancedMessageBubble
                               key={message.id || index}
@@ -828,8 +882,6 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
                               botPic={agentAvatarUrl}
                               userPic={userAvatar}
                               assistantAvatar={assistantAvatar}
-                              toolStates={toolStates}
-                              toggleToolExpansion={toggleToolExpansion}
                             />
                           );
                         }
@@ -857,12 +909,9 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
                             }
 
                             nodes.push(
-                              <motion.div
+                              <div
                                 key="thinking-indicator"
                                 className="flex gap-3 justify-start"
-                                initial={{ opacity: 0, y: 8 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                transition={{ duration: 0.3, delay: 0.15, ease: "easeOut" }}
                               >
                                 <div className="w-8 h-8 flex-shrink-0">
                                   <Avatar className="w-8 h-8">
@@ -879,14 +928,14 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
                                 <div className="flex items-center py-1.5">
                                   <AnimatedThinkingText text={thinkingText} />
                                 </div>
-                              </motion.div>
+                              </div>
                             );
                           }
                         }
 
                         return nodes;
                       })()}
-                    </AnimatePresence>
+                    </>
                   )}
                 </div>
                 </div>

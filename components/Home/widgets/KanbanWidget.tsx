@@ -28,6 +28,8 @@ import {
   Clock,
   Crown,
   Shield,
+  Ban,
+  Pencil,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -41,6 +43,7 @@ import {
 } from "@/components/ui/context-menu";
 import { useTodoList } from "$/components/Tool/TodoList/provider/todolistProvider";
 import { useIsTaskRunningCron } from "$/components/Tool/TodoList/hooks/useIsTaskRunningCron";
+import { useOpenClawContext } from "$/Providers/OpenClawProv";
 import { useOS } from "@OS/Provider/OSProv";
 import { Task } from "$/components/Tool/TodoList/types";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
@@ -49,6 +52,7 @@ import {
   type ChatEventPayload,
 } from "$/lib/openclaw-gateway-ws";
 import { useAgentIdentities, resolveAvatarUrl, isAvatarText } from "$/hooks/useAgentIdentity";
+import { useFloatingChatOS } from "@OS/Provider/OSProv";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useFocusMode } from "./hooks/useFocusMode";
@@ -133,7 +137,7 @@ const AGENT_EVENT_TYPES: EventType[] = ["agent_started", "agent_completed", "age
 let _eventSeq = 0;
 function makeEventId() { return `evt-${Date.now()}-${++_eventSeq}`; }
 
-type KanbanStatus = "pending" | "in_progress" | "blocked" | "completed";
+type KanbanStatus = "pending" | "in_progress" | "blocked" | "completed" | "cancelled";
 
 interface MiniColumnConfig {
   id: KanbanStatus;
@@ -171,6 +175,13 @@ const COLUMNS: MiniColumnConfig[] = [
     icon: <CheckCircle2 className="w-3 h-3" />,
     accentClass: "text-emerald-500",
     dotClass: "bg-emerald-500",
+  },
+  {
+    id: "cancelled",
+    label: "Cancelled",
+    icon: <Ban className="w-3 h-3" />,
+    accentClass: "text-rose-500",
+    dotClass: "bg-rose-500",
   },
 ];
 
@@ -448,14 +459,16 @@ interface MiniKanbanCardProps {
   onStatusChange: (taskId: string, status: KanbanStatus) => void;
   onSelect: (taskId: string) => void;
   onViewDetails: (taskId: string) => void;
+  onEdit?: (taskId: string) => void;
   onDelete: (taskId: string) => void;
   isDragging?: boolean;
+  disableLayout?: boolean;
   mobileMode?: boolean;
   onMoveStatus?: () => void;
 }
 
 const MiniKanbanCard = React.forwardRef<HTMLDivElement, MiniKanbanCardProps>(
-  ({ task, columnId, onStatusChange, onSelect, onViewDetails, onDelete, isDragging = false, mobileMode = false, onMoveStatus }, ref) => {
+  ({ task, columnId, onStatusChange, onSelect, onViewDetails, onEdit, onDelete, isDragging = false, disableLayout = false, mobileMode = false, onMoveStatus }, ref) => {
     // Only allow: Backlog → In Progress, or Review → Done
     const nextCol = useMemo(() => {
       if (columnId === "pending") return COLUMNS[1]; // in_progress
@@ -465,26 +478,25 @@ const MiniKanbanCard = React.forwardRef<HTMLDivElement, MiniKanbanCardProps>(
     const isAgentRunning = useIsTaskRunningCron(task._id);
 
     const hasMetaRow =
-      task.createdAt || task.assignedAgent || task.linkedDocumentUrl;
+      task.createdAt || task.assignedAgent || task.assignedAgentId || task.linkedDocumentUrl;
 
-    const canDelete = columnId === "pending" || columnId === "blocked" ;
+    const canDelete = columnId === "pending" || columnId === "blocked" || columnId === "cancelled";
 
-    const showViewDetails = columnId === "blocked" || columnId === "completed" ;
+    const showViewDetails = true;
 
     return (
       <ContextMenu>
         <ContextMenuTrigger asChild>
         <motion.div
           ref={ref}
-          layout
-          initial={{ opacity: 0, y: 4 }}
+          layout={!disableLayout}
+          initial={disableLayout ? false : { opacity: 0, y: 4 }}
           animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, scale: 0.95 }}
-          transition={{ duration: 0.15 }}
+          exit={disableLayout ? { opacity: 0, transition: { duration: 0 } } : { opacity: 0, scale: 0.95 }}
+          transition={{ duration: disableLayout ? 0 : 0.15 }}
           className={cn(
-            "group relative rounded-md border border-solid border-border/50 bg-card/60 px-2 py-1.5 cursor-pointer transition-all hover:border-border hover:bg-card/90",
-            "active:scale-100 active:opacity-100",
-            task.status === "completed" && "opacity-60",
+            "group relative rounded-md border border-solid border-border/50 bg-card/60 px-2 py-1.5 cursor-pointer transition-colors hover:border-border hover:bg-card/90",
+            (task.status === "completed" || task.status === "cancelled") && "opacity-60",
             isDragging && "opacity-50 scale-95"
           )}
           onClick={() => onSelect(task._id)}
@@ -497,7 +509,7 @@ const MiniKanbanCard = React.forwardRef<HTMLDivElement, MiniKanbanCardProps>(
               <p
                 className={cn(
                   "text-xs font-normal text-foreground truncate",
-                  task.status === "completed" && "line-through text-muted-foreground"
+                  (task.status === "completed" || task.status === "cancelled") && "line-through text-muted-foreground"
                 )}
               >
                 {task.title}
@@ -509,15 +521,15 @@ const MiniKanbanCard = React.forwardRef<HTMLDivElement, MiniKanbanCardProps>(
               )}
               {hasMetaRow && (
                 <div className="flex flex-wrap items-center gap-1.5 gap-y-0.5 text-[10px] leading-none">
-                  {task.assignedAgent && (
+                  {(task.assignedAgent || task.assignedAgentId) && (
                     <span
                       className={cn(
                         "inline-flex items-center gap-0.5 truncate max-w-[88px] rounded border px-1.5 py-0.5 font-medium",
-                        getAgentTagColor(task.assignedAgent)
+                        getAgentTagColor(task.assignedAgent || task.assignedAgentId || "agent")
                       )}
                     >
                       <Bot className="w-2.5 h-2.5 shrink-0 opacity-80" />
-                      <span className="truncate">{task.assignedAgent}</span>
+                      <span className="truncate">{task.assignedAgent || task.assignedAgentId}</span>
                     </span>
                   )}
                   {columnId === "in_progress" && isAgentRunning && (
@@ -606,12 +618,18 @@ const MiniKanbanCard = React.forwardRef<HTMLDivElement, MiniKanbanCardProps>(
         </motion.div>
         </ContextMenuTrigger>
         <ContextMenuContent className="w-48">
-          {showViewDetails && (
+          <ContextMenuItem
+            onClick={() => onViewDetails(task._id)}
+          >
+            <ScrollText className="w-3.5 h-3.5 mr-2" />
+            See logs & info
+          </ContextMenuItem>
+          {columnId === "pending" && onEdit && (
             <ContextMenuItem
-              onClick={() => onViewDetails(task._id)}
+              onClick={() => onEdit(task._id)}
             >
-              <ScrollText className="w-3.5 h-3.5 mr-2" />
-              See logs & info
+              <Pencil className="w-3.5 h-3.5 mr-2" />
+              Edit task
             </ContextMenuItem>
           )}
           {canDelete && (
@@ -638,6 +656,7 @@ interface MiniKanbanColumnProps {
   onStatusChange: (taskId: string, status: KanbanStatus) => void;
   onSelect: (taskId: string) => void;
   onViewDetails: (taskId: string) => void;
+  onEdit?: (taskId: string) => void;
   onDelete: (taskId: string) => void;
   // DnD props (from MissionQueue)
   isDragOver?: boolean;
@@ -646,6 +665,7 @@ interface MiniKanbanColumnProps {
   onDrop?: (e: React.DragEvent, status: KanbanStatus) => void;
   onDragStart?: (e: React.DragEvent, task: Task) => void;
   onDragEnd?: () => void;
+  onDragLeave?: (e: React.DragEvent, columnId: KanbanStatus) => void;
 }
 
 const MiniKanbanColumn = memo<MiniKanbanColumnProps>(({
@@ -654,6 +674,7 @@ const MiniKanbanColumn = memo<MiniKanbanColumnProps>(({
   onStatusChange,
   onSelect,
   onViewDetails,
+  onEdit,
   onDelete,
   isDragOver = false,
   draggedTask = null,
@@ -661,6 +682,7 @@ const MiniKanbanColumn = memo<MiniKanbanColumnProps>(({
   onDrop,
   onDragStart,
   onDragEnd,
+  onDragLeave,
 }) => {
   const hasTasks = tasks.length > 0;
 
@@ -672,6 +694,11 @@ const MiniKanbanColumn = memo<MiniKanbanColumnProps>(({
       )}
       onDragOver={onDragOver ? (e) => onDragOver(e, column.id) : undefined}
       onDrop={onDrop ? (e) => onDrop(e, column.id) : undefined}
+      onDragLeave={onDragLeave ? (e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+          onDragLeave(e, column.id);
+        }
+      } : undefined}
     >
       <div className="flex items-center gap-1.5 px-2 py-1.5 border-b border-t-0 border-l-0 border-r-0 border-solid border-border">
         <span className={cn("shrink-0", column.accentClass)}>
@@ -686,7 +713,7 @@ const MiniKanbanColumn = memo<MiniKanbanColumnProps>(({
       </div>
 
       <div className="flex-1 overflow-y-auto customScrollbar2 p-1 space-y-1 min-h-[48px]">
-        <AnimatePresence mode="popLayout">
+        <AnimatePresence>
           {tasks.length === 0 ? (
             <div className="flex items-center justify-center h-10 text-xs text-muted-foreground/40 font-normal">
               Empty
@@ -696,7 +723,21 @@ const MiniKanbanColumn = memo<MiniKanbanColumnProps>(({
               <div
                 key={task._id}
                 draggable={!!onDragStart}
-                onDragStart={onDragStart ? (e) => onDragStart(e, task) : undefined}
+                onDragStart={onDragStart ? (e) => {
+                  // Clone to document.body so the drag ghost isn't clipped by overflow containers
+                  const el = e.currentTarget as HTMLElement;
+                  const clone = el.cloneNode(true) as HTMLElement;
+                  clone.style.position = "fixed";
+                  clone.style.top = "-10000px";
+                  clone.style.left = "0";
+                  clone.style.width = `${el.offsetWidth}px`;
+                  clone.style.pointerEvents = "none";
+                  document.body.appendChild(clone);
+                  const rect = el.getBoundingClientRect();
+                  e.dataTransfer.setDragImage(clone, e.clientX - rect.left, e.clientY - rect.top);
+                  requestAnimationFrame(() => clone.remove());
+                  onDragStart(e, task);
+                } : undefined}
                 onDragEnd={onDragEnd}
               >
                 <MiniKanbanCard
@@ -705,8 +746,10 @@ const MiniKanbanColumn = memo<MiniKanbanColumnProps>(({
                   onStatusChange={onStatusChange}
                   onSelect={onSelect}
                   onViewDetails={onViewDetails}
+                  onEdit={onEdit}
                   onDelete={onDelete}
                   isDragging={draggedTask?._id === task._id}
+                  disableLayout={!!draggedTask}
                 />
               </div>
             ))
@@ -1316,6 +1359,8 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
   const { isFocusModeActive } = useFocusMode();
   const { tasks, handleStatusChange, handleSelectTask, handleDeleteTask } =
     useTodoList();
+  const { agents: openClawAgents } = useOpenClawContext();
+  const { openChat } = useFloatingChatOS();
 
   const [addTaskOpen, setAddTaskOpen] = useState(false);
   const [editTask, setEditTask] = useState<Task | null>(null);
@@ -1331,9 +1376,14 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
   const [mobileTab, setMobileTab] = useState<KanbanStatus>("pending");
   const [statusMoveTask, setStatusMoveTask] = useState<Task | null>(null);
 
+  // Agents from OpenClawProvider (already fetched on 30s interval)
+  const agents = useMemo<BridgeAgent[]>(
+    () => (openClawAgents ?? []).map((a) => ({ ...a, workspaceFolder: undefined })),
+    [openClawAgents]
+  );
+
   // Team panel state — org chart based
   const [orgData, setOrgData] = useState<OrgChartData | null>(null);
-  const [agents, setAgents] = useState<BridgeAgent[]>([]);
   const [orgLoading, setOrgLoading] = useState(true);
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
   const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
@@ -1346,6 +1396,50 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
 
   const pushEvent = useCallback((evt: DomainEvent) => {
     setFeedEvents((prev) => [evt, ...prev].slice(0, 100));
+  }, []);
+
+  // Load historical events from events.jsonl on mount
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const raw = (await bridgeInvoke("get-events", {})) as Record<string, unknown>[];
+        if (cancelled || !Array.isArray(raw)) return;
+        const mapped: DomainEvent[] = raw
+          .map((e): DomainEvent | null => {
+            const type = String(e.type ?? "system");
+            const ts = e.timestamp ? new Date(String(e.timestamp)).getTime() : Date.now();
+            if (isNaN(ts)) return null;
+            let eventType: EventType = "system";
+            if (type.includes("task_created") || type === "task_added") eventType = "task_created";
+            else if (type.includes("task_completed") || type === "task_done") eventType = "task_completed";
+            else if (type.includes("task_status") || type === "task_updated") eventType = "task_status_changed";
+            else if (type.includes("task_deleted") || type === "task_removed") eventType = "task_deleted";
+            else if (type.includes("agent_start") || type === "agent_run") eventType = "agent_started";
+            else if (type.includes("agent_complete") || type === "agent_done") eventType = "agent_completed";
+            else if (type.includes("agent_error") || type === "error") eventType = "agent_error";
+            const message =
+              (typeof e.message === "string" ? e.message : null) ??
+              (typeof e.title === "string" ? e.title : null) ??
+              type;
+            return {
+              id: makeEventId(),
+              type: eventType,
+              agentId: typeof e.agentId === "string" ? e.agentId : undefined,
+              agentName: typeof e.agentName === "string" ? e.agentName : (typeof e.agent === "string" ? e.agent : undefined),
+              taskId: typeof e.taskId === "string" ? e.taskId : undefined,
+              message,
+              timestamp: ts,
+            };
+          })
+          .filter((e): e is DomainEvent => e !== null)
+          .reverse(); // newest first
+        if (!cancelled && mapped.length > 0) {
+          setFeedEvents((prev) => [...mapped, ...prev].slice(0, 100));
+        }
+      } catch { /* ignore */ }
+    })();
+    return () => { cancelled = true; };
   }, []);
 
   // Fetch org chart data (teams, departments, agents hierarchy)
@@ -1363,15 +1457,6 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
             departments: res.departments ?? [],
           };
           setOrgData(data);
-        }
-      } catch { /* ignore */ }
-      // Also fetch agents for AddTaskDialog
-      try {
-        const agentRes = await bridgeInvoke("list-agents", {}).catch(() => null);
-        if (cancelled) return;
-        const ar = agentRes as { success?: boolean; data?: BridgeAgent[] } | null;
-        if (ar?.success && Array.isArray(ar.data)) {
-          setAgents(ar.data);
         }
       } catch { /* ignore */ }
       if (!cancelled) setOrgLoading(false);
@@ -1456,7 +1541,7 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
           id: makeEventId(),
           type: "task_created",
           taskId: task._id,
-          agentName: task.assignedAgent || undefined,
+          agentName: task.assignedAgent || task.assignedAgentId || undefined,
           message: `Task created: ${task.title}`,
           timestamp: Date.now(),
         });
@@ -1467,7 +1552,7 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
           id: makeEventId(),
           type: isCompleted ? "task_completed" : "task_status_changed",
           taskId: task._id,
-          agentName: task.assignedAgent || undefined,
+          agentName: task.assignedAgent || task.assignedAgentId || undefined,
           message: isCompleted
             ? `Completed: ${task.title}`
             : `${task.title} → ${task.status.replace("_", " ")}`,
@@ -1483,7 +1568,7 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
           id: makeEventId(),
           type: "task_deleted",
           taskId: old._id,
-          agentName: old.assignedAgent || undefined,
+          agentName: old.assignedAgent || old.assignedAgentId || undefined,
           message: `Deleted: ${old.title}`,
           timestamp: Date.now(),
         });
@@ -1515,7 +1600,8 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
   const taskCountByAgent = useMemo(() => {
     const counts: Record<string, number> = {};
     tasks.forEach((t) => {
-      if (t.assignedAgent) counts[t.assignedAgent] = (counts[t.assignedAgent] || 0) + 1;
+      const key = t.assignedAgent || t.assignedAgentId;
+      if (key) counts[key] = (counts[key] || 0) + 1;
     });
     return counts;
   }, [tasks]);
@@ -1539,17 +1625,33 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
     return getDeptAgentNames(orgData, selectedTeamId);
   }, [selectedTeamId, orgData, mainUnlistedNames]);
 
+  const selectedTeamAgentKeys = useMemo((): Set<string> | null => {
+    if (!selectedTeamAgentNames) return null;
+    const keys = new Set<string>();
+    selectedTeamAgentNames.forEach((name) => {
+      if (!name) return;
+      keys.add(name);
+      const match = agents.find((a) => a.name === name || a.id === name);
+      if (match?.id) keys.add(match.id);
+      if (match?.name) keys.add(match.name);
+    });
+    return keys;
+  }, [selectedTeamAgentNames, agents]);
+
   const grouped = useMemo(() => {
     const g: Record<KanbanStatus, Task[]> = {
       pending: [],
       in_progress: [],
       blocked: [],
       completed: [],
+      cancelled: [],
     };
     tasks.forEach((task) => {
       // Filter by selected team's agents
-      if (selectedTeamAgentNames) {
-        if (!task.assignedAgent || !selectedTeamAgentNames.includes(task.assignedAgent)) return;
+      if (selectedTeamAgentKeys) {
+        const matchesAssignedAgent = task.assignedAgent && selectedTeamAgentKeys.has(task.assignedAgent);
+        const matchesAssignedAgentId = task.assignedAgentId && selectedTeamAgentKeys.has(task.assignedAgentId);
+        if (!matchesAssignedAgent && !matchesAssignedAgentId) return;
       }
 
       const s = task.status as KanbanStatus;
@@ -1562,7 +1664,7 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
       }
     });
     return g;
-  }, [tasks, selectedTeamAgentNames]);
+  }, [tasks, selectedTeamAgentKeys]);
 
   const handleMove = useCallback(
     (taskId: string, newStatus: KanbanStatus) => {
@@ -1572,9 +1674,44 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
   );
 
   const handleSelect = useCallback(
+    async (taskId: string) => {
+      const task = tasks.find((t) => t._id === taskId) ?? null;
+      if (!task) return;
+      const agentName = task.assignedAgent || task.assignedAgentId;
+      const agent = agentName
+        ? agents.find(
+            (a) => a.name === agentName || a.id === agentName
+          )
+        : null;
+      const agentId = agent?.id || agentName || "main";
+
+      // Try to fetch the task's linked sessions and use the most recent one
+      try {
+        const resp = await fetch("/api/hyperclaw-bridge", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "get-task-sessions", taskId, agentId }),
+        });
+        const sessions = await resp.json();
+        if (Array.isArray(sessions) && sessions.length > 0) {
+          // Use the most recent session (sorted by linked_at desc from API)
+          const sessionKey = sessions[0].session_key;
+          openChat(agentId, sessionKey);
+          return;
+        }
+      } catch {
+        // Fall through to default
+      }
+      // Fallback: open chat for agent without specific session
+      openChat(agentId);
+    },
+    [tasks, agents, openChat]
+  );
+
+  const handleEdit = useCallback(
     (taskId: string) => {
       const task = tasks.find((t) => t._id === taskId) ?? null;
-      setEditTask(task);
+      if (task) setEditTask(task);
     },
     [tasks]
   );
@@ -1590,8 +1727,9 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
   const handleDragStart = useCallback(
     (e: React.DragEvent, task: Task) => {
       if (isMobile) return;
-      setDraggedTask(task);
       e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", task._id);
+      setDraggedTask(task);
     },
     [isMobile]
   );
@@ -1613,8 +1751,10 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
       if (draggedTask && draggedTask.status !== targetStatus) {
         handleMove(draggedTask._id, targetStatus);
       }
-      setDraggedTask(null);
       setDragOverColumn(null);
+      // Delay clearing draggedTask by one frame so disableLayout stays true
+      // during the re-render that moves the card to its new column
+      requestAnimationFrame(() => setDraggedTask(null));
     },
     [isMobile, draggedTask, handleMove]
   );
@@ -1623,6 +1763,13 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
     setDraggedTask(null);
     setDragOverColumn(null);
   }, []);
+
+  const handleDragLeave = useCallback(
+    (_e: React.DragEvent, columnId: KanbanStatus) => {
+      setDragOverColumn((prev) => (prev === columnId ? null : prev));
+    },
+    []
+  );
 
   // Stable callbacks for child components (prevents re-renders from new fn refs)
   const openAddTask = useCallback(() => setAddTaskOpen(true), []);
@@ -1683,7 +1830,7 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
               })}
             </div>
             <div className="flex-1 overflow-y-auto customScrollbar2 space-y-1 pb-[env(safe-area-inset-bottom)]">
-              <AnimatePresence mode="popLayout">
+              <AnimatePresence>
                 {grouped[mobileTab].length === 0 ? (
                   <div className="flex items-center justify-center h-10 text-xs text-muted-foreground/40 font-normal">
                     Empty
@@ -1697,6 +1844,7 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
                       onStatusChange={handleMove}
                       onSelect={handleSelect}
                       onViewDetails={handleViewDetails}
+                      onEdit={handleEdit}
                       onDelete={handleDelete}
                       mobileMode
                       onMoveStatus={() => setStatusMoveTask(task)}
@@ -1745,6 +1893,7 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
                   onStatusChange={handleMove}
                   onSelect={handleSelect}
                   onViewDetails={handleViewDetails}
+                  onEdit={handleEdit}
                   onDelete={handleDelete}
                   isDragOver={dragOverColumn === col.id}
                   draggedTask={draggedTask}
@@ -1752,6 +1901,7 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
                   onDrop={handleDrop}
                   onDragStart={handleDragStart}
                   onDragEnd={handleDragEnd}
+                  onDragLeave={handleDragLeave}
                 />
               ))}
             </div>

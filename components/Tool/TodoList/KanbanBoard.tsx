@@ -1169,7 +1169,8 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({
   const taskCountByAgent = useMemo(() => {
     const counts: Record<string, number> = {};
     tasks.forEach((t) => {
-      if (t.assignedAgent) counts[t.assignedAgent] = (counts[t.assignedAgent] || 0) + 1;
+      const key = t.assignedAgent || t.assignedAgentId;
+      if (key) counts[key] = (counts[key] || 0) + 1;
     });
     return counts;
   }, [tasks]);
@@ -1193,6 +1194,19 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({
     return getBoardDeptAgentNames(orgData, selectedTeamId);
   }, [selectedTeamId, orgData, mainUnlistedNames]);
 
+  const selectedTeamAgentKeys = useMemo((): Set<string> | null => {
+    if (!selectedTeamAgentNames) return null;
+    const keys = new Set<string>();
+    selectedTeamAgentNames.forEach((name) => {
+      if (!name) return;
+      keys.add(name);
+      const match = agents.find((a) => a.name === name || a.id === name);
+      if (match?.id) keys.add(match.id);
+      if (match?.name) keys.add(match.name);
+    });
+    return keys;
+  }, [selectedTeamAgentNames, agents]);
+
   // Resolve editing agent info for the file editor
   const editingAgentNode = useMemo(() => {
     if (!editingAgentId || !orgData) return null;
@@ -1213,8 +1227,10 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({
     };
     tasks.forEach((task) => {
       // Filter by selected team's agents
-      if (selectedTeamAgentNames) {
-        if (!task.assignedAgent || !selectedTeamAgentNames.includes(task.assignedAgent)) return;
+      if (selectedTeamAgentKeys) {
+        const matchesAssignedAgent = task.assignedAgent && selectedTeamAgentKeys.has(task.assignedAgent);
+        const matchesAssignedAgentId = task.assignedAgentId && selectedTeamAgentKeys.has(task.assignedAgentId);
+        if (!matchesAssignedAgent && !matchesAssignedAgentId) return;
       }
 
       const status = task.status as KanbanColumn;
@@ -1227,7 +1243,7 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({
       }
     });
     return grouped;
-  }, [tasks, selectedTeamAgentNames]);
+  }, [tasks, selectedTeamAgentKeys]);
 
   const handleMoveTask = useCallback(
     (taskId: string, newStatus: KanbanColumn) => {

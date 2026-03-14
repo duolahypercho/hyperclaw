@@ -19,6 +19,7 @@ import { OSProvider } from "@OS/Provider/OSProv";
 import { GeistSans } from "geist/font/sans";
 import { UpdateNotification } from "$/components/UpdateNotification";
 import { GuidanceProvider } from "$/components/Guidance";
+import { ErrorBoundary } from "$/components/ErrorBoundary";
 
 Router.events.on("routeChangeStart", nProgress.start);
 Router.events.on("routeChangeError", nProgress.done);
@@ -27,6 +28,7 @@ Router.events.on("routeChangeComplete", nProgress.done);
 function MyApp({ Component, pageProps }: any) {
   const getLayout = Component.getLayout || ((page: NextPage) => page);
   return (
+    <ErrorBoundary>
     <main className={GeistSans.className} suppressHydrationWarning>
       {/* Core providers first */}
       <SessionProvider
@@ -57,6 +59,7 @@ function MyApp({ Component, pageProps }: any) {
         </ThemeProvider>
       </SessionProvider>
     </main>
+    </ErrorBoundary>
   );
 }
 

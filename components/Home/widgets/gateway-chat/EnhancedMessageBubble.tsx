@@ -1,7 +1,6 @@
 "use client";
 
 import React, { memo } from "react";
-import { motion } from "framer-motion";
 import { Reply } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -21,10 +20,7 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
-import { GenericToolMessage } from "@OS/AI/components/GenericToolMessage";
-import { UnifiedToolState } from "@OS/AI/components/ToolRegistry";
 import createMarkdownComponents from "@OS/AI/components/createMarkdownComponents";
-import { ToolCallFallback } from "./ToolCallFallback";
 import { JsonViewer } from "./JsonViewer";
 import { SystemEventsGroup } from "./SystemEvents";
 
@@ -64,8 +60,6 @@ export const EnhancedMessageBubble = memo(
     botPic,
     userPic,
     assistantAvatar,
-    toolStates,
-    toggleToolExpansion,
   }: {
     message: GatewayChatMessage;
     isUser: boolean;
@@ -76,8 +70,6 @@ export const EnhancedMessageBubble = memo(
     botPic?: string;
     userPic?: { src?: string; fallback: string; alt?: string };
     assistantAvatar?: { src?: string; fallback: string; alt?: string };
-    toolStates?: Map<string, UnifiedToolState>;
-    toggleToolExpansion?: (messageId: string) => void;
   }) => {
     const defaultIcon = isUser ? (
       <span className="text-xs">U</span>
@@ -89,65 +81,6 @@ export const EnhancedMessageBubble = memo(
 
     if (message.role === "system" || message.role === "tool") {
       return null;
-    }
-
-    // Compute tool call element for assistant messages with tool calls.
-    // Instead of early-returning, we store it so messages with BOTH text
-    // and tool calls can render both together.
-    let toolCallElement: React.ReactNode = null;
-    if (
-      message.role === "assistant" &&
-      (message as any).toolCalls?.length > 0
-    ) {
-      const messageId = message.id || "";
-      const toolState = toolStates?.get(messageId);
-      const hasTextForTool = !!message.content?.trim();
-
-      if (toolState && toggleToolExpansion) {
-        toolCallElement = (
-          <GenericToolMessage
-            toolState={toolState}
-            message={message as any}
-            onToggleExpand={() => toggleToolExpansion(messageId)}
-            assistantAvatar={assistantAvatar}
-            botPic={botPic}
-            showAvatar={showAvatar && !hasTextForTool}
-          />
-        );
-      } else {
-        // Fallback: render tool info from message data when toolState is unavailable
-        const tc = (message as any).toolCalls?.[0];
-        const toolName = tc?.function?.name || tc?.name || "action";
-        const toolArgs = tc?.function?.arguments || tc?.arguments || "";
-        const mergedResult = (tc as any)?.result as string | undefined;
-        const mergedIsError = (tc as any)?.isError as boolean | undefined;
-        toolCallElement = (
-          <div className="flex gap-3 justify-start min-w-0 max-w-full">
-            <div className="w-8 h-8 flex-shrink-0">
-              {showAvatar && !hasTextForTool ? (
-                <Avatar className="w-8 h-8">
-                  <AvatarFallback className="bg-primary/10 text-primary">
-                    <CopanionIcon className="w-4 h-4" />
-                  </AvatarFallback>
-                </Avatar>
-              ) : <div className="w-8 h-8" />}
-            </div>
-            <div className="relative flex flex-col min-w-0 overflow-hidden flex-1">
-              <ToolCallFallback
-                toolName={toolName}
-                toolArgs={toolArgs}
-                result={mergedResult}
-                isError={mergedIsError}
-              />
-            </div>
-          </div>
-        );
-      }
-
-      // If no text content, just return the tool element alone
-      if (!message.content?.trim()) {
-        return toolCallElement;
-      }
     }
 
     const rawContent = message.content || "";
@@ -179,7 +112,7 @@ export const EnhancedMessageBubble = memo(
     const hasAttachments = isUser && message.attachments && message.attachments.length > 0;
 
     // If no real content, hide the message entirely
-    if (!hasTextContent && !hasAttachments && !systemEvents.length && !isLoading && !toolCallElement) {
+    if (!hasTextContent && !hasAttachments && !systemEvents.length && !isLoading) {
       return null;
     }
 
@@ -204,11 +137,9 @@ export const EnhancedMessageBubble = memo(
               // Render thinking block (matching ThinkingToolRenderer style)
               if (block.type === "thinking" && block.thinking) {
                 return (
-                  <motion.div
+                  <div
                     key={`thinking-${index}`}
                     className="relative w-full transition-all duration-300 select-text rounded-lg border border-border/50 text-muted-foreground hover:text-foreground/80"
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
                     style={{
                       borderTopRightRadius: "10px",
                       borderBottomRightRadius: "10px",
@@ -242,7 +173,7 @@ export const EnhancedMessageBubble = memo(
                         </AccordionContent>
                       </AccordionItem>
                     </Accordion>
-                  </motion.div>
+                  </div>
                 );
               }
 
@@ -338,14 +269,11 @@ export const EnhancedMessageBubble = memo(
 
         {/* User message bubble — only render if there's actual content */}
         {(hasTextContent || hasAttachments || isLoading) && (
-          <motion.div
+          <div
             className={cn(
               "flex gap-3 group",
               isUser ? "justify-end" : "justify-start"
             )}
-            initial={{ opacity: 0, y: 8, scale: 0.97 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            transition={{ duration: 0.25, ease: "easeOut" }}
           >
             {!isUser && (
               <div className="w-8 h-8 flex-shrink-0">
@@ -459,28 +387,18 @@ export const EnhancedMessageBubble = memo(
                 )}
               </div>
             )}
-          </motion.div>
+          </div>
         )}
-        {toolCallElement}
       </>
     );
   },
   (prevProps, nextProps) => {
-    // Compare tool call results so we re-render when a tool result streams in
-    const prevTc = (prevProps.message as any).toolCalls;
-    const nextTc = (nextProps.message as any).toolCalls;
-    const prevToolResult = prevTc?.[0]?.result;
-    const nextToolResult = nextTc?.[0]?.result;
-
     return (
       prevProps.message.content === nextProps.message.content &&
       prevProps.message.role === nextProps.message.role &&
       prevProps.isLoading === nextProps.isLoading &&
       prevProps.showAvatar === nextProps.showAvatar &&
-      prevProps.userPic?.src === nextProps.userPic?.src &&
-      prevProps.toolStates === nextProps.toolStates &&
-      prevToolResult === nextToolResult &&
-      prevTc?.length === nextTc?.length
+      prevProps.userPic?.src === nextProps.userPic?.src
     );
   }
 );

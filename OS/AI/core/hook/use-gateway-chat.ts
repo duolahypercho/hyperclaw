@@ -412,6 +412,33 @@ function normalizeMessage(message: unknown): GatewayChatMessage | null {
     contentBlocks.push({ type: "text", text: msg.content });
   }
 
+  // Handle top-level toolCalls / tool_calls on assistant messages.
+  // History messages and some gateway formats put tool calls here rather than
+  // inside contentBlocks. Without this, history tool-call messages lose their
+  // toolCalls and become invisible empty assistant messages.
+  if (role === "assistant" && !toolCalls) {
+    const rawToolCalls = msg.tool_calls || msg.toolCalls;
+    if (Array.isArray(rawToolCalls) && rawToolCalls.length > 0) {
+      const stringifyArgs = (v: unknown): string =>
+        typeof v === "string" ? v : JSON.stringify(v || {});
+      toolCalls = (rawToolCalls as any[]).map((tc: any) => ({
+        id: tc.id || uuidv4(),
+        function: tc.function || { name: tc.name || "", arguments: stringifyArgs(tc.arguments) },
+        name: tc.function?.name || tc.name || "",
+        arguments: tc.function?.arguments || stringifyArgs(tc.arguments),
+      }));
+      // Also add to contentBlocks for consistent rendering
+      for (const tc of toolCalls) {
+        contentBlocks.push({
+          type: "toolCall",
+          id: tc.id,
+          name: (tc as any).name || tc.function?.name,
+          arguments: tc.function?.arguments || (tc as any).arguments,
+        });
+      }
+    }
+  }
+
   // Handle tool_results (for tool result messages) - check top-level toolResults array
   // This handles the format: { role: "toolResult", toolResults: [{ toolCallId, toolName, content, isError }] }
   if (role === "toolResult" && Array.isArray(msg.toolResults) && msg.toolResults.length > 0) {

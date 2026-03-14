@@ -69,8 +69,8 @@ const plugin = {
         properties: {
           status: {
             type: "string",
-            enum: ["pending", "in_progress", "completed", "cancelled"],
-            description: "Filter by status",
+            enum: ["pending", "in_progress", "blocked", "completed", "cancelled"],
+            description: "Filter by status: pending (backlog), in_progress, blocked (review), completed (done), cancelled",
           },
         },
       },
@@ -97,7 +97,8 @@ const plugin = {
           priority: { type: "string", enum: ["low", "medium", "high"] },
           status: {
             type: "string",
-            enum: ["pending", "in_progress", "completed", "cancelled"],
+            enum: ["pending", "in_progress", "blocked", "completed", "cancelled"],
+            description: "Task status: pending (backlog), in_progress, blocked (review), completed (done), cancelled",
           },
           metadata: { type: "object" },
         },
@@ -273,8 +274,8 @@ const plugin = {
           agent: { type: "string", description: "Filter by agent name (alias for agentId)" },
           status: {
             type: "string",
-            enum: ["pending", "in_progress", "completed", "cancelled"],
-            description: "Filter by status",
+            enum: ["pending", "in_progress", "blocked", "completed", "cancelled"],
+            description: "Filter by status: pending (backlog), in_progress, blocked (review), completed (done), cancelled",
           },
           kind: { type: "string", description: "Filter by task kind (e.g. 'research', 'code')" },
           limit: { type: "number", description: "Max results to return" },
@@ -435,6 +436,125 @@ const plugin = {
           offset: params.offset,
         });
         return { content: [{ type: "text", text: JSON.stringify(messages) }] };
+      },
+    });
+
+    // ── Task Logs: append learnings / progress ─────────────────────────────
+
+    api.registerTool({
+      name: "hyperclaw_append_task_log",
+      description:
+        "Append a log entry to a task. Use this to record learnings, progress updates, " +
+        "discoveries, errors, or notes as you work on a task. Multiple logs per task are supported.",
+      parameters: {
+        type: "object",
+        properties: {
+          taskId: { type: "string", description: "Task ID to append the log to" },
+          type: {
+            type: "string",
+            enum: ["progress", "learning", "error", "note", "discovery"],
+            description: "Log entry type (default: progress)",
+          },
+          content: { type: "string", description: "Log content — what you learned, did, or found" },
+          agent: { type: "string", description: "Agent name writing this log" },
+          metadata: { type: "object", description: "Optional structured metadata" },
+        },
+        required: ["taskId", "content"],
+      },
+      async execute(_id: string, params: any) {
+        const log = bridge.appendTaskLog({
+          taskId: params.taskId,
+          agentId: params.agent,
+          type: params.type,
+          content: params.content,
+          metadata: params.metadata,
+        });
+        return { content: [{ type: "text", text: JSON.stringify(log) }] };
+      },
+    });
+
+    api.registerTool({
+      name: "hyperclaw_get_task_logs",
+      description:
+        "Retrieve log entries for a task. Returns learnings, progress updates, and notes " +
+        "appended by agents. Newest first.",
+      parameters: {
+        type: "object",
+        properties: {
+          taskId: { type: "string", description: "Task ID to get logs for" },
+          type: {
+            type: "string",
+            enum: ["progress", "learning", "error", "note", "discovery"],
+            description: "Filter by log type",
+          },
+          limit: { type: "number", description: "Max entries to return" },
+          offset: { type: "number", description: "Skip this many entries" },
+        },
+        required: ["taskId"],
+      },
+      async execute(_id: string, params: any) {
+        const logs = bridge.getTaskLogs(params.taskId, {
+          type: params.type,
+          limit: params.limit,
+          offset: params.offset,
+        });
+        return { content: [{ type: "text", text: JSON.stringify(logs) }] };
+      },
+    });
+
+    // ── Task-Session Links ─────────────────────────────────────────────────
+
+    api.registerTool({
+      name: "hyperclaw_link_task_session",
+      description:
+        "Link a session to a task. This creates a many-to-many relationship — " +
+        "a task can have multiple sessions, and a session can be linked to multiple tasks. " +
+        "Use this to track which agent sessions worked on which tasks.",
+      parameters: {
+        type: "object",
+        properties: {
+          taskId: { type: "string", description: "Task ID to link" },
+          sessionKey: { type: "string", description: "Session key to link" },
+        },
+        required: ["taskId", "sessionKey"],
+      },
+      async execute(_id: string, params: any) {
+        const result = bridge.linkTaskSession(params.taskId, params.sessionKey);
+        return { content: [{ type: "text", text: JSON.stringify(result) }] };
+      },
+    });
+
+    api.registerTool({
+      name: "hyperclaw_get_task_sessions",
+      description:
+        "Get all sessions linked to a task. Returns session details including agent, label, and timestamps.",
+      parameters: {
+        type: "object",
+        properties: {
+          taskId: { type: "string", description: "Task ID to get sessions for" },
+        },
+        required: ["taskId"],
+      },
+      async execute(_id: string, params: any) {
+        const sessions = bridge.getTaskSessions(params.taskId);
+        return { content: [{ type: "text", text: JSON.stringify(sessions) }] };
+      },
+    });
+
+    api.registerTool({
+      name: "hyperclaw_get_session_tasks",
+      description:
+        "Get all tasks linked to a session. Useful for seeing what tasks a session worked on.",
+      parameters: {
+        type: "object",
+        properties: {
+          sessionKey: { type: "string", description: "Session key to get tasks for" },
+        },
+        required: ["sessionKey"],
+      },
+      async execute(_id: string, params: any) {
+        const tasks = bridge.getSessionTasks(params.sessionKey);
+        return { content: [{ type: "text", text: JSON.stringify(tasks) }] };
       },
     });
   },

@@ -257,12 +257,8 @@ export const UsageCustomHeader: React.FC<CustomProps> = ({
 
 const UsageWidgetContent = memo((props: CustomProps) => {
   const { isFocusModeActive } = useFocusMode();
-  const { usage, sessionsUsage, loading, error, refetch, applyPreset, startDate, endDate } = useUsage();
+  const { usage, sessionsUsage, loading, error, refetch, startDate, endDate } = useUsage();
   const [localUsage, setLocalUsage] = useState<LocalUsageData | null>(null);
-  const [isMerging, setIsMerging] = useState(false);
-
-  // Track previous dates to detect changes
-  const prevDatesRef = useRef({ startDate, endDate });
 
   // Ref to access localUsage inside effects without re-triggering them
   const localUsageRef = useRef(localUsage);
@@ -283,15 +279,12 @@ const UsageWidgetContent = memo((props: CustomProps) => {
     loadLocal();
   }, []);
 
-  // Default is "today" from usageProvider — no preset override needed
-
   // Merge OpenClaw data with local data when new data arrives
   // NOTE: localUsage is read via ref to avoid infinite loop (effect updates localUsage)
   useEffect(() => {
     if (!usage && !sessionsUsage) return;
 
     async function mergeAndSave() {
-      setIsMerging(true);
       try {
         // Get OpenClaw daily data
         const openClawDaily = usage?.daily ?? [];
@@ -330,8 +323,6 @@ const UsageWidgetContent = memo((props: CustomProps) => {
         setLocalUsage(newLocalData);
       } catch (e) {
         console.error("Failed to merge/save local usage:", e);
-      } finally {
-        setIsMerging(false);
       }
     }
 
@@ -339,7 +330,7 @@ const UsageWidgetContent = memo((props: CustomProps) => {
   }, [usage, sessionsUsage]);
 
   // Totals: prefer sessions.usage (primary, matches OpenClaw), then usage.cost, then local cache
-  const totalsData = useMemo(() => {
+  const totals = useMemo(() => {
     // Primary: sessions.usage totals (complete token counts including cache reads)
     const liveTotals = sessionsUsage?.totals ?? usage?.totals;
     if (liveTotals) {
@@ -374,19 +365,6 @@ const UsageWidgetContent = memo((props: CustomProps) => {
     return { inputTokens: input, outputTokens: output, totalTokens, totalCost };
   }, [sessionsUsage, usage, localUsage, startDate, endDate]);
 
-  // Refetch when dates change
-  useEffect(() => {
-    const prev = prevDatesRef.current;
-    if (prev.startDate !== startDate || prev.endDate !== endDate) {
-      prevDatesRef.current = { startDate, endDate };
-      // Small delay to ensure state is updated
-      const timer = setTimeout(() => {
-        refetch();
-      }, 100);
-      return () => clearTimeout(timer);
-    }
-  }, [startDate, endDate, refetch]);
-
   // Auto-refresh (pauses when tab is hidden)
   useEffect(() => {
     let interval: ReturnType<typeof setInterval> | null = null;
@@ -410,8 +388,6 @@ const UsageWidgetContent = memo((props: CustomProps) => {
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [refetch]);
-
-  const totals = totalsData;
 
   const isInitialLoading = loading && !usage && !sessionsUsage && !localUsage;
   const showError = error && !usage && !sessionsUsage && !localUsage;

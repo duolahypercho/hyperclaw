@@ -79,8 +79,6 @@ export function EditTaskDialog({
   const [channelOptions, setChannelOptions] = useState<ChannelOption[]>([]);
   const [dataLoading, setDataLoading] = useState(false);
 
-  // Defer rendering Select items until first open
-  const [agentSelectReady, setAgentSelectReady] = useState(false);
   const descRef = useRef<HTMLTextAreaElement>(null);
   const MAX_DESC_PX = 320;
 
@@ -104,8 +102,12 @@ export function EditTaskDialog({
     setError(null);
   }, [task._id]);
 
-  // Resolve assignedAgent name → agent id when agents load
+  // Resolve assignedAgent label/id → selected agent id when agents load
   useEffect(() => {
+    if (task.assignedAgentId) {
+      setAssignedAgent(task.assignedAgentId);
+      return;
+    }
     if (!task.assignedAgent) {
       setAssignedAgent("");
       return;
@@ -114,7 +116,7 @@ export function EditTaskDialog({
       (a) => a.name === task.assignedAgent || a.id === task.assignedAgent
     );
     setAssignedAgent(match?.id ?? "");
-  }, [task.assignedAgent, agents]);
+  }, [task.assignedAgent, task.assignedAgentId, agents]);
 
   // Only fetch data that wasn't preloaded
   useEffect(() => {
@@ -191,8 +193,11 @@ export function EditTaskDialog({
       if (description.trim() !== (task.description ?? "").trim())
         fields.description = description.trim();
       const newAgentName = agentObj?.name ?? undefined;
+      const newAgentId = agentObj?.id ?? undefined;
       if (newAgentName !== task.assignedAgent)
         fields.assignedAgent = newAgentName ?? null;
+      if ((newAgentId ?? null) !== (task.assignedAgentId ?? null))
+        fields.assignedAgentId = newAgentId ?? null;
 
       const delivery = announce
         ? (() => {
@@ -274,20 +279,6 @@ export function EditTaskDialog({
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="edit-task-desc" className="text-xs font-medium">
-                Prompt description
-              </Label>
-              <Textarea
-                ref={descRef}
-                id="edit-task-desc"
-                placeholder="Add a description..."
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                className="min-h-[60px] text-sm resize-none bg-muted/30 border-border/60 transition-[height] duration-150 ease-out"
-                rows={2}
-              />
-            </div>
-            <div className="space-y-2">
               <Label className="text-xs font-medium flex items-center gap-1.5">
                 <Bot className="w-3.5 h-3.5 text-muted-foreground" />
                 Assigned agent
@@ -297,7 +288,6 @@ export function EditTaskDialog({
                 onValueChange={(v) =>
                   setAssignedAgent(v === "__none__" ? "" : v)
                 }
-                onOpenChange={(o) => { if (o) setAgentSelectReady(true); }}
                 disabled={dataLoading}
               >
                 <SelectTrigger className="h-9 bg-muted/30 border-border/60">
@@ -311,7 +301,7 @@ export function EditTaskDialog({
                   <SelectItem value="__none__" className="text-xs text-muted-foreground">
                     None
                   </SelectItem>
-                  {agentSelectReady && agents.map((agent) => {
+                  {agents.map((agent) => {
                     const label = agent.name || agent.id || "Unnamed";
                     return (
                       <SelectItem
@@ -333,6 +323,20 @@ export function EditTaskDialog({
                   })}
                 </SelectContent>
               </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-task-desc" className="text-xs font-medium">
+                Prompt description
+              </Label>
+              <Textarea
+                ref={descRef}
+                id="edit-task-desc"
+                placeholder="Add a description..."
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                className="min-h-[120px] text-sm bg-muted/30 border-border/60 transition-[height] duration-150 ease-out"
+                rows={4}
+              />
             </div>
             <div className="space-y-2">
               <Label className="text-xs font-medium">Delivery</Label>

@@ -1,12 +1,24 @@
 import type { NextApiRequest, NextApiResponse } from "next";
+import logger from "$/lib/logger";
+
+function getAllowedOrigin(req: NextApiRequest): string {
+  const origin = req.headers.origin ?? "";
+  const allowed = [
+    /^https?:\/\/localhost(:\d+)?$/,
+    /^https?:\/\/127\.0\.0\.1(:\d+)?$/,
+    /^https?:\/\/([a-z0-9-]+\.)?hypercho\.com$/,
+  ];
+  return allowed.some((re) => re.test(origin)) ? origin : "";
+}
 
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
+  const corsOrigin = getAllowedOrigin(req);
   // Handle CORS preflight requests
   if (req.method === "OPTIONS") {
-    res.setHeader("Access-Control-Allow-Origin", "*");
+    if (corsOrigin) res.setHeader("Access-Control-Allow-Origin", corsOrigin);
     res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Range, Content-Type");
     res.setHeader("Access-Control-Max-Age", "86400");
@@ -48,7 +60,7 @@ export default async function handler(
 
     // Set appropriate headers for streaming
     res.setHeader("Content-Type", contentType);
-    res.setHeader("Access-Control-Allow-Origin", "*");
+    if (corsOrigin) res.setHeader("Access-Control-Allow-Origin", corsOrigin);
     res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Range");
     res.setHeader("Cache-Control", "no-cache");
@@ -73,7 +85,7 @@ export default async function handler(
       res.send(Buffer.from(buffer));
     }
   } catch (error) {
-    console.error("Radio proxy error:", error);
+    logger.error({ err: error }, "Radio proxy error");
 
     // Send appropriate error response
     if (error instanceof Error) {

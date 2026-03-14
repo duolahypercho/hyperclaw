@@ -738,7 +738,7 @@ const MessageBubble = memo(
 
 // ── Main FloatingChatViewer ───────────────────────────────────────────
 export function FloatingChatViewer() {
-  const { agentId, closeChat } = useFloatingChatOS();
+  const { agentId, sessionKey: providedSessionKey, closeChat } = useFloatingChatOS();
   const { agents } = useOpenClawContext();
   const { userInfo } = useUser();
 
@@ -754,9 +754,15 @@ export function FloatingChatViewer() {
   const defaultSessionKey = `agent:${effectiveAgentId}:main`;
   const [resolvedSessionKey, setResolvedSessionKey] = useState(defaultSessionKey);
 
-  // Auto-detect the most recent session for this agent
+  // Auto-detect the most recent session for this agent,
+  // or use the provided session key if one was given (e.g. direct session link)
   const [sessionResolved, setSessionResolved] = useState(false);
   useEffect(() => {
+    if (providedSessionKey) {
+      setResolvedSessionKey(providedSessionKey);
+      setSessionResolved(true);
+      return;
+    }
     const fallback = `agent:${effectiveAgentId}:main`;
     setSessionResolved(false);
     if (!gatewayConnection.isConnected()) {
@@ -772,7 +778,7 @@ export function FloatingChatViewer() {
     }).finally(() => {
       setSessionResolved(true);
     });
-  }, [effectiveAgentId]);
+  }, [effectiveAgentId, providedSessionKey]);
 
   const {
     messages,

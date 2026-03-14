@@ -8,12 +8,20 @@ const OPENCLAW_WS_PORTS = (process.env.NEXT_PUBLIC_OPENCLAW_GATEWAY_PORTS || "18
   .filter(Boolean);
 
 function buildConnectSrc() {
+  // Build WebSocket origins for each configured gateway port
+  const wsOrigins = OPENCLAW_WS_PORTS.flatMap((p) => [
+    `ws://127.0.0.1:${p}`,
+    `ws://localhost:${p}`,
+    `wss://127.0.0.1:${p}`,
+    `wss://localhost:${p}`,
+  ]);
   const parts = [
-    "connect-src 'self' https: ws: wss:",
+    "connect-src 'self'",
+    "https://api.hypercho.com",
+    "https://hub.hypercho.com",
+    "wss://hub.hypercho.com",
     "http://127.0.0.1:9979 http://localhost:9979",
-    // Allow all WebSocket connections for remote/VPS access (gateway auth provides security)
-    "ws://*:* wss://*:*",
-    "http://*:* https://*:*",
+    ...wsOrigins,
   ];
   return parts.join(" ");
 }
@@ -67,11 +75,17 @@ const nextConfig = {
   },
   webpack: (config, { isServer }) => {
     const path = require("path");
-    
+
     config.resolve.alias = {
       ...config.resolve.alias,
       buffer: path.join(__dirname, "node_modules/buffer/index.js"),
     };
+
+    // Keep better-sqlite3 as external on server — it's a native addon that can't be bundled
+    if (isServer) {
+      config.externals = config.externals || [];
+      config.externals.push("better-sqlite3");
+    }
 
     return config;
   },
@@ -80,4 +94,12 @@ const nextConfig = {
   },
 };
 
-module.exports = nextConfig;
+const { withSentryConfig } = require("@sentry/nextjs");
+
+module.exports = withSentryConfig(nextConfig, {
+  silent: true,
+  org: process.env.SENTRY_ORG || "",
+  project: process.env.SENTRY_PROJECT || "",
+  disableServerWebpackPlugin: !process.env.SENTRY_AUTH_TOKEN,
+  disableClientWebpackPlugin: !process.env.SENTRY_AUTH_TOKEN,
+});
