@@ -358,6 +358,19 @@ export default function UsageFilters() {
                 </TabsTrigger>
               </TabsList>
             </Tabs>
+            <Tabs
+              value={ctx.timeZone}
+              onValueChange={(v) => ctx.setTimeZone(v as "local" | "utc")}
+            >
+              <TabsList className="h-8">
+                <TabsTrigger value="local" className="text-xs px-2">
+                  Local
+                </TabsTrigger>
+                <TabsTrigger value="utc" className="text-xs px-2">
+                  UTC
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
             <Button
               size="sm"
               onClick={() => ctx.refetch()}
@@ -378,6 +391,12 @@ export default function UsageFilters() {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
+                <DropdownMenuItem
+                  onClick={handleExportSessionsCsv}
+                  disabled={filteredSessions.length === 0}
+                >
+                  Sessions CSV
+                </DropdownMenuItem>
                 <DropdownMenuItem
                   onClick={handleExportDailyCsv}
                   disabled={filteredDaily.length === 0}

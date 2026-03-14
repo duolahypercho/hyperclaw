@@ -255,10 +255,21 @@ export const InteractAppProvider = ({
 
   // Memoize validated active tab to ensure it's always valid
   const validatedActiveTab = useMemo(() => {
-    if (!appSchema.sidebar) return currentAppSettings.currentActiveTab || "";
+    const currentTab = currentAppSettings.currentActiveTab;
+
+    if (!appSchema.sidebar) {
+      // No sidebar — check header tabs as fallback for InteractContent visibility
+      if (currentTab) return currentTab;
+      const headerTabs = appSchema.header?.leftUI?.type === "tabs"
+        ? appSchema.header.leftUI.tabs
+        : undefined;
+      if (headerTabs && headerTabs.length > 0) {
+        return headerTabs[0].value ?? headerTabs[0].id ?? "";
+      }
+      return "";
+    }
 
     const validTabIds = getValidTabIds(appSchema);
-    const currentTab = currentAppSettings.currentActiveTab;
 
     // Return current tab if valid, otherwise return first tab or empty string
     if (currentTab && validTabIds.includes(currentTab)) {

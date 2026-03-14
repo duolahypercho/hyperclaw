@@ -255,6 +255,11 @@ function JournalContentView({
   mergedContent?: string | null;
   mergedLoading?: boolean;
 }) {
+  // Hooks must be called unconditionally (Rules of Hooks)
+  const filteredContent = useMemo(() => stripSessionFromContent(content), [content]);
+  const blocks = useMemo(() => parseJournalContent(filteredContent), [filteredContent]);
+  const hasTimeStamps = blocks.some((b) => b.time);
+
   // Merged day view: big header + all files for that day
   if (dayEntry) {
     const fullDateLabel =
@@ -331,11 +336,6 @@ function JournalContentView({
       </div>
     );
   }
- const filteredContent = useMemo(() => stripSessionFromContent(content), [content]);
-
-  const blocks = useMemo(() => parseJournalContent(filteredContent), [filteredContent]);
-  const hasTimeStamps = blocks.some((b) => b.time);
-
   return (
     <motion.div
       initial={{ opacity: 0 }}

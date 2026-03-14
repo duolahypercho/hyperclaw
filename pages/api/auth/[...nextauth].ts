@@ -5,6 +5,7 @@ import GoogleProvider from "next-auth/providers/google";
 import { setCookie, deleteCookie } from "cookies-next";
 import Jwt from "jsonwebtoken";
 import { loginAuth, googleAuth } from "$/services/user";
+import logger from "$/lib/logger";
 
 export const authOptions = (req: any, res: any) => {
   const useSecureCookies = process.env.NEXTAUTH_URL!.startsWith("https://");
@@ -45,7 +46,7 @@ export const authOptions = (req: any, res: any) => {
                 profilePic: string;
                 _id: string;
                 Verified: boolean;
-                channel: { _id?: string };
+                channel: { _id?: string; tier?: string };
                 Firstname: string;
                 Lastname: string;
                 username: string;
@@ -66,7 +67,11 @@ export const authOptions = (req: any, res: any) => {
               deleteCookie(`hypercho_user_token`, { req, res, path: "/" });
               if (userId) {
                 // set the new id to the cookie
-                const newToken = Jwt.sign(userId, process.env.NEXTAUTH_SECRET!);
+                const newToken = Jwt.sign(
+                  { sub: userId, tier: channel?.tier || "free" },
+                  process.env.NEXTAUTH_SECRET!,
+                  { expiresIn: "30d" }
+                );
                 setCookie(`hypercho_user_token`, newToken, {
                   req,
                   res,
@@ -80,19 +85,17 @@ export const authOptions = (req: any, res: any) => {
               }
               return info; //return when change successful
               //return when change successful
-            } else if (status === 401) {
-              throw new Error("This user doesn't exist"); //return when mail doesn't exist
             } else {
-              throw new Error("Incorrect Password"); //return when password is wrong
+              throw new Error("Invalid email or password");
             }
           } catch (e: any) {
-            console.error(e);
-            const errorMessage = e.response.data.message as string;
+            logger.warn({ err: e }, "Login failed");
+            const errorMessage = e?.response?.data?.message as string | undefined;
             if (
               errorMessage === "Incorrect Password" ||
               errorMessage === "This user doesn't exist"
             ) {
-              throw new Error(e.response.data.message);
+              throw new Error("Invalid email or password");
             } else {
               throw new Error("Something went wrong");
             }
@@ -130,7 +133,11 @@ export const authOptions = (req: any, res: any) => {
           }
           // User data was fetched from backend successfully
           const userData = anyUser.userData;
-          const newToken = Jwt.sign(userData._id, process.env.NEXTAUTH_SECRET!);
+          const newToken = Jwt.sign(
+            { sub: userData._id, tier: userData.channel?.tier || "free" },
+            process.env.NEXTAUTH_SECRET!,
+            { expiresIn: "30d" }
+          );
           token.token = newToken;
           token.userId = userData._id;
           token.Firstname = userData.Firstname;
@@ -157,7 +164,11 @@ export const authOptions = (req: any, res: any) => {
         // Handle Credentials sign-in
         if (user && account?.provider === "credentials") {
           // Create the JWT token here
-          const newToken = Jwt.sign(user.userId, process.env.NEXTAUTH_SECRET!);
+          const newToken = Jwt.sign(
+            { sub: user.userId, tier: user.channel?.tier || "free" },
+            process.env.NEXTAUTH_SECRET!,
+            { expiresIn: "30d" }
+          );
           token.token = newToken; // Add the token to the JWT
           token.userId = user.userId;
           token.Firstname = user.Firstname;
@@ -232,7 +243,7 @@ export const authOptions = (req: any, res: any) => {
               throw new Error("Failed to authenticate with Google");
             }
           } catch (error: any) {
-            console.error("Google authentication error:", error);
+            logger.error({ err: error }, "Google authentication error");
             throw new Error(
               error.response?.data?.message || "Google authentication failed"
             );

@@ -50,8 +50,12 @@
       ],
       "icon": "../public/Logopic.png",
       "category": "public.app-category.productivity",
-      "hardenedRuntime": false,
-      "gatekeeperAssess": false
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "cscLink": "/Users/ziwenxu/Documents/certificates.p12",
+      "cscKeyPassword": "HxC0d3$1gn2026!Z1w",
+      "entitlements": "./entitlements.plist",
+      "entitlementsInherit": "./entitlements.plist"
     },
     "dmg": {
       "title": "Hyperclaw",
@@ -75,7 +79,7 @@
       "allowToChangeInstallationDirectory": true,
       "allowElevation": true,
       "runAfterFinish": true,
-      "artifactName": "Hyperclaw-Setup-Local-${version}.${ext}",
+      "artifactName": "Hyperclaw-Setup-Remote-${version}.${ext}",
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Hyperclaw",
@@ -91,7 +95,7 @@
     "electron:build:mac:local": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --config.mac.target=zip",
     "electron:build:mac:remote": "node scripts/set-config.js remote && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --config.mac.target=zip --x64 --arm64",
     "electron:build:mac:remote:dmg": "node scripts/set-config.js remote && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --config.mac.target=dmg --x64 --arm64",
-    "electron:build:mac:dmg": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --config.mac.target=dmg",
+    "electron:build:mac:dmg": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=true electron-builder --mac --config.mac.target=dmg",
     "electron:build:mac:zip": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --config.mac.target=zip"
   }
 }

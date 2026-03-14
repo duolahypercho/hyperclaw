@@ -21,6 +21,7 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import remarkBreaks from "remark-breaks";
 import rehypeRaw from "rehype-raw";
+import createMarkdownComponents from "../createMarkdownComponents";
 
 export const DefaultToolRenderer: React.FC<ToolRendererProps> = ({
   toolState,
@@ -55,26 +56,17 @@ export const DefaultToolRenderer: React.FC<ToolRendererProps> = ({
     return Boolean(parsedArguments);
   }, [parsedArguments]);
 
-  const resultHasError = useMemo(() => {
-    if (!toolState.resultContent) return false;
-    const content = toolState.resultContent.toLowerCase();
-    return (
-      content.includes("error") ||
-      content.includes("failed") ||
-      content.includes("exception") ||
-      content.includes("rejected")
-    );
-  }, [toolState.resultContent]);
+  // Reuse the same markdown components as main chat messages
+  const markdownComponents = useMemo(() => createMarkdownComponents(false), []);
 
-  const effectiveStatus: ToolStatus =
-    toolState.status === "completed" && resultHasError ? "rejected" : toolState.status;
+  const effectiveStatus: ToolStatus = toolState.status;
 
   const isExpanded =
     toolState.isExpanded === false
       ? false
       : toolState.isExpanded ||
         isPermissionStage ||
-        (resultHasError && !!toolState.resultContent);
+        (toolState.status === "rejected" && !!toolState.resultContent);
 
   const getStatusColor = (status: ToolStatus) => {
     switch (status) {
@@ -263,6 +255,7 @@ export const DefaultToolRenderer: React.FC<ToolRendererProps> = ({
                             [remarkMath, { singleDollarTextMath: false }],
                           ]}
                           rehypePlugins={[rehypeRaw]}
+                          components={markdownComponents}
                         >
                           {toolState.resultContent}
                         </ReactMarkdown>

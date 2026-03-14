@@ -1,5 +1,6 @@
 // pages/api/deleteObject.ts
 import { NextApiRequest, NextApiResponse } from 'next';
+import logger from "$/lib/logger";
 
 import { S3 } from "@aws-sdk/client-s3";
 
@@ -25,10 +26,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const { objectKey } = req.body;
 
+  if (!objectKey || typeof objectKey !== "string" || objectKey.includes("..") || objectKey.startsWith("/")) {
+    return res.status(400).json({ message: "Invalid object key." });
+  }
+
   try {
     await deleteObjectFromS3(objectKey);
     res.status(200).json({ message: 'Object deleted successfully.' });
-  } catch (error:any) {
-    res.status(500).json({ message: 'Failed to delete object.', error: error.message });
+  } catch (error: any) {
+    logger.error({ err: error, objectKey }, "S3 delete failed");
+    res.status(500).json({ message: 'Failed to delete object.' });
   }
 }

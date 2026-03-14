@@ -1,8 +1,8 @@
 "use client";
 
-import React, { useState, useCallback, useEffect } from "react";
+import React, { useState, useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Plus, Bot, FileText, Loader2 } from "lucide-react";
+import { Plus, Bot, Loader2 } from "lucide-react";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
 import {
   Dialog,
@@ -25,9 +25,7 @@ import {
   SelectGroup,
   SelectLabel,
 } from "@/components/ui/select";
-import { Badge } from "@/components/ui/badge";
 import { useTodoList } from "$/components/Tool/TodoList/provider/todolistProvider";
-import type { DocEntry } from "$/components/Tool/Docs/types";
 
 interface TeamAgent {
   id: string;
@@ -53,118 +51,89 @@ function isChannelFileValue(value: string): boolean {
   return value.includes(":") && value !== "last";
 }
 
-/** Derive agent label for a doc from its path and workspace labels (e.g. workspace-main/Notes/foo.md → "Main"). */
-function getDocAgentLabel(
-  relativePath: string,
-  workspaceLabels: Record<string, string>
-): string {
-  const firstSegment = relativePath.split("/")[0]?.trim() || "";
-  if (!firstSegment) return "Docs";
-  const label = workspaceLabels[firstSegment];
-  if (label) return label;
-  // Fallback: "workspace-main" → "Main", "workspace-aegis" → "Aegis"
-  const suffix = firstSegment.replace(/^workspace-/, "");
-  return suffix.charAt(0).toUpperCase() + suffix.slice(1).toLowerCase() || firstSegment;
-}
-
 export interface AddTaskDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSuccess?: () => void;
+  /** Pre-loaded agents from the parent — avoids redundant bridge call */
+  preloadedAgents?: TeamAgent[];
 }
 
 export function AddTaskDialog({
   open,
   onOpenChange,
   onSuccess,
+  preloadedAgents,
 }: AddTaskDialogProps) {
   const { handleAddTask } = useTodoList();
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [assignedAgent, setAssignedAgent] = useState("");
-  const [linkedDocumentUrl, setLinkedDocumentUrl] = useState("");
-  const [linkDocCustomMode, setLinkDocCustomMode] = useState(false);
   const [announce, setAnnounce] = useState(false);
   const [channel, setChannel] = useState<string>("last");
   const [to, setTo] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [agents, setAgents] = useState<TeamAgent[]>([]);
-  const [agentsLoading, setAgentsLoading] = useState(false);
-  const [docs, setDocs] = useState<DocEntry[]>([]);
-  const [docsLoading, setDocsLoading] = useState(false);
-  const [workspaceLabels, setWorkspaceLabels] = useState<Record<string, string>>({});
+  const [agents, setAgents] = useState<TeamAgent[]>(preloadedAgents ?? []);
   const [channelOptions, setChannelOptions] = useState<ChannelOption[]>([]);
-  const [channelsLoading, setChannelsLoading] = useState(false);
+  const [dataLoading, setDataLoading] = useState(false);
+
+  const descRef = useRef<HTMLTextAreaElement>(null);
+  const MAX_DESC_PX = 320;
+
+  useLayoutEffect(() => {
+    const el = descRef.current;
+    if (!el) return;
+    el.style.overflow = "hidden";
+    el.style.height = "auto";
+    const next = Math.min(el.scrollHeight, MAX_DESC_PX);
+    el.style.height = `${next}px`;
+    el.style.overflow = el.scrollHeight > MAX_DESC_PX ? "auto" : "hidden";
+  }, [description]);
 
   const reset = useCallback(() => {
     setTitle("");
     setDescription("");
     setAssignedAgent("");
-    setLinkedDocumentUrl("");
-    setLinkDocCustomMode(false);
     setAnnounce(false);
     setChannel("last");
     setTo("");
     setError(null);
   }, []);
 
+  // Only fetch data that wasn't preloaded
   useEffect(() => {
     if (!open) return;
-    setAgentsLoading(true);
-    bridgeInvoke("get-team", {})
-      .then((res) => {
-        const list = Array.isArray(res) ? (res as TeamAgent[]) : [];
-        setAgents(list);
-      })
-      .catch(() => setAgents([]))
-      .finally(() => setAgentsLoading(false));
-  }, [open]);
+    let cancelled = false;
 
-  useEffect(() => {
-    if (!open) return;
-    setDocsLoading(true);
-    bridgeInvoke("list-openclaw-docs", {})
-      .then((res) => {
-        const result = res as {
-          success?: boolean;
-          data?: { files?: DocEntry[]; workspaceLabels?: Record<string, string> } | DocEntry[];
-        };
-        const data = result?.data;
-        const files = Array.isArray(data)
-          ? data
-          : data && typeof data === "object" && "files" in data && Array.isArray((data as { files: DocEntry[] }).files)
-            ? (data as { files: DocEntry[] }).files
-            : [];
-        const labels =
-          data && typeof data === "object" && "workspaceLabels" in data && (data as { workspaceLabels?: Record<string, string> }).workspaceLabels
-            ? (data as { workspaceLabels: Record<string, string> }).workspaceLabels
-            : {};
-        setDocs(files);
-        setWorkspaceLabels(typeof labels === "object" && labels !== null ? labels : {});
-      })
-      .catch(() => {
-        setDocs([]);
-        setWorkspaceLabels({});
-      })
-      .finally(() => setDocsLoading(false));
-  }, [open]);
+    const needAgents = !preloadedAgents?.length;
+    const fetches: Promise<unknown>[] = [
+      needAgents ? bridgeInvoke("get-team", {}).catch(() => []) : Promise.resolve(null),
+      bridgeInvoke("list-channels", {}).catch(() => ({ data: [] })),
+    ];
 
-  useEffect(() => {
-    if (!open) return;
-    setChannelsLoading(true);
-    bridgeInvoke("list-channels", {})
-      .then((res) => {
-        const result = res as { success?: boolean; data?: ChannelOption[] };
-        const list =
-          result?.success && Array.isArray(result.data) ? result.data : [];
-        setChannelOptions(
-          list.filter((c) => c && c.kind === "channel") as ChannelOption[]
-        );
-      })
-      .catch(() => setChannelOptions([]))
-      .finally(() => setChannelsLoading(false));
-  }, [open]);
+    if (needAgents) setDataLoading(true);
+
+    Promise.all(fetches).then(([teamRes, channelsRes]) => {
+      if (cancelled) return;
+
+      if (teamRes !== null) {
+        const agentList = Array.isArray(teamRes) ? (teamRes as TeamAgent[]) : [];
+        setAgents(agentList);
+      }
+
+      const channelsResult = channelsRes as { success?: boolean; data?: ChannelOption[] };
+      const channelList =
+        channelsResult?.success && Array.isArray(channelsResult.data) ? channelsResult.data : [];
+      setChannelOptions(
+        channelList.filter((c) => c && c.kind === "channel") as ChannelOption[]
+      );
+
+      setDataLoading(false);
+    });
+
+    return () => { cancelled = true; };
+  }, [open, preloadedAgents]);
 
   const handleDialogOpenChange = useCallback(
     (next: boolean) => {
@@ -229,7 +198,7 @@ export function AddTaskDialog({
         title: trimmedTitle,
         description: description.trim() || undefined,
         assignedAgent: agentObj?.name ?? undefined,
-        linkedDocumentUrl: linkedDocumentUrl.trim() || undefined,
+        assignedAgentId: agentObj?.id ?? undefined,
         delivery,
       });
       onSuccess?.();
@@ -243,19 +212,6 @@ export function AddTaskDialog({
     }
   };
 
-  const docUrls = docs.map(
-    (d) => `/Tool/Docs?path=${encodeURIComponent(d.relativePath)}`
-  );
-  const isDocUrl =
-    linkedDocumentUrl && docUrls.includes(linkedDocumentUrl);
-  const selectValue = linkDocCustomMode
-    ? "__custom__"
-    : !linkedDocumentUrl
-      ? "__none__"
-      : isDocUrl
-        ? linkedDocumentUrl
-        : "__custom__";
-
   return (
     <Dialog open={open} onOpenChange={handleDialogOpenChange}>
       <DialogContent
@@ -268,7 +224,7 @@ export function AddTaskDialog({
             Add task
           </DialogTitle>
           <DialogDescription className="text-xs text-muted-foreground">
-            Create a new task with optional description, assignee, linked doc, and delivery.
+            Create a new task with optional description, assignee, and delivery.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="flex flex-col">
@@ -298,19 +254,6 @@ export function AddTaskDialog({
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="add-task-desc" className="text-xs font-medium">
-                Prompt description
-              </Label>
-              <Textarea
-                id="add-task-desc"
-                placeholder="Add a description..."
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                className="min-h-[60px] text-sm resize-none bg-muted/30 border-border/60"
-                rows={2}
-              />
-            </div>
-            <div className="space-y-2">
               <Label className="text-xs font-medium flex items-center gap-1.5">
                 <Bot className="w-3.5 h-3.5 text-muted-foreground" />
                 Assigned agent
@@ -320,12 +263,12 @@ export function AddTaskDialog({
                 onValueChange={(v) =>
                   setAssignedAgent(v === "__none__" ? "" : v)
                 }
-                disabled={agentsLoading}
+                disabled={dataLoading}
               >
                 <SelectTrigger className="h-9 bg-muted/30 border-border/60">
                   <SelectValue
                     placeholder={
-                      agentsLoading ? "Loading agents…" : "Select agent…"
+                      dataLoading ? "Loading…" : "Select agent…"
                     }
                   />
                 </SelectTrigger>
@@ -357,73 +300,18 @@ export function AddTaskDialog({
               </Select>
             </div>
             <div className="space-y-2">
-              <Label className="text-xs font-medium flex items-center gap-1.5">
-                <FileText className="w-3.5 h-3.5 text-muted-foreground" />
-                Link document
+              <Label htmlFor="add-task-desc" className="text-xs font-medium">
+                Prompt description
               </Label>
-              <div className="space-y-1.5">
-                <Select
-                  value={selectValue}
-                  onValueChange={(v) => {
-                    if (v === "__custom__") setLinkDocCustomMode(true);
-                    else if (v === "__none__") {
-                      setLinkDocCustomMode(false);
-                      setLinkedDocumentUrl("");
-                    } else {
-                      setLinkDocCustomMode(false);
-                      setLinkedDocumentUrl(v);
-                    }
-                  }}
-                  disabled={docsLoading}
-                >
-                  <SelectTrigger className="h-9 bg-muted/30 border-border/60">
-                    <SelectValue
-                      placeholder={
-                        docsLoading
-                          ? "Loading docs…"
-                          : "Pick a doc or paste URL"
-                      }
-                    />
-                  </SelectTrigger>
-                  <SelectContent className="z-[102]">
-                    <SelectItem value="__none__" className="text-xs text-muted-foreground">
-                      None
-                    </SelectItem>
-                    {docs.map((doc) => {
-                      const url = `/Tool/Docs?path=${encodeURIComponent(doc.relativePath)}`;
-                      const agentLabel = getDocAgentLabel(doc.relativePath, workspaceLabels);
-                      return (
-                        <SelectItem
-                          key={doc.relativePath}
-                          value={url}
-                          className="text-xs"
-                        >
-                          <span className="flex items-center gap-2 min-w-0">
-                            <span className="truncate">{doc.name}</span>
-                            <Badge
-                              variant="secondary"
-                              className="shrink-0 text-[10px] font-medium px-1.5 py-0 h-4 border-0 bg-primary/15 text-primary"
-                            >
-                              {agentLabel}
-                            </Badge>
-                          </span>
-                        </SelectItem>
-                      );
-                    })}
-                    <SelectItem value="__custom__" className="text-xs">
-                      Other (paste URL)
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-                {(linkDocCustomMode || selectValue === "__custom__") && (
-                  <Input
-                    placeholder="https://... or /Tool/Docs?path=..."
-                    value={linkedDocumentUrl}
-                    onChange={(e) => setLinkedDocumentUrl(e.target.value)}
-                    className="h-9 text-sm bg-muted/30 border-border/60"
-                  />
-                )}
-              </div>
+              <Textarea
+                ref={descRef}
+                id="add-task-desc"
+                placeholder="Add a description..."
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                className="min-h-[120px] text-sm bg-muted/30 border-border/60 transition-[height] duration-150 ease-out"
+                rows={4}
+              />
             </div>
             <div className="space-y-2">
               <Label className="text-xs font-medium">Delivery</Label>
@@ -449,14 +337,14 @@ export function AddTaskDialog({
                           setChannel(v);
                           if (isChannelFileValue(v)) setTo("");
                         }}
-                        disabled={channelsLoading}
+                        disabled={dataLoading}
                       >
                         <SelectTrigger className="h-9 min-w-0 overflow-hidden bg-muted/30 border-border/60">
                           <span className="block min-w-0 truncate text-left">
                             <SelectValue
                               placeholder={
-                                channelsLoading
-                                  ? "Loading channels…"
+                                dataLoading
+                                  ? "Loading…"
                                   : "Choose channel…"
                               }
                             />

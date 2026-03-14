@@ -104,6 +104,7 @@ const Userdropdown = () => {
         : "OpenClaw status checking...";
 
   return (
+    <>
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <motion.button
@@ -218,6 +219,7 @@ const Userdropdown = () => {
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+    </>
   );
 };
 

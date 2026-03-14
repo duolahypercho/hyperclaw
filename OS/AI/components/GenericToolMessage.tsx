@@ -5,7 +5,7 @@
  * It eliminates the need for if-else chains and separate components for each tool.
  */
 
-import React from "react";
+import React, { memo } from "react";
 import { motion } from "framer-motion";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { getMediaUrl } from "$/utils";
@@ -23,9 +23,10 @@ interface GenericToolMessageProps {
 }
 
 /**
- * Generic component that renders any tool type using the registry
+ * Generic component that renders any tool type using the registry.
+ * Memoized to prevent re-renders when sibling tools change.
  */
-export const GenericToolMessage: React.FC<GenericToolMessageProps> = ({
+export const GenericToolMessage: React.FC<GenericToolMessageProps> = memo(({
   toolState,
   message,
   onToggleExpand,
@@ -41,25 +42,45 @@ export const GenericToolMessage: React.FC<GenericToolMessageProps> = ({
     return null;
   }
 
-  // Render with avatar wrapper
+  // Render with avatar wrapper — no initial animation to prevent replay on re-render
   return (
-    <motion.div
-      className="flex gap-3 justify-start"
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3 }}
-    >
+    <div className="flex gap-3 justify-start min-w-0 max-w-full">
+      {/* Avatar */}
+      {showAvatar !== false && (
+        <div className="w-8 h-8 flex-shrink-0">
+          <Avatar className="w-8 h-8">
+            {botPic ? (
+              <AvatarImage src={getMediaUrl(botPic)} />
+            ) : null}
+            <AvatarFallback className="bg-primary/10 text-primary">
+              <CopanionIcon className="w-4 h-4" />
+            </AvatarFallback>
+          </Avatar>
+        </div>
+      )}
       {/* Tool Content */}
-      <div className="relative flex flex-col justify-start items-start">
+      <div className="relative flex flex-col justify-start items-start min-w-0 max-w-full overflow-hidden">
         <Renderer
           toolState={toolState}
           message={message}
           onToggleExpand={onToggleExpand}
           assistantAvatar={assistantAvatar}
           botPic={botPic}
-          showAvatar={false} // Avatar already rendered above
+          showAvatar={false}
         />
       </div>
-    </motion.div>
+    </div>
   );
-};
+}, (prev, next) => {
+  // Only re-render when the tool's actual state changes
+  return (
+    prev.toolState.toolName === next.toolState.toolName &&
+    prev.toolState.status === next.toolState.status &&
+    prev.toolState.resultContent === next.toolState.resultContent &&
+    prev.toolState.isExpanded === next.toolState.isExpanded &&
+    prev.toolState.arguments === next.toolState.arguments &&
+    prev.toolState.rejectionMessage === next.toolState.rejectionMessage &&
+    prev.showAvatar === next.showAvatar &&
+    prev.botPic === next.botPic
+  );
+});

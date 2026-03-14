@@ -97,7 +97,7 @@ export async function cronDelete(jobId: string): Promise<{ success: boolean; err
 export const CRON_RUN_DURATION_MS = 10 * 60 * 1000;
 export const CRON_RUN_DURATION_MINUTES = 10;
 
-/** Bridge cron shape from POST /api/hyperclaw-bridge { action: "get-crons" } (jobs.json or CLI). */
+/** Bridge cron shape from bridgeInvoke("get-crons") (jobs.json or CLI). */
 export interface BridgeCron {
   id: string;
   name: string;

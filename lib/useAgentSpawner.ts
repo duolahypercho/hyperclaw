@@ -43,14 +43,11 @@ export async function spawnAgentForTask(params: SpawnAgentParams): Promise<Spawn
     }
   }
   
-  // Fallback: call via bridge API
+  // Fallback: call via hub direct
   try {
-    const response = await fetch("/api/hyperclaw-bridge", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "spawn-agent-for-task", ...params }),
-    });
-    return await response.json();
+    const { hubCommand } = await import("$/lib/hub-direct");
+    const result = await hubCommand({ action: "spawn-agent-for-task", ...params });
+    return result as SpawnResult;
   } catch (error) {
     return { 
       success: false, 

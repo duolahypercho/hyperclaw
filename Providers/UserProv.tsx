@@ -10,6 +10,7 @@ import {
 } from "react";
 import { useSession } from "next-auth/react";
 import { setCachedToken, clearCachedToken } from "$/lib/auth-token-cache";
+import { clearTokenCache } from "$/lib/hub-direct";
 import {
   getUserInfo,
   getUserMembership,
@@ -75,20 +76,20 @@ export const UserProvider = ({ children }: { children: ReactNode }) => {
   const { route } = useRouter();
   const [userId, setUserId] = useState<string | null>(null);
 
-  const logout = async () => {
-    try {
-      setStatus("unauthenticated");
-      setMembership(null);
-      clearCachedToken(); // Clear cached token on logout
-      await signOut({ redirect: false });
-      // In Electron, clear persisted cookies/storage so the app doesn't "remember" Google login
-      if (typeof window !== "undefined" && window.electronAPI?.clearAuthSession) {
-        await window.electronAPI.clearAuthSession().catch(() => {});
-      }
-    } catch {
-      setStatus("unauthenticated");
-      setMembership(null);
+  const logout = () => {
+    console.log("[LOGOUT] function called");
+    console.log("[LOGOUT] cookies before:", document.cookie);
+    setStatus("unauthenticated");
+    setMembership(null);
+    clearCachedToken();
+    clearTokenCache();
+    // In Electron, clear persisted cookies/storage
+    if (typeof window !== "undefined" && window.electronAPI?.clearAuthSession) {
+      window.electronAPI.clearAuthSession().catch(() => {});
     }
+    // Navigate directly to logout endpoint — it clears all cookies then redirects to login
+    console.log("[LOGOUT] navigating to /api/auth/logout");
+    window.location.href = "/api/auth/logout";
   };
 
   const setId = async () => {

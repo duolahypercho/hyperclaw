@@ -69,8 +69,8 @@ const plugin = {
         properties: {
           status: {
             type: "string",
-            enum: ["pending", "in_progress", "completed", "cancelled"],
-            description: "Filter by status",
+            enum: ["pending", "in_progress", "blocked", "completed", "cancelled"],
+            description: "Filter by status: pending (backlog), in_progress, blocked (review), completed (done), cancelled",
           },
         },
       },
@@ -97,7 +97,8 @@ const plugin = {
           priority: { type: "string", enum: ["low", "medium", "high"] },
           status: {
             type: "string",
-            enum: ["pending", "in_progress", "completed", "cancelled"],
+            enum: ["pending", "in_progress", "blocked", "completed", "cancelled"],
+            description: "Task status: pending (backlog), in_progress, blocked (review), completed (done), cancelled",
           },
           metadata: { type: "object" },
         },
@@ -256,6 +257,304 @@ const plugin = {
           content: [{ type: "text", text: ok ? `Deleted channel ${params.id}` : `Channel ${params.id} not found` }],
           isError: !ok,
         };
+      },
+    });
+
+    // ── Task OS: query / upsert / claim ───────────────────────────────────
+
+    api.registerTool({
+      name: "hyperclaw_query_tasks",
+      description:
+        "Query tasks with rich filters: agent/agentId, status, kind, limit, sort (newest/oldest). " +
+        "Returns matching tasks sorted by creation date (newest first by default).",
+      parameters: {
+        type: "object",
+        properties: {
+          agentId: { type: "string", description: "Filter by agent ID" },
+          agent: { type: "string", description: "Filter by agent name (alias for agentId)" },
+          status: {
+            type: "string",
+            enum: ["pending", "in_progress", "blocked", "completed", "cancelled"],
+            description: "Filter by status: pending (backlog), in_progress, blocked (review), completed (done), cancelled",
+          },
+          kind: { type: "string", description: "Filter by task kind (e.g. 'research', 'code')" },
+          limit: { type: "number", description: "Max results to return" },
+          sort: {
+            type: "string",
+            enum: ["newest", "oldest"],
+            description: "Sort order by creation date (default: newest)",
+          },
+        },
+      },
+      async execute(_id: string, params: any) {
+        const tasks = bridge.queryTasks(params);
+        return { content: [{ type: "text", text: JSON.stringify(tasks) }] };
+      },
+    });
+
+    api.registerTool({
+      name: "hyperclaw_upsert_task",
+      description:
+        "Create or update a task by external ID. If a task with matching data.external_id exists, " +
+        "it is updated; otherwise a new task is created. Use for idempotent task sync from external systems.",
+      parameters: {
+        type: "object",
+        properties: {
+          externalId: {
+            type: "string",
+            description: "External identifier used to match existing tasks (stored in data.external_id)",
+          },
+          data: {
+            type: "object",
+            description:
+              "Task fields to set (title, description, status, priority, agent, kind, etc.). " +
+              "Nested 'data' object can include sessionKey, runId, kind, and other metadata.",
+          },
+        },
+        required: ["externalId", "data"],
+      },
+      async execute(_id: string, params: any) {
+        const task = bridge.upsertTask({
+          externalId: params.externalId,
+          data: params.data,
+        });
+        return { content: [{ type: "text", text: JSON.stringify(task) }] };
+      },
+    });
+
+    api.registerTool({
+      name: "hyperclaw_claim_task",
+      description:
+        "Atomically claim (lease) a task. Succeeds only if no active lease exists or the current " +
+        "lease has expired. Use to coordinate multiple agents working on a shared task queue.",
+      parameters: {
+        type: "object",
+        properties: {
+          id: { type: "string", description: "Task ID to claim" },
+          externalId: { type: "string", description: "Or match by external ID" },
+          claimant: { type: "string", description: "Identifier of the claimant (agent name or ID)" },
+          leaseSeconds: {
+            type: "number",
+            description: "How long the lease lasts in seconds (default: 300)",
+          },
+        },
+        required: ["claimant"],
+      },
+      async execute(_id: string, params: any) {
+        const result = bridge.claimTask({
+          id: params.id,
+          externalId: params.externalId,
+          claimant: params.claimant,
+          leaseSeconds: params.leaseSeconds ?? 300,
+        });
+        return {
+          content: [{ type: "text", text: JSON.stringify(result) }],
+          isError: !result.success,
+        };
+      },
+    });
+
+    // ── Sessions + Transcript Storage ─────────────────────────────────────
+
+    api.registerTool({
+      name: "hyperclaw_session_upsert",
+      description:
+        "Create or update a session record. Sessions group transcript messages by session_key. " +
+        "Use to register a new agent session before appending messages.",
+      parameters: {
+        type: "object",
+        properties: {
+          sessionKey: { type: "string", description: "Unique session identifier" },
+          agentId: { type: "string", description: "Agent that owns this session" },
+          label: { type: "string", description: "Human-readable label for the session" },
+        },
+        required: ["sessionKey"],
+      },
+      async execute(_id: string, params: any) {
+        const session = bridge.sessionUpsert({
+          sessionKey: params.sessionKey,
+          agentId: params.agentId,
+          label: params.label,
+        });
+        return { content: [{ type: "text", text: JSON.stringify(session) }] };
+      },
+    });
+
+    api.registerTool({
+      name: "hyperclaw_session_append_messages",
+      description:
+        "Append one or more messages to a session transcript. Messages are stored in order " +
+        "and can be filtered by runId. Supports batch inserts.",
+      parameters: {
+        type: "object",
+        properties: {
+          sessionKey: { type: "string", description: "Session to append to" },
+          messages: {
+            type: "array",
+            description: "Array of messages to append",
+            items: {
+              type: "object",
+              properties: {
+                runId: { type: "string", description: "Run/turn identifier within the session" },
+                stream: { type: "string", description: "Stream name (e.g. 'stdout', 'tool')" },
+                role: { type: "string", description: "Message role (e.g. 'user', 'assistant', 'system')" },
+                content: { description: "Message content (any JSON-serializable value)" },
+              },
+              required: ["content"],
+            },
+          },
+        },
+        required: ["sessionKey", "messages"],
+      },
+      async execute(_id: string, params: any) {
+        const result = bridge.sessionAppendMessages(
+          params.sessionKey,
+          params.messages
+        );
+        return { content: [{ type: "text", text: JSON.stringify(result) }] };
+      },
+    });
+
+    api.registerTool({
+      name: "hyperclaw_session_get_messages",
+      description:
+        "Retrieve transcript messages for a session. Optionally filter by runId and paginate with limit/offset.",
+      parameters: {
+        type: "object",
+        properties: {
+          sessionKey: { type: "string", description: "Session to read from" },
+          runId: { type: "string", description: "Filter by run ID" },
+          limit: { type: "number", description: "Max messages to return" },
+          offset: { type: "number", description: "Skip this many messages" },
+        },
+        required: ["sessionKey"],
+      },
+      async execute(_id: string, params: any) {
+        const messages = bridge.sessionGetMessages(params.sessionKey, {
+          runId: params.runId,
+          limit: params.limit,
+          offset: params.offset,
+        });
+        return { content: [{ type: "text", text: JSON.stringify(messages) }] };
+      },
+    });
+
+    // ── Task Logs: append learnings / progress ─────────────────────────────
+
+    api.registerTool({
+      name: "hyperclaw_append_task_log",
+      description:
+        "Append a log entry to a task. Use this to record learnings, progress updates, " +
+        "discoveries, errors, or notes as you work on a task. Multiple logs per task are supported.",
+      parameters: {
+        type: "object",
+        properties: {
+          taskId: { type: "string", description: "Task ID to append the log to" },
+          type: {
+            type: "string",
+            enum: ["progress", "learning", "error", "note", "discovery"],
+            description: "Log entry type (default: progress)",
+          },
+          content: { type: "string", description: "Log content — what you learned, did, or found" },
+          agent: { type: "string", description: "Agent name writing this log" },
+          metadata: { type: "object", description: "Optional structured metadata" },
+        },
+        required: ["taskId", "content"],
+      },
+      async execute(_id: string, params: any) {
+        const log = bridge.appendTaskLog({
+          taskId: params.taskId,
+          agentId: params.agent,
+          type: params.type,
+          content: params.content,
+          metadata: params.metadata,
+        });
+        return { content: [{ type: "text", text: JSON.stringify(log) }] };
+      },
+    });
+
+    api.registerTool({
+      name: "hyperclaw_get_task_logs",
+      description:
+        "Retrieve log entries for a task. Returns learnings, progress updates, and notes " +
+        "appended by agents. Newest first.",
+      parameters: {
+        type: "object",
+        properties: {
+          taskId: { type: "string", description: "Task ID to get logs for" },
+          type: {
+            type: "string",
+            enum: ["progress", "learning", "error", "note", "discovery"],
+            description: "Filter by log type",
+          },
+          limit: { type: "number", description: "Max entries to return" },
+          offset: { type: "number", description: "Skip this many entries" },
+        },
+        required: ["taskId"],
+      },
+      async execute(_id: string, params: any) {
+        const logs = bridge.getTaskLogs(params.taskId, {
+          type: params.type,
+          limit: params.limit,
+          offset: params.offset,
+        });
+        return { content: [{ type: "text", text: JSON.stringify(logs) }] };
+      },
+    });
+
+    // ── Task-Session Links ─────────────────────────────────────────────────
+
+    api.registerTool({
+      name: "hyperclaw_link_task_session",
+      description:
+        "Link a session to a task. This creates a many-to-many relationship — " +
+        "a task can have multiple sessions, and a session can be linked to multiple tasks. " +
+        "Use this to track which agent sessions worked on which tasks.",
+      parameters: {
+        type: "object",
+        properties: {
+          taskId: { type: "string", description: "Task ID to link" },
+          sessionKey: { type: "string", description: "Session key to link" },
+        },
+        required: ["taskId", "sessionKey"],
+      },
+      async execute(_id: string, params: any) {
+        const result = bridge.linkTaskSession(params.taskId, params.sessionKey);
+        return { content: [{ type: "text", text: JSON.stringify(result) }] };
+      },
+    });
+
+    api.registerTool({
+      name: "hyperclaw_get_task_sessions",
+      description:
+        "Get all sessions linked to a task. Returns session details including agent, label, and timestamps.",
+      parameters: {
+        type: "object",
+        properties: {
+          taskId: { type: "string", description: "Task ID to get sessions for" },
+        },
+        required: ["taskId"],
+      },
+      async execute(_id: string, params: any) {
+        const sessions = bridge.getTaskSessions(params.taskId);
+        return { content: [{ type: "text", text: JSON.stringify(sessions) }] };
+      },
+    });
+
+    api.registerTool({
+      name: "hyperclaw_get_session_tasks",
+      description:
+        "Get all tasks linked to a session. Useful for seeing what tasks a session worked on.",
+      parameters: {
+        type: "object",
+        properties: {
+          sessionKey: { type: "string", description: "Session key to get tasks for" },
+        },
+        required: ["sessionKey"],
+      },
+      async execute(_id: string, params: any) {
+        const tasks = bridge.getSessionTasks(params.sessionKey);
+        return { content: [{ type: "text", text: JSON.stringify(tasks) }] };
       },
     });
   },

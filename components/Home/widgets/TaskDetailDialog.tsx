@@ -1,16 +1,23 @@
 "use client";
 
-import React, { useEffect, useCallback, useState, useRef } from "react";
+import React, { useEffect, useCallback, useState, useMemo } from "react";
 import { format } from "date-fns";
 import {
   Loader2,
   CheckCircle2,
   XCircle,
   Clock,
-  ChevronDown,
-  ChevronUp,
   FileText,
   Bot,
+  MessageSquare,
+  ScrollText,
+  Link2,
+  Lightbulb,
+  AlertTriangle,
+  StickyNote,
+  Sparkles,
+  Activity,
+  Ban,
 } from "lucide-react";
 import {
   Dialog,
@@ -20,31 +27,46 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Button } from "@/components/ui/button";
-import {
-  fetchAllCronRunsForJob,
-  fetchCronRunDetail,
-  formatDurationMs,
-  fetchCronsFromBridge,
-} from "$/components/Tool/Crons/utils";
-import { getPendingTaskCronRuns } from "$/lib/task-cron-run-store";
+import { TranscriptViewer } from "./TranscriptViewer";
 import type { Task } from "$/components/Tool/TodoList/types";
-import type { CronRunRecord } from "$/types/electron";
+import { cn } from "@/lib/utils";
 
 const statusLabels: Record<string, string> = {
   pending: "Backlog",
   in_progress: "In progress",
   blocked: "Review",
   completed: "Done",
+  cancelled: "Cancelled",
 };
 
-/** Heuristic: content would exceed 2 lines (so we show "View logs" when collapsed). */
-function wouldExceedTwoLines(text: string | null | undefined): boolean {
-  if (!text || typeof text !== "string") return false;
-  const lines = text.split("\n").length;
-  if (lines > 2) return true;
-  return text.length > 140;
+interface TaskLog {
+  id: number;
+  task_id: string;
+  agent_id: string | null;
+  type: string;
+  content: string;
+  metadata: Record<string, unknown>;
+  created_at: number;
 }
+
+interface TaskSession {
+  session_key: string;
+  linked_at: number;
+  agent_id?: string | null;
+  label?: string | null;
+  created_at_ms?: number | null;
+  updated_at_ms?: number | null;
+}
+
+type TabId = "logs" | "sessions";
+
+const logTypeIcons: Record<string, React.ReactNode> = {
+  progress: <Activity className="h-3 w-3 text-primary shrink-0" />,
+  learning: <Lightbulb className="h-3 w-3 text-amber-500 shrink-0" />,
+  error: <AlertTriangle className="h-3 w-3 text-destructive shrink-0" />,
+  note: <StickyNote className="h-3 w-3 text-blue-400 shrink-0" />,
+  discovery: <Sparkles className="h-3 w-3 text-violet-400 shrink-0" />,
+};
 
 export interface TaskDetailDialogProps {
   open: boolean;
@@ -57,101 +79,93 @@ export function TaskDetailDialog({
   onOpenChange,
   task,
 }: TaskDetailDialogProps) {
-  const [runs, setRuns] = useState<CronRunRecord[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [jobId, setJobId] = useState<string | null>(null);
-  const [expandedRunKey, setExpandedRunKey] = useState<string | null>(null);
-  const [fullDetail, setFullDetail] = useState<Record<string, unknown> | null>(
-    null
-  );
-  const [detailLoading, setDetailLoading] = useState(false);
-  const hasAutoExpandedRef = useRef(false);
+  const [sessionKey, setSessionKey] = useState<string | null>(null);
+  const [transcriptOpen, setTranscriptOpen] = useState(false);
 
-  const resolveJobId = useCallback(async (taskId: string): Promise<string | null> => {
-    const pending = getPendingTaskCronRuns();
-    const entry = pending[taskId];
-    if (entry?.jobId) return entry.jobId;
-    try {
-      const jobs = await fetchCronsFromBridge();
-      const found = jobs.find(
-        (j) => j.name?.includes(taskId) || j.name?.includes(`Task [${taskId}]`)
-      );
-      return found?.id ?? null;
-    } catch {
-      return null;
-    }
-  }, []);
-
-  const loadRuns = useCallback(async (jid: string | null) => {
-    if (!jid) {
-      setRuns([]);
-      return;
-    }
-    setLoading(true);
-    try {
-      const allRuns = await fetchAllCronRunsForJob(jid);
-      setRuns(allRuns);
-      return allRuns;
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  // New: task logs & linked sessions
+  const [taskLogs, setTaskLogs] = useState<TaskLog[]>([]);
+  const [logsLoading, setLogsLoading] = useState(false);
+  const [taskSessions, setTaskSessions] = useState<TaskSession[]>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState<TabId>("logs");
+  const [viewingSessionKey, setViewingSessionKey] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open || !task?._id) {
-      setRuns([]);
-      setJobId(null);
-      setExpandedRunKey(null);
-      setFullDetail(null);
-      hasAutoExpandedRef.current = false;
+      setSessionKey(null);
+      setTaskLogs([]);
+      setTaskSessions([]);
+      setActiveTab("logs");
+      setViewingSessionKey(null);
       return;
     }
     let cancelled = false;
-    resolveJobId(task._id).then((jid) => {
-      if (cancelled) return;
-      setJobId(jid);
-      if (jid) loadRuns(jid);
-    });
+    const taskId = task._id;
+
+    // Look up bridge task for sessionKey
+    fetch("/api/hyperclaw-bridge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "get-tasks" }),
+    })
+      .then((r) => r.json())
+      .then((tasks: any[]) => {
+        if (cancelled) return;
+        const bt = tasks.find(
+          (t: any) => t.id === taskId || t.id?.slice(0, 24) === taskId
+        );
+        const sk = bt?.data?.sessionKey ?? bt?.metadata?.sessionKey ?? null;
+        setSessionKey(sk);
+      })
+      .catch(() => {});
+
+    // Fetch task logs (with agent fallback for orphaned logs)
+    const agentId = task.assignedAgentId || task.assignedAgent || undefined;
+    setLogsLoading(true);
+    fetch("/api/hyperclaw-bridge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "get-task-logs", taskId, agentId }),
+    })
+      .then((r) => r.json())
+      .then((logs: TaskLog[]) => {
+        if (cancelled) return;
+        setTaskLogs(Array.isArray(logs) ? logs : []);
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setLogsLoading(false); });
+
+    // Fetch linked sessions (with agent fallback for orphaned sessions)
+    setSessionsLoading(true);
+    fetch("/api/hyperclaw-bridge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "get-task-sessions", taskId, agentId }),
+    })
+      .then((r) => r.json())
+      .then((sessions: TaskSession[]) => {
+        if (cancelled) return;
+        setTaskSessions(Array.isArray(sessions) ? sessions : []);
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setSessionsLoading(false); });
+
     return () => {
       cancelled = true;
     };
-  }, [open, task?._id, resolveJobId, loadRuns]);
+  }, [open, task?._id]);
 
+  // Pick the best default tab based on available data
   useEffect(() => {
-    if (!task?._id || !jobId || runs.length === 0 || hasAutoExpandedRef.current || detailLoading) return;
-    const latest = runs[0];
-    if (!latest) return;
-    hasAutoExpandedRef.current = true;
-    setDetailLoading(true);
-    fetchCronRunDetail(jobId, latest.runAtMs)
-      .then((detail) => setFullDetail(detail ?? null))
-      .catch(() => setFullDetail(null))
-      .finally(() => setDetailLoading(false));
-  }, [task?._id, jobId, runs]);
+    if (!open) return;
+    if (taskLogs.length > 0) { setActiveTab("logs"); return; }
+    if (taskSessions.length > 0) { setActiveTab("sessions"); return; }
+  }, [open, taskLogs.length, taskSessions.length]);
 
-  const handleShowMore = useCallback(
-    async (run: CronRunRecord) => {
-      if (!jobId) return;
-      const key = `${run.runAtMs}-${run.sessionId ?? run.runAtMs}`;
-      if (expandedRunKey === key) {
-        setExpandedRunKey(null);
-        setFullDetail(null);
-        return;
-      }
-      setExpandedRunKey(key);
-      setFullDetail(null);
-      setDetailLoading(true);
-      try {
-        const detail = await fetchCronRunDetail(jobId, run.runAtMs);
-        setFullDetail(detail ?? null);
-      } catch {
-        setFullDetail(null);
-      } finally {
-        setDetailLoading(false);
-      }
-    },
-    [jobId, expandedRunKey]
-  );
+  const tabCounts = useMemo(() => ({
+    logs: taskLogs.length,
+    sessions: taskSessions.length,
+  }), [taskLogs.length, taskSessions.length]);
 
   if (!task) return null;
 
@@ -170,7 +184,7 @@ export function TaskDetailDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md gap-0 sm:rounded-xl max-h-[85vh] flex flex-col overflow-hidden p-0">
+      <DialogContent className="max-w-lg gap-0 sm:rounded-xl max-h-[85vh] flex flex-col overflow-hidden p-0">
         <DialogHeader className="px-6 pt-6 pb-2 space-y-1.5 shrink-0">
           <DialogTitle className="text-base font-semibold pr-8 leading-snug">
             {task.title}
@@ -186,24 +200,26 @@ export function TaskDetailDialog({
                 <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
               ) : task.status === "blocked" ? (
                 <XCircle className="h-4 w-4 text-destructive shrink-0" />
+              ) : task.status === "cancelled" ? (
+                <Ban className="h-4 w-4 text-rose-500 shrink-0" />
               ) : (
                 <Clock className="h-4 w-4 text-muted-foreground shrink-0" />
               )}
               {statusLabel}
             </span>
-            <span className="text-muted-foreground">Updated: {updatedStr}</span>
+            <span className="text-muted-foreground text-xs">Updated: {updatedStr}</span>
           </div>
           {task.description?.trim() ? (
-            <p className="pt-2 text-xs text-muted-foreground line-clamp-3 whitespace-pre-wrap">
+            <p className="pt-2 text-xs text-muted-foreground whitespace-pre-wrap">
               {task.description.trim()}
             </p>
           ) : null}
           <div className="pt-3 space-y-2 rounded-lg border border-border/40 bg-muted/20 px-3 py-2.5 text-xs">
-            {task.assignedAgent && (
+            {(task.assignedAgent || task.assignedAgentId) && (
               <div className="flex items-center gap-2 text-muted-foreground">
                 <Bot className="h-3.5 w-3.5 shrink-0" />
                 <span>Assigned</span>
-                <span className="text-foreground ml-auto">{task.assignedAgent}</span>
+                <span className="text-foreground ml-auto">{task.assignedAgent || task.assignedAgentId}</span>
               </div>
             )}
             {task.linkedDocumentUrl && (
@@ -219,6 +235,19 @@ export function TaskDetailDialog({
                 >
                   Open
                 </a>
+              </div>
+            )}
+            {sessionKey && (
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <MessageSquare className="h-3.5 w-3.5 shrink-0" />
+                <span>Session</span>
+                <button
+                  onClick={() => setTranscriptOpen(true)}
+                  className="text-primary ml-auto truncate max-w-[200px] hover:underline text-xs"
+                  title={sessionKey}
+                >
+                  View transcript
+                </button>
               </div>
             )}
             <div className="flex items-center gap-2 text-muted-foreground">
@@ -240,154 +269,152 @@ export function TaskDetailDialog({
           </div>
         </DialogHeader>
 
-        <div className="px-6 pb-2 pt-1 text-xs font-medium text-muted-foreground uppercase tracking-wider shrink-0">
-          Run history
+        {/* Tab bar */}
+        <div className="px-6 pt-3 pb-1 flex items-center gap-1 shrink-0 border-b border-border/30">
+          {([
+            { id: "logs" as TabId, label: "Logs", icon: <ScrollText className="h-3.5 w-3.5" /> },
+            { id: "sessions" as TabId, label: "Sessions", icon: <Link2 className="h-3.5 w-3.5" /> },
+          ]).map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={cn(
+                "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors",
+                activeTab === tab.id
+                  ? "bg-primary/10 text-primary"
+                  : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
+              )}
+            >
+              {tab.icon}
+              {tab.label}
+              {tabCounts[tab.id] > 0 && (
+                <span className={cn(
+                  "text-[10px] min-w-[18px] text-center px-1 py-0.5 rounded-full",
+                  activeTab === tab.id ? "bg-primary/20 text-primary" : "bg-muted text-muted-foreground"
+                )}>
+                  {tabCounts[tab.id]}
+                </span>
+              )}
+            </button>
+          ))}
         </div>
-        <div className="px-6 pb-6 min-h-0">
+
+        {/* Tab content */}
+        <div className="px-6 pb-6 pt-2 min-h-0 flex-1">
           <ScrollArea
             className="w-full rounded-md border border-border/40"
-            style={{ height: "min(50vh, 400px)" }}
+            style={{ height: "min(45vh, 360px)" }}
           >
-            {loading ? (
-              <div className="flex items-center justify-center py-12">
-                <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
-              </div>
-            ) : !jobId ? (
-              <div className="py-8 text-center text-sm text-muted-foreground">
-                No cron run linked. Move task to In Progress to run with an agent.
-              </div>
-            ) : runs.length === 0 ? (
-              <div className="py-8 text-center text-sm text-muted-foreground">
-                No run history yet.
-              </div>
-            ) : (
-              <ul className="space-y-2 pr-2">
-                {runs.map((run: CronRunRecord) => {
-                  const runKey = `${run.runAtMs}-${run.sessionId ?? run.runAtMs}`;
-                  const isExpanded = expandedRunKey === runKey;
-                  const detail = isExpanded ? fullDetail : null;
-                  const showMoreButton =
-                    isExpanded ||
-                    wouldExceedTwoLines(run.summary) ||
-                    wouldExceedTwoLines(run.error);
-                  return (
-                    <li
-                      key={runKey}
-                      className="rounded-lg border border-border/50 bg-muted/20 px-3 py-2.5 text-sm"
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="tabular-nums text-muted-foreground">
-                          {format(new Date(run.runAtMs), "MMM d, h:mm a")}
-                        </span>
-                        {run.status === "ok" ? (
-                          <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
-                        ) : (
-                          <XCircle className="h-4 w-4 text-destructive shrink-0" />
-                        )}
-                      </div>
-                      <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-                        {run.durationMs != null && (
-                          <span>
-                            Duration: {formatDurationMs(run.durationMs)}
+            {activeTab === "logs" && (
+              <div className="p-2">
+                {logsLoading ? (
+                  <div className="flex items-center justify-center py-12">
+                    <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+                  </div>
+                ) : taskLogs.length === 0 ? (
+                  <div className="py-8 text-center text-sm text-muted-foreground">
+                    No logs recorded yet.
+                  </div>
+                ) : (
+                  <ul className="space-y-2">
+                    {taskLogs.map((log) => (
+                      <li
+                        key={log.id}
+                        className="rounded-lg border border-border/50 bg-muted/20 px-3 py-2 text-xs"
+                      >
+                        <div className="flex items-center gap-2">
+                          {logTypeIcons[log.type] ?? <Activity className="h-3 w-3 text-muted-foreground shrink-0" />}
+                          <span className="font-medium capitalize text-foreground">
+                            {log.type}
                           </span>
-                        )}
-                      </div>
-                      <div className="mt-1.5 text-xs text-foreground/90 space-y-1">
-                        {!isExpanded &&
-                          run.summary &&
-                          run.summary !== run.error && (
-                            <p className="line-clamp-2 whitespace-pre-wrap break-words">
-                              {run.summary}
-                            </p>
+                          {log.agent_id && (
+                            <span className="text-muted-foreground flex items-center gap-1 ml-auto">
+                              <Bot className="h-3 w-3" />
+                              {log.agent_id}
+                            </span>
                           )}
-                        {!isExpanded &&
-                          run.error &&
-                          run.status === "error" && (
-                            <p className="text-destructive line-clamp-2 whitespace-pre-wrap break-words">
-                              {run.error}
-                            </p>
-                          )}
-                        {isExpanded &&
-                          (detailLoading ? (
-                            <p className="text-muted-foreground">Loading…</p>
-                          ) : detail ? (
-                            <>
-                              {detail.summary != null && (
-                                <pre className="whitespace-pre-wrap break-words font-mono">
-                                  {String(detail.summary)}
-                                </pre>
-                              )}
-                              {detail.error != null && (
-                                <pre className="whitespace-pre-wrap break-words text-destructive font-mono">
-                                  {String(detail.error)}
-                                </pre>
-                              )}
-                              {"log" in detail &&
-                                detail.log != null &&
-                                String(detail.log).trim() !== "" && (
-                                  <>
-                                    <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground mt-2">
-                                      Log
-                                    </p>
-                                    <pre className="whitespace-pre-wrap break-words text-foreground/80 font-mono mt-0.5">
-                                      {String(detail.log)}
-                                    </pre>
-                                  </>
-                                )}
-                              {"output" in detail &&
-                                detail.output != null &&
-                                String(detail.output).trim() !== "" && (
-                                  <>
-                                    <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground mt-2">
-                                      Output
-                                    </p>
-                                    <pre className="whitespace-pre-wrap break-words text-foreground/80 font-mono mt-0.5">
-                                      {String(detail.output)}
-                                    </pre>
-                                  </>
-                                )}
-                            </>
-                          ) : (
-                            <p className="text-muted-foreground">
-                              No additional details for this run.
-                            </p>
-                          ))}
-                      </div>
-                      {showMoreButton && (
-                        <div className="mt-2 flex justify-end">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-7 text-xs text-muted-foreground hover:text-foreground"
-                            onClick={() => handleShowMore(run)}
-                            disabled={
-                              detailLoading && expandedRunKey === runKey
-                            }
-                          >
-                            {detailLoading && expandedRunKey === runKey ? (
-                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                            ) : isExpanded ? (
-                              <>
-                                <ChevronUp className="w-3.5 h-3.5 mr-1" />
-                                Show less
-                              </>
-                            ) : (
-                              <>
-                                <ChevronDown className="w-3.5 h-3.5 mr-1" />
-                                View logs
-                              </>
-                            )}
-                          </Button>
                         </div>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
+                        <p className="mt-1.5 text-foreground/90 whitespace-pre-wrap break-words leading-relaxed">
+                          {log.content}
+                        </p>
+                        <div className="mt-1.5 text-[10px] text-muted-foreground">
+                          {format(new Date(log.created_at), "MMM d, h:mm a")}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+
+            {activeTab === "sessions" && (
+              <div className="p-2 overflow-hidden">
+                {sessionsLoading ? (
+                  <div className="flex items-center justify-center py-12">
+                    <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+                  </div>
+                ) : taskSessions.length === 0 ? (
+                  <div className="py-8 text-center text-sm text-muted-foreground">
+                    No linked sessions.
+                  </div>
+                ) : (
+                  <ul className="space-y-2">
+                    {taskSessions.map((session) => (
+                      <li
+                        key={session.session_key}
+                        className="rounded-lg border border-border/50 bg-muted/20 px-3 py-2.5 text-xs"
+                      >
+                        <div className="flex items-center gap-2">
+                          <MessageSquare className="h-3.5 w-3.5 text-primary shrink-0" />
+                          <span className="font-mono text-foreground truncate flex-1" title={session.session_key}>
+                            {session.label || session.session_key}
+                          </span>
+                          <button
+                            onClick={() => setViewingSessionKey(session.session_key)}
+                            className="text-primary text-[11px] hover:underline shrink-0"
+                          >
+                            View
+                          </button>
+                        </div>
+                        <div className="mt-1.5 flex items-center gap-3 text-[10px] text-muted-foreground">
+                          {session.agent_id && (
+                            <span className="flex items-center gap-1">
+                              <Bot className="h-3 w-3" />
+                              {session.agent_id}
+                            </span>
+                          )}
+                          <span>
+                            Linked {format(new Date(session.linked_at), "MMM d, h:mm a")}
+                          </span>
+                          {session.created_at_ms && (
+                            <span>
+                              Created {format(new Date(session.created_at_ms), "MMM d, h:mm a")}
+                            </span>
+                          )}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             )}
           </ScrollArea>
         </div>
       </DialogContent>
+      <TranscriptViewer
+        open={transcriptOpen}
+        onOpenChange={setTranscriptOpen}
+        sessionKey={sessionKey}
+        label={task?.title}
+      />
+      {viewingSessionKey && (
+        <TranscriptViewer
+          open
+          onOpenChange={(o) => { if (!o) setViewingSessionKey(null); }}
+          sessionKey={viewingSessionKey}
+          label={task?.title}
+        />
+      )}
     </Dialog>
   );
 }

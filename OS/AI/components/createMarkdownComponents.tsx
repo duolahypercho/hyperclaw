@@ -1,5 +1,99 @@
-import React from "react";
+import React, { useState, useCallback } from "react";
 import ReactMarkdown, { Options, Components } from "react-markdown";
+
+const LANGUAGE_DISPLAY_NAMES: Record<string, string> = {
+  js: "JavaScript",
+  jsx: "JSX",
+  ts: "TypeScript",
+  tsx: "TSX",
+  py: "Python",
+  python: "Python",
+  rb: "Ruby",
+  ruby: "Ruby",
+  go: "Go",
+  rust: "Rust",
+  rs: "Rust",
+  java: "Java",
+  kt: "Kotlin",
+  kotlin: "Kotlin",
+  swift: "Swift",
+  cs: "C#",
+  csharp: "C#",
+  cpp: "C++",
+  c: "C",
+  html: "HTML",
+  css: "CSS",
+  scss: "SCSS",
+  sass: "Sass",
+  less: "Less",
+  json: "JSON",
+  yaml: "YAML",
+  yml: "YAML",
+  xml: "XML",
+  sql: "SQL",
+  sh: "Shell",
+  bash: "Bash",
+  zsh: "Zsh",
+  powershell: "PowerShell",
+  ps1: "PowerShell",
+  dockerfile: "Dockerfile",
+  docker: "Docker",
+  graphql: "GraphQL",
+  gql: "GraphQL",
+  md: "Markdown",
+  markdown: "Markdown",
+  php: "PHP",
+  r: "R",
+  scala: "Scala",
+  lua: "Lua",
+  perl: "Perl",
+  dart: "Dart",
+  elixir: "Elixir",
+  ex: "Elixir",
+  erl: "Erlang",
+  erlang: "Erlang",
+  haskell: "Haskell",
+  hs: "Haskell",
+  toml: "TOML",
+  ini: "INI",
+  env: "ENV",
+  txt: "Text",
+  text: "Text",
+  diff: "Diff",
+  prisma: "Prisma",
+  proto: "Protobuf",
+  protobuf: "Protobuf",
+  terraform: "Terraform",
+  tf: "Terraform",
+  vue: "Vue",
+  svelte: "Svelte",
+};
+
+function CopyButton({ content, isUser }: { content: string; isUser?: boolean }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(content).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }, [content]);
+
+  return (
+    <button
+      onClick={handleCopy}
+      className={`text-xs px-2 py-1 rounded transition-colors duration-200 ${
+        copied
+          ? "text-green-400"
+          : isUser
+            ? "text-primary-foreground/60 hover:text-primary-foreground"
+            : "text-muted-foreground hover:text-foreground"
+      }`}
+    >
+      {copied ? "Copied!" : "Copy"}
+    </button>
+  );
+}
 
 // Enhanced markdown components with consistent styling - memoized to prevent recreation
 const createMarkdownComponents = (isUser?: boolean): Components => {
@@ -58,17 +152,38 @@ const createMarkdownComponents = (isUser?: boolean): Components => {
         );
       }
 
+      const language = match?.[1] || "";
+      const displayLang = LANGUAGE_DISPLAY_NAMES[language.toLowerCase()] || language.toUpperCase();
+
       return (
         <div
-          className={`overflow-auto w-full my-2 ${isUser ? "bg-primary-foreground/10" : "bg-muted/20"
-            } p-3 rounded-lg customScrollbar2 select-text`}
+          className={`overflow-hidden w-full my-2 ${isUser ? "bg-primary-foreground/10" : "bg-muted/20"
+            } rounded-lg select-text`}
         >
-          <pre
-            className={`text-sm ${isUser ? "text-primary-foreground" : "text-foreground"
-              } whitespace-pre-wrap`}
+          <div
+            className={`flex items-center justify-between px-3 py-1.5 border-b ${
+              isUser
+                ? "border-primary-foreground/10 bg-primary-foreground/5"
+                : "border-border/50 bg-muted/30"
+            }`}
           >
-            <code {...props}>{children}</code>
-          </pre>
+            <span
+              className={`text-xs font-medium ${
+                isUser ? "text-primary-foreground/60" : "text-muted-foreground"
+              }`}
+            >
+              {displayLang || "Code"}
+            </span>
+            <CopyButton content={content} isUser={isUser} />
+          </div>
+          <div className="overflow-auto p-3 customScrollbar2">
+            <pre
+              className={`text-sm ${isUser ? "text-primary-foreground" : "text-foreground"
+                } whitespace-pre-wrap`}
+            >
+              <code {...props}>{children}</code>
+            </pre>
+          </div>
         </div>
       );
     },
@@ -135,14 +250,8 @@ const createMarkdownComponents = (isUser?: boolean): Components => {
         {children}
       </p>
     ),
-    pre: ({ children, ...props }) => (
-      <pre
-        className={`overflow-auto w-full my-2 select-txt ${isUser ? "bg-primary-foreground/10" : "bg-muted/20"
-          } p-3 rounded-lg customScrollbar2`}
-        {...props}
-      >
-        {children}
-      </pre>
+    pre: ({ children }) => (
+      <>{children}</>
     ),
     blockquote: ({ children, ...props }) => (
       <blockquote
@@ -196,6 +305,56 @@ const createMarkdownComponents = (isUser?: boolean): Components => {
           }`}
         {...props}
       />
+    ),
+    table: ({ children, ...props }) => (
+      <div className="overflow-auto my-3 rounded-lg border border-border border-solid customScrollbar2">
+        <table
+          className={`w-full text-sm ${
+            isUser ? "text-primary-foreground" : "text-foreground"
+          }`}
+          {...props}
+        >
+          {children}
+        </table>
+      </div>
+    ),
+    thead: ({ children, ...props }) => (
+      <thead
+        className={isUser ? "bg-primary-foreground/10" : "bg-muted/50"}
+        {...props}
+      >
+        {children}
+      </thead>
+    ),
+    tbody: ({ children, ...props }) => (
+      <tbody className="divide-y divide-border" {...props}>
+        {children}
+      </tbody>
+    ),
+    tr: ({ children, ...props }) => (
+      <tr className="border-b border-border border-solid border-l-0 border-r-0 border-t-0 last:border-b-0" {...props}>
+        {children}
+      </tr>
+    ),
+    th: ({ children, ...props }) => (
+      <th
+        className={`px-3 py-2 text-left text-xs font-semibold border border-border first:border-l-0 last:border-r-0 ${
+          isUser ? "text-primary-foreground/80" : "text-foreground/80"
+        }`}
+        {...props}
+      >
+        {children}
+      </th>
+    ),
+    td: ({ children, ...props }) => (
+      <td
+        className={`px-3 py-2 text-sm border border-border border-solid first:border-l-0 last:border-r-0 ${
+          isUser ? "text-primary-foreground/90" : "text-foreground/90"
+        }`}
+        {...props}
+      >
+        {children}
+      </td>
     ),
   };
 

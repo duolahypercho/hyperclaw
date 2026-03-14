@@ -97,4 +97,8 @@ export interface InputContainerProps {
 
   // Session management
   sessionKey?: string;
+
+  // Context window usage
+  tokenUsage?: number;
+  contextLimit?: number;
 }

@@ -9,7 +9,7 @@ import React, {
   useMemo,
   useRef,
 } from "react";
-import { Bot, FileText, Plus, RefreshCw, Save, Loader2, Trash2 } from "lucide-react";
+import { Bot, FileText, Plus, RefreshCw, Save, Loader2, Trash2, Sparkles, Brain, UserRound, Users, Wrench, Heart } from "lucide-react";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
 import { AppSchema } from "@OS/Layout/types";
 import type { SidebarSection, SidebarItem } from "@OS/Layout/Sidebar/SidebarSchema";
@@ -107,6 +107,17 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/** Map well-known agent file names to distinct icons */
+const FILE_ICONS: Record<string, typeof FileText> = {
+  "SOUL.md": Sparkles,
+  "MEMORY.md": Brain,
+  "IDENTITY.md": UserRound,
+  "AGENTS.md": Users,
+  "TOOLS.md": Wrench,
+  "USER.md": UserRound,
+  "HEARTBEAT.md": Heart,
+};
+
 export function AgentsProvider({ children }: { children: React.ReactNode }) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [agentFiles, setAgentFiles] = useState<AgentFileEntry[]>([]);
@@ -129,10 +140,13 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
     if (!selectedAgentId) return [];
     const agent = agents.find((a) => a.id === selectedAgentId);
     const folder = agent?.workspaceFolder ?? selectedAgentId;
-    return agentFiles.filter(
-      (f) =>
-        f.relativePath === folder ||
-        f.relativePath.startsWith(folder + "/")
+    // Workspace dirs may be "workspace-{id}", "{id}", or "workspace" (for main)
+    const prefixes = [folder, `workspace-${folder}`];
+    if (folder === "main") prefixes.push("workspace");
+    return agentFiles.filter((f) =>
+      prefixes.some(
+        (p) => f.relativePath === p || f.relativePath.startsWith(p + "/")
+      )
     );
   }, [agentFiles, agents, selectedAgentId]);
 
@@ -246,12 +260,12 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
       content: <AgentSidebarSelect />,
     });
 
-    // Files belonging to the selected agent (title = name, subtitle = size)
+    // Files belonging to the selected agent (title = name, subtitle = size, distinct icons)
     const fileItems: SidebarItem[] = filteredAgentFiles.map((file) => ({
       id: file.relativePath,
       title: file.name,
       subtitle: formatFileSize(file.sizeBytes),
-      icon: FileText,
+      icon: FILE_ICONS[file.name] ?? FileText,
       isActive: selectedFile?.relativePath === file.relativePath,
       onClick: () => setSelectedFile(file),
     }));
@@ -290,14 +304,28 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
   const hasUnsavedChanges =
     content !== null && originalContent !== null && content !== originalContent;
 
+  const selectedAgentName = useMemo(() => {
+    const agent = agents.find((a) => a.id === selectedAgentId);
+    return agent?.name ?? selectedAgentId;
+  }, [agents, selectedAgentId]);
+
   const appSchema: AppSchema = useMemo(
     () => {
       const firstAgentId = agents[0]?.id ?? null;
       const isFirstAgent = firstAgentId != null && selectedAgentId === firstAgentId;
+      const breadcrumbs = [{ label: "Agents" }];
+      if (selectedAgentName) breadcrumbs.push({ label: selectedAgentName });
+      if (selectedFile) breadcrumbs.push({ label: selectedFile.name });
+
       return {
       header: {
         title: "Agents",
         icon: Bot,
+        centerUI: {
+          type: "breadcrumbs" as const,
+          breadcrumbs,
+          className: "text-xs text-muted-foreground",
+        },
         rightUI: {
           type: "buttons",
           buttons: [
@@ -320,7 +348,7 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
             },
             {
               id: "agents-save",
-              label: saving ? "Saving…" : "Save",
+              label: saving ? "Saving…" : hasUnsavedChanges ? "Save ⌘S" : "Save",
               icon:
                 saving ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -356,6 +384,7 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
       hasUnsavedChanges,
       agents,
       selectedAgentId,
+      selectedAgentName,
     ]
   );
 

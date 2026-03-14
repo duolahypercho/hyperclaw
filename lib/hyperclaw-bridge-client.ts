@@ -1,44 +1,44 @@
 /**
- * Single entry point for all /api/hyperclaw-bridge calls.
- * In Electron (production desktop app), uses IPC so the bridge runs on the user's
- * machine and never hits Vercel. In the browser, uses fetch to the same origin.
+ * Single entry point for all bridge calls.
+ *
+ * Priority: Electron IPC → Hub direct (browser).
+ *
+ * In Electron mode, uses IPC so the bridge runs on the user's machine.
+ * In the browser, calls the Hub API directly (no serverless proxy).
  */
+import { hubCommand } from "$/lib/hub-direct";
+
 export type BridgeBody = Record<string, unknown>;
 
 let _bridgeLogOnce = false;
-function logBridgeMode(useIPC: boolean) {
+function logBridgeMode(mode: "ipc" | "hub") {
   if (_bridgeLogOnce || typeof window === "undefined") return;
   _bridgeLogOnce = true;
-  if (useIPC) {
-    console.info("[Hyperclaw] Bridge: using IPC (Electron main.js)");
-  } else {
-    console.info("[Hyperclaw] Bridge: using fetch (browser / no electronAPI)");
-  }
+  const labels = {
+    ipc: "[Hyperclaw] Bridge: using IPC (Electron main.js)",
+    hub: "[Hyperclaw] Bridge: using Hub direct (browser)",
+  };
+  console.info(labels[mode]);
 }
 
 export async function bridgeInvoke(action: string, body: BridgeBody = {}): Promise<unknown> {
+  // Priority 1: Electron IPC
   const useIPC =
     typeof window !== "undefined" &&
     (window as unknown as { electronAPI?: { hyperClawBridge?: { invoke?: (a: string, b: BridgeBody) => Promise<unknown> } } })
       .electronAPI?.hyperClawBridge?.invoke;
 
-  logBridgeMode(!!useIPC);
-
   if (useIPC) {
-    // Electron: bridge runs in main process (electron/main.js). Next.js API is never called.
+    logBridgeMode("ipc");
     return (window as unknown as { electronAPI: { hyperClawBridge: { invoke: (a: string, b: BridgeBody) => Promise<unknown> } } }).electronAPI.hyperClawBridge.invoke(
       action,
       body
     );
   }
 
-  // Browser: call Next.js API route pages/api/hyperclaw-bridge.ts
-  const res = await fetch("/api/hyperclaw-bridge", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action, ...body }),
-  });
-  return res.json();
+  // Priority 2: Direct Hub API call (no serverless proxy)
+  logBridgeMode("hub");
+  return hubCommand({ action, ...body });
 }
 
 // Local usage storage helpers

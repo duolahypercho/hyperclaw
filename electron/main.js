@@ -106,6 +106,55 @@ let mainWindow = null;
 let tray = null;
 let appIsQuiting = false;
 
+// Hub command proxy for Electron IPC handlers.
+// All OpenClaw data flows through Hub → Connector — never directly from local files.
+
+function getHubInfo() {
+  const hubUrl = appConfig.hub?.url || "";
+  const deviceId = appConfig.hub?.deviceId || "";
+  const jwt = appConfig.hub?.jwt || "";
+  const enabled = !!(appConfig.hub?.enabled && hubUrl && deviceId);
+  return { enabled, hubUrl, deviceId, jwt };
+}
+
+function hubNotConfiguredError() {
+  return { success: false, error: "No device registered. Please set up a device first.", needsSetup: true };
+}
+
+/**
+ * Forward a command to the Hub, which relays it to the Connector via WebSocket.
+ * The Connector executes it on the user's machine and returns the result.
+ */
+function hubCommandFromElectron(body) {
+  const { hubUrl, deviceId, jwt } = getHubInfo();
+  const url = new URL(`/api/devices/${deviceId}/command`, hubUrl);
+  const fetchModule = hubUrl.startsWith("https") ? https : http;
+  const payload = JSON.stringify(body);
+
+  return new Promise((resolve, reject) => {
+    const req = fetchModule.request(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${jwt}`,
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(payload),
+      },
+      timeout: 60000,
+    }, (res) => {
+      let data = "";
+      res.on("data", (chunk) => { data += chunk; });
+      res.on("end", () => {
+        try { resolve(JSON.parse(data)); }
+        catch { resolve({ success: false, error: "Invalid response from hub" }); }
+      });
+    });
+    req.on("error", (err) => resolve({ success: false, error: err.message }));
+    req.on("timeout", () => { req.destroy(); resolve({ success: false, error: "Hub request timed out" }); });
+    req.write(payload);
+    req.end();
+  });
+}
+
 // Window and Tray Functions
 function createFallbackIcon() {
   const size = process.platform === "win32" ? 16 : 22;
@@ -1244,47 +1293,21 @@ function runOpenClawWithArgs(args, timeoutMs = 20000) {
 }
 
 ipcMain.handle("openclaw:check-installed", async () => {
-  try {
-    const result = await runOpenClawCommand("--version", 5000);
-    return { installed: true, version: result.stdout };
-  } catch {
-    try {
-      await runOpenClawCommand("cron list", 10000);
-      return { installed: true, version: null };
-    } catch {
-      // Fallback: if gateway health succeeds, treat as installed (gateway is open = CLI can reach it)
-      try {
-        const healthResult = await runOpenClawCommand("health --json --timeout 4000", 6000);
-        const data = JSON.parse(healthResult.stdout);
-        if (data && data.ok === true) {
-          return { installed: true, version: null };
-        }
-      } catch {
-        // ignore
-      }
-      return { installed: false, version: null };
-    }
-  }
+  if (!getHubInfo().enabled) return { installed: false, version: null, needsSetup: true };
+  // Device exists on hub → OpenClaw is available via the connector
+  return { installed: true, version: "remote" };
 });
 
 ipcMain.handle("openclaw:status", async () => {
-  try {
-    const result = await runOpenClawCommand("status");
-    return { success: true, data: result.stdout };
-  } catch (err) {
-    return { success: false, error: err.message || err.stderr || "Failed to get status" };
-  }
+  if (!getHubInfo().enabled) return hubNotConfiguredError();
+  return hubCommandFromElectron({ action: "get-config" });
 });
 
 // Gateway is at ws://127.0.0.1:<port> (default 18789). We use the OpenClaw CLI to connect.
 ipcMain.handle("openclaw:gateway-health", async () => {
-  try {
-    const result = await runOpenClawCommand("health --json --timeout 5000", 8000);
-    const data = JSON.parse(result.stdout);
-    return { healthy: Boolean(data && data.ok === true), error: data && data.ok !== true ? "Gateway health check did not return ok" : undefined };
-  } catch (err) {
-    return { healthy: false, error: err && err.message ? err.message : String(err) };
-  }
+  if (!getHubInfo().enabled) return { healthy: false, error: "No device registered", needsSetup: true };
+  // Gateway health is determined by the connector being connected to the hub
+  return { healthy: true };
 });
 
 // Ensure ~/.openclaw/openclaw.json has gateway.controlUi.allowedOrigins including the app origin
@@ -1320,49 +1343,9 @@ function ensureOpenClawControlUiOrigin(origin) {
 }
 
 ipcMain.handle("openclaw:get-gateway-connect-url", async () => {
-  try {
-    if (isRemoteMode && remoteUrl) ensureOpenClawControlUiOrigin(remoteUrl);
-    if (!fs.existsSync(OPENCLAW_CONFIG_PATH)) {
-      return { gatewayUrl: "http://127.0.0.1:18789", token: null, error: "Config file not found" };
-    }
-    let raw = fs.readFileSync(OPENCLAW_CONFIG_PATH, "utf-8");
-    let config;
-    try {
-      config = JSON.parse(raw);
-    } catch {
-      // OpenClaw config may be JSON5 (comments, trailing commas)
-      raw = raw
-        .replace(/\/\/[^\n]*/g, "")
-        .replace(/\/\*[\s\S]*?\*\//g, "")
-        .replace(/,(\s*[}\]])/g, "$1");
-      try {
-        config = JSON.parse(raw);
-      } catch {
-        return { gatewayUrl: "http://127.0.0.1:18789", token: null, error: "Config is not valid JSON" };
-      }
-    }
-    const port = config?.gateway?.port ?? appConfig.gateway?.port ?? 18789;
-    // Use host from appConfig.gateway, fallback to config or default
-    const host = appConfig.gateway?.host ?? config?.gateway?.host ?? "127.0.0.1";
-    // Token: user-specified token first, then config, then env (OpenClaw uses OPENCLAW_GATEWAY_PASSWORD for token mode)
-    const token =
-      appConfig.gateway?.token ??
-      config?.gateway?.auth?.token ??
-      process.env.OPENCLAW_GATEWAY_PASSWORD ??
-      process.env.OPENCLAW_GATEWAY_TOKEN ??
-      null;
-    const gatewayUrl = `http://${host}:${port}`;
-    return { gatewayUrl, token, error: null };
-  } catch (err) {
-    const host = appConfig.gateway?.host ?? "127.0.0.1";
-    const port = appConfig.gateway?.port ?? 18789;
-    const token = appConfig.gateway?.token ?? null;
-    return {
-      gatewayUrl: `http://${host}:${port}`,
-      token,
-      error: err && err.message ? err.message : String(err),
-    };
-  }
+  if (!getHubInfo().enabled) return { gatewayUrl: null, token: null, error: "No device registered", needsSetup: true };
+  // Gateway is accessed through the hub relay, not a direct local URL
+  return { gatewayUrl: null, token: null, hubMode: true };
 });
 
 // IPC handler to save gateway config (host/port/token) to app-config.json
@@ -1428,102 +1411,72 @@ ipcMain.handle("hyperclaw:test-gateway-connection", async (event, { host, port }
 });
 
 
+// ========================================
+// Hub config IPC handlers (thin client mode)
+// ========================================
+
+ipcMain.handle("hyperclaw:get-hub-config", async () => {
+  return {
+    enabled: appConfig.hub?.enabled ?? false,
+    url: appConfig.hub?.url ?? "",
+    deviceId: appConfig.hub?.deviceId ?? "",
+    jwt: appConfig.hub?.jwt ?? "",
+  };
+});
+
+// Synchronous version for bridge client (needs config before first fetch)
+ipcMain.on("hyperclaw:get-hub-config-sync", (event) => {
+  event.returnValue = {
+    enabled: appConfig.hub?.enabled ?? false,
+    url: appConfig.hub?.url ?? "",
+    deviceId: appConfig.hub?.deviceId ?? "",
+    jwt: appConfig.hub?.jwt ?? "",
+  };
+});
+
+ipcMain.handle("hyperclaw:set-hub-config", async (event, { enabled, url, deviceId, jwt }) => {
+  try {
+    if (!appConfig.hub) {
+      appConfig.hub = {};
+    }
+    appConfig.hub.enabled = !!enabled;
+    appConfig.hub.url = (url && typeof url === "string") ? url.trim() : "";
+    appConfig.hub.deviceId = (deviceId && typeof deviceId === "string") ? deviceId.trim() : "";
+    appConfig.hub.jwt = (jwt && typeof jwt === "string") ? jwt.trim() : "";
+
+    // Persist to app-config.json
+    const configPath = path.join(__dirname, "app-config.json");
+    fs.writeFileSync(configPath, JSON.stringify(appConfig, null, 2), "utf-8");
+
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err && err.message ? err.message : String(err) };
+  }
+});
+
 // IPC handlers for device identity
 ipcMain.handle("openclaw:get-device-identity", async () => {
-  return getDeviceIdentity();
+  if (!getHubInfo().enabled) return { error: "No device registered. Please set up a device first.", needsSetup: true };
+  return hubCommandFromElectron({ action: "get-device-identity" });
 });
 
 ipcMain.handle("openclaw:sign-connect-challenge", async (event, params) => {
-  try {
-    const identity = getDeviceIdentity();
-    if (identity.error) {
-      return { error: identity.error };
-    }
-    
-    const { deviceId, publicKeyPem, privateKeyPem, deviceToken } = identity;
-    console.log("[DEBUG] Device token from identity:", deviceToken);
-    const { clientId, clientMode, role, scopes, token, nonce } = params;
-    
-    const signedAtMs = Date.now();
-    const payload = buildDeviceAuthPayload({
-      deviceId,
-      clientId: clientId || "gateway-client",
-      clientMode: clientMode || "backend",
-      role: role || "operator",
-      scopes: scopes || ["operator.read", "operator.write", "operator.admin"],
-      signedAtMs: signedAtMs,
-      token,
-      nonce,
-    });
-    
-    const signature = await signDevicePayload(privateKeyPem, payload);
-    
-    return {
-      device: {
-        id: deviceId,
-        publicKey: publicKeyPemToBase64Url(publicKeyPem),
-        signature: signature,
-        signedAt: signedAtMs,
-        nonce: nonce,
-      },
-      client: {
-        id: clientId || "gateway-client",
-        version: "1.0",
-        platform: "darwin",
-        mode: clientMode || "backend",
-      },
-      role: role || "operator",
-      scopes: scopes || ["operator.read", "operator.write", "operator.admin"],
-      deviceToken: deviceToken,
-      error: null,
-    };
-  } catch (err) {
-    return { error: err.message };
-  }
+  if (!getHubInfo().enabled) return { error: "No device registered. Please set up a device first.", needsSetup: true };
+  return hubCommandFromElectron({ action: "sign-connect-challenge", ...params });
 });
 ipcMain.handle("openclaw:message-send", async (event, p) => {
-  if (!p || typeof p.target !== "string" || !p.target.trim()) {
-    return { success: false, error: "target is required" };
-  }
-  const hasMessage = typeof p.message === "string" && p.message.trim().length > 0;
-  const hasMedia = typeof p.media === "string" && p.media.trim().length > 0;
-  if (!hasMessage && !hasMedia) {
-    return { success: false, error: "message or media is required" };
-  }
-  const sendArgs = ["message", "send", "--target", p.target.trim()];
-  if (typeof p.channel === "string" && p.channel.trim()) sendArgs.push("--channel", p.channel.trim());
-  if (typeof p.account === "string" && p.account.trim()) sendArgs.push("--account", p.account.trim());
-  if (hasMessage) sendArgs.push("--message", p.message.trim());
-  if (hasMedia) sendArgs.push("--media", p.media.trim());
-  if (typeof p.replyTo === "string" && p.replyTo.trim()) sendArgs.push("--reply-to", p.replyTo.trim());
-  if (p.silent === true) sendArgs.push("--silent");
-  try {
-    await runOpenClawWithArgs(sendArgs, 30000);
-    return { success: true, data: "Message sent." };
-  } catch (err) {
-    const msg = err && err.message ? err.message : String(err);
-    const stderr = err && err.stderr ? err.stderr : "";
-    return { success: false, error: stderr || msg };
-  }
+  if (!getHubInfo().enabled) return hubNotConfiguredError();
+  return hubCommandFromElectron({ action: "send-command", command: p });
 });
 
 ipcMain.handle("openclaw:cron-list", async () => {
-  try {
-    const result = await runOpenClawCommand("cron list");
-    return { success: true, data: result.stdout };
-  } catch (err) {
-    return { success: false, error: err.message || err.stderr || "Failed to list cron jobs" };
-  }
+  if (!getHubInfo().enabled) return hubNotConfiguredError();
+  return hubCommandFromElectron({ action: "get-crons" });
 });
 
 ipcMain.handle("openclaw:cron-list-json", async () => {
-  try {
-    const result = await runOpenClawCommand("cron list --json --all", 30000);
-    const parsed = JSON.parse(result.stdout);
-    return { success: true, data: parsed };
-  } catch (err) {
-    return { success: false, error: err.message || err.stderr || "Failed to list cron jobs" };
-  }
+  if (!getHubInfo().enabled) return hubNotConfiguredError();
+  return hubCommandFromElectron({ action: "get-crons" });
 });
 
 function sanitizeCronId(id) {
@@ -1534,60 +1487,26 @@ function sanitizeCronId(id) {
 }
 
 ipcMain.handle("openclaw:cron-enable", async (event, id) => {
+  if (!getHubInfo().enabled) return hubNotConfiguredError();
   const safeId = sanitizeCronId(id);
   if (!safeId) return { success: false, error: "Invalid job id" };
-  try {
-    await runOpenClawCommand(`cron enable ${safeId}`, 15000);
-    return { success: true };
-  } catch (err) {
-    return { success: false, error: err.message || err.stderr || "Failed to enable cron job" };
-  }
+  return hubCommandFromElectron({ action: "cron-edit", cronEditJobId: safeId, cronEditParams: { enabled: true } });
 });
 
 ipcMain.handle("openclaw:cron-disable", async (event, id) => {
+  if (!getHubInfo().enabled) return hubNotConfiguredError();
   const safeId = sanitizeCronId(id);
   if (!safeId) return { success: false, error: "Invalid job id" };
-  try {
-    await runOpenClawCommand(`cron disable ${safeId}`, 15000);
-    return { success: true };
-  } catch (err) {
-    return { success: false, error: err.message || err.stderr || "Failed to disable cron job" };
-  }
+  return hubCommandFromElectron({ action: "cron-edit", cronEditJobId: safeId, cronEditParams: { enabled: false } });
 });
 
 ipcMain.handle("openclaw:agent-list", async () => {
-  try {
-    const workspacePath = path.join(OPENCLAW_HOME, "workspace");
-    if (!fs.existsSync(workspacePath)) {
-      return { success: true, data: [] };
-    }
-    const dirs = fs.readdirSync(workspacePath, { withFileTypes: true })
-      .filter((d) => d.isDirectory());
-
-    const agents = [];
-    for (const dir of dirs) {
-      const soulPath = path.join(workspacePath, dir.name, "SOUL.md");
-      const memoryPath = path.join(workspacePath, dir.name, "MEMORY.md");
-      const agent = {
-        name: dir.name,
-        hasSoul: fs.existsSync(soulPath),
-        hasMemory: fs.existsSync(memoryPath),
-        soulContent: null,
-      };
-      if (agent.hasSoul) {
-        try {
-          agent.soulContent = fs.readFileSync(soulPath, "utf-8").slice(0, 2000);
-        } catch {}
-      }
-      agents.push(agent);
-    }
-    return { success: true, data: agents };
-  } catch (err) {
-    return { success: false, error: err.message || "Failed to list agents" };
-  }
+  if (!getHubInfo().enabled) return hubNotConfiguredError();
+  return hubCommandFromElectron({ action: "list-agents" });
 });
 
 ipcMain.handle("openclaw:run-command", async (event, args) => {
+  if (!getHubInfo().enabled) return hubNotConfiguredError();
   if (!args || typeof args !== "string") {
     return { success: false, error: "Invalid command arguments" };
   }
@@ -1596,10 +1515,9 @@ ipcMain.handle("openclaw:run-command", async (event, args) => {
     return { success: false, error: "Command blocked for safety" };
   }
   try {
-    const result = await runOpenClawCommand(args);
-    return { success: true, data: result.stdout };
+    return await hubCommandFromElectron({ action: "send-command", command: args });
   } catch (err) {
-    return { success: false, error: err.message || err.stderr || "Command failed" };
+    return { success: false, error: err.message || "Command failed" };
   }
 });
 
@@ -1954,6 +1872,23 @@ function getLogs(lines = 100) {
 function getTeam() {
   try {
     const env = openclawEnv();
+    // Try --json first for reliable parsing
+    try {
+      const jsonOutput = execSync("openclaw agents list --json", { encoding: "utf-8", timeout: 10000, cwd: OPENCLAW_HOME, env });
+      const parsed = JSON.parse(jsonOutput);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed.map((a) => ({
+          id: a.id ?? "unknown",
+          name: a.identityName ?? a.identity?.name ?? a.name ?? (a.id ? a.id.charAt(0).toUpperCase() + a.id.slice(1) : "Agent"),
+          status: (a.isDefault || a.default || a.id === "main") ? "active" : "idle",
+          role: a.identityName ?? a.identity?.name ?? a.name ?? undefined,
+          workspace: a.workspace ?? undefined,
+          workspaceFolder: a.workspace ? path.basename(path.normalize(a.workspace)) : undefined,
+          agentDir: a.agentDir ?? undefined,
+          model: a.model ?? undefined,
+        }));
+      }
+    } catch { /* fall through to plain text parsing */ }
     const output = execSync("openclaw agents list", { encoding: "utf-8", timeout: 10000, cwd: OPENCLAW_HOME, env });
     const lines = output.split("\n");
     const agents = [];
@@ -2394,324 +2329,17 @@ function logBridge(action, err) {
   } catch (_) {}
 }
 
-ipcMain.handle("hyperclaw:bridge-invoke", async (event, { action, task, id, patch, command, date, lines, startDate, endDate, jobIds, jobId, limit, offset, runAtMs, todoData, relativePath, content: docContent, layout: officeLayout, seats: officeSeats, agentId, agentName, cronAddParams, cronRunJobId, cronRunDue, cronEditJobId, cronEditParams, cronDeleteJobId, usageData }) => {
+ipcMain.handle("hyperclaw:bridge-invoke", async (event, body) => {
+  const { action } = body || {};
+
+  // All bridge calls route through the Hub → Connector
+  if (!getHubInfo().enabled) return hubNotConfiguredError();
+
   logBridge(action);
-  ensureHyperClawDir();
-  switch (action) {
-    case "list-agents": {
-      return { success: true, data: getTeam() };
-    }
-    case "list-channels": {
-      return { success: true, data: getHyperClawChannels() };
-    }
-    case "add-agent": {
-      const name = typeof agentName === "string" ? agentName.trim() : "";
-      if (!name) return { success: false, error: "Agent name is required" };
-      if (!/^[a-zA-Z0-9_.-]+$/.test(name)) return { success: false, error: "Agent name may only contain letters, numbers, underscores, hyphens, and dots" };
-      if (name.length > 120) return { success: false, error: "Agent name too long" };
-      const normalizedId = name.toLowerCase().replace(/[^a-z0-9_.-]/g, "");
-      if (!normalizedId) return { success: false, error: "Agent name must contain at least one letter or number" };
-      const workspacePath = path.join(OPENCLAW_HOME, "workspace-" + normalizedId);
-      try {
-        await runOpenClawWithArgs(["agents", "add", name, "--workspace", workspacePath, "--non-interactive"], 30000);
-        return { success: true };
-      } catch (err) {
-        return { success: false, error: err.message || err.stderr || "Failed to add agent" };
-      }
-    }
-    case "delete-agent": {
-      const idOrName = typeof agentId === "string" ? agentId.trim() : "";
-      if (!idOrName) return { success: false, error: "Agent id is required" };
-      let normalizedId = idOrName.toLowerCase().replace(/[^a-z0-9_.-]/g, "");
-      if (!normalizedId) return { success: false, error: "Invalid agent id" };
-      // Strip "workspace-" prefix if present (workspace folders use this naming but agent ID is just the name)
-      if (normalizedId.startsWith("workspace-")) {
-        normalizedId = normalizedId.substring("workspace-".length);
-      }
-      if (!normalizedId) return { success: false, error: "Invalid agent id after stripping prefix" };
-      if (normalizedId === "main") return { success: false, error: "Cannot delete the main agent" };
-      try {
-        await runOpenClawWithArgs(["agents", "delete", normalizedId, "--force"], 15000);
-        return { success: true };
-      } catch (err) {
-        return { success: false, error: err.message || err.stderr || "Failed to delete agent" };
-      }
-    }
-    case "list-openclaw-memory": {
-      return { success: true, data: listOpenClawMemorySources() };
-    }
-    case "list-openclaw-agent-files": {
-      const list = listOpenClawAgentFiles();
-      const workspaceLabels = getOpenClawWorkspaceLabels();
-      return { success: true, data: { files: list, workspaceLabels } };
-    }
-    case "list-openclaw-docs": {
-      const docFiles = listOpenClawMarkdownFiles();
-      const workspaceLabels = getOpenClawWorkspaceLabels();
-      return { success: true, data: { files: docFiles, workspaceLabels } };
-    }
-    case "get-openclaw-doc": {
-      return getOpenClawDocContent(relativePath || "");
-    }
-    case "write-openclaw-doc": {
-      return writeOpenClawDocContent(relativePath || "", docContent ?? "");
-    }
-    case "delete-openclaw-doc": {
-      return deleteOpenClawPath(relativePath || "");
-    }
-    case "create-openclaw-folder": {
-      return createOpenClawFolder(relativePath || "");
-    }
-    case "save-local-usage": {
-      return saveLocalUsageData(usageData);
-    }
-    case "load-local-usage": {
-      return loadLocalUsageData();
-    }
-    case "trigger-process-commands": {
-      try {
-        const escaped = PROCESS_COMMANDS_MESSAGE.replace(/'/g, "'\"'\"'");
-        const result = await runOpenClawCommand(`agent --message '${escaped}'`, 180000);
-        return { success: true, stdout: result.stdout };
-      } catch (err) {
-        return { success: false, error: err.message || err.stderr || "OpenClaw agent failed" };
-      }
-    }
-    case "get-todo-data": {
-      ensureHyperClawDir();
-      try {
-        if (!fs.existsSync(HYPERCLAW_TODO_DATA_PATH)) return { tasks: [], lists: [], activeTaskId: null };
-        return JSON.parse(fs.readFileSync(HYPERCLAW_TODO_DATA_PATH, "utf-8"));
-      } catch { return { tasks: [], lists: [], activeTaskId: null }; }
-    }
-    case "save-todo-data": {
-      ensureHyperClawDir();
-      try {
-        fs.writeFileSync(HYPERCLAW_TODO_DATA_PATH, JSON.stringify(todoData || { tasks: [], lists: [], activeTaskId: null }, null, 2), "utf-8");
-        return { success: true };
-      } catch (e) { return { success: false, error: e?.message || String(e) }; }
-    }
-    case "get-tasks":
-      return readHyperClawTasks();
-    case "add-task": {
-      ensureHyperClawDir();
-      let raw = { tasks: [], lists: [], activeTaskId: null };
-      try {
-        if (fs.existsSync(HYPERCLAW_TODO_DATA_PATH)) {
-          raw = JSON.parse(fs.readFileSync(HYPERCLAW_TODO_DATA_PATH, "utf-8"));
-          if (!Array.isArray(raw.tasks)) raw.tasks = [];
-        }
-      } catch {}
-      const now = new Date().toISOString();
-      const newTask = { ...task, id: generateHyperClawTaskId(), createdAt: now, updatedAt: now };
-      raw.tasks.push(newTask);
-      fs.writeFileSync(HYPERCLAW_TODO_DATA_PATH, JSON.stringify(raw, null, 2), "utf-8");
-      return newTask;
-    }
-    case "update-task": {
-      ensureHyperClawDir();
-      try {
-        const raw = fs.existsSync(HYPERCLAW_TODO_DATA_PATH)
-          ? JSON.parse(fs.readFileSync(HYPERCLAW_TODO_DATA_PATH, "utf-8"))
-          : { tasks: [], lists: [], activeTaskId: null };
-        const tasks = Array.isArray(raw.tasks) ? raw.tasks : [];
-        const idx = tasks.findIndex((t) => t.id === id);
-        if (idx === -1) return null;
-        tasks[idx] = { ...tasks[idx], ...patch, updatedAt: new Date().toISOString() };
-        raw.tasks = tasks;
-        fs.writeFileSync(HYPERCLAW_TODO_DATA_PATH, JSON.stringify(raw, null, 2), "utf-8");
-        return tasks[idx];
-      } catch {
-        return null;
-      }
-    }
-    case "delete-task": {
-      try {
-        if (!fs.existsSync(HYPERCLAW_TODO_DATA_PATH)) return { success: true };
-        const raw = JSON.parse(fs.readFileSync(HYPERCLAW_TODO_DATA_PATH, "utf-8"));
-        const tasks = Array.isArray(raw.tasks) ? raw.tasks : [];
-        const filtered = tasks.filter((t) => t.id !== id);
-        if (filtered.length === tasks.length) return { success: false };
-        raw.tasks = filtered;
-        fs.writeFileSync(HYPERCLAW_TODO_DATA_PATH, JSON.stringify(raw, null, 2), "utf-8");
-        return { success: true };
-      } catch {
-        return { success: false };
-      }
-    }
-    case "send-command": {
-      return appendBridgeCommand(command);
-    }
-    case "get-events":
-      return getEvents();
-    case "get-logs":
-      return getLogs(lines || 100);
-    case "get-team":
-      return getTeam();
-    case "list-models":
-      return { success: true, data: getDefaultModels() };
-    case "get-crons":
-      return getCronsWithState();
-    case "get-cron-by-id": {
-      const jid = typeof jobId === "string" ? jobId.trim() : "";
-      const full = getCronById(jid);
-      if (full == null) return { error: "Job not found" };
-      return full;
-    }
-    case "get-cron-runs": {
-      const ids = Array.isArray(jobIds) ? jobIds : getCrons().map((c) => c.id);
-      return { runsByJobId: getCronRuns(ids) };
-    }
-    case "get-cron-runs-for-job": {
-      const jid = jobId != null ? String(jobId) : "";
-      const lim = typeof limit === "number" && limit > 0 ? Math.min(limit, 100) : 10;
-      const off = typeof offset === "number" && offset >= 0 ? offset : 0;
-      return getCronRunsForJob(jid, lim, off);
-    }
-    case "get-cron-run-detail": {
-      const jid = jobId != null ? String(jobId) : "";
-      const runAt = typeof runAtMs === "number" ? runAtMs : null;
-      const detail = jid && runAt != null ? getCronRunDetail(jid, runAt) : null;
-      if (detail == null) return { error: "Run not found" };
-      return detail;
-    }
-    case "cron-add": {
-      const p = cronAddParams && typeof cronAddParams === "object" ? cronAddParams : {};
-      if (typeof p.name !== "string" || !p.name.trim()) {
-        return { success: false, error: "name is required" };
-      }
-      const session = (p.session && String(p.session)) || "main";
-      const hasAt = typeof p.at === "string" && p.at.trim().length > 0;
-      const hasCron = typeof p.cron === "string" && p.cron.trim().length > 0;
-      if (!hasAt && !hasCron) {
-        return { success: false, error: "Either at (ISO or relative e.g. 20m) or cron expression is required" };
-      }
-      const args = ["cron", "add", "--name", p.name.trim(), "--session", session];
-      if (hasAt) args.push("--at", p.at.trim());
-      if (hasCron) args.push("--cron", p.cron.trim());
-      if (typeof p.tz === "string" && p.tz.trim()) args.push("--tz", p.tz.trim());
-      if (typeof p.message === "string" && p.message.trim()) args.push("--message", p.message.trim());
-      if (typeof p.systemEvent === "string" && p.systemEvent.trim()) args.push("--system-event", p.systemEvent.trim());
-      if (p.deleteAfterRun === true) args.push("--delete-after-run");
-      if (p.announce === true) {
-        args.push("--announce");
-        if (typeof p.channel === "string" && p.channel.trim()) args.push("--channel", p.channel.trim());
-        if (typeof p.to === "string" && p.to.trim()) args.push("--to", p.to.trim());
-      }
-      if (typeof p.stagger === "string" && p.stagger.trim()) args.push("--stagger", p.stagger.trim());
-      if (typeof p.model === "string" && p.model.trim()) args.push("--model", p.model.trim());
-      if (typeof p.thinking === "string" && p.thinking.trim()) args.push("--thinking", p.thinking.trim());
-      if (typeof p.agent === "string" && p.agent.trim()) args.push("--agent", p.agent.trim());
-      try {
-        await runOpenClawWithArgs(args, 30000);
-        return { success: true };
-      } catch (err) {
-        return { success: false, error: err.message || err.stderr || "Failed to add cron job" };
-      }
-    }
-    case "cron-run": {
-      const runJobId = typeof cronRunJobId === "string" ? cronRunJobId.trim() : "";
-      if (!runJobId || !/^[a-f0-9-]{36}$/i.test(runJobId)) {
-        return { success: false, error: "Valid job id is required" };
-      }
-      const args = ["cron", "run", runJobId];
-      if (cronRunDue === true) args.push("--due");
-      try {
-        await runOpenClawWithArgs(args, 120000);
-        return { success: true };
-      } catch (err) {
-        return { success: false, error: err.message || err.stderr || "Run failed" };
-      }
-    }
-    case "cron-runs-sync": {
-      const syncJobId = typeof jobId === "string" ? jobId.trim() : "";
-      if (!syncJobId || !/^[a-f0-9-]{36}$/i.test(syncJobId)) {
-        return { success: false, error: "Valid job id is required" };
-      }
-      try {
-        await runOpenClawWithArgs(["cron", "runs", "--id", syncJobId, "--limit", "1"], 15000);
-        return { success: true };
-      } catch (err) {
-        return { success: false, error: err.message || err.stderr || "Failed to sync cron runs" };
-      }
-    }
-    case "cron-edit": {
-      const editJobId = typeof cronEditJobId === "string" ? cronEditJobId.trim() : "";
-      if (!editJobId || !/^[a-f0-9-]{36}$/i.test(editJobId)) {
-        return { success: false, error: "Valid job id is required" };
-      }
-      const p = cronEditParams && typeof cronEditParams === "object" ? cronEditParams : {};
-      const args = ["cron", "edit", editJobId];
-      if (typeof p.name === "string" && p.name.trim()) args.push("--name", p.name.trim());
-      if (typeof p.message === "string" && p.message.trim()) args.push("--message", p.message.trim());
-      if (typeof p.model === "string" && p.model.trim()) args.push("--model", p.model.trim());
-      if (typeof p.thinking === "string" && p.thinking.trim()) args.push("--thinking", p.thinking.trim());
-      if (p.clearAgent === true) args.push("--clear-agent");
-      else if (typeof p.agent === "string" && p.agent.trim()) args.push("--agent", p.agent.trim());
-      if (p.exact === true) args.push("--exact");
-      if (p.announce === true) {
-        args.push("--announce");
-        if (typeof p.channel === "string" && p.channel.trim()) args.push("--channel", p.channel.trim());
-        if (typeof p.to === "string" && p.to.trim()) args.push("--to", p.to.trim());
-      }
-      if (args.length === 3) {
-        return { success: false, error: "At least one field to update is required" };
-      }
-      try {
-        await runOpenClawWithArgs(args, 15000);
-        return { success: true };
-      } catch (err) {
-        return { success: false, error: err.message || err.stderr || "Failed to update job" };
-      }
-    }
-    case "cron-delete": {
-      const delJobId = typeof cronDeleteJobId === "string" ? cronDeleteJobId.trim() : "";
-      if (!delJobId || !/^[a-f0-9-]{36}$/i.test(delJobId)) {
-        return { success: false, error: "Valid job id is required" };
-      }
-      try {
-        await runOpenClawWithArgs(["cron", "rm", delJobId], 15000);
-        return { success: true };
-      } catch (err) {
-        return { success: false, error: err.message || err.stderr || "Failed to delete cron job" };
-      }
-    }
-    case "get-employee-status":
-      return getEmployeeStatus();
-    case "get-config":
-      return getConfig();
-    case "read-office-layout":
-      return readOfficeLayout();
-    case "write-office-layout": {
-      if (!officeLayout || typeof officeLayout !== "object") return { success: false, error: "Missing layout" };
-      return writeOfficeLayout(officeLayout);
-    }
-    case "read-office-seats":
-      return readOfficeSeats();
-    case "write-office-seats": {
-      if (officeSeats == null || typeof officeSeats !== "object") return { success: false, error: "Missing seats" };
-      return writeOfficeSeats(officeSeats);
-    }
-    case "get-running-crons": {
-      try {
-        const { stdout } = await runOpenClawWithArgs(["sessions"], 10000);
-        const lines = (stdout || "").split("\n").filter((l) => l.includes(":cron:"));
-        const running = lines
-          .map((l) => {
-            const match = l.match(/agent:([^:]+):cron:([^\s]+)/);
-            return match ? { agentId: match[1], jobId: match[2] } : null;
-          })
-          .filter(Boolean);
-        return running;
-      } catch {
-        return [];
-      }
-    }
-    default:
-      logBridge(action, `Unknown action: ${action}`);
-      return { error: `Unknown action: ${action}` };
-  }
+  return hubCommandFromElectron(body);
 });
+
+/* Old bridge-invoke local switch cases removed — all bridge calls now route through Hub → Connector */
 
 // ─── Daily memory: ask OpenClaw to create a memory at end of day ─────────────
 // Keeps ~/.openclaw/workspace/memory structured with one daily file per day.

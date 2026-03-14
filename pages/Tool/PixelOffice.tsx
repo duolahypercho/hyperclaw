@@ -33,7 +33,7 @@ function PixelOfficeContent() {
     return (
       <div className="flex h-full w-full min-h-0 flex-1 flex-col items-center justify-center gap-2 bg-black-100 text-muted-foreground">
         <p className="font-mono text-sm">{error}</p>
-        <p className="font-mono text-xs">Data from /api/hyperclaw-bridge (get-employee-status).</p>
+        <p className="font-mono text-xs">Data from bridge (get-employee-status).</p>
       </div>
     );
   }

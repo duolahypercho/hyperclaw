@@ -18,8 +18,9 @@ import {
   Clock,
   LayoutGrid,
   FileText,
-  Bot,
   BarChart3,
+  Shield,
+  Network,
 } from "lucide-react";
 import { useRouter } from "next/router";
 import { Button } from "@/components/ui/button";
@@ -146,6 +147,16 @@ interface DocsFloatingContextType {
   isMounted: boolean;
 }
 
+interface FloatingChatContextType {
+  showState: boolean;
+  agentId: string | null;
+  sessionKey: string | null;
+  openChat: (agentId: string, sessionKey?: string) => void;
+  closeChat: () => void;
+  isMounted: boolean;
+}
+
+
 const MusicPlayerContext = createContext<MusicPlayerContextType | undefined>(
   undefined
 );
@@ -166,6 +177,9 @@ const StatisticsContext = createContext<StatisticsContextType | undefined>(
 const DocsFloatingContext = createContext<DocsFloatingContextType | undefined>(
   undefined
 );
+const FloatingChatContext = createContext<FloatingChatContextType | undefined>(
+  undefined
+);
 
 export const useOS = () => {
   const context = useContext(OSContext);
@@ -184,9 +198,10 @@ const STATIC_TOOL_ROUTES = [
   "/Tool/TodoList",
   "/Tool/Crons",
   "/Tool/Memory",
-  "/Tool/Agents",
   "/Tool/PixelOffice",
   "/Tool/Docs",
+  "/Tool/Approvals",
+  "/Tool/OrgChart",
   "/Settings",
 ];
 
@@ -261,6 +276,19 @@ export const OSProvider: React.FC<OSProviderProps> = ({ children }) => {
   const closeFloatingDoc = useCallback(() => {
     setFloatingDocPath(null);
   }, []);
+
+  // Floating chat window: agentId when open, null when closed
+  const [floatingChatAgentId, setFloatingChatAgentId] = useState<string | null>(null);
+  const [floatingChatSessionKey, setFloatingChatSessionKey] = useState<string | null>(null);
+  const openFloatingChat = useCallback((agentId: string, sessionKey?: string) => {
+    setFloatingChatAgentId(agentId);
+    setFloatingChatSessionKey(sessionKey ?? null);
+  }, []);
+  const closeFloatingChat = useCallback(() => {
+    setFloatingChatAgentId(null);
+    setFloatingChatSessionKey(null);
+  }, []);
+
 
   // Memoize updateOSSettings to prevent recreation
   const updateOSSettings = useCallback(
@@ -371,15 +399,15 @@ export const OSProvider: React.FC<OSProviderProps> = ({ children }) => {
         href: "/Tool/Memory",
       },
       {
-        id: "agents",
-        name: "Agents",
-        description: "List agents and edit agent files (memory.md, soul.md, etc.)",
-        icon: <Bot className="w-3.5 h-3.5" />,
+        id: "org-chart",
+        name: "Org Chart",
+        description: "Visualize your AI agent team hierarchy and delegation",
+        icon: <Network className="w-3.5 h-3.5" />,
         onClick: () => {
-          if (activeTool?.id === "agents") return;
-          createToolClickHandler("/Tool/Agents", "agents")();
+          if (activeTool?.id === "org-chart") return;
+          createToolClickHandler("/Tool/OrgChart", "org-chart")();
         },
-        href: "/Tool/Agents",
+        href: "/Tool/OrgChart",
       },
       {
         id: "pixel-office",
@@ -413,6 +441,17 @@ export const OSProvider: React.FC<OSProviderProps> = ({ children }) => {
           createToolClickHandler("/Tool/Usage", "usage")();
         },
         href: "/Tool/Usage",
+      },
+      {
+        id: "approvals",
+        name: "Approvals",
+        description: "Review and approve dangerous operations",
+        icon: <Shield className="w-3.5 h-3.5" />,
+        onClick: () => {
+          if (activeTool?.id === "approvals") return;
+          createToolClickHandler("/Tool/Approvals", "approvals")();
+        },
+        href: "/Tool/Approvals",
       },
       {
         id: "settings",
@@ -679,21 +718,36 @@ export const OSProvider: React.FC<OSProviderProps> = ({ children }) => {
     [floatingDocPath, openFloatingDoc, closeFloatingDoc, isMounted]
   );
 
+  const floatingChatValue: FloatingChatContextType = useMemo(
+    () => ({
+      showState: floatingChatAgentId !== null,
+      agentId: floatingChatAgentId,
+      sessionKey: floatingChatSessionKey,
+      openChat: openFloatingChat,
+      closeChat: closeFloatingChat,
+      isMounted,
+    }),
+    [floatingChatAgentId, floatingChatSessionKey, openFloatingChat, closeFloatingChat, isMounted]
+  );
+
+
   return (
     <OSContext.Provider value={value}>
       <MusicPlayerContext.Provider value={musicPlayerValue}>
         <TodoListContext.Provider value={todoListValue}>
           <PomodoroContext.Provider value={pomodoroValue}>
             <DocsFloatingContext.Provider value={docsFloatingValue}>
-              <MenuContext.Provider value={menuValue}>
-                  <CronsContext.Provider value={cronsValue}>
-                  <CopanionChatContext.Provider value={CopanionChatValue}>
-                    <StatisticsContext.Provider value={statisticsValue}>
-                      <NotificationProvider>{children}</NotificationProvider>
-                    </StatisticsContext.Provider>
-                  </CopanionChatContext.Provider>
-                  </CronsContext.Provider>
-              </MenuContext.Provider>
+              <FloatingChatContext.Provider value={floatingChatValue}>
+                <MenuContext.Provider value={menuValue}>
+                    <CronsContext.Provider value={cronsValue}>
+                    <CopanionChatContext.Provider value={CopanionChatValue}>
+                      <StatisticsContext.Provider value={statisticsValue}>
+                        <NotificationProvider>{children}</NotificationProvider>
+                      </StatisticsContext.Provider>
+                    </CopanionChatContext.Provider>
+                    </CronsContext.Provider>
+                </MenuContext.Provider>
+              </FloatingChatContext.Provider>
             </DocsFloatingContext.Provider>
           </PomodoroContext.Provider>
         </TodoListContext.Provider>
@@ -766,6 +820,15 @@ export const useDocsFloatingOS = () => {
   }
   return context;
 };
+
+export const useFloatingChatOS = () => {
+  const context = useContext(FloatingChatContext);
+  if (!context) {
+    throw new Error("useFloatingChatOS must be used within an OSProvider");
+  }
+  return context;
+};
+
 
 export const useMenuOS = () => {
   const context = useContext(MenuContext);

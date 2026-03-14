@@ -31,14 +31,14 @@ import {
 interface StoredStep {
   _id: string;
   title: string;
-  status: "pending" | "completed" | "in_progress" | "blocked";
+  status: "pending" | "completed" | "in_progress" | "blocked" | "cancelled";
   finishedAt?: string | null;
 }
 
 interface StoredTask {
   _id: string;
   title: string;
-  status: "pending" | "completed" | "in_progress" | "blocked";
+  status: "pending" | "completed" | "in_progress" | "blocked" | "cancelled";
   starred: boolean;
   listId: string;
   order: number;
@@ -52,7 +52,10 @@ interface StoredTask {
   recurrence: any;
   statistics: { finishedCount: number; skippedCount: number; lastFinishedAt?: string; lastSkippedAt?: string };
   attachments: string[];
+  /** Human-readable assignee label, e.g. "Elon". */
   assignedAgent?: string;
+  /** Canonical assignee id, e.g. "elon". */
+  assignedAgentId?: string;
   linkedDocumentUrl?: string;
   /** Delivery channel for announcing result when task is run (e.g. by cron). */
   delivery?: { announce?: boolean; channel?: string; to?: string };
@@ -75,11 +78,69 @@ const EMPTY: TodoData = { tasks: [], lists: [], activeTaskId: null };
 
 // ── Core I/O ───────────────────────────────────────────────────────────
 
-/** Normalize a task from bridge (id, no steps) or app ( _id, steps) into StoredTask shape. */
+function asString(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function guessAgentId(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const exact = trimmed.match(/^[a-z0-9_.-]+$/);
+  if (exact) return trimmed;
+  const slug = trimmed.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return slug || undefined;
+}
+
+function extractAgentFromDescription(description: string | undefined): string | undefined {
+  if (!description) return undefined;
+  const patterns = [
+    /^\*\*Agent:\*\*\s*(.+)$/im,
+    /^Agent:\s*(.+)$/im,
+    /^Assigned(?:\s+to)?:\s*(.+)$/im,
+  ];
+  for (const pattern of patterns) {
+    const match = description.match(pattern);
+    const raw = match?.[1]?.trim();
+    if (raw) return raw;
+  }
+  return undefined;
+}
+
+function normalizeAgentAssignment(t: Record<string, unknown>): Pick<StoredTask, "assignedAgent" | "assignedAgentId"> {
+  const nested = t.data && typeof t.data === "object" ? (t.data as Record<string, unknown>) : undefined;
+  const description = asString(t.description) ?? asString(nested?.description);
+
+  const assignedAgent =
+    asString(t.assignedAgent) ??
+    asString((t as Record<string, unknown>).assignedAgentName) ??
+    asString(t.agent) ??
+    asString(nested?.assignedAgent) ??
+    asString(nested?.assignedAgentName) ??
+    asString(nested?.agent) ??
+    extractAgentFromDescription(description);
+
+  const assignedAgentId =
+    asString((t as Record<string, unknown>).assignedAgentId) ??
+    asString((t as Record<string, unknown>).agentId) ??
+    asString(nested?.assignedAgentId) ??
+    asString(nested?.agentId) ??
+    guessAgentId(assignedAgent);
+
+  return {
+    assignedAgent: assignedAgent ?? assignedAgentId,
+    assignedAgentId,
+  };
+}
+
+/** Normalize a task from bridge (id, no steps) or app (_id, steps) into StoredTask shape. */
 function normalizeTask(t: Record<string, unknown>): StoredTask {
   const _id = (t._id ?? t.id) as string;
   const steps = Array.isArray(t.steps) ? (t.steps as StoredStep[]) : [];
   const statistics = t.statistics && typeof t.statistics === "object" ? (t.statistics as StoredTask["statistics"]) : { finishedCount: 0, skippedCount: 0 };
+  const assignment = normalizeAgentAssignment(t);
   return {
     _id: String(_id ?? generateId()),
     title: String(t.title ?? ""),
@@ -97,7 +158,8 @@ function normalizeTask(t: Record<string, unknown>): StoredTask {
     recurrence: t.recurrence ?? { type: "none" },
     statistics,
     attachments: Array.isArray(t.attachments) ? (t.attachments as string[]) : [],
-    assignedAgent: t.assignedAgent as string | undefined,
+    assignedAgent: assignment.assignedAgent,
+    assignedAgentId: assignment.assignedAgentId,
     linkedDocumentUrl: t.linkedDocumentUrl as string | undefined,
     delivery:
       t.delivery && typeof t.delivery === "object"
@@ -184,6 +246,7 @@ function taskToSummary(t: StoredTask) {
     recurrence: t.recurrence ?? { type: "none" },
     statistics: statsToDate(t.statistics),
     assignedAgent: t.assignedAgent,
+    assignedAgentId: t.assignedAgentId,
     linkedDocumentUrl: t.linkedDocumentUrl,
     delivery: t.delivery,
   };
@@ -214,6 +277,7 @@ function taskToDetails(t: StoredTask) {
       attachments,
     },
     assignedAgent: t.assignedAgent,
+    assignedAgentId: t.assignedAgentId,
     linkedDocumentUrl: t.linkedDocumentUrl,
     delivery: t.delivery,
   };
@@ -238,8 +302,10 @@ function filterByTab(
       result = tasks.filter((t) => t.status === "completed");
       break;
     case "task":
-    case "kanban":
       result = tasks.filter((t) => t.status !== "completed");
+      break;
+    case "kanban":
+      result = tasks;
       break;
     case "list":
       result = query?.planned != null
@@ -313,6 +379,7 @@ export const addTodoTaskAPI = async (req: AddTodoTaskRequest) => {
     statistics: { finishedCount: 0, skippedCount: 0 },
     attachments: [],
     assignedAgent: req.assignedAgent,
+    assignedAgentId: req.assignedAgentId,
     linkedDocumentUrl: req.linkedDocumentUrl,
     delivery: req.delivery,
   };
@@ -333,6 +400,12 @@ export const updateTodoTaskAPI = async (req: UpdateTodoTaskRequest) => {
   Object.assign(task, patch, { updatedAt: now() });
   if (patch.dueDate !== undefined) {
     task.dueDate = patch.dueDate ? new Date(patch.dueDate).toISOString() : null;
+  }
+  if (patch.assignedAgent !== undefined) {
+    task.assignedAgent = patch.assignedAgent ?? undefined;
+  }
+  if (patch.assignedAgentId !== undefined) {
+    task.assignedAgentId = patch.assignedAgentId ?? undefined;
   }
   await save(data);
   return ok(taskToSummary(task));

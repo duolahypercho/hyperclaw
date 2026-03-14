@@ -10,7 +10,7 @@ export function gatewayHttpToWs(httpUrl: string): string {
 
 /** Build WebSocket URL with optional auth token */
 export function buildGatewayWsUrl(gatewayUrl: string, token?: string | null): string {
-  const base = gatewayHttpToWs(gatewayUrl || "http://127.0.0.1:18789");
+  const base = gatewayHttpToWs(gatewayUrl);
   if (token && typeof token === "string" && token.trim()) {
     const sep = base.includes("?") ? "&" : "?";
     return `${base}${sep}token=${encodeURIComponent(token.trim())}`;
@@ -31,7 +31,7 @@ export interface ChatEventPayload {
   errorMessage?: string;
 }
 
-export type GatewayConnectOptions = { token?: string | null };
+export type GatewayConnectOptions = { token?: string | null; hubMode?: boolean; hubDeviceId?: string };
 
 const RECONNECT_BACKOFF_MS = [1000, 2000, 4000, 8000, 16000, 30000];
 const MAX_RECONNECT_ATTEMPTS = RECONNECT_BACKOFF_MS.length;
@@ -40,7 +40,7 @@ function randomId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 11)}`;
 }
 
-/** Sign a connect challenge using Electron API */
+/** Sign a connect challenge using Electron API or server-side API fallback */
 async function signConnectChallenge(params: {
   clientId: string;
   clientMode: string;
@@ -49,6 +49,7 @@ async function signConnectChallenge(params: {
   token?: string | null;
   nonce: string;
 }): Promise<{ device: unknown; client: unknown; role: string; scopes: string[]; deviceToken?: string | null; error?: string } | null> {
+  // Priority 1: Electron IPC (desktop app)
   if (typeof window !== "undefined" && (window as unknown as { electronAPI?: { openClaw?: { signConnectChallenge?: (params: unknown) => Promise<{ device: unknown; client: unknown; role: string; scopes: string[]; deviceToken?: string | null; error?: string }> } } }).electronAPI?.openClaw?.signConnectChallenge) {
     try {
       return await (window as unknown as { electronAPI: { openClaw: { signConnectChallenge: (params: unknown) => Promise<{ device: unknown; client: unknown; role: string; scopes: string[]; deviceToken?: string | null; error?: string }> } } }).electronAPI.openClaw.signConnectChallenge(params);
@@ -57,7 +58,19 @@ async function signConnectChallenge(params: {
       return null;
     }
   }
-  console.error("[Gateway WS] signConnectChallenge not available");
+  // Priority 2: Hub direct (browser mode — sign challenge via hub command)
+  try {
+    const { hubCommand } = await import("$/lib/hub-direct");
+    const data = await hubCommand({ action: "sign-connect-challenge", ...params }) as any;
+    if (data && !data.error && data.device && data.client) {
+      return data;
+    }
+    if (data?.error) {
+      return { device: null, client: null, role: "", scopes: [], error: data.error };
+    }
+  } catch (e) {
+    console.warn("[Gateway WS] Hub direct sign challenge failed:", e);
+  }
   return null;
 }
 
@@ -66,6 +79,8 @@ export const gatewayConnection = {
   ws: null as WebSocket | null,
   wsUrl: null as string | null,
   token: null as string | null,
+  hubMode: false,
+  hubDeviceId: null as string | null,
   connected: false,
   error: null as string | null,
   reconnectAttempt: 0,
@@ -90,7 +105,7 @@ export const gatewayConnection = {
   },
 
   /** Send a request over WebSocket and wait for response */
-  request<T = unknown>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+  request<T = unknown>(method: string, params: Record<string, unknown> = {}, timeoutMs?: number): Promise<T> {
     return new Promise((resolve, reject) => {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
         reject(new Error("WebSocket not connected"));
@@ -98,20 +113,47 @@ export const gatewayConnection = {
       }
       const id = randomId();
       this.pendingRequests.set(id, { resolve: resolve as (v: unknown) => void, reject });
-      const req = { type: "req", id, method, params };
-      this.ws.send(JSON.stringify(req));
-      // Timeout after 30s
+      // In hub mode, include routing fields inside params — the hub extracts
+      // deviceId + requestType from params (lines 529-530 of hub.go) then
+      // deletes them before forwarding clean params to the connector/gateway.
+      if (this.hubMode && this.hubDeviceId) {
+        const req = {
+          type: "req",
+          id,
+          method,
+          params: {
+            ...params,
+            deviceId: this.hubDeviceId,
+            requestType: method,
+          },
+        };
+        this.ws.send(JSON.stringify(req));
+      } else {
+        const req = { type: "req", id, method, params };
+        this.ws.send(JSON.stringify(req));
+      }
+      // Default 30s, allow override for large responses (e.g. sessions.usage)
+      const timeout = timeoutMs ?? 30000;
       setTimeout(() => {
         if (this.pendingRequests.has(id)) {
           this.pendingRequests.delete(id);
           reject(new Error(`Request ${method} timed out`));
         }
-      }, 30000);
+      }, timeout);
     });
   },
 
   /** Handle incoming WebSocket messages */
   handleMessage(msg: Record<string, unknown>) {
+    const msgType = msg.type as string;
+
+    const event = msg.event as string | undefined;
+
+    // Normalize "evt" → "event" (hub may forward connector events with either type)
+    if (msgType === "evt") {
+      msg.type = "event";
+    }
+
     if (msg.type === "res") {
       const id = msg.id as string;
       const pending = this.pendingRequests.get(id);
@@ -140,6 +182,11 @@ export const gatewayConnection = {
     }
     // Server sent connect.challenge → sign and reply
     if (msg.type === "event" && msg.event === "connect.challenge" && msg.payload) {
+      // In hub mode, the hub handles challenge signing server-side. Ignore client-side challenges.
+      if (this.hubMode) {
+        return;
+      }
+
       const payload = msg.payload as { nonce?: string; ts?: number };
       const nonce = payload.nonce ?? "";
       // Use stored token, or parse from WS URL (e.g. ?token=...) if connect was called with URL-only
@@ -152,8 +199,10 @@ export const gatewayConnection = {
           /* ignore */
         }
       }
-      if (tokenToUse == null || tokenToUse === "") {
-      }
+
+      // Capture current WS instance — if the connection is replaced (e.g. hub replaces local),
+      // the stale callback must not act on the new connection.
+      const challengeWs = this.ws;
 
       // Sign the challenge using Electron API
       signConnectChallenge({
@@ -164,6 +213,11 @@ export const gatewayConnection = {
         token: tokenToUse ?? undefined,
         nonce: nonce,
       }).then((signed) => {
+        // Guard: if the WS was replaced since this challenge was received, bail out
+        if (this.ws !== challengeWs) {
+          return;
+        }
+
         if (signed && !signed.error && signed.device && signed.client) {
           // Protocol: connect.params.auth.token must match gateway token or socket is closed
           const authToken =
@@ -187,9 +241,23 @@ export const gatewayConnection = {
             },
           };
           this.ws?.send(JSON.stringify(req));
+        } else if (signed === null) {
+          // Browser mode: signConnectChallenge is not available (no Electron API).
+          // Gateway requires device key signing which is only available in Electron.
+          // Stop reconnecting — the WS gateway cannot be used from the browser directly.
+          console.info("[Gateway WS] Browser mode: gateway requires device identity (Electron only). Using REST fallback.");
+          this.wsUrl = null; // Prevent further reconnect attempts
+          if (this.reconnectTimer != null) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
+          this.reconnectAttempt = 0;
+          try { this.ws?.close(); } catch { /* ignore */ }
+          this.ws = null;
+          this.setState(false, null); // No error — just not available in browser
         } else {
-          console.error("[Gateway WS] Failed to sign:", signed?.error);
-          this.setState(false, signed?.error || "Failed to sign challenge");
+          // Electron mode but signing failed (transient error) — let reconnect handle it
+          const errMsg = signed?.error || "Device signing failed";
+          console.warn("[Gateway WS] Sign challenge failed:", errMsg);
+          this.setState(false, errMsg);
+          // Don't null out wsUrl — allow reconnection to retry
         }
       });
       return;
@@ -206,16 +274,19 @@ export const gatewayConnection = {
 
     // Handle agent stream events (assistant delta, final, etc.)
     // Format: agent.{runId}.{stream}.{seq} -> payload contains runId, sessionKey, stream (lifecycle/assistant/tool), data
-    if (msg.type === "event" && typeof msg.event === "string" && msg.event.startsWith("agent.")) {
+    if (msg.type === "event" && typeof msg.event === "string" && (msg.event === "agent" || msg.event.startsWith("agent."))) {
       const payload = msg.payload as Record<string, unknown>;
-      const stream = payload?.stream as string;
+      // Parse stream/runId from event name as fallback (format: agent.{runId}.{stream}.{seq})
+      const eventParts = (msg.event as string).split(".");
+      const stream = (payload?.stream as string) || eventParts[2];
       const sessionKey = payload?.sessionKey as string;
-      const runId = payload?.runId as string;
-      const data = payload?.data as Record<string, unknown>;
+      const runId = (payload?.runId as string) || eventParts[1];
+      const data = payload?.data ? (payload.data as Record<string, unknown>) : payload;
 
       // Buffer for accumulating delta text
       if (!this.agentDeltaBuffer) {
         this.agentDeltaBuffer = new Map();
+        this._agentDeltaTimestamps = new Map();
       }
 
       // Convert agent stream events to chat events
@@ -227,29 +298,36 @@ export const gatewayConnection = {
         const assistantText = delta || text || content;
 
         if (assistantText !== undefined && assistantText !== "") {
-          // Get existing buffered text for this run
+          // Get existing buffered text for this run and accumulate
           const existingBuffer = this.agentDeltaBuffer.get(runId) || "";
           const newBuffer = existingBuffer + assistantText;
           this.agentDeltaBuffer.set(runId, newBuffer);
+          this._agentDeltaTimestamps?.set(runId, Date.now());
 
-          // This is a delta event from agent stream
+          // Send accumulated text (not just delta) so the hook can replace content correctly
           const chatPayload: ChatEventPayload = {
             runId,
             sessionKey,
             state: "delta",
-            message: { role: "assistant", content: [{ type: "text", text: assistantText }] },
+            message: { role: "assistant", content: [{ type: "text", text: newBuffer }] },
           };
           this.chatEventListeners.forEach((handler) => handler(chatPayload));
         }
       }
 
-      // Handle lifecycle end - convert to final with buffered content
+      // Handle lifecycle end/error - convert to final/error chat event.
+      // Every lifecycle "end" emits state:"final". The chat hook uses a
+      // debounce to avoid premature finalization — new delta events from
+      // still-active agents cancel the debounce.
       if (stream === "lifecycle" && sessionKey && runId) {
         const phase = data?.phase as string;
         if (phase === "end") {
           // Get buffered text for this run
           const bufferedText = this.agentDeltaBuffer.get(runId) || "";
           this.agentDeltaBuffer.delete(runId);
+          this._agentDeltaTimestamps?.delete(runId);
+          // Prune stale entries (agents that crashed without lifecycle end)
+          this.pruneAgentDeltaBuffer();
 
           const chatPayload: ChatEventPayload = {
             runId,
@@ -260,35 +338,41 @@ export const gatewayConnection = {
               : undefined,
           };
           this.chatEventListeners.forEach((handler) => handler(chatPayload));
+        } else if (phase === "error") {
+          this.agentDeltaBuffer.delete(runId);
+          this._agentDeltaTimestamps?.delete(runId);
+          const errorMsg = (data?.error || data?.errorMessage) as string | undefined;
+          const chatPayload: ChatEventPayload = {
+            runId,
+            sessionKey,
+            state: "error",
+            errorMessage: errorMsg || "Agent error",
+          };
+          this.chatEventListeners.forEach((handler) => handler(chatPayload));
         }
       }
 
-      // Handle tool events - convert to toolResult messages for real-time display
+      // Handle tool events — real-time display matching OpenClaw's 3-phase protocol:
+      //   phase "start"  → show tool card with spinner (executing)
+      //   phase "update" → ignored (partial output with empty content causes premature completion)
+      //   phase "result" → show completed result
       if (stream === "tool" && sessionKey && runId) {
-        const toolName = data?.name as string | undefined;
-        const toolCallId = data?.callId as string | undefined;
-        const toolInput = data?.input as string | undefined;
-        const toolOutput = data?.output as string | undefined;
-        const toolError = data?.error as string | undefined;
+        const phase = (data?.phase as string) || "";
+        const toolName = (data?.name || data?.toolName || data?.tool_name) as string | undefined;
+        const toolCallId = (data?.callId || data?.id || data?.toolCallId || data?.tool_call_id) as string | undefined;
+        const rawInput = data?.input !== undefined ? data.input : (data?.args !== undefined ? data.args : data?.arguments);
+        // "result" phase uses data.result, "update" phase uses data.partialResult
+        const rawOutput = data?.output !== undefined ? data.output
+          : (data?.result !== undefined ? data.result
+          : data?.partialResult);
+        const toolError = (data?.error || data?.errorMessage) as string | undefined;
+        const isError = data?.isError === true || !!toolError;
+        const toolInput = rawInput !== undefined ? (typeof rawInput === "string" ? rawInput : JSON.stringify(rawInput)) : undefined;
+        const toolOutput = rawOutput !== undefined ? (typeof rawOutput === "string" ? rawOutput : JSON.stringify(rawOutput)) : undefined;
 
         if (toolCallId && toolName) {
-          // If we have output, show tool result
-          if (toolOutput !== undefined) {
-            const chatPayload: ChatEventPayload = {
-              runId,
-              sessionKey,
-              state: "delta", // Use delta to show in real-time
-              message: {
-                role: "toolResult",
-                toolCallId,
-                toolName,
-                content: toolOutput,
-                isError: !!toolError,
-              },
-            };
-            this.chatEventListeners.forEach((handler) => handler(chatPayload));
-          } else if (toolInput !== undefined) {
-            // Show tool call
+          if (phase === "start") {
+            // Tool execution started — show card with spinner
             const chatPayload: ChatEventPayload = {
               runId,
               sessionKey,
@@ -298,8 +382,25 @@ export const gatewayConnection = {
                 tool_calls: [{
                   id: toolCallId,
                   type: "function",
-                  function: { name: toolName, arguments: toolInput },
+                  function: { name: toolName, arguments: toolInput || "{}" },
                 }],
+              },
+            };
+            this.chatEventListeners.forEach((handler) => handler(chatPayload));
+          } else if (phase === "result") {
+            // Tool completed — show final result.
+            // Skipping phase:"update" events: they carry partial/empty output that would
+            // prematurely mark the tool as "completed" in useUnifiedToolState.
+            const chatPayload: ChatEventPayload = {
+              runId,
+              sessionKey,
+              state: "delta",
+              message: {
+                role: "toolResult",
+                toolCallId,
+                toolName,
+                content: toolOutput || "",
+                isError,
               },
             };
             this.chatEventListeners.forEach((handler) => handler(chatPayload));
@@ -356,6 +457,21 @@ export const gatewayConnection = {
     return this.request("sessions.patch", { key, ...patch });
   },
 
+  /** Get agent identity (avatar, name, emoji) from OpenClaw.
+   *  Accepts agentId, sessionKey, or both (matches gateway handler). */
+  async getAgentIdentity(params: { agentId?: string; sessionKey?: string }): Promise<{ agentId: string; name?: string; avatar?: string; emoji?: string } | null> {
+    try {
+      return await this.request<{ agentId: string; name?: string; avatar?: string; emoji?: string }>("agent.identity.get", params);
+    } catch {
+      return null;
+    }
+  },
+
+  /** Reset session — archives old transcript and creates a fresh session */
+  resetSession(key: string): Promise<unknown> {
+    return this.request("sessions.reset", { key, reason: "new" });
+  },
+
   /** Get list of sessions for an agent */
   async listSessions(agentId: string, limit: number = 50): Promise<{ sessions?: Array<{ key: string; label?: string; createdAt?: number; updatedAt?: number; model?: string; modelProvider?: string; thinkingLevel?: string }> }> {
     // Filter sessions by agent prefix
@@ -373,7 +489,10 @@ export const gatewayConnection = {
   },
 
   /** Get session info including model by session key */
+  _sessionModelUnsupported: false,
   async getSessionModel(sessionKey: string): Promise<string | null> {
+    // Skip if previous calls timed out (hub relay may not support sessions.list)
+    if (this._sessionModelUnsupported) return null;
     try {
       // Parse agentId from session key (format: agent:xxx:...)
       const parts = sessionKey.split(':');
@@ -384,7 +503,10 @@ export const gatewayConnection = {
       const session = result.sessions?.find(s => s.key === sessionKey);
       return session?.model || null;
     } catch (error) {
-      console.warn("[GatewayWS] Failed to get session model:", error);
+      const msg = error instanceof Error ? error.message : String(error);
+      if (msg.includes("timed out")) {
+        this._sessionModelUnsupported = true;
+      }
       return null;
     }
   },
@@ -397,6 +519,8 @@ export const gatewayConnection = {
     this.disconnect();
     this.wsUrl = wsUrl;
     this.token = token;
+    this.hubMode = !!options.hubMode;
+    this.hubDeviceId = options.hubDeviceId ?? null;
     try {
       this.ws = new WebSocket(wsUrl);
     } catch (e) {
@@ -406,6 +530,11 @@ export const gatewayConnection = {
     }
     this.ws.onopen = () => {
       this.reconnectAttempt = 0;
+      // In hub mode, the hub authenticates via JWT and doesn't use the
+      // gateway's challenge-response handshake. Mark connected immediately.
+      if (this.hubMode) {
+        this.setState(true, null);
+      }
     };
     this.ws.onmessage = (ev: MessageEvent) => {
       try {
@@ -438,9 +567,11 @@ export const gatewayConnection = {
     this.reconnectAttempt = Math.min(this.reconnectAttempt + 1, MAX_RECONNECT_ATTEMPTS);
     const url = this.wsUrl;
     const token = this.token;
+    const hubMode = this.hubMode;
+    const hubDeviceId = this.hubDeviceId;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
-      if (url) this.connect(url, { token });
+      if (url) this.connect(url, { token, hubMode: hubMode || undefined, hubDeviceId: hubDeviceId || undefined });
     }, delay);
   },
 
@@ -456,7 +587,24 @@ export const gatewayConnection = {
     }
     this.wsUrl = null;
     this.token = null;
+    this.hubMode = false;
+    this.hubDeviceId = null;
+    this.agentDeltaBuffer?.clear();
+    this.agentDeltaBuffer = null;
     this.setState(false, null);
+  },
+
+  /** Prune stale entries from agentDeltaBuffer (entries older than maxAgeMs) */
+  _agentDeltaTimestamps: null as Map<string, number> | null,
+  pruneAgentDeltaBuffer(maxAgeMs = 300_000) {
+    if (!this.agentDeltaBuffer || !this._agentDeltaTimestamps) return;
+    const now = Date.now();
+    for (const [runId, ts] of this._agentDeltaTimestamps) {
+      if (now - ts > maxAgeMs) {
+        this.agentDeltaBuffer.delete(runId);
+        this._agentDeltaTimestamps.delete(runId);
+      }
+    }
   },
 
   getState(): GatewayConnectionState {
@@ -475,7 +623,16 @@ export const gatewayConnection = {
 };
 
 export function connectGatewayWs(wsUrl: string, options?: GatewayConnectOptions): void {
-  gatewayConnection.connect(wsUrl, options ?? {});
+  let finalUrl = wsUrl;
+  if (options?.hubMode && wsUrl) {
+    // Convert hub HTTP URL to WebSocket dashboard URL
+    finalUrl = wsUrl.replace(/^http/, "ws").replace(/\/$/, "") + "/ws/dashboard";
+    if (options.token) {
+      const sep = finalUrl.includes("?") ? "&" : "?";
+      finalUrl = `${finalUrl}${sep}token=${encodeURIComponent(options.token)}`;
+    }
+  }
+  gatewayConnection.connect(finalUrl, options ?? {});
 }
 
 export function disconnectGatewayWs(): void {
@@ -490,31 +647,51 @@ export function subscribeGatewayConnection(cb: () => void): () => void {
   return gatewayConnection.subscribe(cb);
 }
 
-/** Get gateway URL and token from Electron API */
-export async function getGatewayConfig(): Promise<{ gatewayUrl: string; token: string | null }> {
-  let gatewayUrl = "http://127.0.0.1:18789";
-  let token: string | null = null;
-  
-  if (typeof window !== "undefined" && (window as unknown as { electronAPI?: { openClaw?: { getGatewayConnectUrl?: () => Promise<{ gatewayUrl: string; token: string }> } } }).electronAPI?.openClaw?.getGatewayConnectUrl) {
-    try {
-      const config = await (window as unknown as { electronAPI: { openClaw: { getGatewayConnectUrl: () => Promise<{ gatewayUrl: string; token: string }> } } }).electronAPI.openClaw.getGatewayConnectUrl();
-      gatewayUrl = config.gatewayUrl || gatewayUrl;
-      token = config.token;
-    } catch (e) {
-      console.warn("[Gateway WS] Failed to get config:", e);
+/** Get gateway config — always returns hub connection info (no direct local gateway). */
+export async function getGatewayConfig(): Promise<{ gatewayUrl: string; token: string | null; hubMode?: boolean; hubDeviceId?: string }> {
+  // Priority 1: Hub config from window cache or Electron preload
+  if (typeof window !== "undefined") {
+    const w = window as unknown as {
+      electronAPI?: { hyperClawBridge?: { getHubConfig?: () => { enabled: boolean; url: string; deviceId: string; jwt?: string } | null } };
+      __hubConfig?: { enabled: boolean; url: string; deviceId: string; jwt?: string };
+    };
+    const hubCfg = w.__hubConfig?.enabled ? w.__hubConfig : w.electronAPI?.hyperClawBridge?.getHubConfig?.();
+    if (hubCfg?.enabled && hubCfg.url && hubCfg.deviceId) {
+      return { gatewayUrl: hubCfg.url, token: hubCfg.jwt ?? null, hubMode: true, hubDeviceId: hubCfg.deviceId };
     }
   }
-  return { gatewayUrl, token };
+
+  // Priority 2: Hub direct — use env var + session
+  try {
+    const { getHubApiUrl, getUserToken, getActiveDeviceId } = await import("$/lib/hub-direct");
+    const hubUrl = getHubApiUrl();
+    const token = await getUserToken();
+    if (hubUrl && token) {
+      const deviceId = await getActiveDeviceId(token);
+      if (deviceId) {
+        return { gatewayUrl: hubUrl, token, hubMode: true, hubDeviceId: deviceId };
+      }
+    }
+  } catch {
+    /* hub not available */
+  }
+
+  // No hub configured — gateway not available
+  return { gatewayUrl: "", token: null };
 }
 
 /** Send a chat message via WebSocket */
 export async function sendChatMessageWs(sessionKey: string, message: string): Promise<unknown> {
   const { connected } = getGatewayConnectionState();
   if (!connected) {
-    const { gatewayUrl, token } = await getGatewayConfig();
-    const wsUrl = buildGatewayWsUrl(gatewayUrl, token);
-    connectGatewayWs(wsUrl, { token });
-    
+    const config = await getGatewayConfig();
+    if (!config.gatewayUrl) throw new Error("No hub configured");
+    connectGatewayWs(config.gatewayUrl, {
+      token: config.token,
+      hubMode: config.hubMode,
+      hubDeviceId: config.hubDeviceId,
+    });
+
     // Wait for connection (max 5s)
     await new Promise((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error("Connection timeout")), 5000);
@@ -532,7 +709,7 @@ export async function sendChatMessageWs(sessionKey: string, message: string): Pr
       });
     });
   }
-  
+
   const idempotencyKey = `ws-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   return gatewayConnection.request("chat.send", {
     sessionKey,
@@ -766,116 +943,29 @@ export interface SessionsUsageResult {
   };
 }
 
-/** Fetch usage cost from the gateway via WebSocket (usage.cost).
- * Same design as OpenClaw: pass startDate/endDate and optional timeZone for date interpretation.
- * If startDate/endDate omitted, gateway uses default range (e.g. last 30 days).
- * When includeDateInterpretation is false (e.g. legacy gateway), mode/utcOffset are omitted.
- */
-export async function getUsageCostWs(params?: {
-  startDate?: string;
-  endDate?: string;
-  timeZone?: "local" | "utc";
-  detail?: "off" | "tokens" | "full";
-  includeDateInterpretation?: boolean;
-}): Promise<UsageCostPayload> {
-  const { connected } = getGatewayConnectionState();
-  if (!connected) {
-    return { error: "Gateway not connected" } as UsageCostPayload;
+/** Tracks whether the current gateway supports sessions.usage.
+ * After an "unknown method" error, skip future calls until reconnection. */
+let _sessionsUsageSupported: boolean | null = null;
+
+// Reset the flag when the gateway reconnects (new gateway may support it)
+subscribeGatewayConnection(() => {
+  const state = getGatewayConnectionState();
+  if (state.connected) {
+    _sessionsUsageSupported = null; // re-probe on next call
   }
+});
 
-  const requestParams: Record<string, unknown> = {};
-  if (params?.detail) requestParams.detail = params.detail;
-  if (params?.startDate) requestParams.startDate = params.startDate;
-  if (params?.endDate) requestParams.endDate = params.endDate;
-  const tz = params?.timeZone ?? "local";
-  const includeDateInterpretation = params?.includeDateInterpretation !== false;
-  const dateInterpretation = buildDateInterpretationParams(tz, includeDateInterpretation);
-  if (dateInterpretation) {
-    requestParams.mode = dateInterpretation.mode;
-    if (dateInterpretation.utcOffset) requestParams.utcOffset = dateInterpretation.utcOffset;
-  }
-
-  const payload = await gatewayConnection.request<UsageCostPayload>("usage.cost", requestParams);
-  return payload ?? {};
-}
-
-/** Fetch sessions usage from the gateway via WebSocket (sessions.usage).
- * Same design as OpenClaw: startDate, endDate, timeZone, limit, includeContextWeight.
- * When includeDateInterpretation is false (e.g. legacy gateway), mode/utcOffset are omitted.
- */
-export async function getSessionsUsageWs(params: {
-  startDate: string;
-  endDate: string;
-  timeZone?: "local" | "utc";
-  limit?: number;
-  includeContextWeight?: boolean;
-  includeDateInterpretation?: boolean;
-}): Promise<SessionsUsageResult | null> {
-  const { connected } = getGatewayConnectionState();
-  if (!connected) {
-    return null;
-  }
-
-  const includeDateInterpretation = params.includeDateInterpretation !== false;
-  const dateInterpretation = buildDateInterpretationParams(
-    params.timeZone ?? "local",
-    includeDateInterpretation
-  );
-  const requestParams: Record<string, unknown> = {
-    startDate: params.startDate,
-    endDate: params.endDate,
-    limit: params.limit ?? 1000,
-    includeContextWeight: params.includeContextWeight ?? true,
-  };
-  if (dateInterpretation) {
-    requestParams.mode = dateInterpretation.mode;
-    if (dateInterpretation.utcOffset) requestParams.utcOffset = dateInterpretation.utcOffset;
-  }
-
-  try {
-    const payload = await gatewayConnection.request<SessionsUsageResult>("sessions.usage", requestParams);
-    return payload ?? null;
-  } catch (err) {
-    console.warn("[Gateway WS] sessions.usage failed (older gateway?):", err);
-    return null;
-  }
-}
-
-/** Load both usage.cost and sessions.usage in parallel (same design as OpenClaw control UI).
- * Uses legacy fallback: if gateway rejects mode/utcOffset, retries without and remembers per gateway.
- * Returns cost payload and sessions result; sessions may be null if gateway does not support sessions.usage.
+/** Load both usage.cost and sessions.usage in parallel.
+ * Matches OpenClaw's exact pattern (controllers/usage.ts):
+ *   - Both requests via client.request() — errors propagate from both
+ *   - Legacy fallback: if gateway rejects mode/utcOffset, retry both without
+ *   - sessions.usage is primary (totals), usage.cost is secondary (daily chart)
  */
 export async function loadUsageWs(params: UsageFetchParams): Promise<{
   usageCost: UsageCostPayload;
   sessionsUsage: SessionsUsageResult | null;
 }> {
   const { startDate, endDate, timeZone = "local", limit = 1000 } = params;
-
-  let gatewayKey = LEGACY_USAGE_DATE_PARAMS_DEFAULT_GATEWAY_KEY;
-  try {
-    const config = await getGatewayConfig();
-    gatewayKey = normalizeGatewayCompatibilityKey(config.gatewayUrl);
-  } catch {
-    /* use default key */
-  }
-
-  const runRequests = (includeDateInterpretation: boolean) =>
-    Promise.all([
-      getUsageCostWs({
-        startDate,
-        endDate,
-        timeZone,
-        includeDateInterpretation,
-      }),
-      getSessionsUsageWs({
-        startDate,
-        endDate,
-        timeZone,
-        limit,
-        includeContextWeight: true,
-        includeDateInterpretation,
-      }),
-    ]);
 
   const { connected } = getGatewayConnectionState();
   if (!connected) {
@@ -885,19 +975,98 @@ export async function loadUsageWs(params: UsageFetchParams): Promise<{
     };
   }
 
+  let gatewayKey = LEGACY_USAGE_DATE_PARAMS_DEFAULT_GATEWAY_KEY;
+  try {
+    const config = await getGatewayConfig();
+    gatewayKey = normalizeGatewayCompatibilityKey(config.gatewayUrl);
+  } catch {
+    /* use default key */
+  }
+
+  // Mirrors OpenClaw: both requests in Promise.all, errors propagate from both
+  const runUsageRequests = async (includeDateInterpretation: boolean) => {
+    const dateInterpretation = buildDateInterpretationParams(timeZone, includeDateInterpretation);
+    return await Promise.all([
+      gatewayConnection.request<SessionsUsageResult>("sessions.usage", {
+        startDate,
+        endDate,
+        ...dateInterpretation,
+        limit,
+        includeContextWeight: true,
+      }, 60000),
+      gatewayConnection.request<UsageCostPayload>("usage.cost", {
+        startDate,
+        endDate,
+        ...dateInterpretation,
+      }),
+    ]);
+  };
+
+  // If we already know sessions.usage isn't supported, only fetch usage.cost
+  if (_sessionsUsageSupported === false) {
+    try {
+      const dateInterpretation = buildDateInterpretationParams(
+        timeZone,
+        shouldSendLegacyDateInterpretation(gatewayKey),
+      );
+      const usageCost = await gatewayConnection.request<UsageCostPayload>("usage.cost", {
+        startDate,
+        endDate,
+        ...dateInterpretation,
+      });
+      return { usageCost: usageCost ?? ({} as UsageCostPayload), sessionsUsage: null };
+    } catch {
+      return { usageCost: {} as UsageCostPayload, sessionsUsage: null };
+    }
+  }
+
   const includeDateInterpretation = shouldSendLegacyDateInterpretation(gatewayKey);
   try {
-    const [usageCost, sessionsUsage] = await runRequests(includeDateInterpretation);
-    return { usageCost: usageCost ?? {}, sessionsUsage };
+    const [sessionsResult, costResult] = await runUsageRequests(includeDateInterpretation);
+    _sessionsUsageSupported = true;
+    return {
+      usageCost: costResult ?? ({} as UsageCostPayload),
+      sessionsUsage: sessionsResult ?? null,
+    };
   } catch (err) {
-    if (
-      includeDateInterpretation &&
-      isLegacyDateInterpretationUnsupportedError(err)
-    ) {
+    // Legacy fallback: if gateway rejects mode/utcOffset, retry both without
+    if (includeDateInterpretation && isLegacyDateInterpretationUnsupportedError(err)) {
       rememberLegacyDateInterpretation(gatewayKey);
-      const [usageCost, sessionsUsage] = await runRequests(false);
-      return { usageCost: usageCost ?? {}, sessionsUsage };
+      try {
+        const [sessionsResult, costResult] = await runUsageRequests(false);
+        _sessionsUsageSupported = true;
+        return {
+          usageCost: costResult ?? ({} as UsageCostPayload),
+          sessionsUsage: sessionsResult ?? null,
+        };
+      } catch (retryErr) {
+        // If retry also fails, check if sessions.usage is unsupported
+        const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+        if (retryMsg.includes("unknown method")) {
+          _sessionsUsageSupported = false;
+        }
+        throw retryErr;
+      }
     }
+
+    // Check if sessions.usage specifically is unsupported
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("unknown method")) {
+      _sessionsUsageSupported = false;
+      // sessions.usage not supported — fall back to usage.cost only
+      try {
+        const dateInterpretation = buildDateInterpretationParams(timeZone, includeDateInterpretation);
+        const usageCost = await gatewayConnection.request<UsageCostPayload>("usage.cost", {
+          startDate,
+          endDate,
+          ...dateInterpretation,
+        });
+        return { usageCost: usageCost ?? ({} as UsageCostPayload), sessionsUsage: null };
+      } catch {
+        return { usageCost: {} as UsageCostPayload, sessionsUsage: null };
+      }
+    }
+
     throw err;
   }
 }

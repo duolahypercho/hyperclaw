@@ -282,8 +282,18 @@ export function UsageProvider({ children }: { children: ReactNode }) {
 
   const sessionsLimitReached = (sessionsUsage?.sessions?.length ?? 0) >= 1000;
 
+  // Initial load — retry once after a short delay if gateway was still connecting
+  const initialLoadDone = useRef(false);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    load();
+    if (initialLoadDone.current) return;
+    initialLoadDone.current = true;
+    load().then(() => {
+      retryTimerRef.current = setTimeout(() => { load(); }, 3000);
+    });
+    return () => {
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+    };
   }, []);
 
   useEffect(() => {

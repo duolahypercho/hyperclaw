@@ -48,6 +48,10 @@ export interface SidebarItem {
   /** Optional line below the title (e.g. file size, meta) */
   subtitle?: string;
   icon?: IconType | LucideIcon;
+  /** Optional emoji shown instead of icon */
+  emoji?: string;
+  /** Optional avatar image URL shown instead of icon */
+  avatarUrl?: string;
   isActive?: boolean;
   items?: SidebarItem[];
   onClick?: () => void;

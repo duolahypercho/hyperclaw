@@ -1388,8 +1388,8 @@ export const CopilotChat = ({
                       }}
                       assistantAvatar={{
                         src: getMediaUrl(personality.coverPhoto),
-                        fallback: personality.name?.slice(0, 2) || "Co",
-                        alt: personality.name || "Copanion",
+                        fallback: (typeof personality.name === "string" ? personality.name : "").slice(0, 2) || "Co",
+                        alt: (typeof personality.name === "string" ? personality.name : "") || "Copanion",
                       }}
                       onHintClick={handleSuggestionClick}
                       personality={personality}
