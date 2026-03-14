@@ -89,22 +89,38 @@ export const timeDifference = (old_d: Date | string, new_d: Date | string) => {
   return Math.abs(diff);
 };
 
-export const verifyUserString = (signedStr: string) => {
-  return Jwt.verify(signedStr, process.env.NEXT_PUBLIC_AUTHSECRET!);
+/**
+ * Verify a JWT and return the decoded payload.
+ * Handles both old format (raw userId string) and new format ({ sub, tier }).
+ */
+export const verifyUserString = (signedStr: string): string => {
+  const decoded = Jwt.verify(signedStr, process.env.NEXT_PUBLIC_AUTHSECRET!);
+  if (typeof decoded === "string") {
+    // Old format: payload was a raw userId string
+    return decoded;
+  }
+  // New format: payload is { sub: userId, tier, iat, exp }
+  return (decoded as any).sub || (decoded as any).id || "";
 };
 
 export const getUserId = async (): Promise<string> => {
   //try geting cookie with cookie next
   const cookie1 = getCookie("hypercho_user_token");
   if (cookie1) {
-    //@ts-ignore
-    return verifyUserString(cookie1) as string;
+    try {
+      return verifyUserString(cookie1 as string);
+    } catch {
+      return "";
+    }
   } else {
     const cookieCall = await fetch(`${base_url}/api/auth/getUser`);
     const cookie2 = await cookieCall.text();
     if (cookie2) {
-      //@ts-ignore
-      return verifyUserString(cookie2) as string;
+      try {
+        return verifyUserString(cookie2);
+      } catch {
+        return "";
+      }
     }
     return "";
   }

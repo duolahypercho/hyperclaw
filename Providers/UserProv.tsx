@@ -162,6 +162,10 @@ export const UserProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
+  // Track the session userId so the effect re-runs when the logged-in user
+  // changes (e.g. fresh login after logout, or switching accounts).
+  const sessionUserId = sessionData?.user?.userId;
+
   useEffect(() => {
     if (
       sessionData &&
@@ -172,12 +176,12 @@ export const UserProvider = ({ children }: { children: ReactNode }) => {
       return;
     }
 
-    if (sessionStatus === "authenticated") {
+    if (sessionStatus === "authenticated" && sessionUserId) {
       setId();
       return;
     }
     setStatus(sessionStatus);
-  }, [route, sessionStatus]);
+  }, [route, sessionStatus, sessionUserId]);
 
   const fnsRef = useRef({ setId, logout });
   fnsRef.current = { setId, logout };

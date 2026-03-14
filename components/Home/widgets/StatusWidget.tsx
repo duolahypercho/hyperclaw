@@ -363,6 +363,7 @@ const StatusWidgetContent = memo((props: CustomProps) => {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [statuses, setStatuses] = useState<AgentStatus[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [connected, setConnected] = useState(() => getGatewayConnectionState().connected);
   const [showHidden, setShowHidden] = useState(false);
   const [idleExpanded, setIdleExpanded] = useState(false);
@@ -382,9 +383,18 @@ const StatusWidgetContent = memo((props: CustomProps) => {
       const res = (await bridgeInvoke("list-agents", {})) as {
         success?: boolean;
         data?: Agent[];
+        error?: string;
       };
-      if (res?.success && Array.isArray(res.data)) return res.data;
-    } catch { /* ignore */ }
+      if (res?.success && Array.isArray(res.data)) {
+        setError(null);
+        return res.data;
+      }
+      if (res?.error) {
+        setError(res.error);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load agents");
+    }
     return [];
   }, []);
 
@@ -420,6 +430,7 @@ const StatusWidgetContent = memo((props: CustomProps) => {
   const refresh = useCallback(async () => {
     if (!isMounted.current) return;
     setLoading(true);
+    setError(null);
     try {
       const agentList = await fetchAgents();
       if (!isMounted.current) return;
@@ -640,6 +651,23 @@ const StatusWidgetContent = memo((props: CustomProps) => {
             <div className="flex-1 flex items-center justify-center gap-2 py-6">
               <Loader2 className="w-5 h-5 animate-spin text-primary" />
               <span className="text-sm text-muted-foreground">Loading agents...</span>
+            </div>
+          ) : error && statuses.length === 0 ? (
+            <div className="flex-1 flex flex-col items-center justify-center gap-2 py-6">
+              <AlertTriangle className="w-6 h-6 text-destructive/60" />
+              <p className="text-xs text-destructive text-center max-w-[200px]">
+                {error}
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-6 text-xs mt-1"
+                onClick={() => refresh()}
+                disabled={loading}
+              >
+                <RefreshCw className={cn("w-3 h-3 mr-1", loading && "animate-spin")} />
+                Retry
+              </Button>
             </div>
           ) : !connected ? (
             <div className="flex-1 flex flex-col items-center justify-center gap-2 py-6">
