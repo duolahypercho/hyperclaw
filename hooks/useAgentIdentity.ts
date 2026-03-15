@@ -26,6 +26,35 @@ export interface AgentIdentity {
 const identityCache = new Map<string, AgentIdentity>();
 const inflight = new Map<string, Promise<AgentIdentity | null>>();
 
+// --- localStorage persistence ---
+const STORAGE_KEY = "agent-identity-cache";
+
+function loadFromStorage(): void {
+  if (typeof window === "undefined") return;
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    const entries = JSON.parse(raw) as Record<string, AgentIdentity>;
+    for (const [id, identity] of Object.entries(entries)) {
+      if (!identityCache.has(id)) identityCache.set(id, identity);
+    }
+  } catch { /* ignore corrupt data */ }
+}
+
+function saveToStorage(): void {
+  if (typeof window === "undefined") return;
+  try {
+    const obj: Record<string, AgentIdentity> = {};
+    for (const [id, identity] of identityCache) {
+      obj[id] = identity;
+    }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(obj));
+  } catch { /* storage full or unavailable */ }
+}
+
+// Load cached identities on module init
+loadFromStorage();
+
 // --- Cache-update notification ---
 // When any hook instance (or fetchIdentity) populates the cache, all active
 // hook instances watching that agentId are notified so they can sync state.
@@ -35,11 +64,12 @@ function notifyCacheUpdate(agentId: string, identity: AgentIdentity) {
   for (const cb of cacheListeners) cb(agentId, identity);
 }
 
-// Reset cache on reconnect
+// Reset cache on reconnect (but keep localStorage — it's the fallback)
 subscribeGatewayConnection(() => {
   const { connected } = getGatewayConnectionState();
   if (connected) {
     identityCache.clear();
+    loadFromStorage(); // reload persisted as baseline
     inflight.clear();
   }
 });
@@ -53,6 +83,7 @@ export function patchIdentityCache(agentId: string, patch: Partial<AgentIdentity
   const existing = identityCache.get(agentId);
   const updated: AgentIdentity = { ...(existing ?? { agentId }), ...patch, agentId };
   identityCache.set(agentId, updated);
+  saveToStorage();
   notifyCacheUpdate(agentId, updated);
 }
 
@@ -105,6 +136,7 @@ async function fetchIdentity(agentId: string): Promise<AgentIdentity | null> {
       }
 
       identityCache.set(agentId, result);
+      saveToStorage();
       notifyCacheUpdate(agentId, result);
     }
     return result;
