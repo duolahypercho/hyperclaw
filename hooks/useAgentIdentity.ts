@@ -70,23 +70,30 @@ async function fetchIdentity(agentId: string): Promise<AgentIdentity | null> {
         if (dataUri) result.avatar = dataUri;
       }
 
-      // If the gateway didn't return avatar/emoji, try reading from IDENTITY.md via bridge
-      if (!result.avatar || !result.emoji) {
+      // Relative gateway paths (e.g. /avatar/main) can't be reached through the hub relay —
+      // only WebSocket is proxied, not the gateway's HTTP endpoints. Treat as unresolved
+      // so the IDENTITY.md fallback reads the actual file through the connector.
+      const avatarIsRelativePath = result.avatar && result.avatar.startsWith("/");
+      const avatarResolved = !!result.avatar && !avatarIsRelativePath;
+
+      // If the gateway didn't return a usable avatar/emoji, try reading from IDENTITY.md via bridge
+      if (!avatarResolved || !result.emoji) {
         try {
           const folder = resolveAgentFolder(agentId);
           const res = (await bridgeInvoke("get-openclaw-doc", {
             relativePath: `${folder}/IDENTITY.md`,
           })) as { success?: boolean; content?: string | null };
           if (res?.success && typeof res.content === "string") {
-            if (!result.avatar) {
+            if (!avatarResolved) {
               const avatarVal = parseIdentityField(res.content, "Avatar");
               if (avatarVal) {
                 if (isLocalAvatarFile(avatarVal)) {
                   const dataUri = await readAvatarAsDataUri(agentId, avatarVal).catch(() => null);
                   if (dataUri) result.avatar = dataUri;
-                } else {
+                } else if (/^https?:\/\//i.test(avatarVal) || /^data:/i.test(avatarVal)) {
                   result.avatar = avatarVal;
                 }
+                // else: skip non-URL, non-file values (relative paths would still break)
               }
             }
             if (!result.emoji) {
@@ -260,18 +267,17 @@ function isAvatarUrl(value: string): boolean {
   );
 }
 
-/** Default local gateway base URL for resolving relative avatar paths like /avatar/{agentId} */
-const LOCAL_GATEWAY_BASE = "http://127.0.0.1:18789";
-
 /**
  * Build an avatar URL for rendering.
  * OpenClaw returns avatars as:
  * - HTTP/HTTPS URL (remote image)
- * - /avatar/{agentId} (relative path served by local gateway)
  * - data:image/* (data URI)
+ * - /avatar/{agentId} (relative path — NOT directly usable through hub relay)
  * - short text (emoji or initials)
  *
- * Relative paths are resolved against the local OpenClaw gateway (default 127.0.0.1:18789).
+ * Relative paths (e.g. /avatar/main) are NOT resolved to local gateway URLs because
+ * in hub/connector mode the gateway HTTP endpoints aren't directly accessible.
+ * The fetchIdentity pipeline reads avatar files through the connector as data URIs.
  */
 export function resolveAvatarUrl(avatar: string | undefined, gatewayBaseUrl?: string): string | undefined {
   if (!avatar) return undefined;
@@ -280,12 +286,12 @@ export function resolveAvatarUrl(avatar: string | undefined, gatewayBaseUrl?: st
   if (/^https?:\/\//i.test(trimmed) || /^data:image\//i.test(trimmed)) {
     return trimmed;
   }
-  if (trimmed.startsWith("/")) {
-    // Relative path (e.g. /avatar/main) — resolve against provided base or local gateway
-    const base = (gatewayBaseUrl || LOCAL_GATEWAY_BASE).replace(/\/$/, "");
+  // Relative paths and non-URL text (emoji/initials) can't be displayed as image URLs.
+  // If a gatewayBaseUrl is explicitly provided (direct local access), resolve against it.
+  if (trimmed.startsWith("/") && gatewayBaseUrl) {
+    const base = gatewayBaseUrl.replace(/\/$/, "");
     return `${base}${trimmed}`;
   }
-  // Non-URL text (emoji/initials)
   return undefined;
 }
 

@@ -1,7 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { twitter } from "$/lib/auth/x";
 import { OAuth2RequestError } from "arctic";
-import { verifyUserString } from "$/utils";
+import { verifyToken } from "$/lib/shared-auth";
 import { getCookie } from "cookies-next";
 import { TwitterApi } from "twitter-api-v2";
 import { XUserLogin } from "$/services/tools/x";
@@ -55,7 +55,7 @@ export default async function handler(
     // Get user ID from cookie
     const userToken = getCookie("hypercho_user_token", cookieOptions);
 
-    const userId = verifyUserString(userToken as string);
+    const { userId } = verifyToken(userToken as string, process.env.NEXTAUTH_SECRET!);
 
     if (!userId) {
       throw new Error(`User not found`);
