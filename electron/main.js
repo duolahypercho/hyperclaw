@@ -31,6 +31,22 @@ const getSenseVoice = () => {
   return sensevoice;
 };
 
+// Lazy-load WordsDB
+let wordsdb = null;
+const getWordsDB = () => {
+  if (!wordsdb) {
+    try {
+      wordsdb = require("./wordsdb");
+    } catch (error) {
+      console.error("[Hyperclaw] Failed to load WordsDB:", error);
+    }
+  }
+  return wordsdb;
+};
+
+// Insert text storage
+let savedInsertText = "";
+
 
 // Log crashes so we can debug "opens then closes" (run from Terminal to see output)
 function logCrash(label, err) {
@@ -1440,6 +1456,70 @@ ipcMain.handle("sensevoice-status", async () => {
   return { ready: false };
 });
 
+// Words Database IPC handlers
+ipcMain.handle("get-words", async () => {
+  try {
+    const wdb = getWordsDB();
+    const words = wdb.getWords();
+    return { success: true, words };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle("add-word", async (event, { word, definition }) => {
+  try {
+    const wdb = getWordsDB();
+    const words = wdb.addWord(word, definition);
+    return { success: true, words };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle("delete-word", async (event, index) => {
+  try {
+    const wdb = getWordsDB();
+    const words = wdb.deleteWord(index);
+    return { success: true, words };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// Insert Text IPC handlers
+ipcMain.on("save-insert-text", (event, text) => {
+  savedInsertText = text;
+  console.log("[Hyperclaw] Saved insert text:", text ? text.substring(0, 30) + "..." : "(empty)");
+});
+
+ipcMain.handle("get-insert-text", async () => {
+  return { text: savedInsertText };
+});
+
+// Register global hotkey for text insertion (Ctrl+Shift+V)
+function registerTextInsertHotkey() {
+  const ret = globalShortcut.register("Ctrl+Shift+V", () => {
+    console.log("[Hyperclaw] Ctrl+Shift+V pressed - inserting saved text");
+    if (savedInsertText) {
+      // Use clipboard to insert text
+      const { clipboard } = require("electron");
+      clipboard.writeText(savedInsertText);
+      
+      // Simulate paste in the focused window
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("insert-text", savedInsertText);
+      }
+    }
+  });
+  
+  if (!ret) {
+    console.error("[Hyperclaw] Failed to register Ctrl+Shift+V hotkey");
+  } else {
+    console.log("[Hyperclaw] Registered Ctrl+Shift+V for text insertion");
+  }
+}
+
 // ─── App Lifecycle ──────────────────────────────────────────────────────────
 
 app.whenReady().then(() => {
@@ -1447,6 +1527,7 @@ app.whenReady().then(() => {
   createTray();
   createWindow();
   registerVoiceHotkey(); // Register Alt+Space for voice input
+  registerTextInsertHotkey(); // Register Ctrl+Shift+V for text insertion
 
   if (!isDev && app.isPackaged && isRemoteMode && autoUpdater) {
     setTimeout(

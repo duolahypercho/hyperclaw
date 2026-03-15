@@ -144,11 +144,30 @@ contextBridge.exposeInMainWorld("electronAPI", {
     removeVoiceMessageListener: () => {
       ipcRenderer.removeAllListeners("voice-input-message");
     },
+    // Listen for insert text events
+    onInsertText: (callback) => {
+      if (typeof callback !== "function") return;
+      ipcRenderer.on("insert-text", (event, data) => callback(data));
+    },
+    removeInsertTextListener: () => {
+      ipcRenderer.removeAllListeners("insert-text");
+    },
     // SenseVoice API
     sensevoice: {
       initialize: () => ipcRenderer.invoke("sensevoice-initialize"),
       transcribe: (audioData) => ipcRenderer.invoke("sensevoice-transcribe", audioData),
       getStatus: () => ipcRenderer.invoke("sensevoice-status"),
+    },
+    // Words Database API
+    words: {
+      getAll: () => ipcRenderer.invoke("get-words"),
+      add: (word, definition) => ipcRenderer.invoke("add-word", { word, definition }),
+      delete: (index) => ipcRenderer.invoke("delete-word", index),
+    },
+    // Insert Text API
+    insertText: {
+      save: (text) => ipcRenderer.send("save-insert-text", text),
+      get: () => ipcRenderer.invoke("get-insert-text"),
     },
   },
 });
