@@ -94,7 +94,7 @@ export const GroupedToolActions: React.FC<{
           {showAvatar ? (
             <Avatar className="w-8 h-8">
               {assistantAvatar?.src ? (
-                <AvatarImage src={assistantAvatar.src} alt={assistantAvatar.alt} />
+                <AvatarImage src={assistantAvatar.src} alt={assistantAvatar.alt} className="object-contain" />
               ) : null}
               <AvatarFallback className="bg-primary/10 text-primary">
                 {assistantAvatar?.fallback
