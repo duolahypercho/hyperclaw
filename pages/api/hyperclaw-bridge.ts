@@ -63,6 +63,48 @@ const DAILY_SUMMARIES_DIR = path.join(DATA_DIR, "daily-summaries");
 const TODO_DATA_PATH = path.join(DATA_DIR, "todo.json");
 const LAYOUTS_JSON_PATH = path.join(DATA_DIR, "dashboard-layouts.json");
 
+/* ── App State persistence (SQLite key-value store) ───────────────── */
+
+function getAppStateDb(): any | null {
+  try {
+    const Database = nativeRequire("better-sqlite3");
+    const dbPath = path.join(DATA_DIR, "connector.db");
+    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+    const db = new Database(dbPath);
+    db.exec(`CREATE TABLE IF NOT EXISTS app_state (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    )`);
+    return db;
+  } catch { return null; }
+}
+
+function readAppState(keys: string[]): Record<string, string> {
+  const db = getAppStateDb();
+  if (!db) return {};
+  try {
+    const placeholders = keys.map(() => "?").join(", ");
+    const rows = db.prepare(`SELECT key, value FROM app_state WHERE key IN (${placeholders})`).all(...keys) as { key: string; value: string }[];
+    db.close();
+    const result: Record<string, string> = {};
+    for (const row of rows) result[row.key] = row.value;
+    return result;
+  } catch { db.close(); return {}; }
+}
+
+function writeAppState(entries: Record<string, string>) {
+  const db = getAppStateDb();
+  if (!db) return;
+  try {
+    const stmt = db.prepare("INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?)");
+    const tx = db.transaction((items: [string, string][]) => {
+      for (const [k, v] of items) stmt.run(k, v);
+    });
+    tx(Object.entries(entries));
+    db.close();
+  } catch { db.close(); }
+}
+
 /* ── Dashboard Layout persistence (SQLite primary, JSON fallback) ──── */
 
 interface DashboardLayoutRow {
@@ -2065,6 +2107,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const { id: deleteId } = req.body;
       if (!deleteId) return res.status(400).json({ error: "id required" });
       deleteDashboardLayout(deleteId);
+      return res.json({ success: true });
+    }
+
+    /* ── App State (generic key-value) ────────────────────────── */
+
+    case "get-app-state": {
+      const { keys } = req.body;
+      if (!Array.isArray(keys)) return res.status(400).json({ error: "keys array required" });
+      return res.json({ success: true, data: readAppState(keys) });
+    }
+
+    case "save-app-state": {
+      const { entries } = req.body;
+      if (!entries || typeof entries !== "object") return res.status(400).json({ error: "entries object required" });
+      writeAppState(entries);
       return res.json({ success: true });
     }
 

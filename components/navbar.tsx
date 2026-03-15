@@ -11,6 +11,7 @@ import HyperchoIcon from "$/components/Navigation/HyperchoIcon";
 import Userdropdown from "$/components/Navigation/Userdropdown";
 import ClockWidget from "$/components/clock-widget";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
+import { dashboardState } from "$/lib/dashboard-state";
 import { LuGrid2X2Plus } from "react-icons/lu";
 import {
   PanelRightClose,
@@ -37,19 +38,23 @@ interface SavedLayout {
 
 function captureCurrentLayout(): Omit<SavedLayout, "id" | "name" | "createdAt"> {
   return {
-    layout: localStorage.getItem("dashboard-layout") || "{}",
+    layout: dashboardState.get("dashboard-layout") || "{}",
     visibleWidgets: (() => {
-      try { return JSON.parse(localStorage.getItem("dashboard-visible-widgets") || "[]"); } catch { return []; }
+      try { return JSON.parse(dashboardState.get("dashboard-visible-widgets") || "[]"); } catch { return []; }
     })(),
-    widgetConfigs: localStorage.getItem("dashboard-widget-configs") || "{}",
+    widgetConfigs: dashboardState.get("dashboard-widget-configs") || "{}",
   };
 }
 
 function applyLayout(saved: SavedLayout) {
-  localStorage.setItem("dashboard-layout", saved.layout);
-  localStorage.setItem("dashboard-visible-widgets", JSON.stringify(saved.visibleWidgets));
-  localStorage.setItem("dashboard-widget-configs", saved.widgetConfigs);
-  window.dispatchEvent(new CustomEvent("dashboard-layout-applied"));
+  dashboardState.setMany({
+    "dashboard-layout": saved.layout,
+    "dashboard-visible-widgets": JSON.stringify(saved.visibleWidgets),
+    "dashboard-widget-configs": saved.widgetConfigs,
+  });
+  window.dispatchEvent(new CustomEvent("dashboard-layout-applied", {
+    detail: { visibleWidgets: saved.visibleWidgets },
+  }));
 }
 
 /* ── Layout Switcher (select-style dropdown) ────────────── */
@@ -64,7 +69,7 @@ const LayoutSwitcher: React.FC = () => {
   const [editName, setEditName] = useState("");
   const [activeId, setActiveId] = useState<string | null>(() => {
     if (typeof window === "undefined") return null;
-    return localStorage.getItem("dashboard-active-layout-id");
+    return dashboardState.get("dashboard-active-layout-id");
   });
   const triggerRef = useRef<HTMLButtonElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
@@ -127,7 +132,7 @@ const LayoutSwitcher: React.FC = () => {
     };
     setLayouts((prev) => [...prev, entry]);
     setActiveId(entry.id);
-    localStorage.setItem("dashboard-active-layout-id", entry.id);
+    dashboardState.set("dashboard-active-layout-id", entry.id);
     setSaving(false);
     setNewName("");
     try { await bridgeInvoke("save-layout", { ...entry }); } catch {}
@@ -136,7 +141,7 @@ const LayoutSwitcher: React.FC = () => {
   const handleApply = useCallback((layout: SavedLayout) => {
     applyLayout(layout);
     setActiveId(layout.id);
-    localStorage.setItem("dashboard-active-layout-id", layout.id);
+    dashboardState.set("dashboard-active-layout-id", layout.id);
     setOpen(false);
   }, []);
 
@@ -144,7 +149,7 @@ const LayoutSwitcher: React.FC = () => {
     setLayouts((prev) => prev.filter((l) => l.id !== id));
     if (activeId === id) {
       setActiveId(null);
-      localStorage.removeItem("dashboard-active-layout-id");
+      dashboardState.remove("dashboard-active-layout-id");
     }
     try { await bridgeInvoke("delete-layout", { id }); } catch {}
   }, [activeId]);

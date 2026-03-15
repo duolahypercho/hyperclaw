@@ -68,7 +68,7 @@ export const authOptions = (req: any, res: any) => {
               if (userId) {
                 // set the new id to the cookie
                 const newToken = Jwt.sign(
-                  { sub: userId, tier: channel?.tier || "free" },
+                  { id: userId },
                   process.env.NEXTAUTH_SECRET!,
                   { expiresIn: "30d" }
                 );
@@ -134,7 +134,7 @@ export const authOptions = (req: any, res: any) => {
           // User data was fetched from backend successfully
           const userData = anyUser.userData;
           const newToken = Jwt.sign(
-            { sub: userData._id, tier: userData.channel?.tier || "free" },
+            { id: userData._id },
             process.env.NEXTAUTH_SECRET!,
             { expiresIn: "30d" }
           );
@@ -165,7 +165,7 @@ export const authOptions = (req: any, res: any) => {
         if (user && account?.provider === "credentials") {
           // Create the JWT token here
           const newToken = Jwt.sign(
-            { sub: user.userId, tier: user.channel?.tier || "free" },
+            { id: user.userId },
             process.env.NEXTAUTH_SECRET!,
             { expiresIn: "30d" }
           );
