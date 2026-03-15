@@ -4,6 +4,7 @@ import React, { useState, useCallback, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Loader2, Calendar, Clock, Bot } from "lucide-react";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
+import { useOpenClawContext } from "$/Providers/OpenClawProv";
 import {
   Dialog,
   DialogContent,
@@ -79,14 +80,6 @@ function isChannelFileValue(value: string): boolean {
   return value.includes(":") && value !== "last";
 }
 
-async function fetchAgentOptions(): Promise<AgentOption[]> {
-  const res = (await bridgeInvoke("list-agents", {})) as {
-    success?: boolean;
-    data?: { id: string; name: string }[];
-  };
-  if (!res?.success || !Array.isArray(res.data)) return [];
-  return res.data.map((a) => ({ id: a.id, name: a.name || a.id }));
-}
 
 async function fetchChannelOptions(): Promise<ChannelOption[]> {
   const res = (await bridgeInvoke("list-channels", {})) as {
@@ -99,6 +92,7 @@ async function fetchChannelOptions(): Promise<ChannelOption[]> {
 
 export function AddCronDialog({ open, onOpenChange, onSuccess }: AddCronDialogProps) {
   const { cronAdd } = useCronsActions();
+  const { agents: openClawAgents } = useOpenClawContext();
   const [name, setName] = useState("");
   const [scheduleType, setScheduleType] = useState<ScheduleType>("recurring");
   const [atPreset, setAtPreset] = useState<string>("15m");
@@ -139,22 +133,19 @@ export function AddCronDialog({ open, onOpenChange, onSuccess }: AddCronDialogPr
     setTo("");
   }, []);
 
+  // Sync agents from context
   useEffect(() => {
     if (!open) return;
-    const id = window.setTimeout(() => {
-      setAgentsLoading(true);
-      setChannelsLoading(true);
-      Promise.all([fetchAgentOptions(), fetchChannelOptions()])
-        .then(([agents, channels]) => {
-          setAgentOptions(agents);
-          setChannelOptions(channels);
-        })
-        .finally(() => {
-          setAgentsLoading(false);
-          setChannelsLoading(false);
-        });
-    }, 0);
-    return () => window.clearTimeout(id);
+    setAgentOptions(openClawAgents.map((a) => ({ id: a.id, name: a.name || a.id })));
+  }, [open, openClawAgents]);
+
+  // Fetch channels (still a bridge call — not centralized)
+  useEffect(() => {
+    if (!open) return;
+    setChannelsLoading(true);
+    fetchChannelOptions()
+      .then((channels) => setChannelOptions(channels))
+      .finally(() => setChannelsLoading(false));
   }, [open]);
 
   const handleOpenChange = useCallback(

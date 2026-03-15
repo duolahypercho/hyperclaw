@@ -29,6 +29,7 @@ export function OpenClawProvider({ children }: { children: ReactNode }) {
       cronJobs: openClaw.cronJobs,
       cronJobsJson: openClaw.cronJobsJson,
       agents: openClaw.agents,
+      models: openClaw.models,
       logs: openClaw.logs,
       errors: openClaw.errors,
       // Stable function references via ref — these never change identity
@@ -38,6 +39,7 @@ export function OpenClawProvider({ children }: { children: ReactNode }) {
       fetchCronList: (...args: Parameters<typeof openClaw.fetchCronList>) => fnsRef.current.fetchCronList(...args),
       fetchCronListJson: (...args: Parameters<typeof openClaw.fetchCronListJson>) => fnsRef.current.fetchCronListJson(...args),
       fetchAgents: (...args: Parameters<typeof openClaw.fetchAgents>) => fnsRef.current.fetchAgents(...args),
+      fetchModels: (...args: Parameters<typeof openClaw.fetchModels>) => fnsRef.current.fetchModels(...args),
       fetchLogs: (...args: Parameters<typeof openClaw.fetchLogs>) => fnsRef.current.fetchLogs(...args),
       runCommand: (...args: Parameters<typeof openClaw.runCommand>) => fnsRef.current.runCommand(...args),
       sendMessage: (...args: Parameters<typeof openClaw.sendMessage>) => fnsRef.current.sendMessage(...args),
@@ -54,6 +56,7 @@ export function OpenClawProvider({ children }: { children: ReactNode }) {
       openClaw.cronJobs,
       openClaw.cronJobsJson,
       openClaw.agents,
+      openClaw.models,
       openClaw.logs,
       openClaw.errors,
     ]

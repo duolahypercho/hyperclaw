@@ -23,6 +23,12 @@ import type {
   OpenClawMessageSendResult,
 } from "$/types/electron";
 
+export interface OpenClawModel {
+  id: string;
+  provider: string;
+  displayName?: string;
+}
+
 interface OpenClawState {
   installed: boolean | null;
   version: string | null;
@@ -32,10 +38,17 @@ interface OpenClawState {
   cronJobs: string | null;
   cronJobsJson: OpenClawCronJobJson[] | null;
   agents: OpenClawRegistryAgent[];
+  models: OpenClawModel[];
   logs: string | null;
   loading: boolean;
   errors: Record<string, string | null>;
 }
+
+const DEFAULT_MODELS: OpenClawModel[] = [
+  { id: "claude-opus-4-6", provider: "anthropic", displayName: "Claude Opus 4.6" },
+  { id: "claude-sonnet-4-6", provider: "anthropic", displayName: "Claude Sonnet 4.6" },
+  { id: "claude-haiku-4-5", provider: "anthropic", displayName: "Claude Haiku 4.5" },
+];
 
 const initialState: OpenClawState = {
   installed: null,
@@ -46,6 +59,7 @@ const initialState: OpenClawState = {
   cronJobs: null,
   cronJobsJson: null,
   agents: [],
+  models: DEFAULT_MODELS,
   logs: null,
   loading: true,
   errors: {},
@@ -269,29 +283,33 @@ export function useOpenClaw(autoRefreshMs = 0) {
   }, []);
 
   const fetchAgents = useCallback(async () => {
-    try {
-      const res = (await bridgeInvoke("list-agents", {})) as {
-        success?: boolean;
-        data?: OpenClawRegistryAgent[];
-      };
-      if (res?.success && Array.isArray(res.data)) {
-        setState((prev) => ({ ...prev, agents: res.data!, errors: { ...prev.errors, agents: null } }));
-        return;
-      }
-    } catch {
-      /* fall through */
-    }
     const api = getApi();
     const res = await api.getAgentList();
     if (res.success && res.data) {
-      const mapped: OpenClawRegistryAgent[] = res.data.map((a) => ({
-        id: a.name,
+      const list = Array.isArray(res.data) ? res.data : [];
+      const mapped: OpenClawRegistryAgent[] = list.map((a) => ({
+        id: (a as any).id ?? a.name,
         name: a.name,
-        status: "idle",
+        status: (a as any).status ?? "idle",
+        role: (a as any).role,
+        lastActive: (a as any).lastActive,
       }));
       setState((prev) => ({ ...prev, agents: mapped, errors: { ...prev.errors, agents: null } }));
     } else {
       setState((prev) => ({ ...prev, errors: { ...prev.errors, agents: res.error ?? "Unknown error" } }));
+    }
+  }, []);
+
+  const fetchModels = useCallback(async () => {
+    try {
+      const { gatewayConnection } = await import("$/lib/openclaw-gateway-ws");
+      if (!gatewayConnection.connected) return;
+      const result = await gatewayConnection.listModels();
+      if (result?.models && result.models.length > 0) {
+        setState((prev) => ({ ...prev, models: result.models }));
+      }
+    } catch {
+      // keep default models
     }
   }, []);
 
@@ -401,7 +419,7 @@ export function useOpenClaw(autoRefreshMs = 0) {
       setPartial({ installed: isInstalled });
       await fetchGatewayHealth();
       if (isInstalled) {
-        const [statusSettled, agentsSettled] = await Promise.allSettled([fetchStatus(), fetchAgents()]);
+        const [statusSettled, agentsSettled] = await Promise.allSettled([fetchStatus(), fetchAgents(), fetchModels()]);
         if (statusSettled.status === "rejected") {
           console.warn("[useOpenClaw] fetchStatus failed:", statusSettled.reason);
           setState((prev) => ({ ...prev, errors: { ...prev.errors, status: errMsg(statusSettled.reason) } }));
@@ -426,7 +444,7 @@ export function useOpenClaw(autoRefreshMs = 0) {
       globalRefreshInProgress = false;
       setState((prev) => ({ ...prev, loading: false }));
     }
-  }, [checkInstalled, fetchStatus, fetchGatewayHealth, fetchAgents, setPartial]);
+  }, [checkInstalled, fetchStatus, fetchGatewayHealth, fetchAgents, fetchModels, setPartial]);
 
   useEffect(() => {
     refreshAll().catch((err) => {
@@ -542,6 +560,7 @@ export function useOpenClaw(autoRefreshMs = 0) {
     fetchCronList,
     fetchCronListJson,
     fetchAgents,
+    fetchModels,
     fetchLogs,
     runCommand,
     sendMessage,

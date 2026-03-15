@@ -23,7 +23,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { useFocusMode } from "./hooks/useFocusMode";
-import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
+import { useOpenClawContext } from "$/Providers/OpenClawProv";
 import {
   gatewayConnection,
   getGatewayConnectionState,
@@ -360,6 +360,7 @@ function AgentCollapsedRow({
 
 const StatusWidgetContent = memo((props: CustomProps) => {
   const { isFocusModeActive } = useFocusMode();
+  const { agents: openClawAgents } = useOpenClawContext();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [statuses, setStatuses] = useState<AgentStatus[]>([]);
   const [loading, setLoading] = useState(true);
@@ -377,26 +378,10 @@ const StatusWidgetContent = memo((props: CustomProps) => {
     });
   }, []);
 
-  // Fetch agents list
+  // Get agents from context (no separate fetch needed)
   const fetchAgents = useCallback(async (): Promise<Agent[]> => {
-    try {
-      const res = (await bridgeInvoke("list-agents", {})) as {
-        success?: boolean;
-        data?: Agent[];
-        error?: string;
-      };
-      if (res?.success && Array.isArray(res.data)) {
-        setError(null);
-        return res.data;
-      }
-      if (res?.error) {
-        setError(res.error);
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load agents");
-    }
-    return [];
-  }, []);
+    return openClawAgents as Agent[];
+  }, [openClawAgents]);
 
   // Fetch session data for a single agent
   const fetchAgentSessions = useCallback(

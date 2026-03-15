@@ -11,6 +11,7 @@ import React, {
 } from "react";
 import { Bot, FileText, Plus, RefreshCw, Save, Loader2, Trash2, Sparkles, Brain, UserRound, Users, Wrench, Heart } from "lucide-react";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
+import { useOpenClawContext } from "$/Providers/OpenClawProv";
 import { AppSchema } from "@OS/Layout/types";
 import type { SidebarSection, SidebarItem } from "@OS/Layout/Sidebar/SidebarSchema";
 import { AgentSidebarSelect } from "../AgentSidebarSelect";
@@ -63,14 +64,6 @@ export function useAgents() {
   return ctx;
 }
 
-async function fetchListAgents(): Promise<Agent[]> {
-  const res = (await bridgeInvoke("list-agents", {})) as {
-    success?: boolean;
-    data?: Agent[];
-  };
-  if (!res?.success || !Array.isArray(res.data)) return [];
-  return res.data;
-}
 
 export interface AgentFilesResponse {
   files: AgentFileEntry[];
@@ -119,6 +112,7 @@ const FILE_ICONS: Record<string, typeof FileText> = {
 };
 
 export function AgentsProvider({ children }: { children: React.ReactNode }) {
+  const { agents: openClawAgents } = useOpenClawContext();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [agentFiles, setAgentFiles] = useState<AgentFileEntry[]>([]);
   const [workspaceLabels, setWorkspaceLabels] = useState<Record<string, string>>({});
@@ -154,11 +148,8 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
     setLoading(true);
     setError(null);
     try {
-      const [agentsList, filesResponse] = await Promise.all([
-        fetchListAgents(),
-        fetchListAgentFiles(),
-      ]);
-      setAgents(agentsList);
+      const filesResponse = await fetchListAgentFiles();
+      setAgents(openClawAgents as Agent[]);
       setAgentFiles(filesResponse.files);
       setWorkspaceLabels(filesResponse.workspaceLabels);
     } catch (err: unknown) {
@@ -166,7 +157,7 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [openClawAgents]);
 
   const initialLoadDone = useRef(false);
   useEffect(() => {

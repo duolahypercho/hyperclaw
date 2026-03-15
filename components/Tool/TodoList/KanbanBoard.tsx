@@ -42,6 +42,7 @@ import { Task } from "./types";
 import { useTodoList } from "./provider/todolistProvider";
 import { useIsTaskRunningCron } from "./hooks/useIsTaskRunningCron";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
+import { useOpenClawContext } from "$/Providers/OpenClawProv";
 import { useAgentIdentities, resolveAvatarUrl, isAvatarText } from "$/hooks/useAgentIdentity";
 import { AddAgentDialog } from "$/components/Tool/Agents/AddAgentDialog";
 
@@ -1086,6 +1087,7 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({
     handleDeleteTask,
     handleToggleStar,
   } = useTodoList();
+  const { agents: openClawAgents } = useOpenClawContext();
 
   // HTML5 drag-and-drop state (from MissionQueue)
   const [draggedTask, setDraggedTask] = useState<Task | null>(null);
@@ -1109,7 +1111,12 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [logsLoading, setLogsLoading] = useState(true);
 
-  // Fetch org chart + agents
+  // Sync agents from context
+  useEffect(() => {
+    setAgents(openClawAgents as BridgeAgent[]);
+  }, [openClawAgents]);
+
+  // Fetch org chart
   useEffect(() => {
     let cancelled = false;
     const fetchData = async () => {
@@ -1122,15 +1129,6 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({
             tasks: res.tasks ?? [],
             departments: res.departments ?? [],
           });
-        }
-      } catch { /* ignore */ }
-      try {
-        const agentRes = (await bridgeInvoke("list-agents", {})) as {
-          success?: boolean;
-          data?: BridgeAgent[];
-        };
-        if (!cancelled && agentRes?.success && Array.isArray(agentRes.data)) {
-          setAgents(agentRes.data);
         }
       } catch { /* ignore */ }
     };

@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/select";
 import { useCronsActions } from "./provider/cronsProvider";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
+import { useOpenClawContext } from "$/Providers/OpenClawProv";
 import { fetchCronById } from "./utils";
 import type { OpenClawCronJobJson } from "$/types/electron";
 
@@ -75,23 +76,7 @@ async function fetchChannelOptions(): Promise<ChannelOption[]> {
   return res.data.filter((c) => c && c.kind === "channel") as ChannelOption[];
 }
 
-async function fetchAgentOptions(): Promise<AgentOption[]> {
-  const res = (await bridgeInvoke("list-agents", {})) as {
-    success?: boolean;
-    data?: { id: string; name: string }[];
-  };
-  if (!res?.success || !Array.isArray(res.data)) return [];
-  return res.data.map((a) => ({ id: a.id, name: a.name || a.id }));
-}
 
-async function fetchModelOptions(): Promise<ModelOption[]> {
-  const res = (await bridgeInvoke("list-models", {})) as {
-    success?: boolean;
-    data?: { id: string; name: string }[];
-  };
-  if (!res?.success || !Array.isArray(res.data)) return [];
-  return res.data.map((m) => ({ id: m.id, name: m.name || m.id }));
-}
 
 const THINKING_UNCHANGED = "__unchanged__";
 const MODEL_UNCHANGED = "__unchanged__";
@@ -142,6 +127,7 @@ function getJobDelivery(job: OpenClawCronJobJson): { announce: boolean; channel:
 
 export function EditCronDialog({ open, onOpenChange, job, onSuccess }: EditCronDialogProps) {
   const { cronEdit } = useCronsActions();
+  const { agents: openClawAgents, models: openClawModels } = useOpenClawContext();
   const [fullJob, setFullJob] = useState<OpenClawCronJobJson | null>(null);
   const [fullJobLoading, setFullJobLoading] = useState(false);
   const [name, setName] = useState("");
@@ -204,27 +190,17 @@ export function EditCronDialog({ open, onOpenChange, job, onSuccess }: EditCronD
     }
   }, [open, jobForForm, fullJob]);
 
+  // Sync agents from context
   useEffect(() => {
     if (!open) return;
-    const id = window.setTimeout(() => {
-      setAgentsLoading(true);
-      fetchAgentOptions()
-        .then((opts) => setAgentOptions(opts))
-        .finally(() => setAgentsLoading(false));
-    }, 0);
-    return () => window.clearTimeout(id);
-  }, [open]);
+    setAgentOptions(openClawAgents.map((a) => ({ id: a.id, name: a.name || a.id })));
+  }, [open, openClawAgents]);
 
+  // Sync models from context
   useEffect(() => {
     if (!open) return;
-    const id = window.setTimeout(() => {
-      setModelsLoading(true);
-      fetchModelOptions()
-        .then((opts) => setModelOptions(opts))
-        .finally(() => setModelsLoading(false));
-    }, 0);
-    return () => window.clearTimeout(id);
-  }, [open]);
+    setModelOptions(openClawModels.map((m) => ({ id: m.id, name: m.displayName || m.id })));
+  }, [open, openClawModels]);
 
   useEffect(() => {
     if (!open) return;

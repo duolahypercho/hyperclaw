@@ -4,6 +4,7 @@ import React, { createContext, useContext, useCallback, useEffect, useMemo, useR
 import { LayoutGrid } from "lucide-react";
 import type { AppSchema } from "@OS/Layout/types";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
+import { useOpenClawContext } from "$/Providers/OpenClawProv";
 import { buildAgentsFromTeam, type AgentConfig, type AgentStatus, type RoomLabels } from "../types";
 
 /** How often to refetch employee status (lightweight). */
@@ -54,14 +55,6 @@ interface ListAgentItem {
 
 
 
-async function fetchListAgents(): Promise<ListAgentItem[]> {
-  const res = (await bridgeInvoke("list-agents", {})) as {
-    success?: boolean;
-    data?: ListAgentItem[];
-  };
-  if (!res?.success || !Array.isArray(res.data)) return [];
-  return res.data;
-}
 
 
 /** Single batched state to avoid 5+ setState calls per fetch → fewer re-renders. */
@@ -176,22 +169,20 @@ function mergeEmployeeStatus(
 }
 
 export function PixelOfficeProvider({ children }: { children: React.ReactNode }) {
+  const { agents: openClawAgents } = useOpenClawContext();
   const [officeData, setOfficeData] = useState<OfficeData>(EMPTY_OFFICE_DATA);
   const [loading, setLoading] = useState(true);
   const lastTeamSourceRef = useRef<{ teamForBuild: { id: string; name: string; status?: string }[] } | null>(null);
 
   const runFullRefresh = useCallback(async () => {
     try {
-      const [data, agentsList] = await Promise.all([
-        bridgeInvoke("get-employee-status") as Promise<BridgeResponse>,
-        fetchListAgents(),
-      ]);
+      const data = (await bridgeInvoke("get-employee-status")) as BridgeResponse;
       const employeesRaw = data && typeof data === "object" && "employees" in data ? (data as BridgeResponse).employees : undefined;
       const employees = Array.isArray(employeesRaw) ? employeesRaw : [];
       const hasDataError = !!(data && typeof data === "object" && (data as { error?: string }).error);
       const teamForBuild =
-        agentsList.length > 0
-          ? agentsList.map((a) => ({ id: a.id, name: a.name, status: a.status }))
+        openClawAgents.length > 0
+          ? openClawAgents.map((a) => ({ id: a.id, name: a.name, status: a.status }))
           : employees.filter((e) => e && typeof e === "object" && e.id).map((e) => ({ id: e.id, name: e.name ?? e.id, status: (e as BridgeEmployeeStatus).status }));
       lastTeamSourceRef.current = { teamForBuild };
       const built = buildAgentsFromTeam(teamForBuild);
@@ -205,7 +196,7 @@ export function PixelOfficeProvider({ children }: { children: React.ReactNode })
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [openClawAgents]);
 
   const runStatusOnlyRefresh = useCallback(async () => {
     const teamSource = lastTeamSourceRef.current?.teamForBuild;
