@@ -673,19 +673,7 @@ export function subscribeGatewayConnection(cb: () => void): () => void {
 }
 
 export async function getGatewayConfig(): Promise<{ gatewayUrl: string; token: string | null; hubMode?: boolean; hubDeviceId?: string }> {
-  // Priority 1: Hub config from window cache or Electron preload
-  if (typeof window !== "undefined") {
-    const w = window as unknown as {
-      electronAPI?: { hyperClawBridge?: { getHubConfig?: () => { enabled: boolean; url: string; deviceId: string; jwt?: string } | null } };
-      __hubConfig?: { enabled: boolean; url: string; deviceId: string; jwt?: string };
-    };
-    const hubCfg = w.__hubConfig?.enabled ? w.__hubConfig : w.electronAPI?.hyperClawBridge?.getHubConfig?.();
-    if (hubCfg?.enabled && hubCfg.url && hubCfg.deviceId) {
-      return { gatewayUrl: hubCfg.url, token: hubCfg.jwt ?? null, hubMode: true, hubDeviceId: hubCfg.deviceId };
-    }
-  }
-
-  // Priority 2: Hub direct — use env var + session
+  // Use Hub direct — session token + env var (works cross-device)
   try {
     const { getHubApiUrl, getUserToken, getActiveDeviceId } = await import("$/lib/hub-direct");
     const hubUrl = getHubApiUrl();

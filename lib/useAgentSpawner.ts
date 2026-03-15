@@ -19,38 +19,13 @@ interface SpawnResult {
 
 // Standalone function that can be called from anywhere
 export async function spawnAgentForTask(params: SpawnAgentParams): Promise<SpawnResult> {
-  // Check if we're in Electron environment with hyperClawBridge
-  if (typeof window !== "undefined") {
-    const win = window as unknown as {
-      electronAPI?: {
-        hyperClawBridge?: {
-          spawnAgentForTask?: (params: SpawnAgentParams) => Promise<SpawnResult>;
-        };
-      };
-    };
-    
-    if (win.electronAPI?.hyperClawBridge?.spawnAgentForTask) {
-      try {
-        return await win.electronAPI.hyperClawBridge.spawnAgentForTask(params);
-      } catch (error) {
-        return { 
-          success: false, 
-          error: error instanceof Error ? error.message : "Failed to spawn agent",
-          taskId: params.taskId,
-          agentId: params.agentId
-        };
-      }
-    }
-  }
-  
-  // Fallback: call via hub direct
   try {
     const { hubCommand } = await import("$/lib/hub-direct");
     const result = await hubCommand({ action: "spawn-agent-for-task", ...params });
     return result as SpawnResult;
   } catch (error) {
-    return { 
-      success: false, 
+    return {
+      success: false,
       error: error instanceof Error ? error.message : "Failed to spawn agent",
       taskId: params.taskId,
       agentId: params.agentId
@@ -67,15 +42,7 @@ export function useAgentSpawner() {
   return { spawnAgentForTask: spawn };
 }
 
-// Helper to check if agent spawning is available
+// Agent spawning is always available via hub
 export function isAgentSpawnAvailable(): boolean {
-  if (typeof window === "undefined") return false;
-  const win = window as unknown as {
-    electronAPI?: {
-      hyperClawBridge?: {
-        spawnAgentForTask?: unknown;
-      };
-    };
-  };
-  return !!win.electronAPI?.hyperClawBridge?.spawnAgentForTask;
+  return typeof window !== "undefined";
 }

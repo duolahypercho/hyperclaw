@@ -55,6 +55,7 @@ const MainLayout = ({ children }: any) => {
     if (status === "unauthenticated") hasBeenAuthenticatedRef.current = false;
   }, [status]);
 
+
   const showFullPageLoading =
     isRedirecting ||
     (!hasBeenAuthenticatedRef.current && (isLoading || status === "loading"));
