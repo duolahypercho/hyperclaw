@@ -5,12 +5,13 @@ import { SEOSchema } from "@OS/Provider/SEOProv";
 import { InteractApp } from "@OS/InteractApp";
 import { PixelOfficeProvider, usePixelOffice, FullOfficeView } from "$/components/PixelOffice";
 import { motion } from "framer-motion";
+import { SITE_URL } from "../../lib/site-url";
 
 const pixelOfficeSEOSchema: SEOSchema = {
   title: "AI Agent Office - Hyperclaw OS",
   description:
     "A retro pixel-art office view of your AI team. See agents from OpenClaw (get-team, get-crons) with working/idle status.",
-  url: "https://www.app.claw.hypercho.com/Tool/PixelOffice",
+  url: `${SITE_URL}/Tool/PixelOffice`,
   image: "https://hypercho.com/hypercho_banner.png",
   author: "Hypercho",
   robots: "index,follow",

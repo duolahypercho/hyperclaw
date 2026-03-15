@@ -8,7 +8,7 @@ From the **project root** (Hyperclaw_app):
 npm run electron:build:mac:remote
 ```
 
-- Uses **remote** mode (app loads from `https://app.claw.hypercho.com`).
+- Uses **remote** mode (app loads from `https://claw.hypercho.com`).
 - Output is in **`electron/dist-electron/`**:
   - `Hyperclaw-0.1.0-arm64-mac.zip` (Apple Silicon)
   - `Hyperclaw-0.1.0-x64-mac.zip` (Intel)

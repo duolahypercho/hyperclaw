@@ -118,7 +118,7 @@ import { [ToolName]Provider } from "$/components/Tool/[ToolName]/provider/[toolN
 const [toolName]SEOSchema: SEOSchema = {
   title: "[Tool Name] - Copanion OS",
   description: "[Tool description]",
-  url: "https://www.app.claw.hypercho.com/Tool/[ToolName]",
+  url: `${SITE_URL}/Tool/[ToolName]`, // Import SITE_URL from lib/site-url
   image: "https://hypercho.com/hypercho_banner.png",
   author: "Hypercho",
   robots: "index,follow",

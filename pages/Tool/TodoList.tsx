@@ -4,12 +4,13 @@ import { CopanionProvider } from "@OS/Provider/CopanionProv";
 import { SEOSchema } from "@OS/Provider/SEOProv";
 import TodoList from "$/components/Tool/TodoList";
 import { TodoListProvider } from "$/components/Tool/TodoList/provider/todolistProvider";
+import { SITE_URL } from "../../lib/site-url";
 
 const todoSEOSchema: SEOSchema = {
   title: "Todo List - Hyperclaw OS",
   description:
     "Organize your tasks and boost productivity with our intelligent todo list. Features smart categorization, priority management, due dates, progress tracking, and seamless integration with your AI workspace.",
-  url: "https://www.app.claw.hypercho.com/Tool/TodoList",
+  url: `${SITE_URL}/Tool/TodoList`,
   image: "https://hypercho.com/hypercho_banner.png",
   author: "Hypercho",
   robots: "index,follow",
@@ -29,7 +30,7 @@ const todoSEOSchema: SEOSchema = {
     title: "Todo List - Hyperclaw OS",
     description:
       "Organize your tasks and boost productivity with our intelligent todo list. Features smart categorization, priority management, due dates, progress tracking, and seamless integration with your AI workspace.",
-    url: "https://www.app.claw.hypercho.com/Tool/TodoList",
+    url: `${SITE_URL}/Tool/TodoList`,
     image: "https://hypercho.com/hypercho_banner.png",
     site_name: "Hypercho Hyperclaw",
     locale: "en_US",
@@ -58,7 +59,7 @@ const todoSEOSchema: SEOSchema = {
       price: "0",
       priceCurrency: "USD",
       availability: "https://schema.org/InStock",
-      url: "https://www.app.claw.hypercho.com/Tool/TodoList",
+      url: `${SITE_URL}/Tool/TodoList`,
     },
     creator: {
       "@type": "Organization",
@@ -66,8 +67,8 @@ const todoSEOSchema: SEOSchema = {
       url: "https://hypercho.com",
     },
     applicationSubCategory: "OfficeApplication",
-    downloadUrl: "https://www.app.claw.hypercho.com/Tool/TodoList",
-    installUrl: "https://www.app.claw.hypercho.com/Tool/TodoList",
+    downloadUrl: `${SITE_URL}/Tool/TodoList`,
+    installUrl: `${SITE_URL}/Tool/TodoList`,
     softwareRequirements: "Web Browser with JavaScript enabled",
     storageRequirements: "Cloud-based task storage with local sync",
     permissions: "Access to local storage for offline task management",

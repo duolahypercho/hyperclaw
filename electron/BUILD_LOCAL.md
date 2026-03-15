@@ -32,7 +32,7 @@ npm run electron:build:win:local
 ## What Gets Built
 
 - **Local Mode**: App will start Next.js server locally on port 1000
-- **Remote Mode**: App will connect to https://app.claw.hypercho.com
+- **Remote Mode**: App will connect to https://claw.hypercho.com
 
 ## Output Location
 

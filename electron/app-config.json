@@ -1,5 +1,5 @@
 {
-  "mode": "local",
-  "remoteUrl": "https://app.claw.hypercho.com",
+  "mode": "remote",
+  "remoteUrl": "https://claw.hypercho.com",
   "localUrl": "http://localhost:1000"
 }

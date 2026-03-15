@@ -3,6 +3,7 @@ import Home from "$/components/Home";
 import SEO from "$/components/SEO";
 import { useUser } from "$/Providers/UserProv";
 import Loading from "$/components/Loading";
+import { SITE_URL } from "../lib/site-url";
 
 const Index = () => {
   const { status } = useUser();
@@ -16,7 +17,7 @@ const Index = () => {
       <SEO
         title="Hyperclaw OS - Your AI-Powered Workspace"
         description="Launch into your personal AI-first operating system. Access Todo List, Music Player, AI Chat, and productivity tools in one seamless interface. Start your intelligent workflow with Hyperclaw OS."
-        url="https://www.app.claw.hypercho.com/"
+        url={`${SITE_URL}/`}
         image="https://hypercho.com/hypercho_banner.png"
         author="Hypercho"
         keywords="Hyperclaw OS, AI workspace, productivity app, todo list, AI chat, productivity tools, Hypercho, interactive OS, smart workspace, AI assistant, task management"
@@ -35,7 +36,7 @@ const Index = () => {
           { property: "og:image:type", content: "image/png" },
           {
             name: "apple-itunes-app",
-            content: "app-argument=https://www.app.claw.hypercho.com/",
+            content: `app-argument=${SITE_URL}/`,
           },
         ]}
         additionalStructuredData={{
@@ -62,7 +63,7 @@ const Index = () => {
             price: "0",
             priceCurrency: "USD",
             availability: "https://schema.org/InStock",
-            url: "https://www.app.claw.hypercho.com/",
+            url: `${SITE_URL}/`,
           },
           aggregateRating: {
             "@type": "AggregateRating",
@@ -77,8 +78,8 @@ const Index = () => {
             url: "https://hypercho.com",
           },
           applicationSubCategory: "OfficeApplication",
-          downloadUrl: "https://www.app.claw.hypercho.com/",
-          installUrl: "https://www.app.claw.hypercho.com/",
+          downloadUrl: `${SITE_URL}/`,
+          installUrl: `${SITE_URL}/`,
           softwareRequirements: "Web Browser with JavaScript enabled",
           memoryRequirements: "Minimum 2GB RAM recommended",
           storageRequirements: "No local storage required - cloud-based",

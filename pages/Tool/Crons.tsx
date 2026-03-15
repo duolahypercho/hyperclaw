@@ -4,12 +4,13 @@ import { CopanionProvider } from "@OS/Provider/CopanionProv";
 import { SEOSchema } from "@OS/Provider/SEOProv";
 import Crons from "$/components/Tool/Crons";
 import { CronsProvider } from "$/components/Tool/Crons/provider/cronsProvider";
+import { SITE_URL } from "../../lib/site-url";
 
 const cronsSEOSchema: SEOSchema = {
   title: "Cron Jobs - Hyperclaw OS",
   description:
     "Monitor and manage your OpenClaw cron jobs. View schedules, track job status, and visualize upcoming executions in a calendar view.",
-  url: "https://www.app.claw.hypercho.com/Tool/Crons",
+  url: `${SITE_URL}/Tool/Crons`,
   image: "https://hypercho.com/hypercho_banner.png",
   author: "Hypercho",
   robots: "index,follow",
@@ -29,7 +30,7 @@ const cronsSEOSchema: SEOSchema = {
     title: "Cron Jobs - Hyperclaw OS",
     description:
       "Monitor and manage your OpenClaw cron jobs. View schedules, track job status, and visualize upcoming executions in a calendar view.",
-    url: "https://www.app.claw.hypercho.com/Tool/Crons",
+    url: `${SITE_URL}/Tool/Crons`,
     image: "https://hypercho.com/hypercho_banner.png",
     site_name: "Hypercho Hyperclaw",
     locale: "en_US",
@@ -54,7 +55,7 @@ const cronsSEOSchema: SEOSchema = {
       price: "0",
       priceCurrency: "USD",
       availability: "https://schema.org/InStock",
-      url: "https://www.app.claw.hypercho.com/Tool/Crons",
+      url: `${SITE_URL}/Tool/Crons`,
     },
     creator: {
       "@type": "Organization",
@@ -62,8 +63,8 @@ const cronsSEOSchema: SEOSchema = {
       url: "https://hypercho.com",
     },
     applicationSubCategory: "OfficeApplication",
-    downloadUrl: "https://www.app.claw.hypercho.com/Tool/Crons",
-    installUrl: "https://www.app.claw.hypercho.com/Tool/Crons",
+    downloadUrl: `${SITE_URL}/Tool/Crons`,
+    installUrl: `${SITE_URL}/Tool/Crons`,
     softwareRequirements: "Web Browser with JavaScript enabled",
     storageRequirements: "Cloud-based storage",
     permissions: "Access to OpenClaw CLI",

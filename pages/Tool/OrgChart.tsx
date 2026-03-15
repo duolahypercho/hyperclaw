@@ -4,12 +4,13 @@ import { CopanionProvider } from "@OS/Provider/CopanionProv";
 import { SEOSchema } from "@OS/Provider/SEOProv";
 import OrgChart from "$/components/Tool/OrgChart";
 import { OrgChartProvider } from "$/components/Tool/OrgChart/provider/orgChartProvider";
+import { SITE_URL } from "../../lib/site-url";
 
 const orgChartSEOSchema: SEOSchema = {
   title: "Org Chart - Hyperclaw OS",
   description:
     "Visualize your AI agent team hierarchy, delegation, and task assignments in an interactive org chart.",
-  url: "https://www.app.claw.hypercho.com/Tool/OrgChart",
+  url: `${SITE_URL}/Tool/OrgChart`,
   image: "https://hypercho.com/hypercho_banner.png",
   author: "Hypercho",
   robots: "index,follow",
@@ -29,7 +30,7 @@ const orgChartSEOSchema: SEOSchema = {
     title: "Org Chart - Hyperclaw OS",
     description:
       "Visualize your AI agent team hierarchy and task delegation.",
-    url: "https://www.app.claw.hypercho.com/Tool/OrgChart",
+    url: `${SITE_URL}/Tool/OrgChart`,
     image: "https://hypercho.com/hypercho_banner.png",
     site_name: "Hypercho Hyperclaw",
     locale: "en_US",
@@ -53,7 +54,7 @@ const orgChartSEOSchema: SEOSchema = {
       price: "0",
       priceCurrency: "USD",
       availability: "https://schema.org/InStock",
-      url: "https://www.app.claw.hypercho.com/Tool/OrgChart",
+      url: `${SITE_URL}/Tool/OrgChart`,
     },
     creator: {
       "@type": "Organization",
@@ -61,8 +62,8 @@ const orgChartSEOSchema: SEOSchema = {
       url: "https://hypercho.com",
     },
     applicationSubCategory: "OfficeApplication",
-    downloadUrl: "https://www.app.claw.hypercho.com/Tool/OrgChart",
-    installUrl: "https://www.app.claw.hypercho.com/Tool/OrgChart",
+    downloadUrl: `${SITE_URL}/Tool/OrgChart`,
+    installUrl: `${SITE_URL}/Tool/OrgChart`,
     softwareRequirements: "Web Browser with JavaScript enabled",
     storageRequirements: "Cloud-based storage",
     permissions: "Access to OpenClaw CLI",

@@ -3,6 +3,7 @@ import { getLayout } from "$/layouts/MainLayout";
 import SettingsApp from "$/components/Tool/Setting";
 import { CopanionProvider } from "@OS/Provider/CopanionProv";
 import SEO from "$/components/SEO";
+import { SITE_URL } from "../lib/site-url";
 
 const Index = () => {
   return (
@@ -10,7 +11,7 @@ const Index = () => {
       <SEO
         title="Settings - Hyperclaw OS"
         description="Customize your Hyperclaw OS experience. Manage account settings, themes, privacy preferences, notifications, and AI assistant configurations. Personalize your AI-powered workspace."
-        url="https://www.app.claw.hypercho.com/Settings"
+        url={`${SITE_URL}/Settings`}
         image="https://hypercho.com/hypercho_banner.png"
         author="Hypercho"
         keywords="Hyperclaw OS settings, account settings, theme customization, privacy settings, notification preferences, AI assistant settings, user preferences, workspace customization, profile management, security settings"
@@ -32,7 +33,7 @@ const Index = () => {
           "@type": "WebPage",
           name: "Settings - Hyperclaw OS",
           description: "Settings and configuration page for Hyperclaw OS",
-          url: "https://www.app.claw.hypercho.com/Settings",
+          url: `${SITE_URL}/Settings`,
           mainEntity: {
             "@type": "SoftwareApplication",
             name: "Hyperclaw OS",
@@ -45,13 +46,13 @@ const Index = () => {
                 "@type": "ListItem",
                 position: 1,
                 name: "Home",
-                item: "https://www.app.claw.hypercho.com/",
+                item: `${SITE_URL}/`,
               },
               {
                 "@type": "ListItem",
                 position: 2,
                 name: "Settings",
-                item: "https://www.app.claw.hypercho.com/Settings",
+                item: `${SITE_URL}/Settings`,
               },
             ],
           },
