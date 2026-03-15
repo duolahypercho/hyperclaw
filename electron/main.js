@@ -23,7 +23,7 @@ let sensevoice = null;
 const getSenseVoice = () => {
   if (!sensevoice) {
     try {
-      sensevoice = require("./sensevoice");
+      sensevoice = require("./sensevoice-service");
     } catch (error) {
       console.error("[Hyperclaw] Failed to load SenseVoice:", error);
     }
@@ -1427,7 +1427,7 @@ ipcMain.handle("sensevoice-initialize", async () => {
     const sv = getSenseVoice();
     if (sv) {
       await sv.initialize();
-      return { success: true, info: sv.getModelInfo() };
+      return { success: true, ready: sv.isReady() };
     }
     return { success: false, error: "SenseVoice not available" };
   } catch (error) {
@@ -1438,10 +1438,37 @@ ipcMain.handle("sensevoice-initialize", async () => {
 ipcMain.handle("sensevoice-transcribe", async (event, audioData) => {
   try {
     const sv = getSenseVoice();
-    if (sv && sv.isReady()) {
-      const text = await sv.transcribe(new Float32Array(audioData));
-      return { success: true, text };
+    
+    // If audio data is provided as array, convert to buffer
+    let audioBuffer;
+    if (Array.isArray(audioData)) {
+      audioBuffer = Buffer.from(audioData);
+    } else if (Buffer.isBuffer(audioData)) {
+      audioBuffer = audioData;
+    } else {
+      return { success: false, error: "Invalid audio data format" };
     }
+    
+    if (sv && sv.isReady()) {
+      const result = await sv.transcribe(audioBuffer);
+      if (result.success) {
+        return { success: true, text: result.text || "" };
+      }
+      return { success: false, error: result.error };
+    }
+    
+    // If not ready, try to initialize first
+    if (sv) {
+      await sv.initialize();
+      if (sv.isReady()) {
+        const result = await sv.transcribe(audioBuffer);
+        if (result.success) {
+          return { success: true, text: result.text || "" };
+        }
+        return { success: false, error: result.error };
+      }
+    }
+    
     return { success: false, error: "SenseVoice not initialized" };
   } catch (error) {
     return { success: false, error: error.message };
@@ -1451,7 +1478,7 @@ ipcMain.handle("sensevoice-transcribe", async (event, audioData) => {
 ipcMain.handle("sensevoice-status", async () => {
   const sv = getSenseVoice();
   if (sv) {
-    return { ready: sv.isReady(), info: sv.getModelInfo() };
+    return { ready: sv.isReady() };
   }
   return { ready: false };
 });

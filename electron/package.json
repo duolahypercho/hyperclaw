@@ -9,7 +9,8 @@
   },
   "dependencies": {
     "electron-updater": "^6.1.7",
-    "onnxruntime-node": "^1.24.3"
+    "onnxruntime-node": "^1.24.3",
+    "python-shell": "^5.0.0"
   },
   "devDependencies": {
     "cross-env": "^7.0.3",
