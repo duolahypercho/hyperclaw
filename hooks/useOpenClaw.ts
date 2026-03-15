@@ -139,11 +139,7 @@ const hubApi: OpenClawAPI = {
 };
 
 function getApi(): OpenClawAPI {
-  // Priority 1: Electron IPC
-  if (typeof window !== "undefined" && window.electronAPI?.openClaw) {
-    return window.electronAPI.openClaw;
-  }
-  // Priority 2: Hub direct
+  // Always use Hub → Connector (cross-device compatible)
   return hubApi;
 }
 
