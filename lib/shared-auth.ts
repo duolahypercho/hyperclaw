@@ -1,37 +1,31 @@
 import Jwt from "jsonwebtoken";
 
 /**
- * Sign a structured JWT token with standardized claims.
- * All services in the Hyperclaw/Hypercho ecosystem should use this format:
- * - `sub`: userId (JWT standard subject claim)
- * - `tier`: user's subscription tier
+ * Sign a JWT token as a raw userId string.
+ * All services in the Hyperclaw/Hypercho ecosystem use this same format.
  */
 export function signToken(
   userId: string,
-  tier: string,
-  secret: string,
-  expiresIn: string = "30d"
+  secret: string
 ): string {
-  return Jwt.sign({ sub: userId, tier }, secret, { expiresIn });
+  return Jwt.sign(userId, secret);
 }
 
 /**
- * Verify a JWT token and extract the userId, handling both old and new formats:
- * - Old format: payload IS the raw userId string
- * - New format: payload is { sub: userId, tier: "free" | ... }
+ * Verify a JWT token and extract the userId.
+ * Handles legacy formats for backward compatibility.
  */
 export function verifyToken(
   token: string,
   secret: string
-): { userId: string; tier: string } {
+): { userId: string } {
   const decoded = Jwt.verify(token, secret) as any;
 
   if (typeof decoded === "string") {
-    // Old format: raw userId string
-    return { userId: decoded, tier: "free" };
+    return { userId: decoded };
   }
 
-  const userId = decoded.sub || decoded.id || decoded;
-  const tier = decoded.tier || "free";
-  return { userId, tier };
+  // Legacy fallback for object tokens
+  const userId = decoded.id || decoded.sub || decoded;
+  return { userId };
 }

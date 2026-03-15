@@ -3,6 +3,7 @@ import { Responsive, WidthProvider, Layout } from "react-grid-layout";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { CustomProps } from "$/components/Home/widgets/types/widgets";
+import { dashboardState } from "$/lib/dashboard-state";
 import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
 
@@ -11,19 +12,19 @@ const ResponsiveGridLayout = WidthProvider(Responsive);
 // Widget config storage keys
 const WIDGET_CONFIGS_KEY = "dashboard-widget-configs";
 
-// Helper to load widget configs from localStorage
+// Helper to load widget configs from dashboardState cache
 const loadWidgetConfigs = (): Record<string, Record<string, unknown>> => {
   try {
-    const saved = localStorage.getItem(WIDGET_CONFIGS_KEY);
+    const saved = dashboardState.get(WIDGET_CONFIGS_KEY);
     return saved ? JSON.parse(saved) : {};
   } catch {
     return {};
   }
 };
 
-// Helper to save widget configs to localStorage
+// Helper to save widget configs to dashboardState (SQLite)
 const saveWidgetConfigs = (configs: Record<string, Record<string, unknown>>): void => {
-  localStorage.setItem(WIDGET_CONFIGS_KEY, JSON.stringify(configs));
+  dashboardState.set(WIDGET_CONFIGS_KEY, JSON.stringify(configs));
 };
 
 // Widget types
@@ -177,58 +178,48 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onRemoveWidget,
   onUpdateWidgetConfig,
 }) => {
-  const [layouts, setLayouts] = useState<{ [key: string]: Layout[] }>(() => {
-    // Load saved layout from localStorage
-    const savedLayout = localStorage.getItem("dashboard-layout");
-
-    if (savedLayout) {
-      try {
-        const parsedLayout = JSON.parse(savedLayout);
-        // If we have saved layout, use it and merge with any new widgets
-        const mergedLayouts: { [key: string]: Layout[] } = {};
-
-        // Get default layouts for current widgets
-        const defaultLayouts = {
-          lg: generateDefaultLayout(widgets),
-          md: generateDefaultLayout(widgets),
-          sm: generateDefaultLayout(widgets),
-          xs: generateDefaultLayout(widgets),
-        };
-
-        Object.keys(defaultLayouts).forEach((breakpoint) => {
-          const saved = parsedLayout[breakpoint] || [];
-          const defaults =
-            defaultLayouts[breakpoint as keyof typeof defaultLayouts];
-
-          // Create a map of saved layouts by widget id
-          const savedMap = new Map<string, Layout>(
-            saved.map((item: Layout) => [item.i, item])
-          );
-
-          // Merge: use saved layout if exists, otherwise use default
-          mergedLayouts[breakpoint] = defaults.map((defaultItem: Layout) => {
-            const savedItem = savedMap.get(defaultItem.i);
-            return savedItem ? savedItem : defaultItem;
-          });
+  // Parse a saved layout JSON string and merge with current widget defaults
+  const mergeLayoutWithDefaults = useCallback((savedJson: string): { [key: string]: Layout[] } | null => {
+    try {
+      const parsedLayout = JSON.parse(savedJson);
+      const mergedLayouts: { [key: string]: Layout[] } = {};
+      const defaultLayouts = {
+        lg: generateDefaultLayout(widgets),
+        md: generateDefaultLayout(widgets),
+        sm: generateDefaultLayout(widgets),
+        xs: generateDefaultLayout(widgets),
+      };
+      Object.keys(defaultLayouts).forEach((breakpoint) => {
+        const saved = parsedLayout[breakpoint] || [];
+        const defaults = defaultLayouts[breakpoint as keyof typeof defaultLayouts];
+        const savedMap = new Map<string, Layout>(saved.map((item: Layout) => [item.i, item]));
+        mergedLayouts[breakpoint] = defaults.map((defaultItem: Layout) => {
+          const savedItem = savedMap.get(defaultItem.i);
+          return savedItem ? savedItem : defaultItem;
         });
-
-        return mergedLayouts;
-      } catch (e) {
-        console.error("Failed to parse saved layout:", e);
-      }
+      });
+      return mergedLayouts;
+    } catch {
+      return null;
     }
+  }, [widgets]);
 
-    // Return default layout only if no saved layout exists
-    const defaultLayouts = {
+  const [layouts, setLayouts] = useState<{ [key: string]: Layout[] }>(() => {
+    // Read from in-memory cache (populated by dashboardState.hydrate())
+    const savedLayout = dashboardState.get("dashboard-layout");
+    if (savedLayout) {
+      const merged = mergeLayoutWithDefaults(savedLayout);
+      if (merged) return merged;
+    }
+    return {
       lg: generateDefaultLayout(widgets),
       md: generateDefaultLayout(widgets),
       sm: generateDefaultLayout(widgets),
       xs: generateDefaultLayout(widgets),
     };
-    return defaultLayouts;
   });
 
-  // Widget configs state - stored separately in localStorage
+  // Widget configs state
   const [widgetConfigs, setWidgetConfigs] = useState<Record<string, Record<string, unknown>>>(() =>
     loadWidgetConfigs()
   );
@@ -335,12 +326,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
     });
   }, [widgets]);
 
-  // Save layout to localStorage whenever it changes (debounced)
+  // Save layout to SQLite whenever it changes (debounced)
   const layoutSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (layoutSaveTimerRef.current) clearTimeout(layoutSaveTimerRef.current);
     layoutSaveTimerRef.current = setTimeout(() => {
-      localStorage.setItem("dashboard-layout", JSON.stringify(layouts));
+      dashboardState.set("dashboard-layout", JSON.stringify(layouts));
     }, 500);
     return () => {
       if (layoutSaveTimerRef.current) clearTimeout(layoutSaveTimerRef.current);

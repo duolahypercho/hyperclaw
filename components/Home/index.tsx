@@ -16,11 +16,24 @@ import {
 import { useOS } from "@OS/Provider/OSProv";
 import { useToast } from "@/components/ui/use-toast";
 import { cn } from "@/lib/utils";
+import { dashboardState } from "$/lib/dashboard-state";
 
 export default function Home() {
+  const [stateReady, setStateReady] = useState(dashboardState.isHydrated());
+
+  // Hydrate dashboard state from SQLite before rendering
+  useEffect(() => {
+    if (stateReady) return;
+    dashboardState.hydrate().then(() => setStateReady(true));
+  }, [stateReady]);
+
+  if (!stateReady) return null;
+  return <HomeDashboard />;
+}
+
+function HomeDashboard() {
   const { toolAbstracts, osSettings, updateOSSettings } = useOS();
   const { toast } = useToast();
-  // Removed dialog-related state as we now show dashboard immediately
 
   // Find tool definitions from OSProv
   const todoTool = toolAbstracts.find((t) => t.id === "todo-list");
@@ -120,9 +133,9 @@ export default function Home() {
     [todoTool, pomodoroTool, cronsTool, docsTool, pixelOfficeTool, usageTool]
   );
 
-  // State for visible widgets
+  // State for visible widgets (reads from in-memory cache, hydrated from SQLite)
   const [visibleWidgets, setVisibleWidgets] = useState<string[]>(() => {
-    const saved = localStorage.getItem("dashboard-visible-widgets");
+    const saved = dashboardState.get("dashboard-visible-widgets");
     if (saved) {
       try {
         return JSON.parse(saved);
@@ -163,10 +176,10 @@ export default function Home() {
     isResizable?: boolean;
   };
 
-  // State for dynamically added widget instances - load from localStorage
+  // State for dynamically added widget instances
   const [storedWidgetInstances, setStoredWidgetInstances] = useState<StoredWidget[]>(() => {
     if (typeof window === "undefined") return [];
-    const saved = localStorage.getItem("dashboard-widget-instances");
+    const saved = dashboardState.get("dashboard-widget-instances");
     if (saved) {
       try {
         return JSON.parse(saved);
@@ -177,9 +190,9 @@ export default function Home() {
     return [];
   });
 
-  // Save widget instances to localStorage whenever they change
+  // Save widget instances to SQLite whenever they change
   useEffect(() => {
-    localStorage.setItem("dashboard-widget-instances", JSON.stringify(storedWidgetInstances));
+    dashboardState.set("dashboard-widget-instances", JSON.stringify(storedWidgetInstances));
   }, [storedWidgetInstances]);
 
   // Helper to get widget component from type
@@ -248,24 +261,24 @@ export default function Home() {
     }
   };
 
+  // Persist visible widgets to SQLite whenever they change
+  useEffect(() => {
+    dashboardState.set("dashboard-visible-widgets", JSON.stringify(visibleWidgets));
+  }, [visibleWidgets]);
+
   // Listen for edit mode toggle from Sidebar
   useEffect(() => {
     const handleEditModeToggle = () => {
       setIsEditMode((prev) => {
         if (!prev) {
           // Entering edit mode - store current state
-          const currentLayout = localStorage.getItem("dashboard-layout");
           setEditModeSnapshot({
             visibleWidgets: [...visibleWidgets],
-            layout: currentLayout || "",
+            layout: dashboardState.get("dashboard-layout") || "",
           });
           setShowHeader(true);
         } else {
-          // Exiting edit mode - save visible widgets to localStorage and clear snapshot
-          localStorage.setItem(
-            "dashboard-visible-widgets",
-            JSON.stringify(visibleWidgets)
-          );
+          // Exiting edit mode - visible widgets are already persisted via useEffect
           setEditModeSnapshot(null);
           setShowHeader(false);
         }
@@ -288,11 +301,10 @@ export default function Home() {
 
   // Listen for layout-applied event (from navbar LayoutSwitcher)
   useEffect(() => {
-    const handleLayoutApplied = () => {
-      // Re-read visible widgets from localStorage (just written by applyLayout)
-      const saved = localStorage.getItem("dashboard-visible-widgets");
-      if (saved) {
-        try { setVisibleWidgets(JSON.parse(saved)); } catch {}
+    const handleLayoutApplied = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.visibleWidgets) {
+        setVisibleWidgets(detail.visibleWidgets);
       }
       // Force dashboard remount so it picks up the new grid layout + configs
       setResetKey((k) => k + 1);
@@ -311,9 +323,9 @@ export default function Home() {
   };
 
   const handleResetLayout = () => {
-    // Clear localStorage
-    localStorage.removeItem("dashboard-layout");
-    localStorage.removeItem("dashboard-visible-widgets");
+    // Clear persisted state
+    dashboardState.remove("dashboard-layout");
+    dashboardState.remove("dashboard-visible-widgets");
 
     // Reset visible widgets to show all
     setVisibleWidgets(widgets.map((w) => w.id));
@@ -326,18 +338,13 @@ export default function Home() {
     setIsEditMode((prev) => {
       if (!prev) {
         // Entering edit mode - store current state
-        const currentLayout = localStorage.getItem("dashboard-layout");
         setEditModeSnapshot({
           visibleWidgets: [...visibleWidgets],
-          layout: currentLayout || "",
+          layout: dashboardState.get("dashboard-layout") || "",
         });
         setShowHeader(true);
       } else {
-        // Exiting edit mode - save visible widgets to localStorage and clear snapshot
-        localStorage.setItem(
-          "dashboard-visible-widgets",
-          JSON.stringify(visibleWidgets)
-        );
+        // Exiting edit mode - visible widgets are already persisted via useEffect
         setEditModeSnapshot(null);
         setShowHeader(false);
       }
@@ -351,16 +358,10 @@ export default function Home() {
       setVisibleWidgets(editModeSnapshot.visibleWidgets);
 
       if (editModeSnapshot.layout) {
-        localStorage.setItem("dashboard-layout", editModeSnapshot.layout);
+        dashboardState.set("dashboard-layout", editModeSnapshot.layout);
       } else {
-        localStorage.removeItem("dashboard-layout");
+        dashboardState.remove("dashboard-layout");
       }
-
-      // Restore visible widgets to localStorage (revert to snapshot)
-      localStorage.setItem(
-        "dashboard-visible-widgets",
-        JSON.stringify(editModeSnapshot.visibleWidgets)
-      );
 
       // Force Dashboard to reinitialize with restored layout
       setResetKey((prev) => prev + 1);

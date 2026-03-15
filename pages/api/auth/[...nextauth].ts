@@ -68,9 +68,8 @@ export const authOptions = (req: any, res: any) => {
               if (userId) {
                 // set the new id to the cookie
                 const newToken = Jwt.sign(
-                  { sub: userId, tier: channel?.tier || "free" },
-                  process.env.NEXTAUTH_SECRET!,
-                  { expiresIn: "30d" }
+                  userId,
+                  process.env.NEXTAUTH_SECRET!
                 );
                 setCookie(`hypercho_user_token`, newToken, {
                   req,
@@ -134,9 +133,8 @@ export const authOptions = (req: any, res: any) => {
           // User data was fetched from backend successfully
           const userData = anyUser.userData;
           const newToken = Jwt.sign(
-            { sub: userData._id, tier: userData.channel?.tier || "free" },
-            process.env.NEXTAUTH_SECRET!,
-            { expiresIn: "30d" }
+            userData._id,
+            process.env.NEXTAUTH_SECRET!
           );
           token.token = newToken;
           token.userId = userData._id;
@@ -165,9 +163,8 @@ export const authOptions = (req: any, res: any) => {
         if (user && account?.provider === "credentials") {
           // Create the JWT token here
           const newToken = Jwt.sign(
-            { sub: user.userId, tier: user.channel?.tier || "free" },
-            process.env.NEXTAUTH_SECRET!,
-            { expiresIn: "30d" }
+            user.userId,
+            process.env.NEXTAUTH_SECRET!
           );
           token.token = newToken; // Add the token to the JWT
           token.userId = user.userId;
