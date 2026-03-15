@@ -89,7 +89,7 @@ export const GatewayChatCustomHeader: React.FC<GatewayChatHeaderProps> = ({
           >
             <Avatar className="w-10 h-10 transition-opacity group-hover:opacity-80">
               {headerAvatarUrl ? (
-                <AvatarImage src={headerAvatarUrl} alt={headerIdentity?.name || agent.name} className="object-contain" />
+                <AvatarImage src={headerAvatarUrl} alt={headerIdentity?.name || agent.name} />
               ) : null}
               <AvatarFallback className="bg-primary/10 text-primary">
                 <span className="text-xl">{headerAvatarText || headerIdentity?.emoji || "🤖"}</span>

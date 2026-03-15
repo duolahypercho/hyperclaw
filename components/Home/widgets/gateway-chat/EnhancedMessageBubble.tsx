@@ -280,12 +280,9 @@ export const EnhancedMessageBubble = memo(
                 {showAvatar ? (
                   <Avatar className="w-8 h-8">
                     {botPic ? (
-                      <AvatarImage
-                        src={botPic.startsWith("http") || botPic.startsWith("data:") ? botPic : getMediaUrl(botPic)}
-                        className="object-contain"
-                      />
+                      <AvatarImage src={botPic.startsWith("http") || botPic.startsWith("data:") ? botPic : getMediaUrl(botPic)} />
                     ) : assistantAvatar?.src ? (
-                      <AvatarImage src={assistantAvatar.src} className="object-contain" />
+                      <AvatarImage src={assistantAvatar.src} />
                     ) : null}
                     <AvatarFallback className="bg-primary/10 text-primary">
                       {defaultIcon}
