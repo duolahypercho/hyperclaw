@@ -1320,16 +1320,15 @@ function createVoiceOverlay() {
     },
   });
 
-  // Load the overlay page
+  // Load the overlay page - use static HTML for reliability
   if (isDev) {
-    voiceOverlayWindow.loadURL("http://localhost:1000/voice-overlay");
-  } else {
-    voiceOverlayWindow.loadFile(path.join(__dirname, "../.next/server/voice-overlay.html")).catch(() => {
-      // Fallback: try to load from static
-      voiceOverlayWindow.loadFile(path.join(__dirname, "../.next/static/chunks/voice-overlay.html")).catch(() => {
-        console.error("Could not load voice overlay");
-      });
+    // In dev, try Next.js first, fallback to static
+    voiceOverlayWindow.loadURL("http://localhost:1000/voice-overlay").catch(() => {
+      voiceOverlayWindow.loadFile(path.join(__dirname, "../public/voice-overlay.html"));
     });
+  } else {
+    // In production, use static HTML
+    voiceOverlayWindow.loadFile(path.join(__dirname, "../public/voice-overlay.html"));
   }
 
   voiceOverlayWindow.once("ready-to-show", () => {
@@ -1381,6 +1380,16 @@ ipcMain.handle("hide-voice-overlay", () => {
 
 ipcMain.handle("get-voice-overlay-visible", () => {
   return voiceOverlayWindow && !voiceOverlayWindow.isDestroyed() && voiceOverlayWindow.isVisible();
+});
+
+// Handle voice message from overlay - send to main window
+ipcMain.on("voice-message", (event, data) => {
+  console.log("[Hyperclaw] Voice message received:", data);
+  
+  // Send to main window
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("voice-input-message", data);
+  }
 });
 
 // ─── App Lifecycle ──────────────────────────────────────────────────────────

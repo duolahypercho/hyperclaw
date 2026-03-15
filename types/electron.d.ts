@@ -246,6 +246,8 @@ declare global {
         isVisible: () => Promise<boolean>;
         onTranscript: (callback: (data: { text: string; agentId?: string; sessionKey?: string }) => void) => void;
         removeTranscriptListener: () => void;
+        onVoiceMessage: (callback: (data: { text: string; agentId: string; sessionKey: string }) => void) => void;
+        removeVoiceMessageListener: () => void;
       };
     };
   }

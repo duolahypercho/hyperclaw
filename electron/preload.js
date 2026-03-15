@@ -136,6 +136,14 @@ contextBridge.exposeInMainWorld("electronAPI", {
     removeTranscriptListener: () => {
       ipcRenderer.removeAllListeners("voice-transcript");
     },
+    // Listen for voice messages (from overlay to main window)
+    onVoiceMessage: (callback) => {
+      if (typeof callback !== "function") return;
+      ipcRenderer.on("voice-input-message", (event, data) => callback(data));
+    },
+    removeVoiceMessageListener: () => {
+      ipcRenderer.removeAllListeners("voice-input-message");
+    },
   },
 });
 

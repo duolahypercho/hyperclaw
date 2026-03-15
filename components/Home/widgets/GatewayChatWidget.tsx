@@ -370,6 +370,26 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
     prevLoadingRef2.current = isLoading;
   }, [isLoading, messageQueue, sendMessage]);
 
+  // Listen for voice input messages from overlay (Alt+Space)
+  useEffect(() => {
+    if (!window.electronAPI?.voiceOverlay) return;
+    
+    const handleVoiceMessage = (data: { text: string; agentId: string; sessionKey: string }) => {
+      // Only handle if this is for the current agent/session
+      const expectedSessionKey = `agent:${currentAgentId}:${sessionKey}`;
+      if (data.sessionKey === expectedSessionKey || data.agentId === currentAgentId) {
+        // Auto-send the voice message
+        sendMessage(data.text);
+      }
+    };
+    
+    window.electronAPI.voiceOverlay.onVoiceMessage(handleVoiceMessage);
+    
+    return () => {
+      window.electronAPI?.voiceOverlay?.removeVoiceMessageListener();
+    };
+  }, [currentAgentId, sessionKey, sendMessage]);
+
   // Queue handlers
   const handleEditQueueItem = useCallback(
     (id: string) => {

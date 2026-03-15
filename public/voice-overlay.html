@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Voice Input</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: transparent;
+      color: #fff;
+      overflow: hidden;
+    }
+    
+    .container {
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      background: rgba(0, 0, 0, 0.85);
+      backdrop-filter: blur(20px);
+      border-radius: 16px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      overflow: hidden;
+    }
+    
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      -webkit-app-region: drag;
+    }
+    
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #666;
+    }
+    
+    .status-dot.listening {
+      background: #ef4444;
+      animation: pulse 1s infinite;
+    }
+    
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+    
+    .status-text {
+      font-size: 14px;
+      font-weight: 500;
+    }
+    
+    .close-btn {
+      -webkit-app-region: no-drag;
+      background: none;
+      border: none;
+      color: #999;
+      cursor: pointer;
+      padding: 4px;
+      border-radius: 4px;
+      transition: all 0.2s;
+    }
+    
+    .close-btn:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: #fff;
+    }
+    
+    .transcript-area {
+      flex: 1;
+      padding: 16px;
+      min-height: 80px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    
+    .transcript {
+      font-size: 18px;
+      line-height: 1.5;
+      text-align: center;
+      width: 100%;
+    }
+    
+    .transcript.placeholder {
+      color: #666;
+    }
+    
+    .cursor {
+      display: inline-block;
+      width: 2px;
+      height: 20px;
+      background: #3b82f6;
+      animation: blink 1s infinite;
+      vertical-align: middle;
+      margin-left: 2px;
+    }
+    
+    @keyframes blink {
+      0%, 50% { opacity: 1; }
+      51%, 100% { opacity: 0; }
+    }
+    
+    .waveform {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      height: 40px;
+      padding: 8px 16px;
+    }
+    
+    .waveform-bar {
+      width: 4px;
+      background: #3b82f6;
+      border-radius: 2px;
+      transition: height 0.1s;
+    }
+    
+    .controls {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      background: rgba(0, 0, 0, 0.3);
+    }
+    
+    .picker {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    select {
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      color: #fff;
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    
+    select:focus {
+      outline: none;
+      border-color: #3b82f6;
+    }
+    
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 8px 16px;
+      border: none;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    
+    .btn-mic {
+      width: 36px;
+      height: 36px;
+      padding: 0;
+      background: #3b82f6;
+      color: #fff;
+    }
+    
+    .btn-mic:hover {
+      background: #2563eb;
+    }
+    
+    .btn-mic.listening {
+      background: #ef4444;
+    }
+    
+    .btn-mic.listening:hover {
+      background: #dc2626;
+    }
+    
+    .btn-send {
+      background: #3b82f6;
+      color: #fff;
+    }
+    
+    .btn-send:hover:not(:disabled) {
+      background: #2563eb;
+    }
+    
+    .hint {
+      text-align: center;
+      padding: 8px;
+      font-size: 11px;
+      color: #666;
+    }
+    
+    .hint kbd {
+      background: rgba(255, 255, 255, 0.1);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: monospace;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="header-left">
+        <div class="status-dot" id="statusDot"></div>
+        <span class="status-text" id="statusText">Voice Input</span>
+      </div>
+      <button class="close-btn" id="closeBtn">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="6" x2="6" y2="18"></line>
+          <line x1="6" y1="6" x2="18" y2="18"></line>
+        </svg>
+      </button>
+    </div>
+    
+    <div class="transcript-area">
+      <p class="transcript placeholder" id="transcript">Press the mic to start recording</p>
+    </div>
+    
+    <div class="waveform" id="waveform" style="display: none;">
+      <div class="waveform-bar" style="height: 8px;"></div>
+      <div class="waveform-bar" style="height: 8px;"></div>
+      <div class="waveform-bar" style="height: 8px;"></div>
+      <div class="waveform-bar" style="height: 8px;"></div>
+      <div class="waveform-bar" style="height: 8px;"></div>
+      <div class="waveform-bar" style="height: 8px;"></div>
+      <div class="waveform-bar" style="height: 8px;"></div>
+      <div class="waveform-bar" style="height: 8px;"></div>
+      <div class="waveform-bar" style="height: 8px;"></div>
+      <div class="waveform-bar" style="height: 8px;"></div>
+    </div>
+    
+    <div class="controls">
+      <div class="picker">
+        <select id="agentSelect">
+          <option value="main">🤖 main</option>
+          <option value="ada">📝 ada</option>
+          <option value="echo">🐦 echo</option>
+          <option value="clio">📚 clio</option>
+        </select>
+        <select id="sessionSelect">
+          <option value="main">session: main</option>
+        </select>
+      </div>
+      
+      <div class="actions">
+        <button class="btn btn-mic" id="micBtn">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+            <line x1="12" y1="19" x2="12" y2="23"></line>
+            <line x1="8" y1="23" x2="16" y2="23"></line>
+          </svg>
+        </button>
+        <button class="btn btn-send" id="sendBtn" disabled>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="22" y1="2" x2="11" y2="13"></line>
+            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+          </svg>
+          Send
+        </button>
+      </div>
+    </div>
+    
+    <div class="hint">
+      Press <kbd>Esc</kbd> to close • <kbd>Ctrl+Enter</kbd> to send
+    </div>
+  </div>
+
+  <script>
+    const { ipcRenderer } = require('electron');
+    
+    // Elements
+    const statusDot = document.getElementById('statusDot');
+    const statusText = document.getElementById('statusText');
+    const transcriptEl = document.getElementById('transcript');
+    const waveformEl = document.getElementById('waveform');
+    const micBtn = document.getElementById('micBtn');
+    const sendBtn = document.getElementById('sendBtn');
+    const closeBtn = document.getElementById('closeBtn');
+    const agentSelect = document.getElementById('agentSelect');
+    const sessionSelect = document.getElementById('sessionSelect');
+    const bars = waveformEl.querySelectorAll('.waveform-bar');
+    
+    // State
+    let isListening = false;
+    let transcript = '';
+    let interimTranscript = '';
+    let recognition = null;
+    let audioContext = null;
+    let analyser = null;
+    let mediaStream = null;
+    let animationFrame = null;
+    
+    // Close button
+    closeBtn.addEventListener('click', () => {
+      ipcRenderer.invoke('hide-voice-overlay');
+    });
+    
+    // Mic button
+    micBtn.addEventListener('click', toggleListening);
+    
+    // Send button
+    sendBtn.addEventListener('click', sendMessage);
+    
+    // Keyboard shortcuts
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        ipcRenderer.invoke('hide-voice-overlay');
+      } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        sendMessage();
+      }
+    });
+    
+    function toggleListening() {
+      if (isListening) {
+        stopListening();
+      } else {
+        startListening();
+      }
+    }
+    
+    async function startListening() {
+      transcript = '';
+      interimTranscript = '';
+      updateTranscript('');
+      
+      // Start audio visualization
+      await startAudioAnalysis();
+      
+      // Check for Web Speech API
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      
+      if (!SpeechRecognition) {
+        alert('Speech recognition not supported in this browser');
+        return;
+      }
+      
+      recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = 'en-US';
+      
+      recognition.onresult = (event) => {
+        let interim = '';
+        let final = '';
+        
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const transcriptPart = event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            final += transcriptPart;
+          } else {
+            interim += transcriptPart;
+          }
+        }
+        
+        if (final) {
+          transcript += ' ' + final;
+        }
+        interimTranscript = interim;
+        updateTranscript(transcript + ' ' + interim);
+      };
+      
+      recognition.onerror = (event) => {
+        console.error('Speech recognition error:', event.error);
+        stopListening();
+      };
+      
+      recognition.onend = () => {
+        if (isListening) {
+          // Restart if still supposed to be listening
+          try {
+            recognition.start();
+          } catch (e) {
+            stopListening();
+          }
+        }
+      };
+      
+      recognition.start();
+      isListening = true;
+      updateUI();
+    }
+    
+    function stopListening() {
+      if (recognition) {
+        recognition.stop();
+        recognition = null;
+      }
+      
+      stopAudioAnalysis();
+      
+      isListening = false;
+      updateUI();
+    }
+    
+    async function startAudioAnalysis() {
+      try {
+        mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        analyser = audioContext.createAnalyser();
+        analyser.fftSize = 256;
+        analyser.smoothingTimeConstant = 0.8;
+        
+        const source = audioContext.createMediaStreamSource(mediaStream);
+        source.connect(analyser);
+        
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+        
+        function updateVisualization() {
+          if (!analyser) return;
+          
+          analyser.getByteFrequencyData(dataArray);
+          
+          const step = Math.floor(dataArray.length / bars.length);
+          for (let i = 0; i < bars.length; i++) {
+            const value = dataArray[i * step];
+            const height = Math.max(4, (value / 255) * 40);
+            bars[i].style.height = height + 'px';
+          }
+          
+          animationFrame = requestAnimationFrame(updateVisualization);
+        }
+        
+        updateVisualization();
+      } catch (error) {
+        console.error('Error starting audio analysis:', error);
+      }
+    }
+    
+    function stopAudioAnalysis() {
+      if (animationFrame) {
+        cancelAnimationFrame(animationFrame);
+        animationFrame = null;
+      }
+      
+      if (mediaStream) {
+        mediaStream.getTracks().forEach(track => track.stop());
+        mediaStream = null;
+      }
+      
+      if (audioContext) {
+        audioContext.close();
+        audioContext = null;
+      }
+      
+      analyser = null;
+      
+      // Reset bars
+      bars.forEach(bar => bar.style.height = '8px');
+    }
+    
+    function updateTranscript(text) {
+      if (text.trim()) {
+        transcriptEl.textContent = text;
+        transcriptEl.classList.remove('placeholder');
+        if (isListening) {
+          transcriptEl.innerHTML = text + '<span class="cursor"></span>';
+        }
+      } else {
+        transcriptEl.textContent = 'Press the mic to start recording';
+        transcriptEl.classList.add('placeholder');
+      }
+    }
+    
+    function updateUI() {
+      if (isListening) {
+        statusDot.classList.add('listening');
+        statusText.textContent = 'Recording...';
+        micBtn.classList.add('listening');
+        waveformEl.style.display = 'flex';
+      } else {
+        statusDot.classList.remove('listening');
+        statusText.textContent = 'Voice Input';
+        micBtn.classList.remove('listening');
+        waveformEl.style.display = 'none';
+      }
+      
+      sendBtn.disabled = !transcript.trim();
+    }
+    
+    function sendMessage() {
+      const text = transcript.trim();
+      if (!text) return;
+      
+      const agentId = agentSelect.value;
+      const sessionKey = `agent:${agentId}:${sessionSelect.value}`;
+      
+      // Send via IPC to main process
+      ipcRenderer.send('voice-message', {
+        text,
+        agentId,
+        sessionKey
+      });
+      
+      // Hide overlay after sending
+      setTimeout(() => {
+        ipcRenderer.invoke('hide-voice-overlay');
+      }, 300);
+    }
+  </script>
+</body>
+</html>

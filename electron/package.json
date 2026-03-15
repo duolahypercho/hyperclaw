@@ -4,6 +4,9 @@
   "description": "Hypercho Hyperclaw - AI-powered desktop application",
   "author": "Hypercho",
   "main": "main.js",
+  "scripts": {
+    "electron:dev": "electron ."
+  },
   "dependencies": {
     "electron-updater": "^6.1.7"
   },
@@ -28,74 +31,24 @@
     "win": {
       "target": "nsis",
       "icon": "../public/win.ico",
-      "publisherName": "Hypercho",
-      "verifyUpdateCodeSignature": false
+      "artifactName": "${productName}-${version}-win.${ext}"
     },
     "mac": {
-      "target": [
-        {
-          "target": "dmg",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        },
-        {
-          "target": "zip",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        }
-      ],
-      "icon": "../public/Logopic.png",
-      "category": "public.app-category.productivity",
-      "hardenedRuntime": true,
-      "gatekeeperAssess": false,
-      "cscLink": "/Users/ziwenxu/Documents/certificates.p12",
-      "cscKeyPassword": "HxC0d3$1gn2026!Z1w",
-      "entitlements": "./entitlements.plist",
-      "entitlementsInherit": "./entitlements.plist"
+      "target": ["zip"],
+      "icon": "../public/icon.icns",
+      "artifactName": "${productName}-${version}-mac.${ext}"
     },
-    "dmg": {
-      "title": "Hyperclaw",
-      "artifactName": "Hyperclaw-MacOS-${version}.${ext}",
-      "contents": [
-        {
-          "x": 380,
-          "y": 280,
-          "type": "link",
-          "path": "/Applications"
-        },
-        {
-          "x": 110,
-          "y": 280,
-          "type": "file"
-        }
-      ]
+    "linux": {
+      "target": ["AppImage"],
+      "icon": "../public/icon.png",
+      "artifactName": "${productName}-${version}-linux.${ext}"
     },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "allowElevation": true,
-      "runAfterFinish": true,
-      "artifactName": "Hyperclaw-Setup-Local-${version}.${ext}",
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "shortcutName": "Hyperclaw",
-      "menuCategory": false,
-      "displayLanguageSelector": false,
-      "uninstallDisplayName": "Hyperclaw"
-    }
-  },
-  "scripts": {
-    "electron:build:win:local": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win",
-    "electron:build:win:remote": "node scripts/set-config.js remote && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win",
-    "electron:build:win:portable": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win --config.win.target=portable",
-    "electron:build:mac:local": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --config.mac.target=zip",
-    "electron:build:mac:remote": "node scripts/set-config.js remote && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --config.mac.target=zip --x64 --arm64",
-    "electron:build:mac:remote:dmg": "node scripts/set-config.js remote && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --config.mac.target=dmg --x64 --arm64",
-    "electron:build:mac:dmg": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=true electron-builder --mac --config.mac.target=dmg",
-    "electron:build:mac:zip": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --config.mac.target=zip"
+    "extraResources": [
+      {
+        "from": "../.next",
+        "to": "../.next",
+        "filter": ["**/*"]
+      }
+    ]
   }
 }
