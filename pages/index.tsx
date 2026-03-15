@@ -1,7 +1,7 @@
 import { NextPage } from "next";
 import Head from "next/head";
 import HomeContent from "$/components/Landing/HomeContent";
-import AuthLayout, { getLayout } from "$/layouts/AuthLayout";
+import { getLayout } from "$/layouts/AuthLayout";
 
 const Index: NextPage & { getLayout?: (page: NextPage) => JSX.Element } = () => {
   return (
