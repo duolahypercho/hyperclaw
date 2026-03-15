@@ -88,6 +88,7 @@ export function CronsProvider({ children }: { children: ReactNode }) {
     loading,
     errors,
     installed,
+    gatewayHealthy,
     refreshAll,
     fetchCronListJson,
     cronEnable,
@@ -122,14 +123,10 @@ export function CronsProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  // Load cron list from file (via bridge) immediately on mount so the list appears without waiting for useOpenClaw
+  // Load cron list via bridge once gateway is connected
   useEffect(() => {
-    fetchBridgeCrons();
-  }, [fetchBridgeCrons]);
-
-  useEffect(() => {
-    if (installed === false) fetchBridgeCrons();
-  }, [installed, fetchBridgeCrons]);
+    if (gatewayHealthy) fetchBridgeCrons();
+  }, [gatewayHealthy, fetchBridgeCrons]);
 
   const parsedCronJobs = useMemo(() => parseCronJobs(cronJobs), [cronJobs]);
   const openClawJobs =
