@@ -16,7 +16,7 @@ So: **renderer** → preload (IPC) → **main.js** bridge handler. The Next.js A
   If the window was created without the preload, or the preload path is wrong (e.g. wrong `__dirname` when packaged), `window.electronAPI` is undefined. Then `bridgeInvoke` falls back to `fetch("/api/hyperclaw-bridge")`. So you’d see network requests to the API instead of IPC.
 
 - **Wrong URL / no server**  
-  If the window loads `http://localhost:1000/dashboard` but Next.js isn’t running on port 1000, the page may not load or may be cached. If it loads a **remote** URL (e.g. `https://app.claw.hypercho.com`), the JS is from that server; preload still runs in that window, so `electronAPI` should still be there.
+  If the window loads `http://localhost:1000/dashboard` but Next.js isn’t running on port 1000, the page may not load or may be cached. If it loads a **remote** URL (e.g. `https://claw.hypercho.com`), the JS is from that server; preload still runs in that window, so `electronAPI` should still be there.
 
 - **Packaged app using old main**  
   If you run a built app (e.g. .app or .exe), it uses the main/preload that were bundled at build time. Edit `electron/main.js` and run from source (e.g. `npm run electron:dev`) to test changes without rebuilding.

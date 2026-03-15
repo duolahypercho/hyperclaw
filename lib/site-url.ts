@@ -5,5 +5,5 @@
 export const SITE_URL = (
   process.env.NEXTAUTH_URL ||
   process.env.NEXT_PUBLIC_URL ||
-  "https://app.claw.hypercho.com"
+  "https://claw.hypercho.com"
 ).replace(/\/$/, "");
