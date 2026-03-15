@@ -9,6 +9,7 @@ import React, {
 } from "react";
 import { Network, RefreshCw, Loader2, Plus } from "lucide-react";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
+import { useOpenClawContext } from "$/Providers/OpenClawProv";
 import { syncToIdentityMd, saveAgentName } from "$/lib/identity-md";
 import { AppSchema } from "@OS/Layout/types";
 import type { SidebarSection, SidebarItem } from "@OS/Layout/Sidebar/SidebarSchema";
@@ -88,7 +89,7 @@ interface BridgeAgent {
   role?: string;
 }
 
-async function fetchOrgStatus(): Promise<OrgChartData> {
+async function fetchOrgStatus(contextAgents: BridgeAgent[]): Promise<OrgChartData> {
   let res: unknown;
   try {
     res = await bridgeInvoke("get-org-status", {});
@@ -104,29 +105,18 @@ async function fetchOrgStatus(): Promise<OrgChartData> {
   const orgNodes: OrgNode[] = data.nodes ?? [];
   const orgAgentIds = new Set(orgNodes.map((n) => n.agentId));
 
-  // Fetch all agents from list-agents and merge unlisted ones
-  let unlistedNodes: OrgNode[] = [];
-  try {
-    const agentRes = (await bridgeInvoke("list-agents", {})) as {
-      success?: boolean;
-      data?: BridgeAgent[];
-    };
-    if (agentRes?.success && Array.isArray(agentRes.data)) {
-      unlistedNodes = agentRes.data
-        .filter((a) => !orgAgentIds.has(a.id) && !orgAgentIds.has(a.name))
-        .map((a) => ({
-          id: `unlisted-${a.id}`,
-          name: a.name,
-          role: a.role || "",
-          agentId: a.id,
-          type: "specialist" as const,
-          status: (a.status === "active" || a.status === "working" ? "working" : "idle") as "idle" | "working" | "offline",
-          liveStatus: a.status,
-        }));
-    }
-  } catch {
-    // list-agents failure is non-fatal
-  }
+  // Merge unlisted agents from context (no extra bridge call)
+  const unlistedNodes: OrgNode[] = contextAgents
+    .filter((a) => !orgAgentIds.has(a.id) && !orgAgentIds.has(a.name))
+    .map((a) => ({
+      id: `unlisted-${a.id}`,
+      name: a.name,
+      role: a.role || "",
+      agentId: a.id,
+      type: "specialist" as const,
+      status: (a.status === "active" || a.status === "working" ? "working" : "idle") as "idle" | "working" | "offline",
+      liveStatus: a.status,
+    }));
 
   return {
     nodes: [...orgNodes, ...unlistedNodes],
@@ -283,6 +273,7 @@ async function syncTeamFieldsToIdentity(nodes: OrgNode[], departments: OrgDepart
 }
 
 export function OrgChartProvider({ children }: { children: React.ReactNode }) {
+  const { agents: openClawAgents } = useOpenClawContext();
   const [orgData, setOrgData] = useState<OrgChartData | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -303,14 +294,14 @@ export function OrgChartProvider({ children }: { children: React.ReactNode }) {
     setLoading(true);
     setError(null);
     try {
-      const data = await fetchOrgStatus();
+      const data = await fetchOrgStatus(openClawAgents as BridgeAgent[]);
       setOrgData(data);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to load org chart");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [openClawAgents]);
 
   const initialLoadDone = useRef(false);
   useEffect(() => {

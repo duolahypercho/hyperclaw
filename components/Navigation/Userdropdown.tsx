@@ -10,7 +10,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { User, Settings, LogOut, Sparkles, CreditCard } from "lucide-react";
+import { User, Settings, LogOut, Sparkles, CreditCard, RefreshCw } from "lucide-react";
 import { useRouter } from "next/router";
 import { getMediaUrl } from "$/utils";
 import { cn } from "@/lib/utils";
@@ -28,7 +28,8 @@ import {
 
 const Userdropdown = () => {
   const { userInfo, membership, logout } = useUser();
-  const { gatewayHealthy, gatewayHealthError } = useOpenClawContext();
+  const { gatewayHealthy, gatewayHealthError, refreshAll } = useOpenClawContext();
+  const [reconnecting, setReconnecting] = useState(false);
   const router = useRouter();
   const { openModal } = usePricingModal();
   const [isLoadingBilling, setIsLoadingBilling] = useState(false);
@@ -208,6 +209,23 @@ const Userdropdown = () => {
             <Sparkles className="mr-2 h-4 w-4" />
             <span>Upgrade Plan</span>
           </DropdownMenuItem>
+        )}
+        {gatewayHealthy === false && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onClick={async (e) => {
+                e.preventDefault();
+                setReconnecting(true);
+                try { await refreshAll(); } finally { setReconnecting(false); }
+              }}
+              disabled={reconnecting}
+              className="cursor-pointer text-amber-600 focus:text-amber-600"
+            >
+              <RefreshCw className={cn("mr-2 h-4 w-4", reconnecting && "animate-spin")} />
+              <span>{reconnecting ? "Reconnecting..." : "Reconnect"}</span>
+            </DropdownMenuItem>
+          </>
         )}
         <DropdownMenuSeparator />
         <DropdownMenuItem

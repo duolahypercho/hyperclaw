@@ -34,6 +34,7 @@ import { cn } from "@/lib/utils";
 import { useToast } from "@/components/ui/use-toast";
 import { v4 as uuidv4 } from "uuid";
 import { gatewayConnection, subscribeGatewayConnection } from "$/lib/openclaw-gateway-ws";
+import { useOpenClawContext } from "$/Providers/OpenClawProv";
 import {
   AttachmentPreview,
   AttachmentPreviewModal,
@@ -201,67 +202,31 @@ export const InputContainer: React.FC<InputContainerProps> = ({
   );
   const [pdfPreviewContent, setPdfPreviewContent] = useState<Blob | null>(null);
 
-  // Default models - initialize with defaults first
-  const [availableModels, setAvailableModels] = useState<Array<{ id: string; provider: string; displayName?: string }>>([
-    { id: "claude-opus-4-6", provider: "anthropic", displayName: "Claude Opus 4.6" },
-    { id: "claude-sonnet-4-6", provider: "anthropic", displayName: "Claude Sonnet 4.6" },
-    { id: "claude-haiku-4-5", provider: "anthropic", displayName: "Claude Haiku 4.5" },
-  ]);
+  // Models from centralized context
+  const { models: contextModels } = useOpenClawContext();
+  const availableModels = contextModels;
   const [currentModel, setCurrentModel] = useState<string>("claude-opus-4-6");
-  const [isLoadingModels, setIsLoadingModels] = useState(true);
-  const [modelsLoadedFromGateway, setModelsLoadedFromGateway] = useState(false);
+  const [isLoadingModels, setIsLoadingModels] = useState(false);
   const isControlled = controlledValue !== undefined;
   const currentValue = isControlled ? controlledValue : inputValue;
   const setValue = isControlled ? controlledOnChange : setInputValue;
 
-  // Load models from gateway and get session model when sessionKey changes
+  // Get session model when sessionKey changes
   useEffect(() => {
-    const loadModels = async () => {
-      setIsLoadingModels(true);
-
+    if (!sessionKey || !gatewayConnection.connected) return;
+    let cancelled = false;
+    (async () => {
       try {
-        const client = gatewayConnection;
-
-        if (!client.connected) {
-          setIsLoadingModels(false);
-          return;
+        const sessionModel = await gatewayConnection.getSessionModel(sessionKey);
+        if (!cancelled && sessionModel) {
+          setCurrentModel(sessionModel);
         }
-
-        // Get available models (only load once)
-        if (!modelsLoadedFromGateway) {
-          const result = await client.listModels() as { models: Array<{ id: string; provider: string; displayName?: string }> };
-          if (result.models && result.models.length > 0) {
-            setAvailableModels(result.models);
-            setModelsLoadedFromGateway(true);
-          }
-        }
-
-        // Get session model when sessionKey changes
-        if (sessionKey) {
-          const sessionModel = await client.getSessionModel(sessionKey);
-          if (sessionModel) {
-            setCurrentModel(sessionModel);
-          }
-        }
-      } catch (error) {
-        console.error("[InputContainer] Failed to load models:", error);
-      } finally {
-        setIsLoadingModels(false);
+      } catch {
+        // ignore
       }
-    };
-
-    loadModels();
-
-    // Also subscribe to gateway connection changes
-    const handleConnect = () => {
-      loadModels();
-    };
-    const unsubscribe = subscribeGatewayConnection(handleConnect);
-
-    return () => {
-      unsubscribe();
-    };
-  }, [sessionKey, modelsLoadedFromGateway]);
+    })();
+    return () => { cancelled = true; };
+  }, [sessionKey]);
 
   // Use external attachments if provided, otherwise use internal state
   const currentAttachments: AttachmentUnion[] =
@@ -929,7 +894,7 @@ export const InputContainer: React.FC<InputContainerProps> = ({
         className="flex flex-row items-end justify-between w-full"
       >
         <div className="flex flex-row items-end gap-0">
-          {showActions && (isLoadingModels && !modelsLoadedFromGateway ? (
+          {showActions && (isLoadingModels ? (
             <div className="flex items-center gap-1.5 h-[30px] px-2">
               <div className="w-3 h-3 rounded-sm bg-muted-foreground/20 animate-pulse" />
               <div className="w-[80px] h-3 rounded bg-muted-foreground/20 animate-pulse" />
@@ -1027,7 +992,6 @@ export const InputContainer: React.FC<InputContainerProps> = ({
     availableModels,
     currentModel,
     isLoadingModels,
-    modelsLoadedFromGateway,
     handleModelChange,
     setIsPopoverOpen,
     showEmojiPicker,
