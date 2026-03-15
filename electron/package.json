@@ -8,9 +8,9 @@
     "electron-updater": "^6.1.7"
   },
   "devDependencies": {
+    "cross-env": "^7.0.3",
     "electron": "^39.2.7",
-    "electron-builder": "^24.13.3",
-    "cross-env": "^7.0.3"
+    "electron-builder": "^26.8.1"
   },
   "build": {
     "appId": "com.hypercho.hyperclaw",
@@ -28,7 +28,6 @@
     "win": {
       "target": "nsis",
       "icon": "../public/win.ico",
-      "publisherName": "Hypercho",
       "verifyUpdateCodeSignature": false
     },
     "mac": {
@@ -52,7 +51,7 @@
       "category": "public.app-category.productivity",
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
-      "cscLink": "/Users/ziwenxu/Documents/certificates.p12",
+      "identity": "18F65824DF8FEF47D0F84D1EE05DC98D91E3F8EB",
       "cscKeyPassword": "HxC0d3$1gn2026!Z1w",
       "entitlements": "./entitlements.plist",
       "entitlementsInherit": "./entitlements.plist"
@@ -87,7 +86,7 @@
       "allowToChangeInstallationDirectory": true,
       "allowElevation": true,
       "runAfterFinish": true,
-      "artifactName": "Hyperclaw-Setup-Remote-${version}.${ext}",
+      "artifactName": "Hyperclaw-Setup-Local-${version}.${ext}",
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Hyperclaw",
