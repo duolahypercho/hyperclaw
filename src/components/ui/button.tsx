@@ -27,6 +27,8 @@ const buttonVariants = cva(
           "bg-accent/80 text-accent-foreground hover:bg-accent/70 active:bg-accent/30",
         active:
           "bg-primary/30 text-primary-foreground hover:bg-primary/20 active:bg-primary/40",
+        callout:
+          "bg-accent text-accent-foreground shadow hover:bg-accent/90 transition-all hover:scale-105",
         loading:
           "bg-primary text-primary-foreground hover:bg-primary/70 active:bg-primary/30",
         icon: "bg-transparent text-muted-foreground hover:text-foreground transition-colors active:scale-[0.99]",

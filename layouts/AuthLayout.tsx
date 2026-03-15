@@ -104,21 +104,29 @@ const AuthLayout = ({ children }: any) => {
     setMounted(true);
   }, []);
 
-  // Redirect authenticated users to dashboard (only on landing page)
+  // Redirect from landing page: Electron → login, authenticated web → dashboard
   useEffect(() => {
-    // Only redirect if we're on the landing page (index page)
     const isLandingPage = router.pathname === "/" || router.asPath === "/";
+    if (!isLandingPage || isRedirecting) return;
 
-    if (
-      isLandingPage &&
-      status === "authenticated" &&
-      session &&
-      !isRedirecting
-    ) {
+    // Electron app should never show the landing page
+    if (isElectron) {
+      if (status === "authenticated" && session) {
+        setIsRedirecting(true);
+        router.push("/dashboard");
+      } else if (status === "unauthenticated") {
+        setIsRedirecting(true);
+        router.push("/auth/Login");
+      }
+      return;
+    }
+
+    // Web: redirect authenticated users to dashboard
+    if (status === "authenticated" && session) {
       setIsRedirecting(true);
       router.push("/dashboard");
     }
-  }, [status, session, router, isRedirecting]);
+  }, [status, session, router, isRedirecting, isElectron]);
 
   // CRITICAL: Always render children during SSR to ensure SEO tags are present
   // Only show loading overlay (not blocking) during redirect or initial auth check

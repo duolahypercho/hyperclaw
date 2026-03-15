@@ -155,10 +155,42 @@ export default function DeviceSetup({ onComplete }: DeviceSetupProps) {
     }
   }
 
-  // Poll for device connection in "waiting" step
+  // Listen for device connection via WebSocket, with REST polling as fallback
   useEffect(() => {
     if (step !== "waiting" || !pairing) return;
+    let done = false;
+
+    // Primary: listen for real-time device_connected event via gateway WebSocket
+    let unsubWs: (() => void) | null = null;
+    (async () => {
+      try {
+        const { gatewayConnection, connectGatewayWs } =
+          await import("$/lib/openclaw-gateway-ws");
+        const { getUserToken } = await import("$/lib/hub-direct");
+
+        // Ensure gateway is connected in hub mode
+        if (!gatewayConnection.wsUrl) {
+          const token = await getUserToken();
+          if (token) {
+            const hubUrl = process.env.NEXT_PUBLIC_HUB_API_URL || "https://hub.hypercho.com";
+            connectGatewayWs(hubUrl, { token, hubMode: true });
+          }
+        }
+
+        unsubWs = gatewayConnection.on("device_connected", (msg) => {
+          if (msg.deviceId === pairing.deviceId && !done) {
+            done = true;
+            onComplete();
+          }
+        });
+      } catch {
+        // WebSocket not available, rely on polling fallback
+      }
+    })();
+
+    // Fallback: poll REST every 5s in case WebSocket isn't connected
     const interval = setInterval(async () => {
+      if (done) return;
       try {
         const res = await hubFetch("/api/devices");
         if (!res.ok) return;
@@ -167,6 +199,7 @@ export default function DeviceSetup({ onComplete }: DeviceSetupProps) {
           (d: any) => d.id === pairing.deviceId && d.status === "online"
         );
         if (device) {
+          done = true;
           clearInterval(interval);
           onComplete();
         }
@@ -174,8 +207,12 @@ export default function DeviceSetup({ onComplete }: DeviceSetupProps) {
       } catch {
         // ignore
       }
-    }, 3000);
-    return () => clearInterval(interval);
+    }, 5000);
+
+    return () => {
+      clearInterval(interval);
+      unsubWs?.();
+    };
   }, [step, pairing, onComplete]);
 
   const hubBase = process.env.NEXT_PUBLIC_HUB_URL?.replace(/^wss?/, "https") || "https://hub.hypercho.com";

@@ -90,6 +90,8 @@ export const gatewayConnection = {
   deviceIdentity: null as { deviceId: string; publicKeyPem: string } | null,
   // Chat event handlers
   chatEventListeners: new Set<(payload: ChatEventPayload) => void>(),
+  // Generic event handlers keyed by event name (e.g. "device_connected")
+  eventHandlers: new Map<string, Set<(msg: Record<string, unknown>) => void>>(),
   // Buffer for accumulating delta text from agent events
   agentDeltaBuffer: null as Map<string, string> | null,
 
@@ -410,12 +412,28 @@ export const gatewayConnection = {
       return;
     }
 
+    // Emit to generic event handlers
+    if (msg.type === "event" && typeof event === "string") {
+      const handlers = this.eventHandlers.get(event);
+      if (handlers) {
+        handlers.forEach((handler) => handler(msg));
+      }
+    }
   },
 
   /** Subscribe to chat events */
   onChatEvent(callback: (payload: ChatEventPayload) => void): () => void {
     this.chatEventListeners.add(callback);
     return () => this.chatEventListeners.delete(callback);
+  },
+
+  /** Subscribe to a named event (e.g. "device_connected", "device_disconnected") */
+  on(event: string, callback: (msg: Record<string, unknown>) => void): () => void {
+    if (!this.eventHandlers.has(event)) {
+      this.eventHandlers.set(event, new Set());
+    }
+    this.eventHandlers.get(event)!.add(callback);
+    return () => this.eventHandlers.get(event)?.delete(callback);
   },
 
   /** Send a chat message */
