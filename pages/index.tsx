@@ -1,15 +1,23 @@
-import { GetServerSideProps } from "next";
+import { NextPage } from "next";
+import Head from "next/head";
+import HomeContent from "$/components/Landing/HomeContent";
+import AuthLayout, { getLayout } from "$/layouts/AuthLayout";
 
-// Root redirects to dashboard (landing removed)
-export const getServerSideProps: GetServerSideProps = async () => {
-  return {
-    redirect: {
-      destination: "/dashboard",
-      permanent: false,
-    },
-  };
+const Index: NextPage & { getLayout?: (page: NextPage) => JSX.Element } = () => {
+  return (
+    <>
+      <Head>
+        <title>HyperClaw - OpenClaw Mission Control</title>
+        <meta
+          name="description"
+          content="Your local command center for AI assistants. Download OpenClaw Dashboard and manage your AI deployment."
+        />
+      </Head>
+      <HomeContent />
+    </>
+  );
 };
 
-const Index = () => null;
+Index.getLayout = getLayout;
 
 export default Index;

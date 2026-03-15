@@ -27,15 +27,8 @@ function buildConnectSrc() {
 const nextConfig = {
   reactStrictMode: true,
   transpilePackages: ["@mui/material", "geist", "ai", "@ai-sdk/react"],
-  // Root → dashboard (landing removed)
   async redirects() {
-    return [
-      {
-        source: "/",
-        destination: "/dashboard",
-        permanent: false,
-      },
-    ];
+    return [];
   },
   async headers() {
     return [
