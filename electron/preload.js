@@ -123,6 +123,20 @@ contextBridge.exposeInMainWorld("electronAPI", {
     reorderFolder: (folderId, newIndex) => ipcRenderer.invoke("notes:reorderFolder", { folderId, newIndex }),
     uploadAttachment: (folderId, noteId, attachment) => ipcRenderer.invoke("notes:uploadAttachment", { folderId, noteId, attachment }),
   },
+
+  // Voice Overlay - for global voice input (Alt+Space)
+  voiceOverlay: {
+    hide: () => ipcRenderer.invoke("hide-voice-overlay"),
+    isVisible: () => ipcRenderer.invoke("get-voice-overlay-visible"),
+    // Listen for voice transcript results
+    onTranscript: (callback) => {
+      if (typeof callback !== "function") return;
+      ipcRenderer.on("voice-transcript", (event, data) => callback(data));
+    },
+    removeTranscriptListener: () => {
+      ipcRenderer.removeAllListeners("voice-transcript");
+    },
+  },
 });
 
 // You can add more APIs here as needed for your Hypercho OS features

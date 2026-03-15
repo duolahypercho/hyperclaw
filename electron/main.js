@@ -8,6 +8,8 @@ const {
   nativeImage,
   shell,
   session,
+  globalShortcut,
+  screen,
 } = require("electron");
 const path = require("path");
 const fs = require("fs");
@@ -1283,12 +1285,111 @@ if (process.platform === "darwin") {
   });
 }
 
+// ─── Voice Overlay Window ──────────────────────────────────────────────────────────
+
+let voiceOverlayWindow = null;
+
+function createVoiceOverlay() {
+  if (voiceOverlayWindow && !voiceOverlayWindow.isDestroyed()) {
+    voiceOverlayWindow.show();
+    voiceOverlayWindow.focus();
+    return;
+  }
+
+  const { width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().workAreaSize;
+  const overlayWidth = 500;
+  const overlayHeight = 200;
+
+  voiceOverlayWindow = new BrowserWindow({
+    width: overlayWidth,
+    height: overlayHeight,
+    x: Math.round((screenWidth - overlayWidth) / 2),
+    y: Math.round((screenHeight - overlayHeight) / 2),
+    frame: false,
+    transparent: true,
+    resizable: false,
+    movable: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    focusable: true,
+    show: false,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, "preload.js"),
+    },
+  });
+
+  // Load the overlay page
+  if (isDev) {
+    voiceOverlayWindow.loadURL("http://localhost:1000/voice-overlay");
+  } else {
+    voiceOverlayWindow.loadFile(path.join(__dirname, "../.next/server/voice-overlay.html")).catch(() => {
+      // Fallback: try to load from static
+      voiceOverlayWindow.loadFile(path.join(__dirname, "../.next/static/chunks/voice-overlay.html")).catch(() => {
+        console.error("Could not load voice overlay");
+      });
+    });
+  }
+
+  voiceOverlayWindow.once("ready-to-show", () => {
+    voiceOverlayWindow.show();
+    voiceOverlayWindow.focus();
+  });
+
+  voiceOverlayWindow.on("blur", () => {
+    // Optionally hide on blur - can be toggled
+  });
+
+  voiceOverlayWindow.on("closed", () => {
+    voiceOverlayWindow = null;
+  });
+}
+
+function hideVoiceOverlay() {
+  if (voiceOverlayWindow && !voiceOverlayWindow.isDestroyed()) {
+    voiceOverlayWindow.hide();
+  }
+}
+
+function toggleVoiceOverlay() {
+  if (voiceOverlayWindow && !voiceOverlayWindow.isDestroyed() && voiceOverlayWindow.isVisible()) {
+    hideVoiceOverlay();
+  } else {
+    createVoiceOverlay();
+  }
+}
+
+// Register global hotkey for voice input (Alt+Space)
+function registerVoiceHotkey() {
+  const ret = globalShortcut.register("Alt+Space", () => {
+    console.log("[Hyperclaw] Alt+Space pressed - toggling voice overlay");
+    toggleVoiceOverlay();
+  });
+
+  if (!ret) {
+    console.error("[Hyperclaw] Failed to register Alt+Space hotkey");
+  } else {
+    console.log("[Hyperclaw] Registered Alt+Space for voice input");
+  }
+}
+
+// IPC handlers for voice overlay
+ipcMain.handle("hide-voice-overlay", () => {
+  hideVoiceOverlay();
+});
+
+ipcMain.handle("get-voice-overlay-visible", () => {
+  return voiceOverlayWindow && !voiceOverlayWindow.isDestroyed() && voiceOverlayWindow.isVisible();
+});
+
 // ─── App Lifecycle ──────────────────────────────────────────────────────────
 
 app.whenReady().then(() => {
   writeToBridgeLog("Hyperclaw main process started");
   createTray();
   createWindow();
+  registerVoiceHotkey(); // Register Alt+Space for voice input
 
   if (!isDev && app.isPackaged && isRemoteMode && autoUpdater) {
     setTimeout(
@@ -1301,4 +1402,5 @@ app.whenReady().then(() => {
 app.on("before-quit", () => {
   appIsQuiting = true;
   if (tray) tray.destroy();
+  globalShortcut.unregisterAll(); // Unregister all global shortcuts including voice hotkey
 });

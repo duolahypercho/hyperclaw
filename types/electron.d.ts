@@ -240,6 +240,13 @@ declare global {
       hyperClawBridge: HyperClawBridgeAPI;
       noteFS: any;
       memoryFS: MemoryAPI;
+      // Voice Overlay - global voice input (Alt+Space)
+      voiceOverlay?: {
+        hide: () => Promise<void>;
+        isVisible: () => Promise<boolean>;
+        onTranscript: (callback: (data: { text: string; agentId?: string; sessionKey?: string }) => void) => void;
+        removeTranscriptListener: () => void;
+      };
     };
   }
 }
