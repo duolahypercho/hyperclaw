@@ -1,43 +1,13 @@
 /**
  * Single entry point for all bridge calls.
  *
- * Priority: Electron IPC → Hub direct (browser).
- *
- * In Electron mode, uses IPC so the bridge runs on the user's machine.
- * In the browser, calls the Hub API directly (no serverless proxy).
+ * Always routes through Hub API → Connector (cross-device compatible).
  */
 import { hubCommand } from "$/lib/hub-direct";
 
 export type BridgeBody = Record<string, unknown>;
 
-let _bridgeLogOnce = false;
-function logBridgeMode(mode: "ipc" | "hub") {
-  if (_bridgeLogOnce || typeof window === "undefined") return;
-  _bridgeLogOnce = true;
-  const labels = {
-    ipc: "[Hyperclaw] Bridge: using IPC (Electron main.js)",
-    hub: "[Hyperclaw] Bridge: using Hub direct (browser)",
-  };
-  console.info(labels[mode]);
-}
-
 export async function bridgeInvoke(action: string, body: BridgeBody = {}): Promise<unknown> {
-  // Priority 1: Electron IPC
-  const useIPC =
-    typeof window !== "undefined" &&
-    (window as unknown as { electronAPI?: { hyperClawBridge?: { invoke?: (a: string, b: BridgeBody) => Promise<unknown> } } })
-      .electronAPI?.hyperClawBridge?.invoke;
-
-  if (useIPC) {
-    logBridgeMode("ipc");
-    return (window as unknown as { electronAPI: { hyperClawBridge: { invoke: (a: string, b: BridgeBody) => Promise<unknown> } } }).electronAPI.hyperClawBridge.invoke(
-      action,
-      body
-    );
-  }
-
-  // Priority 2: Direct Hub API call (no serverless proxy)
-  logBridgeMode("hub");
   return hubCommand({ action, ...body });
 }
 

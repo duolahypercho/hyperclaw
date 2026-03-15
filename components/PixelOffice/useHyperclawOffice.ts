@@ -62,16 +62,14 @@ function buildEngineConfig(): import("./officeEngineConfig").OfficeEngineConfig 
   return {
     assetBasePath: "/pixel-office",
     getInitialLayout: async (): Promise<OfficeLayout> => {
-      if (typeof window !== "undefined" && (window as unknown as { electronAPI?: { hyperClawBridge?: { invoke?: unknown } } }).electronAPI?.hyperClawBridge?.invoke) {
-        try {
-          const r = (await bridgeInvoke("read-office-layout")) as { success?: boolean; layout?: OfficeLayout };
-          if (r?.success && r.layout) {
-            if (typeof localStorage !== "undefined") localStorage.setItem(HAS_USER_LAYOUT_KEY, "1");
-            return migrateLayoutColors(r.layout);
-          }
-        } catch {
-          // fallback to preset
+      try {
+        const r = (await bridgeInvoke("read-office-layout")) as { success?: boolean; layout?: OfficeLayout };
+        if (r?.success && r.layout) {
+          if (typeof localStorage !== "undefined") localStorage.setItem(HAS_USER_LAYOUT_KEY, "1");
+          return migrateLayoutColors(r.layout);
         }
+      } catch {
+        // fallback to localStorage / preset
       }
       try {
         const saved = typeof localStorage !== "undefined" && localStorage.getItem(LAYOUT_STORAGE_KEY);

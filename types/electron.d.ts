@@ -198,7 +198,15 @@ export interface BridgeCommand {
   payload?: Record<string, unknown>;
 }
 
+export interface HubConfig {
+  enabled: boolean;
+  url: string;
+  deviceId: string;
+  jwt: string;
+}
+
 export interface HyperClawBridgeAPI {
+  invoke: (action: string, body?: Record<string, unknown>) => Promise<unknown>;
   getTasks: () => Promise<HyperClawTask[]>;
   addTask: (task: (Omit<HyperClawTask, "id" | "createdAt" | "updatedAt">) & { id?: string }) => Promise<HyperClawTask>;
   updateTask: (id: string, patch: Partial<Omit<HyperClawTask, "id" | "createdAt">>) => Promise<HyperClawTask | null>;
@@ -214,6 +222,11 @@ export interface HyperClawBridgeAPI {
     document?: string;
     context?: Record<string, unknown>;
   }) => Promise<{ success: boolean; error?: string; stdout?: string; taskId: string; agentId: string }>;
+  getHubConfig: () => HubConfig;
+  setHubConfig: (config: Partial<HubConfig>) => Promise<{ success: boolean; error?: string }>;
+  getGatewayConfig: () => Promise<{ host: string; port: number; token?: string }>;
+  setGatewayConfig: (host: string, port: number, token?: string) => Promise<{ success: boolean; error?: string }>;
+  testGatewayConnection: (host: string, port: number) => Promise<{ success: boolean; error?: string }>;
   onEvent: (callback: (event: BridgeEvent) => void) => void;
   onTasksChanged: (callback: (tasks: HyperClawTask[]) => void) => void;
   removeAllBridgeListeners: () => void;

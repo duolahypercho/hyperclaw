@@ -3,7 +3,7 @@ import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
 import type { HyperClawTask, BridgeEvent, BridgeCommand } from "$/types/electron";
 
 export type BridgeDebug = {
-  bridgeType: "electron" | "hub";
+  bridgeType: "hub";
   lastError: string | null;
   lastFetchAt: string | null;
   taskCount: number;
@@ -12,11 +12,6 @@ export type BridgeDebug = {
 
 async function apiFetch(action: string, body?: Record<string, unknown>) {
   return bridgeInvoke(action, body);
-}
-
-function getElectronBridge() {
-  if (typeof window !== "undefined") return window.electronAPI?.hyperClawBridge ?? null;
-  return null;
 }
 
 function nowIso() {
@@ -30,27 +25,18 @@ export function useHyperClawBridge(pollIntervalMs = 15_000) {
   const [lastError, setLastError] = useState<string | null>(null);
   const [lastFetchAt, setLastFetchAt] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const bridgeType: "electron" | "hub" = typeof window !== "undefined" && getElectronBridge() ? "electron" : "hub";
 
   const fetchTasks = useCallback(async () => {
     setLastError(null);
-    const bridge = getElectronBridge();
     try {
-      if (bridge) {
-        const t = await bridge.getTasks();
-        const list = Array.isArray(t) ? t : [];
-        setTasks(list);
-        setLastFetchAt(nowIso());
+      const raw = await apiFetch("get-tasks");
+      if (!Array.isArray(raw)) {
+        setLastError(`API returned non-array: ${typeof raw} ${JSON.stringify(raw).slice(0, 200)}`);
+        setTasks([]);
       } else {
-        const raw = await apiFetch("get-tasks");
-        if (!Array.isArray(raw)) {
-          setLastError(`API returned non-array: ${typeof raw} ${JSON.stringify(raw).slice(0, 200)}`);
-          setTasks([]);
-        } else {
-          setTasks(raw);
-        }
-        setLastFetchAt(nowIso());
+        setTasks(raw);
       }
+      setLastFetchAt(nowIso());
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setLastError(msg);
@@ -61,14 +47,8 @@ export function useHyperClawBridge(pollIntervalMs = 15_000) {
 
   const addTask = useCallback(async (task: (Omit<HyperClawTask, "id" | "createdAt" | "updatedAt">) & { id?: string }) => {
     setLastError(null);
-    const bridge = getElectronBridge();
     try {
-      let newTask: HyperClawTask;
-      if (bridge) {
-        newTask = await bridge.addTask(task);
-      } else {
-        newTask = (await apiFetch("add-task", { task })) as HyperClawTask;
-      }
+      const newTask = (await apiFetch("add-task", { task })) as HyperClawTask;
       setTasks((prev) => [...prev, newTask]);
       return newTask;
     } catch (e) {
@@ -80,14 +60,8 @@ export function useHyperClawBridge(pollIntervalMs = 15_000) {
 
   const deleteTask = useCallback(async (id: string) => {
     setLastError(null);
-    const bridge = getElectronBridge();
     try {
-      let result: { success: boolean };
-      if (bridge) {
-        result = await bridge.deleteTask(id);
-      } else {
-        result = (await apiFetch("delete-task", { id })) as { success: boolean };
-      }
+      const result = (await apiFetch("delete-task", { id })) as { success: boolean };
       if (result?.success) {
         setTasks((prev) => prev.filter((t) => t.id !== id));
       }
@@ -100,38 +74,19 @@ export function useHyperClawBridge(pollIntervalMs = 15_000) {
   }, []);
 
   const updateTask = useCallback(async (id: string, patch: Partial<Omit<HyperClawTask, "id" | "createdAt">>) => {
-    const bridge = getElectronBridge();
-    let updated: HyperClawTask | null;
-    if (bridge) {
-      updated = await bridge.updateTask(id, patch);
-    } else {
-      updated = (await apiFetch("update-task", { id, patch })) as HyperClawTask;
-    }
+    const updated = (await apiFetch("update-task", { id, patch })) as HyperClawTask;
     if (updated) {
-      setTasks((prev) => prev.map((t) => (t.id === id ? updated! : t)));
+      setTasks((prev) => prev.map((t) => (t.id === id ? updated : t)));
     }
     return updated;
   }, []);
 
   const sendCommand = useCallback(async (command: BridgeCommand) => {
-    const bridge = getElectronBridge();
-    if (bridge) {
-      return bridge.sendCommand(command);
-    }
     return apiFetch("send-command", { command });
   }, []);
 
-  // Real-time events from Electron, or polling in dev
+  // Poll for events
   useEffect(() => {
-    const bridge = getElectronBridge();
-
-    if (bridge) {
-      bridge.onTasksChanged((t) => setTasks(Array.isArray(t) ? t : []));
-      bridge.onEvent((evt) => setEvents((prev) => [...prev.slice(-99), evt]));
-      return () => { bridge.removeAllBridgeListeners(); };
-    }
-
-    // Dev fallback: poll for events
     const poll = async () => {
       try {
         const evts = (await apiFetch("get-events")) as BridgeEvent[];
@@ -149,7 +104,7 @@ export function useHyperClawBridge(pollIntervalMs = 15_000) {
   }, [fetchTasks]);
 
   const debug: BridgeDebug = {
-    bridgeType,
+    bridgeType: "hub",
     lastError,
     lastFetchAt,
     taskCount: tasks.length,
