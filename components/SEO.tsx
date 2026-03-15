@@ -1,5 +1,6 @@
 import React from "react";
 import Head from "next/head";
+import { SITE_URL } from "../lib/site-url";
 
 interface SEOProps {
   title: string;
@@ -65,7 +66,7 @@ const SEO: React.FC<SEOProps> = ({
       } catch {
         // Fallback if URL parsing fails
         return imgUrl.startsWith("/")
-          ? `https://app.claw.hypercho.com${imgUrl}`
+          ? `${SITE_URL}${imgUrl}`
           : imgUrl;
       }
     }
@@ -93,13 +94,13 @@ const SEO: React.FC<SEOProps> = ({
       "@type": "Organization",
       name: author,
       url: "https://hypercho.com",
-      logo: "https://app.claw.hypercho.com/Logopic.png",
+      logo: `${SITE_URL}/Logopic.png`,
     },
     publisher: {
       "@type": "Organization",
       name: "Hypercho",
       url: "https://hypercho.com",
-      logo: "https://app.claw.hypercho.com/Logopic.png",
+      logo: `${SITE_URL}/Logopic.png`,
     },
     ...(type === "article" &&
       publishedTime && { datePublished: publishedTime }),

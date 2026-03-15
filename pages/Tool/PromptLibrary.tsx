@@ -4,12 +4,13 @@ import { CopanionProvider } from "@OS/Provider/CopanionProv";
 import { SEOSchema } from "@OS/Provider/SEOProv";
 import { PromptLibraryProvider } from "$/components/Tool/PromptLibrary/provider/PromptProv";
 import PromptHome from "$/components/Tool/PromptLibrary/ui";
+import { SITE_URL } from "../../lib/site-url";
 
 const promptSEOSchema: SEOSchema = {
   title: "Prompt Library - Hyperclaw OS",
   description:
     "Discover, create, and organize AI prompts with our comprehensive prompt library. Access curated prompts for various AI models, create custom prompts, and share your best prompts with the community.",
-  url: "https://www.app.claw.hypercho.com/Tool/PromptLibrary",
+  url: `${SITE_URL}/Tool/PromptLibrary`,
   image: "https://hypercho.com/hypercho_banner.png",
   author: "Hypercho",
   robots: "index,follow",
@@ -29,7 +30,7 @@ const promptSEOSchema: SEOSchema = {
     title: "Prompt Library - Hyperclaw OS",
     description:
       "Discover, create, and organize AI prompts with our comprehensive prompt library. Access curated prompts for various AI models, create custom prompts, and share your best prompts with the community.",
-    url: "https://www.app.claw.hypercho.com/Tool/PromptLibrary",
+    url: `${SITE_URL}/Tool/PromptLibrary`,
     image: "https://hypercho.com/hypercho_banner.png",
     site_name: "Hypercho Hyperclaw",
     locale: "en_US",
@@ -58,7 +59,7 @@ const promptSEOSchema: SEOSchema = {
       price: "0",
       priceCurrency: "USD",
       availability: "https://schema.org/InStock",
-      url: "https://www.app.claw.hypercho.com/Tool/PromptLibrary",
+      url: `${SITE_URL}/Tool/PromptLibrary`,
     },
     creator: {
       "@type": "Organization",
@@ -66,8 +67,8 @@ const promptSEOSchema: SEOSchema = {
       url: "https://hypercho.com",
     },
     applicationSubCategory: "OfficeApplication",
-    downloadUrl: "https://www.app.claw.hypercho.com/Tool/PromptLibrary",
-    installUrl: "https://www.app.claw.hypercho.com/Tool/PromptLibrary",
+    downloadUrl: `${SITE_URL}/Tool/PromptLibrary`,
+    installUrl: `${SITE_URL}/Tool/PromptLibrary`,
     softwareRequirements: "Web Browser with JavaScript enabled",
     storageRequirements: "Cloud-based prompt storage with local caching",
     permissions: "Access to local storage for prompt management",

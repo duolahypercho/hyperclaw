@@ -1,4 +1,5 @@
 import { GetServerSideProps } from "next";
+import { SITE_URL } from "../lib/site-url";
 
 const Manifest = () => {
   return null;
@@ -69,7 +70,7 @@ export const getServerSideProps: GetServerSideProps = async ({ res }) => {
     related_applications: [
       {
         platform: "webapp",
-        url: "https://www.app.claw.hypercho.com/manifest.json",
+        url: `${SITE_URL}/manifest.json`,
       },
     ],
     prefer_related_applications: false,

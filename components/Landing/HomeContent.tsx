@@ -9,6 +9,7 @@ import { getMediaUrl } from "$/utils";
 const MACOS_ARM64_FILE_NAME = process.env.NEXT_PUBLIC_MACOS_ARM64_FILE_NAME;
 const MACOS_INTEL_FILE_NAME = process.env.NEXT_PUBLIC_MACOS_INTEL_FILE_NAME;
 const WINDOWS_FILE_NAME = process.env.NEXT_PUBLIC_WINDOWS_FILE_NAME;
+const LINUX_FILE_NAME = process.env.NEXT_PUBLIC_LINUX_FILE_NAME;
 
 const OPENCLAW_MACOS_ARM64_URL =
   getMediaUrl(`${MACOS_ARM64_FILE_NAME}`) ?? "#";
@@ -16,10 +17,13 @@ const OPENCLAW_MACOS_INTEL_URL =
   getMediaUrl(`${MACOS_INTEL_FILE_NAME}`) ?? "#";
 const OPENCLAW_WINDOWS_URL =
   getMediaUrl(`${WINDOWS_FILE_NAME}`) ?? "#";
+const OPENCLAW_LINUX_URL =
+  getMediaUrl(`${LINUX_FILE_NAME}`) ?? "#";
 
 const HAS_VALID_DOWNLOAD_URLS =
   OPENCLAW_MACOS_ARM64_URL !== "#" || OPENCLAW_MACOS_INTEL_URL !== "#";
 const HAS_WINDOWS_URL = OPENCLAW_WINDOWS_URL !== "#";
+const HAS_LINUX_URL = OPENCLAW_LINUX_URL !== "#";
 
 function useMacArchitecture(): "arm" | "x86" | null {
   const [arch, setArch] = useState<"arm" | "x86" | null>(null);
@@ -155,19 +159,25 @@ const WindowsIcon = ({ className }: { className?: string }) => (
   </svg>
 );
 
-function useDetectedPlatform(): "mac-arm" | "mac-intel" | "windows" | null {
+const LinuxIcon = ({ className }: { className?: string }) => (
+  <svg className={className} fill="currentColor" viewBox="0 0 24 24" aria-hidden>
+    <path d="M12.504 0c-.155 0-.315.008-.48.021-4.226.333-3.105 4.807-3.17 6.298-.076 1.092-.3 1.953-1.05 3.02-.885 1.051-2.127 2.75-2.716 4.521-.278.832-.41 1.684-.287 2.489a.424.424 0 00-.11.135c-.26.268-.45.6-.663.839-.199.199-.485.267-.797.4-.313.136-.658.269-.864.68-.09.189-.136.394-.132.602 0 .199.027.4.055.536.058.399.116.728.04.97-.249.68-.28 1.145-.106 1.484.174.334.535.47.94.601.81.2 1.91.135 2.774.6.926.466 1.866.67 2.616.47.526-.116.97-.464 1.208-.946.587-.003 1.23-.269 2.26-.334.699-.058 1.574.267 2.577.2.025.134.063.198.114.333l.003.003c.391.778 1.113 1.022 1.903 1.395.199.093.387.134.59.134.15 0 .6-.063.863-.195a.44.44 0 00.133-.078c.137.07.208.18.224.317.057.28.08.632.035 1.082-.052.473-.112.872-.197 1.173-.175.638-.49.937-.856.937-.09 0-.184-.013-.283-.039-.493-.128-.807-.356-1.068-.588-.251-.222-.44-.449-.656-.625-.195-.16-.406-.276-.66-.284a.632.632 0 00-.137.014c-.208.05-.37.195-.473.39a1.18 1.18 0 00-.13.59c.008.199.076.4.2.606.124.201.27.399.455.591.193.197.371.399.55.529.176.129.322.2.402.23.137.053.288.112.444.182.193.087.349.204.463.358.116.158.164.34.134.564-.03.21-.1.39-.254.515-.151.13-.38.197-.674.197-.106 0-.202-.009-.3-.027a1.9 1.9 0 01-.363-.117 2.6 2.6 0 01-.234-.13c-.136-.08-.257-.179-.404-.279-.335-.224-.648-.398-.968-.398a.67.67 0 00-.266.053c-.196.081-.32.233-.38.408-.064.176-.068.382.008.577.076.192.234.38.46.52.344.21.71.364 1.076.429.199.036.326.058.48.058a2.03 2.03 0 001.31-.506c.264-.239.393-.553.4-.875.005-.21-.055-.408-.17-.589.224-.114.412-.29.543-.522.13-.231.17-.495.134-.741a1.41 1.41 0 00-.264-.622c.087-.264.13-.562.166-.905.047-.455.026-.857-.036-1.178-.063-.321-.166-.569-.298-.653a.66.66 0 00-.174-.077l-.014-.003.007-.016c.199-.39.293-.762.294-1.083 0-.199-.04-.39-.102-.553-.069-.179-.174-.333-.336-.429-.164-.095-.355-.143-.613-.143-.284 0-.501.076-.758.119-.256.046-.509.07-.834.07l-.154-.003c-.27-.009-.514.044-.717.135-.17.076-.302.193-.373.361-.148-.16-.368-.28-.685-.28-.291 0-.532.098-.712.242-.171.137-.277.328-.302.564a1.45 1.45 0 00.001.316c-.263.028-.529.001-.735-.07a1.47 1.47 0 01-.453-.231 1.99 1.99 0 00-.282-.175 2.15 2.15 0 00-.278-.12c.074-.176.087-.38.033-.58-.048-.175-.14-.325-.255-.446z" />
+  </svg>
+);
+
+function useDetectedPlatform(): "mac-arm" | "mac-intel" | "windows" | "linux" | null {
   const macArch = useMacArchitecture();
-  const [isWindows, setIsWindows] = useState(false);
+  const [osPlatform, setOsPlatform] = useState<"windows" | "linux" | null>(null);
 
   useEffect(() => {
-    if (typeof navigator !== "undefined" && /Win/i.test(navigator.platform)) {
-      setIsWindows(true);
-    }
+    if (typeof navigator === "undefined") return;
+    if (/Win/i.test(navigator.platform)) setOsPlatform("windows");
+    else if (/Linux/i.test(navigator.platform)) setOsPlatform("linux");
   }, []);
 
   if (macArch === "arm") return "mac-arm";
   if (macArch === "x86") return "mac-intel";
-  if (isWindows) return "windows";
+  if (osPlatform) return osPlatform;
   return null;
 }
 
@@ -192,6 +202,10 @@ export default function HomeContent() {
       case "windows":
         return HAS_WINDOWS_URL
           ? { url: OPENCLAW_WINDOWS_URL, label: "Download for Windows", platform: "windows" as const }
+          : null;
+      case "linux":
+        return HAS_LINUX_URL
+          ? { url: OPENCLAW_LINUX_URL, label: "Download for Linux", platform: "linux" as const }
           : null;
       default:
         return OPENCLAW_MACOS_ARM64_URL !== "#"
@@ -221,6 +235,8 @@ export default function HomeContent() {
                   <div className="w-14 h-14 rounded-2xl bg-white/10 flex items-center justify-center">
                     {primaryDownload?.platform === "windows" ? (
                       <WindowsIcon className="w-8 h-8 text-white" />
+                    ) : primaryDownload?.platform === "linux" ? (
+                      <LinuxIcon className="w-8 h-8 text-white" />
                     ) : (
                       <AppleIcon className="w-8 h-8 text-white" />
                     )}
@@ -298,6 +314,23 @@ export default function HomeContent() {
                         <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/5 border border-white/10 text-xs text-white/25 cursor-default">
                           <WindowsIcon className="w-3 h-3" />
                           Windows (soon)
+                        </span>
+                      )}
+                      {HAS_LINUX_URL ? (
+                        <a
+                          href={OPENCLAW_LINUX_URL}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          download
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/5 border border-white/10 text-xs text-white/60 hover:bg-white/10 hover:text-white transition-colors"
+                        >
+                          <LinuxIcon className="w-3 h-3" />
+                          Linux
+                        </a>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/5 border border-white/10 text-xs text-white/25 cursor-default">
+                          <LinuxIcon className="w-3 h-3" />
+                          Linux (soon)
                         </span>
                       )}
                     </div>

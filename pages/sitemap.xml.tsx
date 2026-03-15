@@ -1,11 +1,12 @@
 import { GetServerSideProps } from "next";
+import { SITE_URL } from "../lib/site-url";
 
 const Sitemap = () => {
   return null;
 };
 
 export const getServerSideProps: GetServerSideProps = async ({ res }) => {
-  const baseUrl = "https://app.claw.hypercho.com";
+  const baseUrl = SITE_URL;
 
   const staticPages = [
     "",

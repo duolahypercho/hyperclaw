@@ -4,12 +4,13 @@ import { CopanionProvider } from "@OS/Provider/CopanionProv";
 import { SEOSchema } from "@OS/Provider/SEOProv";
 import Usage from "$/components/Tool/Usage";
 import { UsageProvider } from "$/components/Tool/Usage/provider/usageProvider";
+import { SITE_URL } from "../../lib/site-url";
 
 const usageSEOSchema: SEOSchema = {
   title: "Gateway Usage & Cost - Hyperclaw OS",
   description:
     "View token usage and cost from the OpenClaw gateway. Daily input, output, cache read/write, and cost breakdown.",
-  url: "https://www.app.claw.hypercho.com/Tool/Usage",
+  url: `${SITE_URL}/Tool/Usage`,
   image: "https://hypercho.com/hypercho_banner.png",
   author: "Hypercho",
   robots: "index,follow",
@@ -27,7 +28,7 @@ const usageSEOSchema: SEOSchema = {
     type: "software",
     title: "Gateway Usage & Cost - Hyperclaw OS",
     description: "View token usage and cost from the OpenClaw gateway.",
-    url: "https://www.app.claw.hypercho.com/Tool/Usage",
+    url: `${SITE_URL}/Tool/Usage`,
     image: "https://hypercho.com/hypercho_banner.png",
     site_name: "Hypercho Hyperclaw",
     locale: "en_US",
@@ -50,7 +51,7 @@ const usageSEOSchema: SEOSchema = {
       price: "0",
       priceCurrency: "USD",
       availability: "https://schema.org/InStock",
-      url: "https://www.app.claw.hypercho.com/Tool/Usage",
+      url: `${SITE_URL}/Tool/Usage`,
     },
     creator: {
       "@type": "Organization",
