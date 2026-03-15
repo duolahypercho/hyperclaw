@@ -299,6 +299,20 @@ export async function readAvatarAsDataUri(
     })) as { success?: boolean; data?: string; mimeType?: string };
     if (!res?.success || !res.data) return null;
     const mime = res.mimeType || "image/png";
+
+    // Convert base64 to a blob URL for proper browser image rendering
+    // (data URIs can have sub-pixel rendering issues on retina displays)
+    if (typeof window !== "undefined") {
+      try {
+        const binary = atob(res.data);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        const blob = new Blob([bytes], { type: mime });
+        return URL.createObjectURL(blob);
+      } catch {
+        // fall through to data URI
+      }
+    }
     return `data:${mime};base64,${res.data}`;
   } catch {
     return null;
