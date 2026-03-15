@@ -144,6 +144,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
     removeVoiceMessageListener: () => {
       ipcRenderer.removeAllListeners("voice-input-message");
     },
+    // SenseVoice API
+    sensevoice: {
+      initialize: () => ipcRenderer.invoke("sensevoice-initialize"),
+      transcribe: (audioData) => ipcRenderer.invoke("sensevoice-transcribe", audioData),
+      getStatus: () => ipcRenderer.invoke("sensevoice-status"),
+    },
   },
 });
 

@@ -8,12 +8,13 @@
     "electron:dev": "electron ."
   },
   "dependencies": {
-    "electron-updater": "^6.1.7"
+    "electron-updater": "^6.1.7",
+    "onnxruntime-node": "^1.24.3"
   },
   "devDependencies": {
+    "cross-env": "^7.0.3",
     "electron": "^39.2.7",
-    "electron-builder": "^24.13.3",
-    "cross-env": "^7.0.3"
+    "electron-builder": "^24.13.3"
   },
   "build": {
     "appId": "com.hypercho.hyperclaw",
@@ -34,12 +35,16 @@
       "artifactName": "${productName}-${version}-win.${ext}"
     },
     "mac": {
-      "target": ["zip"],
+      "target": [
+        "zip"
+      ],
       "icon": "../public/icon.icns",
       "artifactName": "${productName}-${version}-mac.${ext}"
     },
     "linux": {
-      "target": ["AppImage"],
+      "target": [
+        "AppImage"
+      ],
       "icon": "../public/icon.png",
       "artifactName": "${productName}-${version}-linux.${ext}"
     },
@@ -47,7 +52,9 @@
       {
         "from": "../.next",
         "to": "../.next",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       }
     ]
   }

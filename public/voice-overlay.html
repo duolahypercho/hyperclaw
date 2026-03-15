@@ -23,7 +23,7 @@
       height: 100vh;
       display: flex;
       flex-direction: column;
-      background: rgba(0, 0, 0, 0.85);
+      background: rgba(0, 0, 0, 0.9);
       backdrop-filter: blur(20px);
       border-radius: 16px;
       border: 1px solid rgba(255, 255, 255, 0.1);
@@ -57,6 +57,10 @@
       animation: pulse 1s infinite;
     }
     
+    .status-dot.sensevoice {
+      background: #3b82f6;
+    }
+    
     @keyframes pulse {
       0%, 100% { opacity: 1; }
       50% { opacity: 0.5; }
@@ -65,6 +69,15 @@
     .status-text {
       font-size: 14px;
       font-weight: 500;
+    }
+    
+    .engine-badge {
+      font-size: 10px;
+      padding: 2px 6px;
+      background: rgba(59, 130, 246, 0.2);
+      color: #60a5fa;
+      border-radius: 4px;
+      margin-left: 8px;
     }
     
     .close-btn {
@@ -231,6 +244,28 @@
       border-radius: 4px;
       font-family: monospace;
     }
+    
+    .loading {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      color: #60a5fa;
+      font-size: 12px;
+    }
+    
+    .spinner {
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(96, 165, 250, 0.3);
+      border-top-color: #60a5fa;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
   </style>
 </head>
 <body>
@@ -239,6 +274,7 @@
       <div class="header-left">
         <div class="status-dot" id="statusDot"></div>
         <span class="status-text" id="statusText">Voice Input</span>
+        <span class="engine-badge" id="engineBadge">SenseVoice</span>
       </div>
       <button class="close-btn" id="closeBtn">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -249,7 +285,7 @@
     </div>
     
     <div class="transcript-area">
-      <p class="transcript placeholder" id="transcript">Press the mic to start recording</p>
+      <p class="transcript placeholder" id="transcript">Initializing SenseVoice...</p>
     </div>
     
     <div class="waveform" id="waveform" style="display: none;">
@@ -320,15 +356,43 @@
     // State
     let isListening = false;
     let transcript = '';
-    let interimTranscript = '';
-    let recognition = null;
+    let sensevoiceReady = false;
+    let mediaRecorder = null;
+    let audioChunks = [];
     let audioContext = null;
     let analyser = null;
     let mediaStream = null;
     let animationFrame = null;
     
+    // Initialize SenseVoice
+    async function initSenseVoice() {
+      try {
+        transcriptEl.textContent = 'Loading SenseVoice model...';
+        
+        const result = await ipcRenderer.invoke('sensevoice-initialize');
+        
+        if (result.success) {
+          sensevoiceReady = true;
+          statusDot.classList.add('sensevoice');
+          transcriptEl.textContent = 'Press the mic to start recording';
+          transcriptEl.classList.remove('placeholder');
+          console.log('[VoiceOverlay] SenseVoice initialized:', result.info);
+        } else {
+          console.error('[VoiceOverlay] SenseVoice init failed:', result.error);
+          transcriptEl.textContent = 'SenseVoice failed to load. Using fallback mode.';
+        }
+      } catch (error) {
+        console.error('[VoiceOverlay] Error initializing SenseVoice:', error);
+        transcriptEl.textContent = 'Error loading SenseVoice: ' + error.message;
+      }
+    }
+    
+    // Check SenseVoice status on load
+    initSenseVoice();
+    
     // Close button
     closeBtn.addEventListener('click', () => {
+      stopListening();
       ipcRenderer.invoke('hide-voice-overlay');
     });
     
@@ -341,6 +405,7 @@
     // Keyboard shortcuts
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
+        stopListening();
         ipcRenderer.invoke('hide-voice-overlay');
       } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
         sendMessage();
@@ -357,70 +422,102 @@
     
     async function startListening() {
       transcript = '';
-      interimTranscript = '';
+      audioChunks = [];
       updateTranscript('');
       
-      // Start audio visualization
-      await startAudioAnalysis();
-      
-      // Check for Web Speech API
-      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-      
-      if (!SpeechRecognition) {
-        alert('Speech recognition not supported in this browser');
-        return;
+      try {
+        // Request microphone access
+        mediaStream = await navigator.mediaDevices.getUserMedia({ 
+          audio: {
+            sampleRate: 16000,
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: true,
+          } 
+        });
+        
+        // Start audio visualization
+        await startAudioAnalysis();
+        
+        // Use MediaRecorder to capture audio
+        mediaRecorder = new MediaRecorder(mediaStream, {
+          mimeType: 'audio/webm;codecs=opus'
+        });
+        
+        mediaRecorder.ondataavailable = (event) => {
+          if (event.data.size > 0) {
+            audioChunks.push(event.data);
+          }
+        };
+        
+        mediaRecorder.onstop = async () => {
+          await processAudio();
+        };
+        
+        mediaRecorder.start(100); // Collect data every 100ms
+        
+        isListening = true;
+        updateUI();
+        
+      } catch (error) {
+        console.error('[VoiceOverlay] Error starting recording:', error);
+        transcriptEl.textContent = 'Error: ' + error.message;
       }
+    }
+    
+    async function processAudio() {
+      if (audioChunks.length === 0) return;
       
-      recognition = new SpeechRecognition();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = 'en-US';
-      
-      recognition.onresult = (event) => {
-        let interim = '';
-        let final = '';
+      try {
+        // Combine audio chunks
+        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
         
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const transcriptPart = event.results[i][0].transcript;
-          if (event.results[i].isFinal) {
-            final += transcriptPart;
-          } else {
-            interim += transcriptPart;
-          }
+        // Convert to array buffer
+        const arrayBuffer = await audioBlob.arrayBuffer();
+        
+        // Convert to audio context for processing
+        if (!audioContext) {
+          audioContext = new AudioContext({ sampleRate: 16000 });
         }
         
-        if (final) {
-          transcript += ' ' + final;
+        const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+        const audioData = audioBuffer.getChannelData(0);
+        
+        // Normalize to Float32
+        const normalizedData = new Float32Array(audioData.length);
+        for (let i = 0; i < audioData.length; i++) {
+          normalizedData[i] = audioData[i];
         }
-        interimTranscript = interim;
-        updateTranscript(transcript + ' ' + interim);
-      };
-      
-      recognition.onerror = (event) => {
-        console.error('Speech recognition error:', event.error);
-        stopListening();
-      };
-      
-      recognition.onend = () => {
-        if (isListening) {
-          // Restart if still supposed to be listening
-          try {
-            recognition.start();
-          } catch (e) {
-            stopListening();
-          }
+        
+        statusText.textContent = 'Transcribing...';
+        
+        // Send to SenseVoice for transcription
+        const result = await ipcRenderer.invoke('sensevoice-transcribe', Array.from(normalizedData));
+        
+        if (result.success && result.text) {
+          transcript = result.text;
+          updateTranscript(transcript);
+        } else {
+          // Fallback: couldn't transcribe
+          transcript = '[Audio captured but transcription not yet implemented]';
+          updateTranscript(transcript);
+          console.log('[VoiceOverlay] Transcription result:', result);
         }
-      };
-      
-      recognition.start();
-      isListening = true;
-      updateUI();
+        
+      } catch (error) {
+        console.error('[VoiceOverlay] Error processing audio:', error);
+        transcriptEl.textContent = 'Processing error: ' + error.message;
+      }
     }
     
     function stopListening() {
-      if (recognition) {
-        recognition.stop();
-        recognition = null;
+      if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+        mediaRecorder.stop();
+      }
+      
+      if (mediaStream) {
+        mediaStream.getTracks().forEach(track => track.stop());
+        mediaStream = null;
       }
       
       stopAudioAnalysis();
@@ -430,9 +527,9 @@
     }
     
     async function startAudioAnalysis() {
+      if (!mediaStream) return;
+      
       try {
-        mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
         analyser = audioContext.createAnalyser();
         analyser.fftSize = 256;
@@ -444,7 +541,7 @@
         const dataArray = new Uint8Array(analyser.frequencyBinCount);
         
         function updateVisualization() {
-          if (!analyser) return;
+          if (!analyser || !isListening) return;
           
           analyser.getByteFrequencyData(dataArray);
           
@@ -460,7 +557,7 @@
         
         updateVisualization();
       } catch (error) {
-        console.error('Error starting audio analysis:', error);
+        console.error('[VoiceOverlay] Error starting audio analysis:', error);
       }
     }
     
@@ -468,11 +565,6 @@
       if (animationFrame) {
         cancelAnimationFrame(animationFrame);
         animationFrame = null;
-      }
-      
-      if (mediaStream) {
-        mediaStream.getTracks().forEach(track => track.stop());
-        mediaStream = null;
       }
       
       if (audioContext) {
@@ -490,10 +582,7 @@
       if (text.trim()) {
         transcriptEl.textContent = text;
         transcriptEl.classList.remove('placeholder');
-        if (isListening) {
-          transcriptEl.innerHTML = text + '<span class="cursor"></span>';
-        }
-      } else {
+      } else if (sensevoiceReady) {
         transcriptEl.textContent = 'Press the mic to start recording';
         transcriptEl.classList.add('placeholder');
       }
@@ -502,11 +591,15 @@
     function updateUI() {
       if (isListening) {
         statusDot.classList.add('listening');
+        statusDot.classList.remove('sensevoice');
         statusText.textContent = 'Recording...';
         micBtn.classList.add('listening');
         waveformEl.style.display = 'flex';
       } else {
         statusDot.classList.remove('listening');
+        if (sensevoiceReady) {
+          statusDot.classList.add('sensevoice');
+        }
         statusText.textContent = 'Voice Input';
         micBtn.classList.remove('listening');
         waveformEl.style.display = 'none';

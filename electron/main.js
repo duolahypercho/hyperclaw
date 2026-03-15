@@ -18,6 +18,19 @@ const http = require("http");
 
 const isDev = process.env.NODE_ENV === "development";
 
+// Lazy-load SenseVoice to avoid startup delays
+let sensevoice = null;
+const getSenseVoice = () => {
+  if (!sensevoice) {
+    try {
+      sensevoice = require("./sensevoice");
+    } catch (error) {
+      console.error("[Hyperclaw] Failed to load SenseVoice:", error);
+    }
+  }
+  return sensevoice;
+};
+
 
 // Log crashes so we can debug "opens then closes" (run from Terminal to see output)
 function logCrash(label, err) {
@@ -1390,6 +1403,41 @@ ipcMain.on("voice-message", (event, data) => {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send("voice-input-message", data);
   }
+});
+
+// SenseVoice IPC handlers
+ipcMain.handle("sensevoice-initialize", async () => {
+  try {
+    const sv = getSenseVoice();
+    if (sv) {
+      await sv.initialize();
+      return { success: true, info: sv.getModelInfo() };
+    }
+    return { success: false, error: "SenseVoice not available" };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle("sensevoice-transcribe", async (event, audioData) => {
+  try {
+    const sv = getSenseVoice();
+    if (sv && sv.isReady()) {
+      const text = await sv.transcribe(new Float32Array(audioData));
+      return { success: true, text };
+    }
+    return { success: false, error: "SenseVoice not initialized" };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle("sensevoice-status", async () => {
+  const sv = getSenseVoice();
+  if (sv) {
+    return { ready: sv.isReady(), info: sv.getModelInfo() };
+  }
+  return { ready: false };
 });
 
 // ─── App Lifecycle ──────────────────────────────────────────────────────────
