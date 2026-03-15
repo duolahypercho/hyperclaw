@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
-import { hubCommand } from "$/lib/hub-direct";
+import { hubCommand, getUserToken } from "$/lib/hub-direct";
 import {
   getRunningJobIds,
   removeRunningJobIds,
@@ -442,10 +442,27 @@ export function useOpenClaw(autoRefreshMs = 0) {
     }
   }, [checkInstalled, fetchStatus, fetchGatewayHealth, fetchAgents, fetchModels, setPartial]);
 
+  // Wait for a valid session token before first refresh — OpenClawProvider
+  // mounts at _app level before auth, so getSession() may not be ready yet.
   useEffect(() => {
-    refreshAll().catch((err) => {
-      console.warn("[useOpenClaw] initial refresh failed:", err);
-    });
+    let cancelled = false;
+    const tryRefresh = async () => {
+      // Poll for token readiness (max ~10s)
+      for (let i = 0; i < 20; i++) {
+        if (cancelled) return;
+        const token = await getUserToken();
+        if (token) {
+          refreshAll().catch((err) => {
+            console.warn("[useOpenClaw] initial refresh failed:", err);
+          });
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      // Give up waiting — user may not be logged in
+    };
+    tryRefresh();
+    return () => { cancelled = true; };
   }, []);  // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
