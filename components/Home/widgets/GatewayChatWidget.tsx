@@ -181,8 +181,13 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
   useEffect(() => {
     if (initialLoadDoneRef.current) return; // already done, never re-show skeleton
     if (!agentsLoading && isConnected) {
-      // Agents loaded + connected — mark ready after a tick so history load can start
-      loadChatHistory().finally(() => {
+      // Agents loaded + connected — load history and sessions in parallel
+      Promise.all([
+        loadChatHistory(),
+        gatewayConnection.isConnected()
+          ? gatewayConnection.listSessions(currentAgentId, 20).then(r => setSessions(r.sessions || [])).catch(() => {})
+          : Promise.resolve(),
+      ]).finally(() => {
         initialLoadDoneRef.current = true;
         setInitialReady(true);
       });
@@ -190,28 +195,26 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentsLoading, isConnected]);
 
-  // Reload chat history when session changes or connection is established
+  // Reload chat history when session changes (after initial load is done).
+  // Connection state changes are handled by use-gateway-chat internally.
   const prevSessionKeyRef = useRef<string | undefined>(undefined);
-  const prevConnectedRef = useRef<boolean>(false);
 
   useEffect(() => {
-    const sessionChanged = sessionKey && sessionKey !== prevSessionKeyRef.current;
-    const justConnected = isConnected && !prevConnectedRef.current;
-
-    prevConnectedRef.current = isConnected;
-
-    if (!sessionKey) return;
-
-    if (sessionChanged || justConnected) {
-      prevSessionKeyRef.current = sessionKey;
-      if (isConnected && initialLoadDoneRef.current) {
-        loadChatHistory();
-      }
+    if (!initialLoadDoneRef.current) return; // initial load handles first fetch
+    if (!sessionKey || sessionKey === prevSessionKeyRef.current) return;
+    prevSessionKeyRef.current = sessionKey;
+    if (isConnected) {
+      loadChatHistory();
     }
   }, [isConnected, loadChatHistory, sessionKey]);
 
-  // Fetch sessions when agent changes or connection is established
+  // Fetch sessions when agent changes (not on every connection toggle).
+  // Initial load is handled by the parallel fetch above, so skip if not ready yet.
+  const prevAgentIdForSessionsRef = useRef(currentAgentId);
   useEffect(() => {
+    if (!initialLoadDoneRef.current) return; // initial load handles its own fetch
+    if (prevAgentIdForSessionsRef.current === currentAgentId) return;
+    prevAgentIdForSessionsRef.current = currentAgentId;
     const fetchSessions = async () => {
       if (!gatewayConnection.isConnected()) return;
       setSessionsLoading(true);
@@ -226,7 +229,7 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
       }
     };
     fetchSessions();
-  }, [currentAgentId, isConnected]);
+  }, [currentAgentId]);
 
   // Reset session selection ONLY when agent actually changes
   // (not on connection toggles, which would wipe the user's session during heartbeats)

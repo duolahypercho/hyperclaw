@@ -1,13 +1,13 @@
 "use client";
 
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import type { OfficeLayout } from "./office/types";
 import { isSoundEnabled, setSoundEnabled } from "./notificationSound";
 import { LAYOUT_PRESETS, getPresetById } from "./layoutPresets";
 import { deserializeLayout } from "./office/layout/layoutSerializer";
+import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
 
-const LAYOUT_STORAGE_KEY = "pixel-office-layout";
-const PRESET_STORAGE_KEY = "pixel-office-preset";
+const PRESET_STATE_KEY = "office-preset-id";
 const SOUND_STORAGE_KEY = "pixel-office-sound";
 
 const menuItemBase: React.CSSProperties = {
@@ -65,10 +65,17 @@ export function HyperclawSettingsModal({
 }: HyperclawSettingsModalProps) {
   const [hovered, setHovered] = useState<string | null>(null);
   const [soundLocal, setSoundLocal] = useState(loadSoundPreference());
-  const [presetId, setPresetId] = useState<string>(() => {
-    if (typeof localStorage === "undefined") return LAYOUT_PRESETS[0].id;
-    return localStorage.getItem(PRESET_STORAGE_KEY) || LAYOUT_PRESETS[0].id;
-  });
+  const [presetId, setPresetId] = useState<string>(LAYOUT_PRESETS[0].id);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    bridgeInvoke("get-app-state", { keys: [PRESET_STATE_KEY] })
+      .then((res: any) => {
+        const id = res?.data?.[PRESET_STATE_KEY];
+        if (id) setPresetId(id);
+      })
+      .catch(() => {});
+  }, [isOpen]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   if (!isOpen) return null;
@@ -104,10 +111,6 @@ export function HyperclawSettingsModal({
           const ok = confirmBeforeReplaceLayout ? await Promise.resolve(confirmBeforeReplaceLayout()) : true;
           if (!ok) return;
           onApplyLayout(layout);
-          if (typeof localStorage !== "undefined") {
-            localStorage.setItem(LAYOUT_STORAGE_KEY, text);
-            localStorage.removeItem(PRESET_STORAGE_KEY);
-          }
           onClose();
         }
       } catch {
@@ -124,10 +127,7 @@ export function HyperclawSettingsModal({
     if (!ok) return;
     setPresetId(id);
     onApplyLayout(layout);
-    try {
-      localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(layout));
-      localStorage.setItem(PRESET_STORAGE_KEY, id);
-    } catch {}
+    bridgeInvoke("save-app-state", { entries: { [PRESET_STATE_KEY]: id } }).catch(() => {});
     onClose();
   };
 

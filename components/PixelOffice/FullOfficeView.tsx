@@ -20,7 +20,7 @@ import { loadSoundPreference } from "./HyperclawSettingsModal";
 import { setSoundEnabled } from "./notificationSound";
 import { vscode } from "./vscodeApi";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
-import { getOfficeState, LAYOUT_STORAGE_KEY, DEFAULT_LAYOUT_STORAGE_KEY, pushLayoutToHistory, getLayoutHistory, HAS_USER_LAYOUT_KEY } from "./officeStateSingleton";
+import { getOfficeState, DEFAULT_LAYOUT_STORAGE_KEY, pushLayoutToHistory, getLayoutHistory, HAS_USER_LAYOUT_KEY } from "./officeStateSingleton";
 import { deserializeLayout, createDefaultLayout, serializeLayout, migrateLayoutColors } from "./office/layout/layoutSerializer";
 import { getPresetById, LAYOUT_PRESETS } from "./layoutPresets";
 
@@ -187,40 +187,36 @@ export function FullOfficeView(props: FullOfficeViewProps = {}) {
       pushLayoutToHistory(serializeLayout(current));
     }
     os.rebuildFromLayout(layout, undefined, true);
-    try {
-      localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(layout));
-      localStorage.setItem(HAS_USER_LAYOUT_KEY, "1");
-    } catch {}
     vscode.postMessage({ type: "saveLayout", layout });
+    bridgeInvoke("save-app-state", { entries: { [HAS_USER_LAYOUT_KEY]: "1" } }).catch(() => {});
   }, []);
 
   const handleSaveAsDefault = useCallback(() => {
-    try {
-      const layout = getOfficeState().getLayout();
-      localStorage.setItem(DEFAULT_LAYOUT_STORAGE_KEY, JSON.stringify(layout));
-    } catch {}
+    const layout = getOfficeState().getLayout();
+    bridgeInvoke("save-app-state", {
+      entries: { [DEFAULT_LAYOUT_STORAGE_KEY]: JSON.stringify(layout) },
+    }).catch(() => {});
   }, []);
 
-  const handleResetToDefault = useCallback(() => {
-    const raw = typeof localStorage !== "undefined" ? localStorage.getItem(DEFAULT_LAYOUT_STORAGE_KEY) : null;
-    const layout = (raw && deserializeLayout(raw)) || getPresetById("default") || createDefaultLayout();
+  const handleResetToDefault = useCallback(async () => {
+    try {
+      const res = (await bridgeInvoke("get-app-state", { keys: [DEFAULT_LAYOUT_STORAGE_KEY] })) as {
+        success?: boolean; data?: Record<string, string>;
+      };
+      const raw = res?.data?.[DEFAULT_LAYOUT_STORAGE_KEY];
+      if (raw) {
+        const layout = deserializeLayout(raw);
+        if (layout) { handleApplyLayout(layout); return; }
+      }
+    } catch {}
+    const layout = getPresetById("default") || createDefaultLayout();
     if (layout) handleApplyLayout(layout);
   }, [handleApplyLayout]);
 
   const handleRestorePrevious = useCallback(async () => {
-    const w = typeof window !== "undefined" ? (window as unknown as { electronAPI?: { hyperClawBridge?: { invoke?: unknown } } }) : null;
-    const isElectron = Boolean(w?.electronAPI?.hyperClawBridge?.invoke);
-    let layout: import("./office/types").OfficeLayout | null = null;
-    if (isElectron) {
-      try {
-        const r = (await bridgeInvoke("read-previous-office-layout", {})) as { success?: boolean; layout?: import("./office/types").OfficeLayout };
-        if (r?.success && r.layout) layout = migrateLayoutColors(r.layout);
-      } catch {}
-    } else {
-      const history = getLayoutHistory();
-      const raw = history[0];
-      layout = raw ? deserializeLayout(raw) : null;
-    }
+    const history = await getLayoutHistory();
+    const raw = history[0];
+    const layout = raw ? deserializeLayout(raw) : null;
     if (layout) handleApplyLayout(layout);
     else if (typeof window !== "undefined") window.alert("No previous layout to restore.");
   }, [handleApplyLayout]);
@@ -257,9 +253,14 @@ export function FullOfficeView(props: FullOfficeViewProps = {}) {
   }, [selectedAgentId]);
 
   useEffect(() => {
-    if (layoutReady && typeof localStorage !== "undefined" && !localStorage.getItem(HAS_USER_LAYOUT_KEY)) {
-      setShowTemplatePicker(true);
-    }
+    if (!layoutReady) return;
+    bridgeInvoke("get-app-state", { keys: [HAS_USER_LAYOUT_KEY] })
+      .then((res: any) => {
+        if (!res?.data?.[HAS_USER_LAYOUT_KEY]) {
+          setShowTemplatePicker(true);
+        }
+      })
+      .catch(() => {});
   }, [layoutReady]);
 
   // Load modern office furniture sprites and build dynamic catalog so layout furniture (e.g. modern_office_*) resolves.

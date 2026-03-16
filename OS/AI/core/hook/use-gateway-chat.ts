@@ -169,20 +169,23 @@ function deduplicateMessages(messages: GatewayChatMessage[]): GatewayChatMessage
   // This catches server-side duplicates that have different IDs but identical
   // content (e.g. the same final assistant response returned 3 times).
   // Uses fuzzy comparison to handle whitespace differences.
+  // Cache the previous normalized content to avoid re-normalizing on every iteration.
   const result: GatewayChatMessage[] = [];
+  let prevNorm = "";
   for (const msg of idDeduped) {
     const prev = result[result.length - 1];
     if (
       prev &&
       prev.role === msg.role &&
-      prev.content.trim() !== "" &&
-      normalizeForCompare(prev.content) === normalizeForCompare(msg.content) &&
+      prevNorm !== "" &&
       // Don't collapse tool-call messages — they may legitimately repeat
       !prev.toolCalls?.length &&
-      !msg.toolCalls?.length
+      !msg.toolCalls?.length &&
+      prevNorm === normalizeForCompare(msg.content)
     ) {
       continue; // skip duplicate
     }
+    prevNorm = msg.content.trim() ? normalizeForCompare(msg.content) : "";
     result.push(msg);
   }
   return result;
@@ -207,6 +210,18 @@ function mergeHistoryIntoMessages(
   // when the same content appears legitimately in multiple messages).
   const claimedCurrentIds = new Set<string>();
   let hasChanges = false;
+
+  // Pre-build a content lookup map: "role:normalizedContent" → array of messages.
+  // This turns the O(n²) inner loop into O(n) total lookups.
+  const contentIndex = new Map<string, GatewayChatMessage[]>();
+  for (const cm of current) {
+    if (cm.content.trim()) {
+      const key = `${cm.role}:${normalizeForCompare(cm.content)}`;
+      const arr = contentIndex.get(key);
+      if (arr) arr.push(cm);
+      else contentIndex.set(key, [cm]);
+    }
+  }
 
   // Build merged list using history order (server's canonical ordering).
   // Use existing current references when possible to prevent re-renders.
@@ -233,20 +248,13 @@ function mergeHistoryIntoMessages(
     // The server returns DIFFERENT UUIDs for text messages on every history
     // call, so ID matching never works for them. Content match is the only
     // reliable bridge between streaming and history.
-    // We iterate current (not a Map) and pick the FIRST unclaimed match to
-    // handle repeated identical content (e.g. "can you try it?" twice).
+    // Uses pre-built content index for O(1) lookup per history message.
     let contentMatch: GatewayChatMessage | undefined;
     if (histMsg.content.trim()) {
-      const histNorm = normalizeForCompare(histMsg.content);
-      for (const cm of current) {
-        if (
-          !claimedCurrentIds.has(cm.id) &&
-          cm.role === histMsg.role &&
-          normalizeForCompare(cm.content) === histNorm
-        ) {
-          contentMatch = cm;
-          break;
-        }
+      const key = `${histMsg.role}:${normalizeForCompare(histMsg.content)}`;
+      const candidates = contentIndex.get(key);
+      if (candidates) {
+        contentMatch = candidates.find(cm => !claimedCurrentIds.has(cm.id));
       }
     }
 
@@ -586,7 +594,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       currentRunIdRef.current = null;
       setIsLoading(false);
       mergeHistoryAndMaybeFinalize(false);
-    }, 3000);
+    }, 1000);
   }, [mergeHistoryAndMaybeFinalize]);
 
   // Handle incoming chat events
@@ -904,7 +912,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       setIsConnected(state.connected);
 
       if (state.connected && !previousConnected) {
-        setTimeout(() => fetchAndSetHistory(), 500);
+        fetchAndSetHistory();
       }
 
       if (!state.connected) {
@@ -922,7 +930,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       setIsConnected(true);
       if (!previousConnected) {
         previousConnected = true;
-        setTimeout(() => fetchAndSetHistory(), 500);
+        fetchAndSetHistory();
       }
     }
 

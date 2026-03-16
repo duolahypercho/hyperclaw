@@ -2125,6 +2125,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.json({ success: true });
     }
 
+    /* ── Pixel Office Layout (SQLite via app_state) ──────────── */
+
+    case "write-office-layout": {
+      const { layout } = req.body;
+      if (!layout) return res.status(400).json({ error: "layout required" });
+      writeAppState({ "office-layout": JSON.stringify(layout) });
+      return res.json({ success: true });
+    }
+
+    case "read-office-layout":
+    case "read-previous-office-layout": {
+      const data = readAppState(["office-layout"]);
+      if (data["office-layout"]) {
+        try {
+          return res.json({ success: true, layout: JSON.parse(data["office-layout"]) });
+        } catch {
+          return res.json({ success: false });
+        }
+      }
+      return res.json({ success: false });
+    }
+
     default:
       return res.status(400).json({ error: `Unknown action: ${action}` });
   }

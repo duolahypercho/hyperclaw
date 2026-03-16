@@ -86,7 +86,7 @@
       "allowToChangeInstallationDirectory": true,
       "allowElevation": true,
       "runAfterFinish": true,
-      "artifactName": "Hyperclaw-Setup-Local-${version}.${ext}",
+      "artifactName": "Hyperclaw-Setup-Remote-${version}.${ext}",
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Hyperclaw",

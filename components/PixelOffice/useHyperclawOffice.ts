@@ -3,14 +3,14 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import type { OfficeState } from "./office/engine/officeState";
 import type { OfficeLayout, ToolActivity } from "./office/types";
-import { createDefaultLayout, deserializeLayout, migrateLayoutColors } from "./office/layout/layoutSerializer";
+import { createDefaultLayout, migrateLayoutColors } from "./office/layout/layoutSerializer";
 import { getPresetById } from "./layoutPresets";
 import { useOfficeEngine } from "./officeEngineConfig";
 import { usePixelOffice } from "./provider/pixelOfficeProvider";
 import type { EmployeeCronJob, EmployeePreviousTask } from "./provider/pixelOfficeProvider";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
 import type { SubagentCharacter } from "./office/types";
-import { LAYOUT_STORAGE_KEY, DEFAULT_LAYOUT_STORAGE_KEY, HAS_USER_LAYOUT_KEY } from "./officeStateSingleton";
+import { HAS_USER_LAYOUT_KEY } from "./officeStateSingleton";
 
 export type { SubagentCharacter };
 
@@ -65,30 +65,14 @@ function buildEngineConfig(): import("./officeEngineConfig").OfficeEngineConfig 
       try {
         const r = (await bridgeInvoke("read-office-layout")) as { success?: boolean; layout?: OfficeLayout };
         if (r?.success && r.layout) {
-          if (typeof localStorage !== "undefined") localStorage.setItem(HAS_USER_LAYOUT_KEY, "1");
+          // Mark that user has a saved layout
+          bridgeInvoke("save-app-state", { entries: { [HAS_USER_LAYOUT_KEY]: "1" } }).catch(() => {});
           return migrateLayoutColors(r.layout);
         }
       } catch {
-        // fallback to localStorage / preset
+        // fallback to preset
       }
-      try {
-        const saved = typeof localStorage !== "undefined" && localStorage.getItem(LAYOUT_STORAGE_KEY);
-        if (saved) {
-          const layout = deserializeLayout(saved);
-          if (layout) {
-            if (typeof localStorage !== "undefined") localStorage.setItem(HAS_USER_LAYOUT_KEY, "1");
-            return layout;
-          }
-        }
-        const defaultSaved = typeof localStorage !== "undefined" && localStorage.getItem(DEFAULT_LAYOUT_STORAGE_KEY);
-        if (defaultSaved) {
-          const layout = deserializeLayout(defaultSaved);
-          if (layout) return layout;
-        }
-        return getPresetById("default") || createDefaultLayout();
-      } catch {
-        return getPresetById("default") || createDefaultLayout();
-      }
+      return getPresetById("default") || createDefaultLayout();
     },
   };
 }
