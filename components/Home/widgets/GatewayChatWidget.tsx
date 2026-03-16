@@ -262,6 +262,9 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
     const newKey = `agent:${currentAgentId}:chat-${Date.now()}`;
     setSelectedSessionKey(newKey);
     setSessionKey(newKey);
+    // Clear stale context data — new session has no usage yet
+    setSessionContextTokens(null);
+    setSessionTotalTokens(null);
     // Refresh session list so the previous session appears in history
     if (gatewayConnection.isConnected()) {
       try {
@@ -615,7 +618,45 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
     [mergedMessages]
   );
 
-  // Estimate token usage from messages (rough: ~4 chars per token)
+  // Real context window data from the gateway session entry.
+  // Synced on initial load, session switches, and after each agent run completes.
+  const [sessionContextTokens, setSessionContextTokens] = useState<number | null>(null);
+  const [sessionTotalTokens, setSessionTotalTokens] = useState<number | null>(null);
+
+  const fetchSessionContext = useCallback(async () => {
+    if (!gatewayConnection.isConnected()) return;
+    try {
+      const data = await gatewayConnection.getSession(sessionKey) as {
+        contextTokens?: number;
+        totalTokens?: number;
+      } | null;
+      if (data?.contextTokens && data.contextTokens > 0) {
+        setSessionContextTokens(data.contextTokens);
+      }
+      if (typeof data?.totalTokens === "number") {
+        setSessionTotalTokens(data.totalTokens);
+      }
+    } catch {
+      // Gateway may not support sessions.get — fall back to estimates
+    }
+  }, [sessionKey]);
+
+  // Fetch context on initial ready + session changes
+  useEffect(() => {
+    if (!initialReady || !isConnected) return;
+    fetchSessionContext();
+  }, [initialReady, isConnected, sessionKey, fetchSessionContext]);
+
+  // Re-fetch after each agent run completes (isLoading transitions false → fresh data)
+  const prevLoadingForContextRef = useRef(isLoading);
+  useEffect(() => {
+    if (prevLoadingForContextRef.current && !isLoading) {
+      fetchSessionContext();
+    }
+    prevLoadingForContextRef.current = isLoading;
+  }, [isLoading, fetchSessionContext]);
+
+  // Estimate token usage from messages (rough: ~4 chars per token) — fallback only
   const estimatedTokenUsage = useMemo(() => {
     let chars = 0;
     for (const msg of mergedMessages) {
@@ -630,9 +671,9 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
     return Math.round(chars / 4);
   }, [mergedMessages]);
 
-  // Context window limit — session keys don't contain model names, so we
-  // use a reasonable default. Actual usage comes from token estimation below.
-  const contextLimit = 200_000;
+  // Use real gateway values when available, fall back to client-side estimates
+  const tokenUsage = sessionTotalTokens ?? estimatedTokenUsage;
+  const contextLimit = sessionContextTokens ?? 200_000;
 
   // Get user avatar from user profile
   const userAvatar = {
@@ -756,7 +797,7 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
                       assistantAvatar={assistantAvatar}
                       onHintClick={() => {}}
                       personality={{
-                        name: currentAgent.name,
+                        name: agentNameStr || currentAgent.name,
                         coverPhoto: "",
                         tag: "OpenClaw Agent",
                       }}
@@ -1093,7 +1134,7 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
                 />
                 <InputContainer
                   onSendMessage={handleSend}
-                  placeholder={`Ask ${currentAgent.name} anything...`}
+                  placeholder={`Ask ${agentNameStr || currentAgent.name} anything...`}
                   isLoading={isLoading}
                   isSending={isLoading}
                   showAttachments={true}
@@ -1109,7 +1150,7 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
                   onStopGeneration={stopGeneration}
                   value={inputValue}
                   onChange={setInputValue}
-                  tokenUsage={estimatedTokenUsage}
+                  tokenUsage={tokenUsage}
                   contextLimit={contextLimit}
                 />
               </div>

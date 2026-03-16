@@ -14,26 +14,13 @@ import {
   StatusWidget,
 } from "$/components/Home/widgets";
 import { useOS } from "@OS/Provider/OSProv";
-import { useToast } from "@/components/ui/use-toast";
 import { cn } from "@/lib/utils";
 import { dashboardState } from "$/lib/dashboard-state";
+import { useOpenClawContext } from "$/Providers/OpenClawProv";
 
 export default function Home() {
-  const [stateReady, setStateReady] = useState(dashboardState.isHydrated());
-
-  // Hydrate dashboard state from SQLite before rendering
-  useEffect(() => {
-    if (stateReady) return;
-    dashboardState.hydrate().then(() => setStateReady(true));
-  }, [stateReady]);
-
-  if (!stateReady) return null;
-  return <HomeDashboard />;
-}
-
-function HomeDashboard() {
-  const { toolAbstracts, osSettings, updateOSSettings } = useOS();
-  const { toast } = useToast();
+  const { toolAbstracts } = useOS();
+  const { dashboardReady } = useOpenClawContext();
 
   // Find tool definitions from OSProv
   const todoTool = toolAbstracts.find((t) => t.id === "todo-list");
@@ -110,7 +97,7 @@ function HomeDashboard() {
         component: UsageWidget,
         defaultValue: { w: 8, h: 3, minW: 6, minH: 3, x: 12, y: 15 },
       },
-{
+      {
         id: "agent-status",
         type: "agent-status",
         title: "Agent Status",
@@ -125,10 +112,8 @@ function HomeDashboard() {
         icon: null,
         component: GatewayChatWidget,
         defaultValue: { w: 8, h: 6, minW: 6, minH: 4, x: 0, y: 0 },
-        config: { agentId: undefined, sessionKey: undefined }, // Default - uses first available agent
+        config: { agentId: undefined, sessionKey: undefined },
       },
-      // Additional chat widgets can be enabled by users in edit mode
-      // Each can connect to a different agent or session via their config
     ],
     [todoTool, pomodoroTool, cronsTool, docsTool, pixelOfficeTool, usageTool]
   );
@@ -149,12 +134,6 @@ function HomeDashboard() {
   // State for edit mode
   const [isEditMode, setIsEditMode] = useState(false);
   const [showHeader, setShowHeader] = useState(false);
-
-  // State for storing original state when entering edit mode
-  const [editModeSnapshot, setEditModeSnapshot] = useState<{
-    visibleWidgets: string[];
-    layout: string;
-  } | null>(null);
 
   // State for forcing Dashboard reset
   const [resetKey, setResetKey] = useState(0);
@@ -190,6 +169,34 @@ function HomeDashboard() {
     return [];
   });
 
+  // Re-read persisted state once dashboardState is hydrated.
+  // useState initializers run before hydration completes, so they may
+  // return defaults. This effect syncs state with the real SQLite data.
+  const [hydratedOnce, setHydratedOnce] = useState(false);
+  useEffect(() => {
+    if (!dashboardReady || hydratedOnce) return;
+    setHydratedOnce(true);
+
+    const savedVisible = dashboardState.get("dashboard-visible-widgets");
+    if (savedVisible) {
+      try {
+        const parsed = JSON.parse(savedVisible);
+        setVisibleWidgets(parsed);
+      } catch {}
+    }
+
+    const savedInstances = dashboardState.get("dashboard-widget-instances");
+    if (savedInstances) {
+      try {
+        const parsed = JSON.parse(savedInstances);
+        setStoredWidgetInstances(parsed);
+      } catch {}
+    }
+
+    // Force dashboard remount with the hydrated state
+    setResetKey((k) => k + 1);
+  }, [dashboardReady, hydratedOnce]);
+
   // Save widget instances to SQLite whenever they change
   useEffect(() => {
     dashboardState.set("dashboard-widget-instances", JSON.stringify(storedWidgetInstances));
@@ -207,7 +214,6 @@ function HomeDashboard() {
     const templateWidgets = widgets.map(template => {
       const instance = storedWidgetInstances.find(s => s.id === template.id);
       if (instance) {
-        // Merge instance data with template (but keep template's component)
         return {
           ...template,
           ...instance,
@@ -236,7 +242,6 @@ function HomeDashboard() {
 
   // Handler for adding a new widget instance
   const handleAddWidget = (newWidget: typeof widgets[0]) => {
-    // Store only the serializable parts
     const stored: StoredWidget = {
       id: newWidget.id,
       type: newWidget.type,
@@ -247,13 +252,11 @@ function HomeDashboard() {
     };
     setStoredWidgetInstances(prev => [...prev, stored]);
     setVisibleWidgets(prev => [...prev, newWidget.id]);
-    // Trigger a layout update
     setResetKey(k => k + 1);
   };
 
   // Handler for removing a widget instance
   const handleRemoveWidget = (widgetId: string) => {
-    // Only remove if it's an instance (not a template)
     const isInstance = !widgets.find(w => w.id === widgetId);
     if (isInstance) {
       setStoredWidgetInstances(prev => prev.filter(w => w.id !== widgetId));
@@ -270,19 +273,9 @@ function HomeDashboard() {
   useEffect(() => {
     const handleEditModeToggle = () => {
       setIsEditMode((prev) => {
-        if (!prev) {
-          // Entering edit mode - store current state
-          setEditModeSnapshot({
-            visibleWidgets: [...visibleWidgets],
-            layout: dashboardState.get("dashboard-layout") || "",
-          });
-          setShowHeader(true);
-        } else {
-          // Exiting edit mode - visible widgets are already persisted via useEffect
-          setEditModeSnapshot(null);
-          setShowHeader(false);
-        }
-        return !prev;
+        const next = !prev;
+        setShowHeader(next);
+        return next;
       });
     };
 
@@ -297,7 +290,7 @@ function HomeDashboard() {
         handleEditModeToggle as EventListener
       );
     };
-  }, [visibleWidgets]);
+  }, []);
 
   // Listen for layout-applied event (from navbar LayoutSwitcher)
   useEffect(() => {
@@ -305,6 +298,15 @@ function HomeDashboard() {
       const detail = (e as CustomEvent).detail;
       if (detail?.visibleWidgets) {
         setVisibleWidgets(detail.visibleWidgets);
+      }
+      // Restore widget instances (added chat widgets etc.) from the applied layout
+      if (detail?.widgetInstances) {
+        try {
+          const parsed = JSON.parse(detail.widgetInstances);
+          setStoredWidgetInstances(Array.isArray(parsed) ? parsed : []);
+        } catch {
+          setStoredWidgetInstances([]);
+        }
       }
       // Force dashboard remount so it picks up the new grid layout + configs
       setResetKey((k) => k + 1);
@@ -336,42 +338,21 @@ function HomeDashboard() {
 
   const handleToggleEditMode = () => {
     setIsEditMode((prev) => {
-      if (!prev) {
-        // Entering edit mode - store current state
-        setEditModeSnapshot({
-          visibleWidgets: [...visibleWidgets],
-          layout: dashboardState.get("dashboard-layout") || "",
-        });
-        setShowHeader(true);
-      } else {
-        // Exiting edit mode - visible widgets are already persisted via useEffect
-        setEditModeSnapshot(null);
-        setShowHeader(false);
-      }
-      return !prev;
+      const next = !prev;
+      setShowHeader(next);
+      return next;
     });
   };
 
-  const handleCancelEdit = () => {
-    if (editModeSnapshot) {
-      // Restore original state
-      setVisibleWidgets(editModeSnapshot.visibleWidgets);
-
-      if (editModeSnapshot.layout) {
-        dashboardState.set("dashboard-layout", editModeSnapshot.layout);
-      } else {
-        dashboardState.remove("dashboard-layout");
-      }
-
-      // Force Dashboard to reinitialize with restored layout
-      setResetKey((prev) => prev + 1);
-
-      // Clear snapshot and exit edit mode
-      setEditModeSnapshot(null);
-      setIsEditMode(false);
-      setShowHeader(false);
-    }
-  };
+  // Don't render the dashboard until state is hydrated from SQLite.
+  // Rendering before hydration uses stale defaults and causes layout glitches.
+  if (!dashboardReady) {
+    return (
+      <div className="flex-1 w-full h-full flex items-center justify-center bg-background/80 backdrop-blur-xl">
+        <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+      </div>
+    );
+  }
 
   return (
     <div className="flex-1 w-full h-full flex flex-col overflow-hidden relative">
@@ -387,9 +368,7 @@ function HomeDashboard() {
           }))}
           isEditMode={isEditMode}
           onToggleEditMode={handleToggleEditMode}
-          onCancelEdit={handleCancelEdit}
           onAddChatWidget={() => {
-            // Add a new gateway-chat widget instance
             const chatWidgetTemplate = widgets.find(w => w.type === "gateway-chat");
             if (chatWidgetTemplate) {
               const newId = `gateway-chat-${Date.now()}`;
@@ -397,7 +376,7 @@ function HomeDashboard() {
                 ...chatWidgetTemplate,
                 id: newId,
                 title: `Chat ${Date.now().toString().slice(-4)}`,
-                config: {}, // Fresh config - no preset agent or session
+                config: {},
               };
               handleAddWidget(newWidget);
             }

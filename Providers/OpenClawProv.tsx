@@ -1,9 +1,33 @@
 "use client";
 
-import { createContext, useContext, type ReactNode, useRef, useMemo } from "react";
+import { createContext, useContext, type ReactNode, useRef, useMemo, useState, useEffect, useCallback } from "react";
 import { useOpenClaw } from "$/hooks/useOpenClaw";
+import { dashboardState } from "$/lib/dashboard-state";
+import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
+import { subscribeGatewayConnection, getGatewayConnectionState } from "$/lib/openclaw-gateway-ws";
 
-type OpenClawContextValue = ReturnType<typeof useOpenClaw>;
+/* ── Saved-layout type (shared with LayoutSwitcher) ─── */
+
+export interface SavedLayout {
+  id: string;
+  name: string;
+  createdAt: number;
+  layout: string;
+  visibleWidgets: string[];
+  widgetConfigs: string;
+  /** Serialised JSON array of dynamically-added widget instances (e.g. extra chat widgets) */
+  widgetInstances?: string;
+}
+
+/* ── Context value ──────────────────────────────────── */
+
+type OpenClawContextValue = ReturnType<typeof useOpenClaw> & {
+  /** true once dashboard state is hydrated AND saved layouts are fetched */
+  dashboardReady: boolean;
+  /** User-saved layouts (excludes the implicit "Default") */
+  savedLayouts: SavedLayout[];
+  setSavedLayouts: React.Dispatch<React.SetStateAction<SavedLayout[]>>;
+};
 
 const OpenClawContext = createContext<OpenClawContextValue | null>(null);
 
@@ -16,6 +40,62 @@ export function OpenClawProvider({ children }: { children: ReactNode }) {
   // Keep function refs stable — they don't need to trigger re-renders of consumers
   const fnsRef = useRef(openClaw);
   fnsRef.current = openClaw;
+
+  /* ── Dashboard state hydration + layout fetch ────── */
+
+  const [dashboardReady, setDashboardReady] = useState(false);
+  const [savedLayouts, setSavedLayouts] = useState<SavedLayout[]>([]);
+
+  // Fetch saved layouts helper — reused for initial load + retry
+  const fetchSavedLayouts = useCallback(async (): Promise<SavedLayout[] | null> => {
+    try {
+      const res = (await bridgeInvoke("get-layouts", {})) as {
+        success?: boolean;
+        data?: SavedLayout[];
+      };
+      if (res?.success && Array.isArray(res.data)) {
+        return res.data;
+      }
+    } catch {}
+    return null;
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      // 1. Hydrate dashboard in-memory cache from SQLite
+      await dashboardState.hydrate();
+
+      // 2. Fetch saved layouts from backend
+      const layouts = await fetchSavedLayouts();
+      if (!cancelled && layouts) {
+        setSavedLayouts(layouts);
+      }
+
+      if (!cancelled) setDashboardReady(true);
+    })();
+
+    return () => { cancelled = true; };
+  }, [fetchSavedLayouts]);
+
+  // Retry layout fetch when gateway connects — the initial fetch may have failed
+  // because the hub/connector wasn't reachable yet during cold start.
+  useEffect(() => {
+    let retried = false;
+    const unsub = subscribeGatewayConnection(() => {
+      if (retried) return;
+      const { connected } = getGatewayConnectionState();
+      if (!connected) return;
+      retried = true;
+      fetchSavedLayouts().then((layouts) => {
+        if (layouts && layouts.length > 0) {
+          setSavedLayouts(layouts);
+        }
+      });
+    });
+    return () => unsub();
+  }, [fetchSavedLayouts]);
 
   // Only re-create context value when data fields actually change
   const value = useMemo<OpenClawContextValue>(
@@ -45,6 +125,10 @@ export function OpenClawProvider({ children }: { children: ReactNode }) {
       sendMessage: (...args: Parameters<typeof openClaw.sendMessage>) => fnsRef.current.sendMessage(...args),
       cronEnable: (...args: Parameters<typeof openClaw.cronEnable>) => fnsRef.current.cronEnable(...args),
       cronDisable: (...args: Parameters<typeof openClaw.cronDisable>) => fnsRef.current.cronDisable(...args),
+      // Dashboard state
+      dashboardReady,
+      savedLayouts,
+      setSavedLayouts,
     }),
     [
       openClaw.installed,
@@ -59,6 +143,8 @@ export function OpenClawProvider({ children }: { children: ReactNode }) {
       openClaw.models,
       openClaw.logs,
       openClaw.errors,
+      dashboardReady,
+      savedLayouts,
     ]
   );
   return (

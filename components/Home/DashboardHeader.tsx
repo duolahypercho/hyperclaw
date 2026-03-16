@@ -10,7 +10,6 @@ import {
   LayoutGrid,
   Edit3,
   Lock,
-  X,
   Plus,
   MessageCircle,
 } from "lucide-react";
@@ -40,8 +39,7 @@ interface DashboardHeaderProps {
   }>;
   isEditMode: boolean;
   onToggleEditMode: () => void;
-  onCancelEdit?: () => void;
-  onAddChatWidget?: () => void; // Simple callback to add a new chat widget
+  onAddChatWidget?: () => void;
 }
 
 export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
@@ -51,7 +49,6 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
   availableWidgets,
   isEditMode,
   onToggleEditMode,
-  onCancelEdit,
   onAddChatWidget,
 }) => {
   const [open, setOpen] = useState(false);
@@ -84,14 +81,6 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
             {/* Customize Settings or Cancel Button */}
             {isEditMode && (
               <>
-                <Button
-                  variant="destructive"
-                  onClick={onCancelEdit}
-                  className="gap-2 text-xs h-fit"
-                >
-                  <X className="w-3 h-3" />
-                  <span className="font-medium">Cancel</span>
-                </Button>
                 <Dialog open={open} onOpenChange={setOpen}>
                   <DialogTrigger asChild>
                     <Button variant="outline" className="gap-2 text-xs h-fit">
@@ -121,7 +110,7 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
                           </Label>
                         </div>
                         <div className="space-y-3 pl-1">
-                          {availableWidgets.map((widget) => {
+                          {availableWidgets.filter((w) => w.type !== "gateway-chat").map((widget) => {
                             const isVisible = visibleWidgets.includes(
                               widget.id
                             );

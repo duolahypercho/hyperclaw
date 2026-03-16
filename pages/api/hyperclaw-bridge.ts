@@ -118,6 +118,7 @@ interface DashboardLayoutRow {
   layout: string;
   visibleWidgets: string[];
   widgetConfigs: string;
+  widgetInstances?: string;
 }
 
 function readLayoutsJson(): DashboardLayoutRow[] {
@@ -158,6 +159,7 @@ function updateDashboardLayout(id: string, fields: Record<string, any>) {
   if (fields.layout !== undefined) layout.layout = fields.layout;
   if (fields.visibleWidgets !== undefined) layout.visibleWidgets = fields.visibleWidgets;
   if (fields.widgetConfigs !== undefined) layout.widgetConfigs = fields.widgetConfigs;
+  if (fields.widgetInstances !== undefined) layout.widgetInstances = fields.widgetInstances;
   writeDashboardLayoutsKv(layouts);
 }
 
@@ -2029,9 +2031,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     case "save-layout": {
-      const { id, name, layout, visibleWidgets, widgetConfigs } = req.body;
+      const { id, name, layout, visibleWidgets, widgetConfigs, widgetInstances } = req.body;
       if (!id || !name) return res.status(400).json({ error: "id and name required" });
-      const entry = { id, name, createdAt: Date.now(), layout: layout ?? "{}", visibleWidgets: visibleWidgets ?? [], widgetConfigs: widgetConfigs ?? "{}" };
+      const entry = { id, name, createdAt: Date.now(), layout: layout ?? "{}", visibleWidgets: visibleWidgets ?? [], widgetConfigs: widgetConfigs ?? "{}", widgetInstances: widgetInstances ?? "[]" };
       upsertDashboardLayout(entry);
       return res.json({ success: true });
     }

@@ -298,8 +298,25 @@ export function useOpenClaw(autoRefreshMs = 0) {
 
   const fetchModels = useCallback(async () => {
     try {
-      const { gatewayConnection } = await import("$/lib/openclaw-gateway-ws");
-      if (!gatewayConnection.connected) return;
+      const { gatewayConnection, subscribeGatewayConnection, getGatewayConnectionState } = await import("$/lib/openclaw-gateway-ws");
+
+      // If not connected yet, wait up to 8s for the gateway to connect.
+      // This avoids a race where refreshAll fires before the WS handshake completes,
+      // causing models to silently stay as defaults until the next 30s refresh cycle.
+      if (!gatewayConnection.connected) {
+        const connected = await new Promise<boolean>((resolve) => {
+          // Already connected by the time we check
+          if (gatewayConnection.connected) { resolve(true); return; }
+          const timeout = setTimeout(() => { unsub(); resolve(false); }, 8000);
+          const unsub = subscribeGatewayConnection(() => {
+            const s = getGatewayConnectionState();
+            if (s.connected) { clearTimeout(timeout); unsub(); resolve(true); }
+            else if (s.error) { clearTimeout(timeout); unsub(); resolve(false); }
+          });
+        });
+        if (!connected) return;
+      }
+
       const result = await gatewayConnection.listModels();
       if (result?.models && result.models.length > 0) {
         setState((prev) => ({ ...prev, models: result.models }));

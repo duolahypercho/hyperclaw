@@ -62,6 +62,7 @@ export const GatewayChatCustomHeader: React.FC<GatewayChatHeaderProps> = ({
       ? agents.find(a => a.id === configAgentId)
       : agents[0];
 
+  const { loading: agentsLoading } = useOpenClawContext();
   const agent = selectedAgent || { id: "main", name: "General Assistant", status: "active" };
   // Use currentAgentId directly for identity lookup — agents array may not be loaded yet,
   // which would cause agent.id to fall back to "main" and fetch the wrong identity.
@@ -108,11 +109,13 @@ export const GatewayChatCustomHeader: React.FC<GatewayChatHeaderProps> = ({
             </span>
           </button>
           <div className="flex flex-col">
-            {agents.length > 1 ? (
+            {agentsLoading && !headerIdentity?.name ? (
+              <div className="h-4 w-24 rounded bg-muted animate-pulse" />
+            ) : agents.length > 1 ? (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <button className="flex items-center gap-1 hover:opacity-80 transition-opacity text-left">
-                    <CardTitle className="text-sm">{agent.name}</CardTitle>
+                    <CardTitle className="text-sm">{headerIdentity?.name || agent.name}</CardTitle>
                     <ChevronDown className="w-3 h-3 text-muted-foreground" />
                   </button>
                 </DropdownMenuTrigger>
@@ -132,7 +135,7 @@ export const GatewayChatCustomHeader: React.FC<GatewayChatHeaderProps> = ({
                 </DropdownMenuContent>
               </DropdownMenu>
             ) : (
-              <CardTitle className="text-sm">{agent.name}</CardTitle>
+              <CardTitle className="text-sm">{headerIdentity?.name || agent.name}</CardTitle>
             )}
           </div>
         </div>

@@ -454,7 +454,7 @@ export function FullOfficeView(props: FullOfficeViewProps = {}) {
         onSaveAgentSeats={(seats) => {
           vscode.postMessage({ type: "saveAgentSeats", seats });
           if (typeof window !== "undefined" && (window as unknown as { electronAPI?: { hyperClawBridge?: { invoke?: unknown } } }).electronAPI?.hyperClawBridge?.invoke) {
-            bridgeInvoke("write-office-seats", { seats }).catch(() => {});
+            bridgeInvoke("write-office-seats", { officeSeats: seats }).catch(() => {});
           }
         }}
       />
