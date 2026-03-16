@@ -1,7 +1,7 @@
 /**
  * Single entry point for all bridge calls.
  *
- * Always routes through Hub API → Connector (cross-device compatible).
+ * All commands route through Hub API → Connector (cross-device compatible).
  */
 import { hubCommand } from "$/lib/hub-direct";
 
