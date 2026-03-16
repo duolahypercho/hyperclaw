@@ -63,28 +63,29 @@ const DAILY_SUMMARIES_DIR = path.join(DATA_DIR, "daily-summaries");
 const TODO_DATA_PATH = path.join(DATA_DIR, "todo.json");
 const LAYOUTS_JSON_PATH = path.join(DATA_DIR, "dashboard-layouts.json");
 
-/* ── App State persistence (SQLite key-value store) ───────────────── */
+/* ── KV persistence (uses the Connector's `kv` table) ────────────── */
 
-function getAppStateDb(): any | null {
+function getKvDb(): any | null {
   try {
     const Database = nativeRequire("better-sqlite3");
     const dbPath = path.join(DATA_DIR, "connector.db");
     if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
     const db = new Database(dbPath);
-    db.exec(`CREATE TABLE IF NOT EXISTS app_state (
+    db.exec(`CREATE TABLE IF NOT EXISTS kv (
       key TEXT PRIMARY KEY,
-      value TEXT NOT NULL
+      value TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
     )`);
     return db;
   } catch { return null; }
 }
 
 function readAppState(keys: string[]): Record<string, string> {
-  const db = getAppStateDb();
+  const db = getKvDb();
   if (!db) return {};
   try {
     const placeholders = keys.map(() => "?").join(", ");
-    const rows = db.prepare(`SELECT key, value FROM app_state WHERE key IN (${placeholders})`).all(...keys) as { key: string; value: string }[];
+    const rows = db.prepare(`SELECT key, value FROM kv WHERE key IN (${placeholders})`).all(...keys) as { key: string; value: string }[];
     db.close();
     const result: Record<string, string> = {};
     for (const row of rows) result[row.key] = row.value;
@@ -93,19 +94,22 @@ function readAppState(keys: string[]): Record<string, string> {
 }
 
 function writeAppState(entries: Record<string, string>) {
-  const db = getAppStateDb();
+  const db = getKvDb();
   if (!db) return;
   try {
-    const stmt = db.prepare("INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?)");
+    const now = Date.now();
+    const stmt = db.prepare("INSERT OR REPLACE INTO kv (key, value, updated_at) VALUES (?, ?, ?)");
     const tx = db.transaction((items: [string, string][]) => {
-      for (const [k, v] of items) stmt.run(k, v);
+      for (const [k, v] of items) stmt.run(k, v, now);
     });
     tx(Object.entries(entries));
     db.close();
   } catch { db.close(); }
 }
 
-/* ── Dashboard Layout persistence (SQLite primary, JSON fallback) ──── */
+/* ── Dashboard Layout persistence (kv-backed, JSON fallback) ──────── */
+
+const DASHBOARD_LAYOUTS_KV_KEY = "dashboard-saved-layouts";
 
 interface DashboardLayoutRow {
   id: string;
@@ -116,24 +120,6 @@ interface DashboardLayoutRow {
   widgetConfigs: string;
 }
 
-function getLayoutsDb(): any | null {
-  try {
-    const Database = nativeRequire("better-sqlite3");
-    const dbPath = path.join(DATA_DIR, "connector.db");
-    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-    const db = new Database(dbPath);
-    db.exec(`CREATE TABLE IF NOT EXISTS dashboard_layouts (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      created_at INTEGER NOT NULL,
-      layout TEXT NOT NULL DEFAULT '{}',
-      visible_widgets TEXT NOT NULL DEFAULT '[]',
-      widget_configs TEXT NOT NULL DEFAULT '{}'
-    )`);
-    return db;
-  } catch { return null; }
-}
-
 function readLayoutsJson(): DashboardLayoutRow[] {
   try {
     if (!fs.existsSync(LAYOUTS_JSON_PATH)) return [];
@@ -141,92 +127,46 @@ function readLayoutsJson(): DashboardLayoutRow[] {
   } catch { return []; }
 }
 
-function writeLayoutsJson(layouts: DashboardLayoutRow[]) {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(LAYOUTS_JSON_PATH, JSON.stringify(layouts, null, 2), "utf-8");
-}
-
 function readDashboardLayouts(): DashboardLayoutRow[] {
-  const db = getLayoutsDb();
+  const db = getKvDb();
   if (db) {
     try {
-      const rows = db.prepare("SELECT * FROM dashboard_layouts ORDER BY created_at ASC").all() as any[];
+      const row = db.prepare("SELECT value FROM kv WHERE key = ?").get(DASHBOARD_LAYOUTS_KV_KEY) as { value: string } | undefined;
       db.close();
-      return rows.map((r: any) => ({
-        id: r.id,
-        name: r.name,
-        createdAt: r.created_at,
-        layout: r.layout,
-        visibleWidgets: JSON.parse(r.visible_widgets || "[]"),
-        widgetConfigs: r.widget_configs,
-      }));
-    } catch { db.close(); }
+      if (row?.value) return JSON.parse(row.value);
+    } catch { try { db.close(); } catch {} }
   }
   return readLayoutsJson();
 }
 
+function writeDashboardLayoutsKv(layouts: DashboardLayoutRow[]) {
+  writeAppState({ [DASHBOARD_LAYOUTS_KV_KEY]: JSON.stringify(layouts) });
+}
+
 function upsertDashboardLayout(entry: DashboardLayoutRow) {
-  const db = getLayoutsDb();
-  if (db) {
-    try {
-      db.prepare(`INSERT OR REPLACE INTO dashboard_layouts (id, name, created_at, layout, visible_widgets, widget_configs)
-        VALUES (?, ?, ?, ?, ?, ?)`).run(
-        entry.id, entry.name, entry.createdAt, entry.layout,
-        JSON.stringify(entry.visibleWidgets), entry.widgetConfigs,
-      );
-      db.close();
-      return;
-    } catch { db.close(); }
-  }
-  // JSON fallback
-  const layouts = readLayoutsJson();
+  const layouts = readDashboardLayouts();
   const idx = layouts.findIndex((l) => l.id === entry.id);
   if (idx >= 0) layouts[idx] = entry; else layouts.push(entry);
-  writeLayoutsJson(layouts);
+  writeDashboardLayoutsKv(layouts);
 }
 
 function updateDashboardLayout(id: string, fields: Record<string, any>) {
-  const db = getLayoutsDb();
-  if (db) {
-    try {
-      const sets: string[] = [];
-      const vals: any[] = [];
-      if (fields.name !== undefined) { sets.push("name = ?"); vals.push(fields.name); }
-      if (fields.layout !== undefined) { sets.push("layout = ?"); vals.push(fields.layout); }
-      if (fields.visibleWidgets !== undefined) { sets.push("visible_widgets = ?"); vals.push(JSON.stringify(fields.visibleWidgets)); }
-      if (fields.widgetConfigs !== undefined) { sets.push("widget_configs = ?"); vals.push(fields.widgetConfigs); }
-      if (sets.length) {
-        vals.push(id);
-        db.prepare(`UPDATE dashboard_layouts SET ${sets.join(", ")} WHERE id = ?`).run(...vals);
-      }
-      db.close();
-      return;
-    } catch { db.close(); }
-  }
-  // JSON fallback
-  const layouts = readLayoutsJson();
+  const layouts = readDashboardLayouts();
   const layout = layouts.find((l) => l.id === id);
-  if (layout) {
-    if (fields.name !== undefined) layout.name = fields.name;
-    if (fields.layout !== undefined) layout.layout = fields.layout;
-    if (fields.visibleWidgets !== undefined) layout.visibleWidgets = fields.visibleWidgets;
-    if (fields.widgetConfigs !== undefined) layout.widgetConfigs = fields.widgetConfigs;
-    writeLayoutsJson(layouts);
-  }
+  if (!layout) return;
+  if (fields.name !== undefined) layout.name = fields.name;
+  if (fields.layout !== undefined) layout.layout = fields.layout;
+  if (fields.visibleWidgets !== undefined) layout.visibleWidgets = fields.visibleWidgets;
+  if (fields.widgetConfigs !== undefined) layout.widgetConfigs = fields.widgetConfigs;
+  writeDashboardLayoutsKv(layouts);
 }
 
 function deleteDashboardLayout(id: string) {
-  const db = getLayoutsDb();
-  if (db) {
-    try {
-      db.prepare("DELETE FROM dashboard_layouts WHERE id = ?").run(id);
-      db.close();
-      return;
-    } catch { db.close(); }
-  }
-  // JSON fallback
-  writeLayoutsJson(readLayoutsJson().filter((l) => l.id !== id));
+  const layouts = readDashboardLayouts().filter((l) => l.id !== id);
+  writeDashboardLayoutsKv(layouts);
 }
+
+// (Legacy JSON/dashboard_layouts table functions removed — all layout storage now uses kv table)
 
 // 24-char hex string compatible with MongoDB ObjectId format (used by TodoList backend).
 function generateTaskId(): string {
@@ -2125,12 +2065,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.json({ success: true });
     }
 
-    /* ── Pixel Office Layout (SQLite via app_state) ──────────── */
+    /* ── Pixel Office Layout (kv table) ──────────────────────── */
 
     case "write-office-layout": {
-      const { layout } = req.body;
-      if (!layout) return res.status(400).json({ error: "layout required" });
-      writeAppState({ "office-layout": JSON.stringify(layout) });
+      const officeLayout = req.body.officeLayout ?? req.body.layout;
+      if (!officeLayout) return res.status(400).json({ error: "layout required" });
+      writeAppState({ "office-layout": JSON.stringify(officeLayout) });
       return res.json({ success: true });
     }
 

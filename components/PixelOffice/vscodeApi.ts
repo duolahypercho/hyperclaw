@@ -8,7 +8,7 @@ export const vscode = {
   postMessage: (msg: unknown) => {
     const m = msg as { type?: string; layout?: unknown; seats?: unknown };
     if (m?.type === "saveLayout" && m.layout) {
-      bridgeInvoke("write-office-layout", { layout: m.layout }).catch(() => {});
+      bridgeInvoke("write-office-layout", { officeLayout: m.layout }).catch(() => {});
     }
   },
 };
