@@ -18,6 +18,20 @@ import { cn } from "@/lib/utils";
 import { dashboardState } from "$/lib/dashboard-state";
 import { useOpenClawContext } from "$/Providers/OpenClawProv";
 
+// Component registry for dynamic-only widget types (not in the template array).
+// This lets dynamically-added instances resolve their component without being
+// a default template widget that shows up in the toggle list.
+const DYNAMIC_WIDGET_COMPONENTS: Record<string, React.FC<any>> = {
+  "gateway-chat": GatewayChatWidget,
+};
+
+// Default layout for dynamically-created chat widgets
+const CHAT_WIDGET_DEFAULTS = {
+  type: "gateway-chat" as const,
+  defaultValue: { w: 8, h: 6, minW: 6, minH: 4, x: 0, y: 0 },
+  config: { agentId: undefined, sessionKey: undefined },
+};
+
 export default function Home() {
   const { toolAbstracts } = useOS();
   const { dashboardReady } = useOpenClawContext();
@@ -31,6 +45,7 @@ export default function Home() {
   const usageTool = toolAbstracts.find((t) => t.id === "usage");
 
   // Memoize widget components to maintain provider state
+  // NOTE: gateway-chat is NOT here — it's dynamic-only (created via "Add Chat Widget")
   const widgets: Widget[] = useMemo(
     () => [
       {
@@ -105,15 +120,6 @@ export default function Home() {
         component: StatusWidget,
         defaultValue: { w: 6, h: 4, minW: 4, minH: 3, x: 14, y: 0 },
       },
-      {
-        id: "gateway-chat",
-        type: "gateway-chat",
-        title: "AI Assistant",
-        icon: null,
-        component: GatewayChatWidget,
-        defaultValue: { w: 8, h: 6, minW: 6, minH: 4, x: 0, y: 0 },
-        config: { agentId: undefined, sessionKey: undefined },
-      },
     ],
     [todoTool, pomodoroTool, cronsTool, docsTool, pixelOfficeTool, usageTool]
   );
@@ -180,16 +186,14 @@ export default function Home() {
     const savedVisible = dashboardState.get("dashboard-visible-widgets");
     if (savedVisible) {
       try {
-        const parsed = JSON.parse(savedVisible);
-        setVisibleWidgets(parsed);
+        setVisibleWidgets(JSON.parse(savedVisible));
       } catch {}
     }
 
     const savedInstances = dashboardState.get("dashboard-widget-instances");
     if (savedInstances) {
       try {
-        const parsed = JSON.parse(savedInstances);
-        setStoredWidgetInstances(parsed);
+        setStoredWidgetInstances(JSON.parse(savedInstances));
       } catch {}
     }
 
@@ -197,15 +201,18 @@ export default function Home() {
     setResetKey((k) => k + 1);
   }, [dashboardReady, hydratedOnce]);
 
-  // Save widget instances to SQLite whenever they change
+  // Save widget instances to SQLite whenever they change — but only AFTER hydration
+  // to prevent overwriting connector data with empty defaults before hydration completes.
   useEffect(() => {
+    if (!hydratedOnce) return;
     dashboardState.set("dashboard-widget-instances", JSON.stringify(storedWidgetInstances));
-  }, [storedWidgetInstances]);
+  }, [storedWidgetInstances, hydratedOnce]);
 
-  // Helper to get widget component from type
+  // Helper to get widget component from type — checks templates first, then dynamic registry
   const getWidgetComponent = (type: string) => {
     const w = widgets.find(w => w.type === type);
-    return w?.component;
+    if (w) return w.component;
+    return DYNAMIC_WIDGET_COMPONENTS[type] ?? null;
   };
 
   // Get all widgets (templates + instances with resolved components)
@@ -264,10 +271,11 @@ export default function Home() {
     }
   };
 
-  // Persist visible widgets to SQLite whenever they change
+  // Persist visible widgets to SQLite whenever they change — gated on hydration
   useEffect(() => {
+    if (!hydratedOnce) return;
     dashboardState.set("dashboard-visible-widgets", JSON.stringify(visibleWidgets));
-  }, [visibleWidgets]);
+  }, [visibleWidgets, hydratedOnce]);
 
   // Listen for edit mode toggle from Sidebar
   useEffect(() => {
@@ -369,17 +377,16 @@ export default function Home() {
           isEditMode={isEditMode}
           onToggleEditMode={handleToggleEditMode}
           onAddChatWidget={() => {
-            const chatWidgetTemplate = widgets.find(w => w.type === "gateway-chat");
-            if (chatWidgetTemplate) {
-              const newId = `gateway-chat-${Date.now()}`;
-              const newWidget = {
-                ...chatWidgetTemplate,
-                id: newId,
-                title: `Chat ${Date.now().toString().slice(-4)}`,
-                config: {},
-              };
-              handleAddWidget(newWidget);
-            }
+            const newId = `gateway-chat-${Date.now()}`;
+            handleAddWidget({
+              id: newId,
+              type: CHAT_WIDGET_DEFAULTS.type,
+              title: `Chat ${Date.now().toString().slice(-4)}`,
+              icon: null,
+              component: GatewayChatWidget,
+              defaultValue: CHAT_WIDGET_DEFAULTS.defaultValue,
+              config: {},
+            });
           }}
         />
       )}

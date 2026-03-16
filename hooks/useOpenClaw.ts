@@ -11,6 +11,7 @@ import {
   getGatewayConfig,
   getGatewayConnectionState,
   subscribeGatewayConnection,
+  probeGatewayHealth,
 } from "$/lib/openclaw-gateway-ws";
 import type {
   OpenClawCommandResult,
@@ -214,10 +215,20 @@ export function useOpenClaw(autoRefreshMs = 0) {
           hubMode: true,
           hubDeviceId: config.hubDeviceId,
         });
+        if (!connected) {
+          setPartial({
+            gatewayHealthy: false,
+            gatewayHealthError: error ?? "Not connected",
+          });
+          return;
+        }
+        // Hub WS is connected, but that only means we can reach the cloud.
+        // Probe through the full relay to verify OpenClaw is actually running.
+        const probe = await probeGatewayHealth();
         setPartial({
-          gatewayHealthy: connected,
-          gatewayHealthError: connected ? null : (error ?? "Not connected"),
-          ...(connected ? { installed: true as boolean } : {}),
+          gatewayHealthy: probe.healthy,
+          gatewayHealthError: probe.healthy ? null : (probe.error ?? "OpenClaw not reachable"),
+          ...(probe.healthy ? { installed: true as boolean } : {}),
         });
         return;
       } catch {
@@ -484,20 +495,46 @@ export function useOpenClaw(autoRefreshMs = 0) {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+
+    // Track previous WS state to detect reconnections
+    let prevConnected = getGatewayConnectionState().connected;
+
+    // On mount: if hub WS is already connected, probe to verify OpenClaw health
+    if (prevConnected) {
+      probeGatewayHealth().then((probe) => {
+        setPartial({
+          gatewayHealthy: probe.healthy,
+          gatewayHealthError: probe.healthy ? null : (probe.error ?? "OpenClaw not reachable"),
+        });
+      });
+    }
+
     const unsub = subscribeGatewayConnection(() => {
       const { connected, error } = getGatewayConnectionState();
-      setPartial({
-        gatewayHealthy: connected,
-        gatewayHealthError: connected ? null : (error ?? "Not connected"),
-      });
+
+      if (!connected) {
+        // Hub WS dropped — immediately mark unhealthy
+        prevConnected = false;
+        setPartial({
+          gatewayHealthy: false,
+          gatewayHealthError: error ?? "Not connected",
+        });
+      } else if (!prevConnected) {
+        // Hub WS just reconnected — probe end-to-end before showing green
+        prevConnected = true;
+        probeGatewayHealth().then((probe) => {
+          setPartial({
+            gatewayHealthy: probe.healthy,
+            gatewayHealthError: probe.healthy ? null : (probe.error ?? "OpenClaw not reachable"),
+          });
+        });
+      }
     });
     return unsub;
   }, [setPartial]);
 
   useEffect(() => {
     const CRON_POLL_MS = 5_000;
-    const DEBUG = typeof window !== "undefined" && (window as unknown as { __CRON_POLL_DEBUG?: boolean }).__CRON_POLL_DEBUG !== false;
-    const debugLog = (...args: unknown[]) => DEBUG && console.log("[cron-poll]", ...args);
     const WINDOW_BEFORE_MS = 10_000;
     const WINDOW_AFTER_MS = 300_000;
     const RECENT_MS = 120_000;
@@ -533,16 +570,11 @@ export function useOpenClaw(autoRefreshMs = 0) {
             : runAtMs >= Date.now() - RECENT_MS;
 
           if (isOurs && String(latest.action) === "finished") {
-            debugLog("poll: job", jobId, "our run finished (runAtMs", runAtMs, "), removing");
             removeRunningJobIds([jobId]);
           }
-        } catch (e) {
-          if (DEBUG) console.warn("[cron-poll] error for job", jobId, e);
-        }
+        } catch {}
       }
     };
-
-    debugLog("start interval (time-based runAtMs)", CRON_POLL_MS, "ms. Disable: window.__CRON_POLL_DEBUG = false");
 
     let intervalId: ReturnType<typeof setInterval> | null = null;
     const start = () => { if (!intervalId) intervalId = setInterval(checkRunningCrons, CRON_POLL_MS); };

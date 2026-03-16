@@ -378,10 +378,14 @@ const StatusWidgetContent = memo((props: CustomProps) => {
     });
   }, []);
 
-  // Get agents from context (no separate fetch needed)
+  // Get agents from context (no separate fetch needed).
+  // Use a ref so the callback identity is stable — prevents refresh/effect churn
+  // when the context provides a new agents array with the same content.
+  const openClawAgentsRef = useRef(openClawAgents);
+  openClawAgentsRef.current = openClawAgents;
   const fetchAgents = useCallback(async (): Promise<Agent[]> => {
-    return openClawAgents as Agent[];
-  }, [openClawAgents]);
+    return openClawAgentsRef.current as Agent[];
+  }, []);
 
   // Fetch session data for a single agent
   const fetchAgentSessions = useCallback(

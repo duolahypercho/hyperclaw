@@ -490,16 +490,36 @@ export const gatewayConnection = {
     return this.request("sessions.reset", { key, reason: "new" });
   },
 
+  /** In-flight + short-lived cache for `sessions.list` — every caller sends
+   * the same `{ limit: 200 }` request and filters client-side, so a single
+   * WS round-trip can satisfy many concurrent callers. */
+  _sessionsListInflight: null as Promise<{ sessions?: Array<{ key: string; label?: string; createdAt?: number; updatedAt?: number; model?: string; modelProvider?: string; thinkingLevel?: string }> }> | null,
+  _sessionsListCache: null as { data: { sessions?: Array<{ key: string; label?: string; createdAt?: number; updatedAt?: number; model?: string; modelProvider?: string; thinkingLevel?: string }> }; ts: number } | null,
+  _sessionsListCacheTTL: 2000, // 2s TTL
+
   /** Get list of sessions for an agent */
   async listSessions(agentId: string, limit: number = 50): Promise<{ sessions?: Array<{ key: string; label?: string; createdAt?: number; updatedAt?: number; model?: string; modelProvider?: string; thinkingLevel?: string }> }> {
-    // Filter sessions by agent prefix
-    const prefix = `agent:${agentId}:`;
-    const result = await this.request<{ sessions?: Array<{ key: string; label?: string; createdAt?: number; updatedAt?: number; model?: string; modelProvider?: string; thinkingLevel?: string }> }>("sessions.list", { limit: 200 });
-    if (!result?.sessions) {
+    // Deduplicate: reuse in-flight request or short-lived cache
+    let allSessions: { sessions?: Array<{ key: string; label?: string; createdAt?: number; updatedAt?: number; model?: string; modelProvider?: string; thinkingLevel?: string }> };
+    const cached = this._sessionsListCache;
+    if (cached && Date.now() - cached.ts < this._sessionsListCacheTTL) {
+      allSessions = cached.data;
+    } else if (this._sessionsListInflight) {
+      allSessions = await this._sessionsListInflight;
+    } else {
+      const req = this.request<typeof allSessions>("sessions.list", { limit: 200 })
+        .finally(() => { this._sessionsListInflight = null; });
+      this._sessionsListInflight = req;
+      allSessions = await req;
+      this._sessionsListCache = { data: allSessions, ts: Date.now() };
+    }
+
+    if (!allSessions?.sessions) {
       return { sessions: [] };
     }
     // Filter to only sessions for this agent
-    const agentSessions = result.sessions.filter(s => s.key.startsWith(prefix));
+    const prefix = `agent:${agentId}:`;
+    const agentSessions = allSessions.sessions.filter(s => s.key.startsWith(prefix));
     // Sort by updatedAt descending (most recent first)
     agentSessions.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
     // Return top N
@@ -532,9 +552,38 @@ export const gatewayConnection = {
   connect(wsUrl: string, options: GatewayConnectOptions = {}) {
     const sameUrl = this.wsUrl === wsUrl;
     const sameToken = this.token === (options.token ?? null);
-    if (sameUrl && sameToken && this.ws != null && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) return;
+    if (sameUrl && sameToken && this.ws != null && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
+      // Update device routing even when reusing the connection — the active
+      // device may have changed (e.g. user switched to a different machine).
+      if (options.hubDeviceId !== undefined) {
+        this.hubDeviceId = options.hubDeviceId ?? null;
+      }
+      if (options.hubMode !== undefined) {
+        this.hubMode = !!options.hubMode;
+      }
+      return;
+    }
     const token = options.token ?? null;
-    this.disconnect();
+
+    // Clean up existing connection. IMPORTANT: detach handlers from the old WS
+    // BEFORE closing it. Otherwise the old WS's onclose fires asynchronously
+    // after the new WS is created and clobbers this.ws with null.
+    if (this.reconnectTimer != null) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.ws != null) {
+      const oldWs = this.ws;
+      oldWs.onopen = null;
+      oldWs.onmessage = null;
+      oldWs.onerror = null;
+      oldWs.onclose = null;
+      this.ws = null;
+      try { oldWs.close(); } catch { /* ignore */ }
+    }
+    this.agentDeltaBuffer?.clear();
+    this.agentDeltaBuffer = null;
+
     this.wsUrl = wsUrl;
     this.token = token;
     this.hubMode = !!options.hubMode;
@@ -546,7 +595,12 @@ export const gatewayConnection = {
       this.scheduleReconnect();
       return;
     }
+
+    // Capture the WS instance so handlers can guard against stale callbacks
+    const currentWs = this.ws;
+
     this.ws.onopen = () => {
+      if (this.ws !== currentWs) return; // stale
       this.reconnectAttempt = 0;
       // In hub mode, the hub authenticates via JWT and doesn't use the
       // gateway's challenge-response handshake. Mark connected immediately.
@@ -555,6 +609,7 @@ export const gatewayConnection = {
       }
     };
     this.ws.onmessage = (ev: MessageEvent) => {
+      if (this.ws !== currentWs) return; // stale
       try {
         const msg = typeof ev.data === "string" ? JSON.parse(ev.data) : null;
         if (!msg) return;
@@ -564,9 +619,11 @@ export const gatewayConnection = {
       }
     };
     this.ws.onerror = () => {
+      if (this.ws !== currentWs) return; // stale
       this.setState(false, this.error ?? "Connection failed");
     };
     this.ws.onclose = (ev: CloseEvent) => {
+      if (this.ws !== currentWs) return; // stale
       const { code, reason } = ev;
       this.ws = null;
       const connectionRefused = code === 1006 || (reason && /refused|ECONNREFUSED/i.test(String(reason)));
@@ -574,6 +631,14 @@ export const gatewayConnection = {
       const err = connectionRefused
         ? "Gateway not running. Start the OpenClaw app or run: openclaw gateway run"
         : isNormalClose ? null : reason && String(reason).trim() ? String(reason) : `Closed (${code})`;
+      // Reject all pending requests so callers fail fast instead of waiting 30s
+      if (this.pendingRequests.size > 0) {
+        const closeError = new Error(err || "WebSocket closed");
+        for (const [id, pending] of this.pendingRequests) {
+          pending.reject(closeError);
+        }
+        this.pendingRequests.clear();
+      }
       this.setState(false, err);
       this.scheduleReconnect();
     };
@@ -587,8 +652,25 @@ export const gatewayConnection = {
     const token = this.token;
     const hubMode = this.hubMode;
     const hubDeviceId = this.hubDeviceId;
-    this.reconnectTimer = setTimeout(() => {
+    this.reconnectTimer = setTimeout(async () => {
       this.reconnectTimer = null;
+      // In hub mode, re-fetch the active device before reconnecting — the
+      // device may have changed while we were disconnected.
+      if (hubMode) {
+        try {
+          const config = await getGatewayConfig();
+          if (config.gatewayUrl && config.hubMode) {
+            connectGatewayWs(config.gatewayUrl, {
+              token: config.token,
+              hubMode: true,
+              hubDeviceId: config.hubDeviceId,
+            });
+            return;
+          }
+        } catch {
+          /* fall through to reconnect with captured values */
+        }
+      }
       if (url) this.connect(url, { token, hubMode: hubMode || undefined, hubDeviceId: hubDeviceId || undefined });
     }, delay);
   },
@@ -600,8 +682,13 @@ export const gatewayConnection = {
     }
     this.reconnectAttempt = 0;
     if (this.ws != null) {
-      try { this.ws.close(); } catch { /* ignore */ }
+      const oldWs = this.ws;
+      oldWs.onopen = null;
+      oldWs.onmessage = null;
+      oldWs.onerror = null;
+      oldWs.onclose = null;
       this.ws = null;
+      try { oldWs.close(); } catch { /* ignore */ }
     }
     this.wsUrl = null;
     this.token = null;
@@ -609,6 +696,8 @@ export const gatewayConnection = {
     this.hubDeviceId = null;
     this.agentDeltaBuffer?.clear();
     this.agentDeltaBuffer = null;
+    this._sessionsListInflight = null;
+    this._sessionsListCache = null;
     this.setState(false, null);
   },
 
@@ -638,7 +727,46 @@ export const gatewayConnection = {
   isConnected(): boolean {
     return this.connected;
   },
+
+  /** Immediately attempt to reconnect (resets backoff). Used on tab focus. */
+  async reconnectNow() {
+    if (this.connected || !this.wsUrl) return;
+    // Cancel any pending backoff timer
+    if (this.reconnectTimer != null) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.reconnectAttempt = 0;
+    // In hub mode, fetch fresh config (device/token may have changed)
+    if (this.hubMode) {
+      try {
+        const config = await getGatewayConfig();
+        if (config.gatewayUrl && config.hubMode) {
+          connectGatewayWs(config.gatewayUrl, {
+            token: config.token,
+            hubMode: true,
+            hubDeviceId: config.hubDeviceId,
+          });
+          return;
+        }
+      } catch { /* fall through */ }
+    }
+    this.connect(this.wsUrl, {
+      token: this.token,
+      hubMode: this.hubMode || undefined,
+      hubDeviceId: this.hubDeviceId || undefined,
+    });
+  },
 };
+
+// Auto-reconnect when the browser tab regains focus
+if (typeof document !== "undefined") {
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && !gatewayConnection.connected && gatewayConnection.wsUrl) {
+      gatewayConnection.reconnectNow();
+    }
+  });
+}
 
 export function connectGatewayWs(wsUrl: string, options?: GatewayConnectOptions): void {
   let finalUrl = wsUrl;
@@ -655,6 +783,24 @@ export function connectGatewayWs(wsUrl: string, options?: GatewayConnectOptions)
 
 export function disconnectGatewayWs(): void {
   gatewayConnection.disconnect();
+}
+
+/**
+ * Verify end-to-end connectivity through the full relay chain
+ * (dashboard → hub → connector → OpenClaw gateway).
+ * The hub WS being connected only means the dashboard can talk to the cloud —
+ * this probe verifies OpenClaw is actually running and reachable on the device.
+ */
+export async function probeGatewayHealth(timeoutMs = 5000): Promise<{ healthy: boolean; error?: string }> {
+  if (!gatewayConnection.connected) {
+    return { healthy: false, error: "WebSocket not connected" };
+  }
+  try {
+    await gatewayConnection.request("models.list", {}, timeoutMs);
+    return { healthy: true };
+  } catch (e) {
+    return { healthy: false, error: e instanceof Error ? e.message : "Gateway not reachable" };
+  }
 }
 
 export function getGatewayConnectionState(): GatewayConnectionState {

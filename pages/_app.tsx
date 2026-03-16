@@ -18,6 +18,7 @@ import { NextPage } from "next/types";
 import { OSProvider } from "@OS/Provider/OSProv";
 import { GeistSans } from "geist/font/sans";
 import { UpdateNotification } from "$/components/UpdateNotification";
+import { GatewayStatusBanner } from "$/components/GatewayStatusBanner";
 import { GuidanceProvider } from "$/components/Guidance";
 import { ErrorBoundary } from "$/components/ErrorBoundary";
 
@@ -51,6 +52,7 @@ function MyApp({ Component, pageProps }: any) {
                 </UserProvider>
                 <Analytics />
                 <Toaster />
+                <GatewayStatusBanner />
                 <UpdateNotification />
               </TooltipProvider>
             </GuidanceProvider>

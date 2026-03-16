@@ -209,15 +209,18 @@ export async function hubCommand(
 
   // Fallback: REST API
   const token = await getUserToken();
-  if (!token) return { success: false, error: "Not authenticated" };
+  if (!token) {
+    return { success: false, error: "Not authenticated" };
+  }
 
   const deviceId = await getActiveDeviceId(token);
-  if (!deviceId)
+  if (!deviceId) {
     return {
       success: false,
       error: "No device registered",
       needsSetup: true,
     };
+  }
 
   const res = await fetch(
     `${HUB_API_URL}/api/devices/${deviceId}/command`,

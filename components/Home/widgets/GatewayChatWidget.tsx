@@ -37,54 +37,37 @@ export { GatewayChatCustomHeader };
 
 // GatewayChat Widget Content - matches CopilotChat UI
 const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
-  const { widget, isEditMode } = props;
+  const { widget, isEditMode, onConfigChange } = props;
   const { isFocusModeActive } = useFocusMode();
 
   // Get OpenClaw agents from provider
   const { agents, loading: agentsLoading } = useOpenClawContext();
 
-  // Get agent config from widget config or use default (first available agent)
+  // Get agent config from widget config (persisted to SQLite via dashboardState)
   const config = widget.config as Record<string, unknown> | undefined;
   const configAgentId = config?.agentId as string | undefined;
   const configSessionKey = config?.sessionKey as string | undefined;
 
-  // Storage key for this widget's state
-  const widgetStorageKey = `gateway-chat-state-${widget.id}`;
-
-  // Load persisted state from localStorage
-  const loadPersistedState = () => {
-    if (typeof window === "undefined") return {};
-    try {
-      const saved = localStorage.getItem(widgetStorageKey);
-      return saved ? JSON.parse(saved) : {};
-    } catch {
-      return {};
-    }
-  };
-
-  // Initialize state from localStorage or config
-  const persistedState = loadPersistedState();
-
-  // Local state for selected agent - initialized with config/persisted, but persists after user selection
+  // Local state for selected agent - initialized from widget config
   const [selectedAgentId, setSelectedAgentId] = useState<string | undefined>(
-    persistedState.agentId || configAgentId
+    configAgentId
   );
 
-  // Input field state - persisted per widget
-  const [inputValue, setInputValue] = useState<string>(persistedState.inputValue || "");
+  // Input field state - ephemeral, kept in component state only
+  const [inputValue, setInputValue] = useState<string>("");
 
   // Slash command menu state
   const [slashMenuVisible, setSlashMenuVisible] = useState(false);
   const [slashQuery, setSlashQuery] = useState("");
 
   // Track if user has manually selected an agent
-  const [userHasSelectedAgent, setUserHasSelectedAgent] = useState(!!persistedState.agentId);
+  const [userHasSelectedAgent, setUserHasSelectedAgent] = useState(!!configAgentId);
 
 
-  // Sessions state - initialize with configSessionKey/persisted if provided
+  // Sessions state - initialize with configSessionKey if provided
   const [sessions, setSessions] = useState<Array<{ key: string; label?: string; updatedAt?: number }>>([]);
   const [selectedSessionKey, setSelectedSessionKey] = useState<string | undefined>(
-    persistedState.sessionKey || configSessionKey
+    configSessionKey
   );
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const [sessionsError, setSessionsError] = useState<string | null>(null);
@@ -96,22 +79,23 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
     }
   }, [configSessionKey, selectedSessionKey]);
 
-  // Persist widget state to localStorage (debounced to avoid thrashing on every keystroke)
+  // Stable ref for onConfigChange to avoid re-triggering the persist effect
+  // when Dashboard re-renders and creates a new closure.
+  const onConfigChangeRef = useRef(onConfigChange);
+  onConfigChangeRef.current = onConfigChange;
+
+  // Persist widget config to dashboardState (SQLite) so it syncs across devices.
+  // Only persist agentId and sessionKey — inputValue is ephemeral.
   const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (persistTimerRef.current) clearTimeout(persistTimerRef.current);
     persistTimerRef.current = setTimeout(() => {
-      const state = {
-        agentId: selectedAgentId,
-        sessionKey: selectedSessionKey,
-        inputValue: inputValue,
-      };
-      localStorage.setItem(widgetStorageKey, JSON.stringify(state));
+      onConfigChangeRef.current?.({ agentId: selectedAgentId, sessionKey: selectedSessionKey });
     }, 500);
     return () => {
       if (persistTimerRef.current) clearTimeout(persistTimerRef.current);
     };
-  }, [widgetStorageKey, selectedAgentId, selectedSessionKey, inputValue]);
+  }, [selectedAgentId, selectedSessionKey]);
 
   // Resolve the effective agent ID.  Priority:
   // 1. User's explicit selection (persisted or in-session)
@@ -181,14 +165,15 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
   useEffect(() => {
     if (initialLoadDoneRef.current) return; // already done, never re-show skeleton
     if (!agentsLoading && isConnected) {
+      // Set ref synchronously to prevent duplicate fires while async work is in flight
+      initialLoadDoneRef.current = true;
       // Agents loaded + connected — load history and sessions in parallel
       Promise.all([
         loadChatHistory(),
         gatewayConnection.isConnected()
           ? gatewayConnection.listSessions(currentAgentId, 20).then(r => setSessions(r.sessions || [])).catch(() => {})
           : Promise.resolve(),
-      ]).finally(() => {
-        initialLoadDoneRef.current = true;
+      ]).then(() => {
         setInitialReady(true);
       });
     }

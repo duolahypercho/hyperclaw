@@ -264,15 +264,20 @@ export const Dashboard: React.FC<DashboardProps> = ({
     return newId;
   }, [onAddWidget]);
 
-  // Update widget config
+  // Update widget config — skip if values haven't changed to prevent render loops
   const updateWidgetConfig = useCallback((widgetId: string, config: Record<string, unknown>) => {
-    setWidgetConfigs(prev => ({
-      ...prev,
-      [widgetId]: {
-        ...prev[widgetId],
-        ...config,
-      },
-    }));
+    setWidgetConfigs(prev => {
+      const existing = prev[widgetId];
+      // Shallow-compare incoming keys against existing config to avoid no-op updates
+      if (existing) {
+        const changed = Object.keys(config).some(k => existing[k] !== config[k]);
+        if (!changed) return prev; // same reference = no re-render
+      }
+      return {
+        ...prev,
+        [widgetId]: { ...existing, ...config },
+      };
+    });
     if (onUpdateWidgetConfig) {
       onUpdateWidgetConfig(widgetId, config);
     }
@@ -433,6 +438,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
             isMaximized={true}
             onMaximize={() => handleMaximize(widget.id)}
             isEditMode={isEditMode}
+            onConfigChange={(config) => updateWidgetConfig(widget.id, config)}
           />
         </motion.div>
       </div>
@@ -473,6 +479,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
               isMaximized={false}
               onMaximize={() => handleMaximize(widget.id)}
               isEditMode={isEditMode}
+              onConfigChange={(config) => updateWidgetConfig(widget.id, config)}
             />
           </div>
         ))}

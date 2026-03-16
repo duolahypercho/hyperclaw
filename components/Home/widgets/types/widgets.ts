@@ -5,4 +5,6 @@ export interface CustomProps {
   isMaximized: boolean;
   onMaximize: () => void;
   isEditMode: boolean;
+  /** Persist widget-specific config to dashboardState (SQLite) so it syncs across devices. */
+  onConfigChange?: (config: Record<string, unknown>) => void;
 }

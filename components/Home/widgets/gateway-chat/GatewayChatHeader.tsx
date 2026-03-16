@@ -50,8 +50,8 @@ export const GatewayChatCustomHeader: React.FC<GatewayChatHeaderProps> = ({
   sessionsError = null,
   isConnected = false,
 }) => {
-  // Get OpenClaw agents from provider
-  const { agents } = useOpenClawContext();
+  // Get OpenClaw agents and gateway health from provider
+  const { agents, gatewayHealthy } = useOpenClawContext();
 
   // Get agent from config or use first available
   const config = widget.config as Record<string, unknown> | undefined;
@@ -96,14 +96,16 @@ export const GatewayChatCustomHeader: React.FC<GatewayChatHeaderProps> = ({
                 <span className="text-xl">{headerAvatarText || headerIdentity?.emoji || "🤖"}</span>
               </AvatarFallback>
             </Avatar>
-            {/* Connection status dot — matches navbar avatar style */}
+            {/* Connection status dot — uses probed gateway health, not raw hub WS state */}
             <span className="absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-background shadow-sm">
               <span
                 className={cn(
                   "h-2.5 w-2.5 rounded-full transition-all duration-300",
-                  isConnected
+                  gatewayHealthy === true
                     ? "bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.6)]"
-                    : "bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.6)]"
+                    : gatewayHealthy === false
+                      ? "bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.6)]"
+                      : "bg-amber-500/80 animate-pulse"
                 )}
               />
             </span>
