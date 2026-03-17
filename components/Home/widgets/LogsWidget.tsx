@@ -1,4 +1,4 @@
-import React, { memo, useEffect, useState, useCallback, useRef } from "react";
+import React, { memo, useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { motion } from "framer-motion";
 import { CustomProps } from "$/components/Home/widgets/types/widgets";
 import {
@@ -8,6 +8,8 @@ import {
   ScrollText,
   RefreshCw,
   Loader2,
+  Search,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -20,314 +22,105 @@ import {
 import { useFocusMode } from "./hooks/useFocusMode";
 import { cn } from "@/lib/utils";
 
-const LINES_REQUEST = 200;
+// ── Types & Constants ────────────────────────────────
+const LOGS_LIMIT = 500;
 const AUTO_REFRESH_MS = 15_000;
 
-export type LogEntry = { time?: string; level?: string; message?: string; tags?: string[] };
+/** Levels the OpenClaw JSONL can have — normalized to lowercase. */
+const LOG_LEVELS = ["fatal", "error", "warn", "info", "debug", "trace"] as const;
+type LogLevel = (typeof LOG_LEVELS)[number];
+const VALID_LEVELS = new Set<string>(LOG_LEVELS);
 
-async function fetchLogsFromBridge(lines: number): Promise<{ data: LogEntry[] | string; error?: string }> {
+export type LogEntry = {
+  time?: string | null;
+  level?: LogLevel | null;
+  subsystem?: string | null;
+  message?: string | null;
+};
+
+type LevelFilters = Record<LogLevel, boolean>;
+const ALL_ON: LevelFilters = { fatal: true, error: true, warn: true, info: true, debug: true, trace: true };
+
+// ── Bridge → LogEntry mapping ────────────────────────
+type BridgeEntry = { time?: string; level?: string; message?: string };
+
+function toBridgeEntry(e: BridgeEntry): LogEntry {
+  const raw = (e.level ?? "").toLowerCase();
+  if (VALID_LEVELS.has(raw)) {
+    return { time: e.time, level: raw as LogLevel, message: e.message, subsystem: null };
+  }
+  // Tag-like level ("ws", "gateway", "discord") → subsystem badge, classify as info
+  return { time: e.time, level: "info", message: e.message, subsystem: e.level || null };
+}
+
+async function fetchLogs(): Promise<{ data: LogEntry[]; error?: string }> {
   try {
-    const json = await bridgeInvoke("get-logs", { lines });
+    const json = await bridgeInvoke("get-logs", { lines: LOGS_LIMIT });
     const err = (json as { error?: string })?.error;
     if (err) return { data: [], error: err };
-    const data = Array.isArray(json) ? json : ((json as { data?: LogEntry[] })?.data ?? []);
-    return { data };
+    const raw = Array.isArray(json) ? json : ((json as { data?: BridgeEntry[] })?.data ?? []);
+    return { data: (raw as BridgeEntry[]).map(toBridgeEntry) };
   } catch (e) {
     return { data: [], error: e instanceof Error ? e.message : "Failed to fetch logs" };
   }
 }
 
-function formatTime(iso?: string): string {
+// ── Display helpers ──────────────────────────────────
+
+function formatTime(iso?: string | null): string {
   if (!iso) return "";
   try {
     const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
     return d.toLocaleTimeString([], { hour12: true, hour: "2-digit", minute: "2-digit", second: "2-digit" }).toLowerCase();
-  } catch {
-    return iso;
-  }
+  } catch { return iso; }
 }
 
-function dotColor(level: string): string {
-  const l = (level ?? "").toUpperCase();
-  if (l === "ERROR") return "bg-destructive";
-  if (l === "WARN" || l === "WARNING") return "bg-amber-500";
-  if (l === "DEBUG") return "bg-muted-foreground";
+function levelDotClass(level?: LogLevel | null): string {
+  if (level === "error" || level === "fatal") return "bg-destructive";
+  if (level === "warn") return "bg-amber-500";
+  if (level === "debug" || level === "trace") return "bg-muted-foreground";
   return "bg-emerald-500";
 }
 
-/** Tag badge color for gateway-style [tag] (reload, ws, discord, hooks/..., agents/..., cron:...). */
-function tagBadgeClass(tag: string): string {
-  const t = (tag ?? "").toLowerCase();
-  if (t === "ws") return "bg-primary/20 text-primary border border-primary/30";
-  if (t === "discord") return "bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 border border-indigo-500/30";
-  if (t.startsWith("cron")) return "bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-500/30";
-  if (t.startsWith("reload")) return "bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-500/30";
-  if (t.startsWith("hooks")) return "bg-violet-500/20 text-violet-600 dark:text-violet-400 border border-violet-500/30";
-  if (t.startsWith("agents")) return "bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30";
-  if (t === "gateway") return "bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30";
-  if (t === "error") return "bg-destructive/20 text-destructive border border-destructive/30";
-  if (t === "warn" || t === "warning") return "bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-500/30";
-  return "bg-muted/80 text-muted-foreground border border-border";
+function levelBadgeClass(level?: LogLevel | null): string {
+  if (level === "error" || level === "fatal") return "bg-destructive/15 text-destructive border-destructive/30";
+  if (level === "warn") return "bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30";
+  if (level === "debug" || level === "trace") return "bg-muted/80 text-muted-foreground border-border";
+  return "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30";
 }
 
-/** True if level is used as a tag (e.g. ws, gateway, discord) rather than log level. */
-const LOG_LEVELS = new Set(["INFO", "WARN", "WARNING", "ERROR", "DEBUG"]);
-function isTagLikeLevel(level: string): boolean {
-  const u = (level ?? "").toUpperCase();
-  return level != null && level !== "" && !LOG_LEVELS.has(u);
+function chipClass(level: LogLevel, on: boolean): string {
+  if (!on) return "text-muted-foreground/50 hover:text-foreground hover:bg-muted/50 border-transparent";
+  if (level === "error" || level === "fatal") return "bg-destructive/20 text-destructive border-destructive/30";
+  if (level === "warn") return "bg-amber-500/20 text-amber-600 dark:text-amber-400 border-amber-500/30";
+  if (level === "info") return "bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border-emerald-500/30";
+  return "bg-muted text-muted-foreground border-border";
 }
 
-/** Tags to show for an entry: from entry.tags or [level] when level is tag-like. */
-function getDisplayTags(e: LogEntry): string[] {
-  if (e.tags && e.tags.length > 0) return e.tags;
-  const level = (e.level ?? "").trim();
-  return isTagLikeLevel(level) ? [level] : [];
-}
-
-/** Expand JSON messages so all fields (subsystem, module, storePath, etc.) are visible. */
-function formatMessageForDisplay(msg: string): string {
-  if (!msg || typeof msg !== "string") return msg ?? "";
-  const trimmed = msg.trim();
-  if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
-    try {
-      const o = JSON.parse(msg);
-      if (o && typeof o === "object" && !Array.isArray(o)) {
-        return Object.entries(o)
-          .map(([k, v]) => `${k}: ${typeof v === "object" && v !== null ? JSON.stringify(v) : String(v)}`)
-          .join(" · ");
-      }
-    } catch {
-      // fall through to raw message
-    }
-  }
-  return msg;
-}
-
-/** Match gateway-style "⇄ res ✓ method 70ms" or "⇄ res ✓chat.send53ms" (with or without spaces). */
-const WS_RESPONSE = /^(⇄\s*res\s*✓)\s*([a-zA-Z._]+)(\d+ms)?(.*)$/;
-/** Match gateway error response "⇄ res ✗ agent 0ms errorCode=UNAVAILABLE ..." */
-const WS_RESPONSE_ERROR = /^(⇄\s*res\s*✗)\s*([a-zA-Z._]+)(\d+ms)?(.*)$/;
-const CONFIG_READS = /^(config change (?:detected|applied));?\s*(.*)$/i;
-const SESSION_SAVED = /^(Session context saved to)\s+(.+)$/i;
-const IMAGE_RESIZED = /^(Image resized to fit limits:)\s+(.+)$/i;
-
-function formatMessageContent(msg: string): React.ReactNode {
-  if (!msg || typeof msg !== "string") return null;
-  const raw = formatMessageForDisplay(msg);
-  const m = raw.trim();
-
-  const wsErrorMatch = m.match(WS_RESPONSE_ERROR);
-  if (wsErrorMatch) {
-    const [, iconPart, method, duration, tail] = wsErrorMatch;
-    return (
-      <>
-        <span className="text-destructive font-medium" aria-hidden>{iconPart}</span>
-        <span className="text-destructive mx-1">{method}</span>
-        {duration && <span className="text-destructive/80 tabular-nums ml-0.5">{duration}</span>}
-        {tail && <span className="text-destructive break-words ml-0.5" title={tail.trim()}>{tail.trim()}</span>}
-      </>
-    );
-  }
-
-  const wsMatch = m.match(WS_RESPONSE);
-  if (wsMatch) {
-    const [, iconPart, method, duration, tail] = wsMatch;
-    return (
-      <>
-        <span className="text-emerald-500 dark:text-emerald-400" aria-hidden>{iconPart}</span>
-        <span className="font-normal text-foreground mx-1">{method}</span>
-        {duration && <span className="text-muted-foreground tabular-nums ml-0.5">{duration}</span>}
-        {tail && <span className="text-muted-foreground break-words ml-0.5" title={tail.trim()}>{tail.trim()}</span>}
-      </>
-    );
-  }
-
-  const configMatch = m.match(CONFIG_READS);
-  if (configMatch) {
-    const [, action, rest] = configMatch;
-    return (
-      <>
-        <span className="text-amber-600 dark:text-amber-400">{action}</span>
-        {rest && <span className="text-muted-foreground"> {rest}</span>}
-      </>
-    );
-  }
-
-  const sessionMatch = m.match(SESSION_SAVED);
-  if (sessionMatch) {
-    const [, prefix, pathPart] = sessionMatch;
-    return (
-      <>
-        <span className="text-muted-foreground">{prefix}</span>{" "}
-        <code className="text-[11px] bg-muted/60 px-1 rounded break-all">{pathPart.trim()}</code>
-      </>
-    );
-  }
-
-  const imageMatch = m.match(IMAGE_RESIZED);
-  if (imageMatch) {
-    const [, prefix, details] = imageMatch;
-    return (
-      <>
-        <span className="text-muted-foreground">{prefix}</span>{" "}
-        <span className="text-foreground/90 tabular-nums">{details.trim()}</span>
-      </>
-    );
-  }
-
-  return highlightMessage(raw) ?? raw;
-}
-
-/** True if this log entry should be shown as an error (red styling). */
-function isErrorLogEntry(e: LogEntry): boolean {
-  if ((e.level ?? "").toUpperCase() === "ERROR") return true;
+function isErrorRow(e: LogEntry): boolean {
+  if (e.level === "error" || e.level === "fatal") return true;
   const msg = e.message ?? "";
   return msg.includes("⇄ res ✗") || /errorCode=/i.test(msg);
 }
 
-/** True if message looks like markdown (AI/content block). */
-function looksLikeMarkdown(msg: string): boolean {
-  if (!msg || typeof msg !== "string") return false;
-  const m = msg.trim();
-  return /\n/.test(m) || /\*\*[^*]+\*\*/.test(m) || /^##\s/.test(m) || /^###\s/.test(m) || /```/.test(m) || /^---$/.test(m) || /^- /.test(m);
+function matchesSearch(e: LogEntry, needle: string): boolean {
+  if (!needle) return true;
+  const haystack = [e.message, e.subsystem, e.level, e.time].filter(Boolean).join(" ").toLowerCase();
+  return haystack.includes(needle);
 }
 
-const HIGHLIGHT_KEYWORDS = /(\[?\b(webhook|telegram|hooks|gateway|OS\/browser|default|ms)\b\]?)/gi;
-const IS_KEYWORD = /^\[?\b(webhook|telegram|hooks|gateway|OS\/browser|default|ms)\b\]?$/i;
-
-function highlightMessage(msg: string): React.ReactNode {
-  if (!msg) return null;
-  const parts = msg.split(HIGHLIGHT_KEYWORDS);
-  return parts.map((part, i) =>
-    IS_KEYWORD.test(part) ? (
-      <span key={i} className="text-emerald-400">{part}</span>
-    ) : (
-      <span key={i}>{part}</span>
-    )
-  );
-}
-
-/** Merge consecutive INFO entries (e.g. long AI/markdown blocks) into single rows. */
-const MAX_INFO_GROUP = 50;
-
-function groupConsecutiveInfo(entries: LogEntry[]): LogEntry[] {
-  const out: LogEntry[] = [];
-  let i = 0;
-  while (i < entries.length) {
-    const e = entries[i];
-    const isInfo = (e.level ?? "").toUpperCase() === "INFO";
-    if (!isInfo) {
-      out.push(e);
-      i++;
-      continue;
-    }
-    const group: LogEntry[] = [];
-    while (i < entries.length && (entries[i].level ?? "").toUpperCase() === "INFO" && group.length < MAX_INFO_GROUP) {
-      group.push(entries[i]);
-      i++;
-    }
-    if (group.length === 1) {
-      out.push(group[0]);
-    } else {
-      const first = group[0];
-      const time = first.time;
-      const message = group.map((x) => (x.message ?? "").trim()).filter(Boolean).join("\n");
-      out.push({ time, level: "INFO", message: message || first.message });
-    }
-  }
-  return out;
-}
-
-/** Render inline markdown: **bold**, `code`, ## header, ### subheader. */
-function renderInlineMarkdown(line: string): React.ReactNode {
-  const parts: React.ReactNode[] = [];
-  let rest = line;
-  let key = 0;
-  while (rest.length > 0) {
-    const bold = /^\*\*([^*]+)\*\*/.exec(rest);
-    const code = /^`([^`]*)`/.exec(rest);
-    if (bold) {
-      parts.push(<strong key={key++} className="font-semibold text-foreground">{bold[1]}</strong>);
-      rest = rest.slice(bold[0].length);
-    } else if (code) {
-      parts.push(<code key={key++} className="bg-muted/70 px-1 rounded text-[11px]">{code[1]}</code>);
-      rest = rest.slice(code[0].length);
-    } else {
-      const next = rest.match(/\*\*[^*]*\*\*|`[^`]*`/);
-      const plainEnd = next ? rest.indexOf(next[0]) : rest.length;
-      parts.push(<span key={key++}>{rest.slice(0, plainEnd)}</span>);
-      rest = rest.slice(plainEnd);
-    }
-  }
-  return <>{parts}</>;
-}
-
-/** Render a (possibly multi-line) message with simple markdown: ##, ###, **, `, ```, ---. */
-function renderMessageWithMarkdown(msg: string): React.ReactNode {
-  if (!msg || typeof msg !== "string") return null;
-  const raw = msg.trim();
-  const lines = raw.split("\n");
-  const nodes: React.ReactNode[] = [];
-  let i = 0;
-  let key = 0;
-  while (i < lines.length) {
-    const line = lines[i];
-    if (line.startsWith("```")) {
-      const lang = line.slice(3).trim();
-      const block: string[] = [];
-      i++;
-      while (i < lines.length && !lines[i].startsWith("```")) {
-        block.push(lines[i]);
-        i++;
-      }
-      if (i < lines.length) i++;
-      nodes.push(
-        <pre key={key++} className="bg-muted/50 rounded p-2 my-1 text-xs overflow-x-auto border border-border/50">
-          <code>{block.join("\n")}</code>
-        </pre>
-      );
-      continue;
-    }
-    if (line.trim() === "---") {
-      nodes.push(<hr key={key++} className="border-border/50 my-1" />);
-      i++;
-      continue;
-    }
-    if (line.startsWith("### ")) {
-      nodes.push(<div key={key++} className="text-xs font-semibold text-foreground mt-1">{renderInlineMarkdown(line.slice(4))}</div>);
-      i++;
-      continue;
-    }
-    if (line.startsWith("## ")) {
-      nodes.push(<div key={key++} className="text-xs font-bold text-foreground mt-1.5">{renderInlineMarkdown(line.slice(3))}</div>);
-      i++;
-      continue;
-    }
-    if (line.startsWith("- ")) {
-      nodes.push(<div key={key++} className="pl-2 text-muted-foreground">{renderInlineMarkdown(line.slice(2))}</div>);
-      i++;
-      continue;
-    }
-    nodes.push(<div key={key++} className="leading-relaxed">{renderInlineMarkdown(line)}</div>);
-    i++;
-  }
-  return <div className="space-y-0.5">{nodes}</div>;
-}
+// ── Header ───────────────────────────────────────────
 
 interface LogsCustomHeaderProps extends CustomProps {
   onRefresh?: () => void;
   refreshing?: boolean;
   eventCount?: number;
+  totalCount?: number;
 }
 
 export const LogsCustomHeader: React.FC<LogsCustomHeaderProps> = ({
-  widget,
-  isMaximized,
-  onMaximize,
-  isEditMode,
-  onRefresh,
-  refreshing = false,
-  eventCount,
+  widget, isMaximized, onMaximize, isEditMode, onRefresh, refreshing = false, eventCount, totalCount,
 }) => (
   <div className="flex items-center justify-between px-4 py-2">
     <div className="flex items-center gap-3 flex-1 min-w-0">
@@ -336,233 +129,216 @@ export const LogsCustomHeader: React.FC<LogsCustomHeaderProps> = ({
           <GripVertical className="w-3.5 h-3.5 text-muted-foreground" />
         </div>
       )}
-      <div className="text-primary flex-shrink-0">
-        <ScrollText className="w-3.5 h-3.5" />
-      </div>
-      <h3 className="text-xs font-normal text-foreground truncate">
-        {widget.title}
-      </h3>
+      <div className="text-primary flex-shrink-0"><ScrollText className="w-3.5 h-3.5" /></div>
+      <h3 className="text-xs font-normal text-foreground truncate">{widget.title}</h3>
       {eventCount != null && eventCount > 0 && (
         <span className="text-xs text-muted-foreground shrink-0">
-          {eventCount} events
+          {eventCount}{totalCount != null && totalCount !== eventCount ? ` / ${totalCount}` : ""} events
         </span>
       )}
     </div>
     <div className="flex items-center gap-2 flex-shrink-0">
       {onRefresh && (
-        <Button
-          variant="ghost"
-          size="iconSm"
-          onClick={onRefresh}
-          disabled={refreshing}
-          className="h-7 w-7"
-        >
-          <RefreshCw
-            className={cn("w-3.5 h-3.5", refreshing && "animate-spin")}
-          />
+        <Button variant="ghost" size="iconSm" onClick={onRefresh} disabled={refreshing} className="h-7 w-7">
+          <RefreshCw className={cn("w-3.5 h-3.5", refreshing && "animate-spin")} />
         </Button>
       )}
-      <Button
-        variant="ghost"
-        size="iconSm"
-        onClick={onMaximize}
-        className="h-7 w-7"
-      >
-        {isMaximized ? (
-          <Minimize2 className="w-3.5 h-3.5" />
-        ) : (
-          <Maximize2 className="w-3.5 h-3.5" />
-        )}
+      <Button variant="ghost" size="iconSm" onClick={onMaximize} className="h-7 w-7">
+        {isMaximized ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
       </Button>
     </div>
   </div>
 );
 
+// ── Widget content ───────────────────────────────────
+
 const LogsWidgetContent = memo((props: CustomProps) => {
+  const { widget, onConfigChange } = props;
   const { isFocusModeActive } = useFocusMode();
-  const [logs, setLogs] = useState<LogEntry[] | string | null>(null);
+
+  const config = widget.config as Record<string, unknown> | undefined;
+  const savedLevels = config?.levelFilters as LevelFilters | undefined;
+  const savedSearch = config?.searchQuery as string | undefined;
+
+  const [logs, setLogs] = useState<LogEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [levelFilters, setLevelFilters] = useState<LevelFilters>(savedLevels ?? { ...ALL_ON });
+  const [searchQuery, setSearchQuery] = useState(savedSearch ?? "");
   const isMounted = useRef(true);
 
-  const fetchLogs = useCallback(async (silent = false) => {
-    if (!silent) setLoading(true);
-    setError(null);
-    const { data, error: err } = await fetchLogsFromBridge(LINES_REQUEST);
-    if (!isMounted.current) return;
-    if (!silent) setLoading(false);
-    if (err) {
-      setError(err);
-      setLogs(null);
-    } else {
-      setLogs(data);
-    }
+  // Persist settings (debounced)
+  const onConfigChangeRef = useRef(onConfigChange);
+  onConfigChangeRef.current = onConfigChange;
+  const persistTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (persistTimer.current) clearTimeout(persistTimer.current);
+    persistTimer.current = setTimeout(() => {
+      onConfigChangeRef.current?.({ levelFilters, searchQuery: searchQuery || undefined });
+    }, 500);
+    return () => { if (persistTimer.current) clearTimeout(persistTimer.current); };
+  }, [levelFilters, searchQuery]);
+
+  const toggleLevel = useCallback((lvl: LogLevel) => {
+    setLevelFilters((prev) => ({ ...prev, [lvl]: !prev[lvl] }));
   }, []);
 
+  const doFetchLogs = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
+    setError(null);
+    const { data, error: err } = await fetchLogs();
+    if (!isMounted.current) return;
+    if (!silent) setLoading(false);
+    if (err) { setError(err); setLogs([]); }
+    else { setLogs(data); }
+  }, []);
+
+  // Initial load + polling
   useEffect(() => {
     isMounted.current = true;
-    fetchLogs(false);
-
-    // Pause polling when tab is hidden
+    doFetchLogs(false);
     let t: ReturnType<typeof setInterval> | null = null;
-    const start = () => { if (!t) t = setInterval(() => fetchLogs(true), AUTO_REFRESH_MS); };
+    const start = () => { if (!t) t = setInterval(() => doFetchLogs(true), AUTO_REFRESH_MS); };
     const stop = () => { if (t) { clearInterval(t); t = null; } };
-    const onVisibility = () => { document.visibilityState === "visible" ? start() : stop(); };
-
+    const onVis = () => { document.visibilityState === "visible" ? start() : stop(); };
     if (document.visibilityState === "visible") start();
-    document.addEventListener("visibilitychange", onVisibility);
+    document.addEventListener("visibilitychange", onVis);
+    return () => { isMounted.current = false; stop(); document.removeEventListener("visibilitychange", onVis); };
+  }, [doFetchLogs]);
 
-    return () => {
-      isMounted.current = false;
-      stop();
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
-  }, [fetchLogs]);
-
-  // Re-fetch when gateway (re)connects — handles race where widget
-  // mounts before the hub WebSocket is established on a remote machine.
+  // Re-fetch on gateway reconnect
   useEffect(() => {
     return subscribeGatewayConnection(() => {
-      if (getGatewayConnectionState().connected) {
-        fetchLogs(true);
-      }
+      if (getGatewayConnectionState().connected) doFetchLogs(true);
     });
-  }, [fetchLogs]);
+  }, [doFetchLogs]);
 
-  const rawEntries = Array.isArray(logs) ? logs : [];
-  const entries = groupConsecutiveInfo(rawEntries);
-  const isStringFallback = logs != null && typeof logs === "string";
-  const bottomRef = useRef<HTMLDivElement>(null);
+  // ── Filtering (OpenClaw style: entry.level checked against chips) ──
+  const allLevelsOn = LOG_LEVELS.every((l) => levelFilters[l]);
+  const isFiltering = !allLevelsOn || searchQuery.trim() !== "";
+  const needle = searchQuery.trim().toLowerCase();
 
+  const filteredEntries = useMemo(() => {
+    if (!isFiltering) return logs;
+    return logs.filter((e) => {
+      if (e.level && !levelFilters[e.level]) return false;
+      return matchesSearch(e, needle);
+    });
+  }, [logs, levelFilters, needle, isFiltering]);
+
+  // Auto-scroll to bottom
+  const scrollAreaRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (entries.length > 0 || isStringFallback) {
-      bottomRef.current?.scrollIntoView({ behavior: "auto", block: "end" });
+    if (filteredEntries.length > 0) {
+      const vp = scrollAreaRef.current?.querySelector("[data-radix-scroll-area-viewport]") as HTMLElement | null;
+      if (vp) vp.scrollTop = vp.scrollHeight;
     }
-  }, [entries.length, isStringFallback]);
+  }, [filteredEntries.length]);
 
   return (
     <motion.div
-      animate={{
-        opacity: isFocusModeActive ? 0.8 : 1,
-        scale: isFocusModeActive ? 0.98 : 1,
-      }}
+      animate={{ opacity: isFocusModeActive ? 0.8 : 1, scale: isFocusModeActive ? 0.98 : 1 }}
       transition={{ duration: 0.4, ease: "easeOut" }}
       className="h-full w-full"
     >
-      <Card
-        className={cn(
-          "h-full w-full flex flex-col overflow-hidden bg-card/70 backdrop-blur-xl border border-border transition-all shadow-sm duration-300 rounded-md",
-          isFocusModeActive && "border-transparent grayscale-[30%]"
-        )}
-      >
+      <Card className={cn(
+        "h-full w-full flex flex-col overflow-hidden bg-card/70 backdrop-blur-xl border border-border transition-all shadow-sm duration-300 rounded-md",
+        isFocusModeActive && "border-transparent grayscale-[30%]",
+      )}>
         <LogsCustomHeader
           {...props}
-          onRefresh={fetchLogs}
+          onRefresh={() => doFetchLogs(false)}
           refreshing={loading}
-          eventCount={rawEntries.length}
+          eventCount={isFiltering ? filteredEntries.length : logs.length}
+          totalCount={isFiltering ? logs.length : undefined}
         />
         <div className="flex-1 overflow-hidden flex flex-col min-h-0 min-w-0 px-2 pb-2">
-          {error ? (
+          {error && logs.length === 0 ? (
             <div className="flex-1 rounded-md bg-destructive/10 border border-destructive/20 p-3 overflow-auto">
-              <p className="text-sm text-destructive font-mono whitespace-pre-wrap">
-                {error}
-              </p>
-              <Button
-                variant="outline"
-                size="sm"
-                className="mt-2 h-7 text-sm"
-                onClick={async () => { await fetchLogs(false); }}
-                disabled={loading}
-              >
-                <RefreshCw
-                  className={cn("w-3 h-3 mr-1", loading && "animate-spin")}
-                />
-                Retry
+              <p className="text-sm text-destructive font-mono whitespace-pre-wrap">{error}</p>
+              <Button variant="outline" size="sm" className="mt-2 h-7 text-sm"
+                onClick={() => doFetchLogs(false)} disabled={loading}>
+                <RefreshCw className={cn("w-3 h-3 mr-1", loading && "animate-spin")} /> Retry
               </Button>
             </div>
-          ) : loading && !logs ? (
+          ) : loading && logs.length === 0 ? (
             <div className="flex-1 flex items-center justify-center gap-2">
               <Loader2 className="w-5 h-5 animate-spin text-primary" />
-              <span className="text-sm text-muted-foreground">
-                Loading logs...
-              </span>
+              <span className="text-sm text-muted-foreground">Loading logs...</span>
             </div>
           ) : (
             <>
-              <ScrollArea className="flex-1 min-w-0 rounded-md border border-border/50 bg-background/40 overflow-x-hidden">
+              {/* Level chips + search */}
+              {logs.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5 px-1 pb-1.5 shrink-0">
+                  {LOG_LEVELS.map((lvl) => (
+                    <button key={lvl} onClick={() => toggleLevel(lvl)}
+                      className={cn("px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors border", chipClass(lvl, levelFilters[lvl]))}>
+                      {lvl}
+                    </button>
+                  ))}
+                  <div className="flex-1 relative min-w-[120px]">
+                    <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-muted-foreground pointer-events-none" />
+                    <input type="text" value={searchQuery}
+                      onChange={(ev) => setSearchQuery(ev.target.value)}
+                      onKeyDown={(ev) => { if (ev.key === "Escape") { setSearchQuery(""); (ev.target as HTMLInputElement).blur(); } }}
+                      placeholder="Search logs..."
+                      className="w-full h-6 pl-6 pr-6 text-xs bg-muted/30 border border-border/50 rounded placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-primary/30 text-foreground"
+                    />
+                    {searchQuery && (
+                      <button onClick={() => setSearchQuery("")}
+                        className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                        <X className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              <ScrollArea ref={scrollAreaRef} className="flex-1 min-w-0 rounded-md border border-border/50 bg-background/40 overflow-x-hidden">
                 <div className="p-2 min-h-0 min-w-0 w-full overflow-hidden">
-                  {isStringFallback ? (
-                    <pre className="text-xs whitespace-pre-wrap break-all text-muted-foreground max-w-full">
-                      {logs}
-                    </pre>
-                  ) : entries.length > 0 ? (
+                  {filteredEntries.length > 0 ? (
                     <ul className="text-xs min-w-0 w-full overflow-hidden divide-y divide-border/50">
-                      {entries.map((e, i) => {
-                        const displayTags = getDisplayTags(e);
-                        const logLevelForDot = isTagLikeLevel(e.level ?? "") ? "INFO" : (e.level ?? "INFO");
-                        return (
-                          <li
-                            key={i}
-                            className={cn(
-                              "flex items-start gap-2 py-2 px-2 min-w-0 overflow-hidden group border-b border-solid border-t-0 border-l-0 border-r-0 border-border/50",
-                              isErrorLogEntry(e) && "bg-destructive/5 border-l-2 border-l-destructive"
-                            )}
-                          >
-                            <span
-                              className={cn(
-                                "shrink-0 w-1.5 h-1.5 rounded-full mt-1.5",
-                                isErrorLogEntry(e) ? "bg-destructive" : dotColor(logLevelForDot)
+                      {filteredEntries.map((e, i) => (
+                        <li key={i} className={cn(
+                          "flex items-start gap-2 py-2 px-2 min-w-0 group",
+                          isErrorRow(e) && "bg-destructive/5 border-l-2 border-l-destructive",
+                        )}>
+                          <span className={cn("shrink-0 w-1.5 h-1.5 rounded-full mt-1.5", levelDotClass(e.level))} aria-hidden />
+                          <div className="flex flex-col gap-1 min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5">
+                              {e.level && (
+                                <span className={cn("inline-block px-1.5 py-0.5 rounded text-[10px] font-medium border shrink-0", levelBadgeClass(e.level))}>
+                                  {e.level}
+                                </span>
                               )}
-                              aria-hidden
-                            />
-                            <div className="flex flex-col gap-1 min-w-0 flex-1 overflow-hidden">
-                            {displayTags.length > 0 && (
-                                <div className="flex flex-wrap gap-1 mt-0.5">
-                                  {displayTags.map((tag, j) => (
-                                    <span
-                                      key={j}
-                                      className={cn(
-                                        "inline-block max-w-[180px] truncate px-1.5 py-0.5 rounded text-xs font-normal border shrink-0",
-                                        tagBadgeClass(tag)
-                                      )}
-                                      title={tag}
-                                    >
-                                      {tag}
-                                    </span>
-                                  ))}
-                                </div>
-                                )}
-                              <div className="flex items-start gap-2 min-w-0">
-                                <span
-                                  className="text-muted-foreground shrink-0 tabular-nums whitespace-nowrap"
-                                  title={e.time ?? undefined}
-                                >
-                                  {formatTime(e.time)}
+                              {e.subsystem && (
+                                <span className="text-[10px] text-muted-foreground font-mono truncate max-w-[200px]" title={e.subsystem}>
+                                  {e.subsystem}
                                 </span>
-                                <span
-                                  className={cn(
-                                    "min-w-0 flex-1 overflow-hidden break-words leading-relaxed",
-                                    isErrorLogEntry(e) ? "text-destructive" : "text-foreground/90"
-                                  )}
-                                  title={e.message ?? undefined}
-                                >
-                                  {(e.level ?? "").toUpperCase() === "INFO" && looksLikeMarkdown(e.message ?? "")
-                                    ? renderMessageWithMarkdown(e.message ?? "")
-                                    : formatMessageContent(e.message ?? "")}
-                                </span>
-                              </div> 
+                              )}
                             </div>
-                          </li>
-                        );
-                      })}
+                            <div className="flex items-start gap-2 min-w-0">
+                              <span className="text-muted-foreground shrink-0 tabular-nums whitespace-nowrap" title={e.time ?? undefined}>
+                                {formatTime(e.time)}
+                              </span>
+                              <span className={cn(
+                                "min-w-0 flex-1 break-words [overflow-wrap:anywhere] leading-relaxed font-mono whitespace-pre-wrap",
+                                isErrorRow(e) ? "text-destructive" : "text-foreground/90",
+                              )} title={e.message ?? undefined}>
+                                {e.message}
+                              </span>
+                            </div>
+                          </div>
+                        </li>
+                      ))}
                     </ul>
+                  ) : logs.length > 0 && isFiltering ? (
+                    <p className="text-muted-foreground text-sm py-4 text-center">No logs matching filters.</p>
                   ) : (
                     <p className="text-muted-foreground text-sm py-4 text-center">
                       No log output yet. Refreshing every {AUTO_REFRESH_MS / 1000}s.
                     </p>
-                  )}
-                  {(entries.length > 0 || isStringFallback) && (
-                    <div ref={bottomRef} aria-hidden className="h-0 shrink-0" />
                   )}
                 </div>
               </ScrollArea>

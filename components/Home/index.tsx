@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { Dashboard, Widget } from "./Dashboard";
 import { DashboardHeader } from "./DashboardHeader";
 import {
@@ -197,15 +197,24 @@ export default function Home() {
       } catch {}
     }
 
-    // Force dashboard remount with the hydrated state
-    setResetKey((k) => k + 1);
+    // No resetKey increment needed — gating on hydratedOnce below ensures
+    // Dashboard only mounts after state is synced with the hydrated cache.
   }, [dashboardReady, hydratedOnce]);
 
-  // Save widget instances to SQLite whenever they change — but only AFTER hydration
-  // to prevent overwriting connector data with empty defaults before hydration completes.
+  // Save widget instances to SQLite whenever they change — but only AFTER hydration.
+  // Skip the initial fire to avoid overwriting backend data with defaults when
+  // hydration fails at startup but saves succeed shortly after (race condition).
+  const widgetInstancesBaselineRef = useRef<string | null>(null);
   useEffect(() => {
     if (!hydratedOnce) return;
-    dashboardState.set("dashboard-widget-instances", JSON.stringify(storedWidgetInstances));
+    const json = JSON.stringify(storedWidgetInstances);
+    if (widgetInstancesBaselineRef.current === null) {
+      widgetInstancesBaselineRef.current = json;
+      return;
+    }
+    if (json === widgetInstancesBaselineRef.current) return;
+    widgetInstancesBaselineRef.current = json;
+    dashboardState.set("dashboard-widget-instances", json);
   }, [storedWidgetInstances, hydratedOnce]);
 
   // Helper to get widget component from type — checks templates first, then dynamic registry
@@ -271,10 +280,21 @@ export default function Home() {
     }
   };
 
-  // Persist visible widgets to SQLite whenever they change — gated on hydration
+  // Persist visible widgets to SQLite whenever they change — gated on hydration.
+  // Track the baseline to avoid saving defaults that would overwrite real backend data
+  // when hydration initially fails (e.g. session not loaded yet) but saves succeed later.
+  const visibleWidgetsBaselineRef = useRef<string | null>(null);
   useEffect(() => {
     if (!hydratedOnce) return;
-    dashboardState.set("dashboard-visible-widgets", JSON.stringify(visibleWidgets));
+    const json = JSON.stringify(visibleWidgets);
+    if (visibleWidgetsBaselineRef.current === null) {
+      // First fire after hydration — record baseline, don't save
+      visibleWidgetsBaselineRef.current = json;
+      return;
+    }
+    if (json === visibleWidgetsBaselineRef.current) return;
+    visibleWidgetsBaselineRef.current = json;
+    dashboardState.set("dashboard-visible-widgets", json);
   }, [visibleWidgets, hydratedOnce]);
 
   // Listen for edit mode toggle from Sidebar
@@ -324,6 +344,34 @@ export default function Home() {
     return () => window.removeEventListener("dashboard-layout-applied", handleLayoutApplied);
   }, []);
 
+  // Listen for late rehydration — if dashboard state arrived after initial mount,
+  // re-read from cache and remount the dashboard.
+  useEffect(() => {
+    const handleRehydrated = () => {
+      const savedVisible = dashboardState.get("dashboard-visible-widgets");
+      if (savedVisible) {
+        try {
+          const parsed = JSON.parse(savedVisible);
+          setVisibleWidgets(parsed);
+          // Update baseline so the save effect recognises this as the new "hydrated" value
+          visibleWidgetsBaselineRef.current = JSON.stringify(parsed);
+        } catch {}
+      }
+      const savedInstances = dashboardState.get("dashboard-widget-instances");
+      if (savedInstances) {
+        try {
+          const parsed = JSON.parse(savedInstances);
+          setStoredWidgetInstances(Array.isArray(parsed) ? parsed : []);
+          widgetInstancesBaselineRef.current = savedInstances;
+        } catch {}
+      }
+      setResetKey((k) => k + 1);
+    };
+
+    window.addEventListener("dashboard-state-rehydrated", handleRehydrated);
+    return () => window.removeEventListener("dashboard-state-rehydrated", handleRehydrated);
+  }, []);
+
   const handleToggleWidget = (widgetId: string) => {
     setVisibleWidgets((prev) =>
       prev.includes(widgetId)
@@ -352,9 +400,10 @@ export default function Home() {
     });
   };
 
-  // Don't render the dashboard until state is hydrated from SQLite.
-  // Rendering before hydration uses stale defaults and causes layout glitches.
-  if (!dashboardReady) {
+  // Don't render until BOTH hydration is complete AND state is synced.
+  // useState initializers run before hydration, so they get stale defaults.
+  // The hydration effect above corrects state — wait for that before mounting Dashboard.
+  if (!dashboardReady || !hydratedOnce) {
     return (
       <div className="flex-1 w-full h-full flex items-center justify-center bg-background/80 backdrop-blur-xl">
         <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />

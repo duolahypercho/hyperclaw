@@ -18,6 +18,8 @@ const ALL_KEYS = [
 
 const cache: Record<string, string> = {};
 let hydrated = false;
+/** true when hydrate() actually got data from the backend */
+let hydratedWithData = false;
 
 /** Keys whose changes should notify the LayoutSwitcher for auto-save. */
 const LAYOUT_KEYS = new Set([
@@ -33,6 +35,44 @@ function notifyIfLayoutKey(key: string) {
   }
 }
 
+/** Persist a key to localStorage as a secondary backup. */
+function backupToLocal(key: string, value: string) {
+  try {
+    localStorage.setItem(`ds:${key}`, value);
+  } catch { /* quota exceeded or unavailable */ }
+}
+
+/** Read a key from localStorage backup. */
+function readLocalBackup(key: string): string | null {
+  try {
+    return localStorage.getItem(`ds:${key}`);
+  } catch {
+    return null;
+  }
+}
+
+/** Save to backend with retry (1 retry after 2s). */
+async function persistToBackend(entries: Record<string, string>): Promise<boolean> {
+  const keys = Object.keys(entries);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = (await bridgeInvoke("save-app-state", { entries })) as {
+        success?: boolean;
+        error?: string;
+      };
+      if (res?.success) {
+        console.log("[dashboard-state] saved", keys.join(", "));
+        return true;
+      }
+      console.warn("[dashboard-state] save-app-state returned:", res?.error || "no success flag", "keys:", keys);
+    } catch (err) {
+      console.warn(`[dashboard-state] save attempt ${attempt + 1} failed for ${keys.join(", ")}:`, err);
+    }
+    if (attempt === 0) await new Promise((r) => setTimeout(r, 2000));
+  }
+  return false;
+}
+
 export const dashboardState = {
   get(key: string): string | null {
     return cache[key] ?? null;
@@ -40,14 +80,16 @@ export const dashboardState = {
 
   set(key: string, value: string) {
     cache[key] = value;
-    bridgeInvoke("save-app-state", { entries: { [key]: value } }).catch(() => {});
+    backupToLocal(key, value);
+    persistToBackend({ [key]: value });
     notifyIfLayoutKey(key);
   },
 
   /** Batch-set multiple keys in one SQLite transaction */
   setMany(entries: Record<string, string>) {
     Object.assign(cache, entries);
-    bridgeInvoke("save-app-state", { entries }).catch(() => {});
+    for (const [k, v] of Object.entries(entries)) backupToLocal(k, v);
+    persistToBackend(entries);
     for (const key of Object.keys(entries)) {
       notifyIfLayoutKey(key);
     }
@@ -55,7 +97,8 @@ export const dashboardState = {
 
   remove(key: string) {
     delete cache[key];
-    bridgeInvoke("save-app-state", { entries: { [key]: "" } }).catch(() => {});
+    try { localStorage.removeItem(`ds:${key}`); } catch {}
+    persistToBackend({ [key]: "" });
     notifyIfLayoutKey(key);
   },
 
@@ -63,20 +106,88 @@ export const dashboardState = {
     return hydrated;
   },
 
+  /** Whether hydrate() successfully loaded data from the backend. */
+  isHydratedWithData() {
+    return hydratedWithData;
+  },
+
   /** Load all dashboard keys from SQLite into memory. Call once at app startup. */
   async hydrate(): Promise<void> {
     if (hydrated) return;
+
+    // Try loading from backend
+    try {
+      const res = (await bridgeInvoke("get-app-state", { keys: ALL_KEYS })) as {
+        success?: boolean;
+        data?: Record<string, string>;
+        error?: string;
+      };
+      if (res?.success && res.data) {
+        let count = 0;
+        for (const [k, v] of Object.entries(res.data)) {
+          if (v) {
+            cache[k] = v;
+            backupToLocal(k, v); // keep local backup in sync
+            count++;
+          }
+        }
+        if (count > 0) hydratedWithData = true;
+        console.log("[dashboard-state] hydrated", count, "keys from backend");
+      } else {
+        console.warn("[dashboard-state] hydrate backend returned:", res?.error || "empty/no success");
+      }
+    } catch (err) {
+      console.warn("[dashboard-state] hydrate from backend failed:", err);
+    }
+
+    // If backend returned nothing, try localStorage backup
+    if (!hydratedWithData) {
+      console.warn("[dashboard-state] backend had no data, trying localStorage backup");
+      let count = 0;
+      for (const key of ALL_KEYS) {
+        const val = readLocalBackup(key);
+        if (val) {
+          cache[key] = val;
+          count++;
+        }
+      }
+      if (count > 0) {
+        hydratedWithData = true;
+        console.log("[dashboard-state] restored", count, "keys from localStorage backup");
+      }
+    }
+
+    hydrated = true;
+  },
+
+  /**
+   * Re-attempt loading from backend (used when gateway connects after initial hydration failed).
+   * Returns true if new data was loaded.
+   */
+  async rehydrate(): Promise<boolean> {
     try {
       const res = (await bridgeInvoke("get-app-state", { keys: ALL_KEYS })) as {
         success?: boolean;
         data?: Record<string, string>;
       };
       if (res?.success && res.data) {
+        let count = 0;
         for (const [k, v] of Object.entries(res.data)) {
-          if (v) cache[k] = v;
+          if (v) {
+            cache[k] = v;
+            backupToLocal(k, v);
+            count++;
+          }
+        }
+        if (count > 0) {
+          hydratedWithData = true;
+          console.log("[dashboard-state] rehydrated", count, "keys from backend");
+          return true;
         }
       }
-    } catch {}
-    hydrated = true;
+    } catch (err) {
+      console.warn("[dashboard-state] rehydrate failed:", err);
+    }
+    return false;
   },
 };

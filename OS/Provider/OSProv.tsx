@@ -147,11 +147,26 @@ interface DocsFloatingContextType {
   isMounted: boolean;
 }
 
+interface FloatingChatTaskContext {
+  _id: string;
+  title: string;
+  description?: string;
+  status: string;
+  assignedAgent?: string;
+  assignedAgentId?: string;
+  linkedDocumentUrl?: string;
+  createdAt?: string | number;
+  updatedAt?: string | number;
+  finishedAt?: string | number;
+  starred?: boolean;
+}
+
 interface FloatingChatContextType {
   showState: boolean;
   agentId: string | null;
   sessionKey: string | null;
-  openChat: (agentId: string, sessionKey?: string) => void;
+  taskContext: FloatingChatTaskContext | null;
+  openChat: (agentId: string, sessionKey?: string, task?: FloatingChatTaskContext | null) => void;
   closeChat: () => void;
   isMounted: boolean;
 }
@@ -280,13 +295,16 @@ export const OSProvider: React.FC<OSProviderProps> = ({ children }) => {
   // Floating chat window: agentId when open, null when closed
   const [floatingChatAgentId, setFloatingChatAgentId] = useState<string | null>(null);
   const [floatingChatSessionKey, setFloatingChatSessionKey] = useState<string | null>(null);
-  const openFloatingChat = useCallback((agentId: string, sessionKey?: string) => {
+  const [floatingChatTask, setFloatingChatTask] = useState<FloatingChatTaskContext | null>(null);
+  const openFloatingChat = useCallback((agentId: string, sessionKey?: string, task?: FloatingChatTaskContext | null) => {
     setFloatingChatAgentId(agentId);
     setFloatingChatSessionKey(sessionKey ?? null);
+    setFloatingChatTask(task ?? null);
   }, []);
   const closeFloatingChat = useCallback(() => {
     setFloatingChatAgentId(null);
     setFloatingChatSessionKey(null);
+    setFloatingChatTask(null);
   }, []);
 
 
@@ -723,11 +741,12 @@ export const OSProvider: React.FC<OSProviderProps> = ({ children }) => {
       showState: floatingChatAgentId !== null,
       agentId: floatingChatAgentId,
       sessionKey: floatingChatSessionKey,
+      taskContext: floatingChatTask,
       openChat: openFloatingChat,
       closeChat: closeFloatingChat,
       isMounted,
     }),
-    [floatingChatAgentId, floatingChatSessionKey, openFloatingChat, closeFloatingChat, isMounted]
+    [floatingChatAgentId, floatingChatSessionKey, floatingChatTask, openFloatingChat, closeFloatingChat, isMounted]
   );
 
 

@@ -47,10 +47,18 @@ import {
   resolveAvatarUrl,
   isAvatarText,
 } from "$/hooks/useAgentIdentity";
+import { PanelRight, Zap } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useFloatingChatOS } from "@OS/Provider/OSProv";
+import { TaskDetailPanel } from "./TaskDetailPanel";
 import { useUnifiedToolState } from "@OS/AI/components/hooks/useUnifiedToolState";
 import { GenericToolMessage } from "@OS/AI/components/GenericToolMessage";
 import { UnifiedToolState } from "@OS/AI/components/ToolRegistry";
+
+// Module-level guard: tracks which task IDs have already had auto-send fired.
+// Survives component unmount/remount (e.g. toggling the floating chat) so we
+// don't re-send the task context message every time the chat is reopened.
+const autoSendFiredTasks = new Set<string>();
 
 // Memoized ReactMarkdown
 const MemoizedReactMarkdown: React.FC<Options> = memo(
@@ -71,6 +79,17 @@ function shouldShowAvatarLocal(messages: GatewayChatMessage[], index: number): b
   const currMsg = messages[index];
   if (!prevMsg || !currMsg) return true;
   return prevMsg.role !== currMsg.role;
+}
+
+// ── Detect error from result content JSON ─────────────────────────────
+function isResultContentError(content: string | undefined): boolean {
+  if (!content) return false;
+  try {
+    const parsed = JSON.parse(content);
+    return parsed?.status === "error" || parsed?.status === "failed";
+  } catch {
+    return false;
+  }
 }
 
 // ── Merge tool calls with their results ───────────────────────────────
@@ -102,7 +121,7 @@ function mergeToolCallsWithResults(messages: GatewayChatMessage[]): GatewayChatM
           ? ((toolResultMsg as any).toolResults?.[0]?.content || (toolResultMsg as any).content)
           : undefined;
         const resultIsError = toolResultMsg
-          ? ((toolResultMsg as any).toolResults?.[0]?.isError || (toolResultMsg as any).isError || false)
+          ? ((toolResultMsg as any).toolResults?.[0]?.isError || (toolResultMsg as any).isError || isResultContentError(resultContent) || false)
           : false;
 
         return { ...tc, result: resultContent, isError: resultIsError };
@@ -117,13 +136,14 @@ function mergeToolCallsWithResults(messages: GatewayChatMessage[]): GatewayChatM
           const msgToolCallId = (m as any).toolCallId || (m as any).toolResults?.[0]?.toolCallId;
           return msgToolCallId === toolId;
         });
+        const blockResultContent = toolResultMsg
+          ? ((toolResultMsg as any).toolResults?.[0]?.content || (toolResultMsg as any).content)
+          : undefined;
         return {
           ...block,
-          result: toolResultMsg
-            ? ((toolResultMsg as any).toolResults?.[0]?.content || (toolResultMsg as any).content)
-            : undefined,
+          result: blockResultContent,
           isError: toolResultMsg
-            ? ((toolResultMsg as any).toolResults?.[0]?.isError || (toolResultMsg as any).isError || false)
+            ? ((toolResultMsg as any).toolResults?.[0]?.isError || (toolResultMsg as any).isError || isResultContentError(blockResultContent) || false)
             : false,
         };
       });
@@ -191,7 +211,7 @@ const ToolCallFallback: React.FC<{
         {statusIcon}
         <span className="font-medium text-muted-foreground">
           {toolName}
-          {hasResult ? " completed" : " executing..."}
+          {hasResult ? (isError ? " failed" : " completed") : " executing..."}
         </span>
         {argsSummary && (
           <span className="text-[10px] text-muted-foreground/60 truncate max-w-[140px]">
@@ -248,19 +268,24 @@ const GroupedToolActions: React.FC<{
   showAvatar: boolean;
   assistantAvatar?: { src?: string; fallback: string; alt?: string };
 }> = ({ toolMessages, toolStates, toggleToolExpansion, showAvatar, assistantAvatar }) => {
-  const isToolCompleted = (msgId: string) => {
-    const state = toolStates?.get(msgId);
+  const getToolCallId = (msg: GatewayChatMessage) => {
+    const tc = msg.toolCalls?.[0];
+    return tc?.id || tc?.function?.name || msg.id || "";
+  };
+
+  const isToolCompleted = (msg: GatewayChatMessage) => {
+    const state = toolStates?.get(getToolCallId(msg));
     return state?.status === "completed" || state?.status === "rejected" || state?.status === "expired";
   };
 
-  const hasExecutingTools = toolMessages.some((m) => !isToolCompleted(m.id || ""));
+  const hasExecutingTools = toolMessages.some((m) => !isToolCompleted(m));
 
   const [groupOpen, setGroupOpen] = useState(true);
   const userOpenedRef = useRef(false);
 
   const allDone = !hasExecutingTools;
   const anyToolExpanded = toolMessages.some((m) => {
-    const state = toolStates?.get(m.id || "");
+    const state = toolStates?.get(getToolCallId(m));
     return state?.isExpanded;
   });
 
@@ -285,7 +310,7 @@ const GroupedToolActions: React.FC<{
     return cb;
   }, [toggleToolExpansion]);
 
-  const executingCount = toolMessages.length - toolMessages.filter((m) => isToolCompleted(m.id || "")).length;
+  const executingCount = toolMessages.length - toolMessages.filter((m) => isToolCompleted(m)).length;
 
   return (
     <Collapsible.Root open={groupOpen} onOpenChange={handleOpenChange}>
@@ -352,16 +377,16 @@ const GroupedToolActions: React.FC<{
             <div className="overflow-x-auto overflow-y-hidden">
               <div className="mt-1.5 space-y-1.5">
                 {toolMessages.map((toolMsg, msgIdx) => {
-                  const msgId = toolMsg.id || "";
-                  const state = toolStates?.get(msgId);
+                  const tcId = getToolCallId(toolMsg);
+                  const state = toolStates?.get(tcId);
 
                   if (state && toggleToolExpansion) {
                     return (
                       <GenericToolMessage
-                        key={msgId || msgIdx}
+                        key={tcId || msgIdx}
                         toolState={state}
                         message={toolMsg as any}
-                        onToggleExpand={getToggleCallback(msgId)}
+                        onToggleExpand={getToggleCallback(tcId)}
                         assistantAvatar={undefined}
                         botPic={undefined}
                         showAvatar={false}
@@ -377,7 +402,7 @@ const GroupedToolActions: React.FC<{
 
                   return (
                     <ToolCallFallback
-                      key={msgId || `tool-fallback-${msgIdx}`}
+                      key={tcId || `tool-fallback-${msgIdx}`}
                       toolName={toolName}
                       toolArgs={toolArgs}
                       result={mergedResult}
@@ -426,8 +451,9 @@ const MessageBubble = memo(
     // Handle tool calls — render tool element, optionally alongside text
     let toolCallElement: React.ReactNode = null;
     if (message.role === "assistant" && (message as any).toolCalls?.length > 0) {
-      const messageId = message.id || "";
-      const toolState = toolStates?.get(messageId);
+      const tc0 = (message as any).toolCalls?.[0];
+      const toolCallId = tc0?.id || tc0?.function?.name || message.id || "";
+      const toolState = toolStates?.get(toolCallId);
       const hasTextForTool = !!message.content?.trim();
 
       if (toolState && toggleToolExpansion) {
@@ -435,7 +461,7 @@ const MessageBubble = memo(
           <GenericToolMessage
             toolState={toolState}
             message={message as any}
-            onToggleExpand={() => toggleToolExpansion(messageId)}
+            onToggleExpand={() => toggleToolExpansion(toolCallId)}
             assistantAvatar={assistantAvatar}
             botPic={botPic}
             showAvatar={showAvatar && !hasTextForTool}
@@ -738,9 +764,33 @@ const MessageBubble = memo(
 
 // ── Main FloatingChatViewer ───────────────────────────────────────────
 export function FloatingChatViewer() {
-  const { agentId, sessionKey: providedSessionKey, closeChat } = useFloatingChatOS();
+  const { agentId, sessionKey: providedSessionKey, taskContext, closeChat } = useFloatingChatOS();
   const { agents } = useOpenClawContext();
   const { userInfo } = useUser();
+
+  // Detail panel toggle — open by default when task context is present
+  const [showDetail, setShowDetail] = useState(!!taskContext);
+  const prevTaskRef = useRef(taskContext);
+  useEffect(() => {
+    if (taskContext && taskContext !== prevTaskRef.current) {
+      setShowDetail(true);
+    } else if (!taskContext) {
+      setShowDetail(false);
+    }
+    prevTaskRef.current = taskContext;
+  }, [taskContext]);
+
+  // Auto-send toggle — persisted in localStorage
+  const [autoSend, setAutoSend] = useState(() => {
+    try { return localStorage.getItem("floatingChat.autoSend") !== "false"; } catch { return true; }
+  });
+  const toggleAutoSend = useCallback(() => {
+    setAutoSend((v) => {
+      const next = !v;
+      try { localStorage.setItem("floatingChat.autoSend", String(next)); } catch {}
+      return next;
+    });
+  }, []);
 
   // Allow switching agents within the floating chat
   const [currentAgentId, setCurrentAgentId] = useState<string | null>(agentId);
@@ -751,13 +801,29 @@ export function FloatingChatViewer() {
   }, [agentId]);
 
   const effectiveAgentId = currentAgentId || agentId || agents[0]?.id || "main";
+  const isTaskMode = !!taskContext;
   const defaultSessionKey = `agent:${effectiveAgentId}:main`;
   const [resolvedSessionKey, setResolvedSessionKey] = useState(defaultSessionKey);
 
-  // Auto-detect the most recent session for this agent,
-  // or use the provided session key if one was given (e.g. direct session link)
+  // Resolve session key.
+  // Task mode: WAIT for providedSessionKey from KanbanWidget's background
+  // resolution (get-task-sessions / sessions.spawn). Show skeleton until
+  // the real session key arrives. Fallback to task-scoped key after 5s timeout.
+  // Non-task mode: use providedSessionKey → auto-detect latest → fallback.
   const [sessionResolved, setSessionResolved] = useState(false);
   useEffect(() => {
+    // Task mode: wait for the real session key from KanbanWidget
+    if (isTaskMode && taskContext) {
+      if (providedSessionKey) {
+        setResolvedSessionKey(providedSessionKey);
+        setSessionResolved(true);
+      } else {
+        // Not resolved yet — keep showing skeleton while KanbanWidget resolves
+        setSessionResolved(false);
+      }
+      return;
+    }
+    // Non-task: use provided key if available
     if (providedSessionKey) {
       setResolvedSessionKey(providedSessionKey);
       setSessionResolved(true);
@@ -778,7 +844,25 @@ export function FloatingChatViewer() {
     }).finally(() => {
       setSessionResolved(true);
     });
-  }, [effectiveAgentId, providedSessionKey]);
+  }, [effectiveAgentId, providedSessionKey, isTaskMode, taskContext]);
+
+  // Fallback timeout: if KanbanWidget's background resolution doesn't provide
+  // a session key within 5s, use a task-scoped fallback so the chat isn't stuck
+  // on the skeleton forever (e.g. bridge call failed).
+  useEffect(() => {
+    if (!isTaskMode || !taskContext || providedSessionKey) return;
+    const timer = setTimeout(() => {
+      setResolvedSessionKey((prev) => {
+        // Only apply fallback if still unresolved
+        if (prev === `agent:${effectiveAgentId}:main` || !prev) {
+          return `agent:${effectiveAgentId}:task-${taskContext._id}`;
+        }
+        return prev;
+      });
+      setSessionResolved(true);
+    }, 5000);
+    return () => clearTimeout(timer);
+  }, [isTaskMode, taskContext, providedSessionKey, effectiveAgentId]);
 
   const {
     messages,
@@ -791,6 +875,13 @@ export function FloatingChatViewer() {
     clearChat,
     setSessionKey,
   } = useGatewayChat({ sessionKey: resolvedSessionKey, autoConnect: true });
+
+  // Keep the hook's internal session key in sync — without this, the hook may
+  // filter out streaming events that arrive with a session key differing from
+  // the stale initial prop value (same pattern GatewayChatWidget uses).
+  useEffect(() => {
+    setSessionKey(resolvedSessionKey);
+  }, [resolvedSessionKey, setSessionKey]);
 
   // Unified tool state management
   const { toolStates, toggleToolExpansion } = useUnifiedToolState(messages as any);
@@ -805,23 +896,22 @@ export function FloatingChatViewer() {
   const agent = agents.find((a) => a.id === effectiveAgentId);
   const agentName = identity?.name || agent?.name || effectiveAgentId;
 
-  // User avatar
+  // User avatar (memoized to avoid new object refs on every render)
   const userAvatarUrl = userInfo?.profilePic ? getMediaUrl(userInfo.profilePic) : undefined;
-  const userAvatar = {
+  const userAvatar = useMemo(() => ({
     src: userAvatarUrl,
     fallback: userInfo?.username?.charAt(0).toUpperCase() || "U",
     alt: userInfo?.username || "User",
-  };
-  const assistantAvatar = {
+  }), [userAvatarUrl, userInfo?.username]);
+  const assistantAvatar = useMemo(() => ({
     src: avatarUrl,
     fallback: avatarText || identity?.emoji || agentName.slice(0, 2).toUpperCase() || "AI",
     alt: agentName || "AI Assistant",
-  };
+  }), [avatarUrl, avatarText, identity?.emoji, agentName]);
 
   // Scroll
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
-  const [inputValue, setInputValue] = useState("");
   const [quotedMessage, setQuotedMessage] = useState<GatewayChatMessage | null>(null);
   const [inputAreaHeight, setInputAreaHeight] = useState(60);
   const inputAreaRef = useRef<HTMLDivElement>(null);
@@ -885,7 +975,7 @@ export function FloatingChatViewer() {
   useEffect(() => {
     initialLoadDoneRef.current = false;
     setInitialReady(false);
-  }, [effectiveAgentId]);
+  }, [effectiveAgentId, resolvedSessionKey]);
 
   useEffect(() => {
     if (!sessionResolved) return;
@@ -896,6 +986,38 @@ export function FloatingChatViewer() {
       }
     });
   }, [sessionResolved, resolvedSessionKey, loadChatHistory]);
+
+  // Auto-send task context once per task when the task session is empty.
+  // Uses module-level `autoSendFiredTasks` Set so the guard survives unmount/remount
+  // (toggling the floating chat). Only fires after the real session is loaded:
+  //   - sessionResolved + initialReady (history fetched for the correct session)
+  //   - isConnected (gateway connected → history is real, not empty due to no connection)
+  //   - messages.length === 0 (session genuinely has no messages)
+  useEffect(() => {
+    if (!isTaskMode || !taskContext || !autoSend || !sessionResolved || !initialReady || isLoading || !isConnected || !sendMessage) return;
+    if (messages.length > 0) return;
+    // Module-level guard — survives unmount/remount
+    if (autoSendFiredTasks.has(taskContext._id)) return;
+    autoSendFiredTasks.add(taskContext._id);
+
+    const lines = [
+      `I need help with this task:`,
+      ``,
+      `**${taskContext.title}**`,
+      `**Task ID:** ${taskContext._id}`,
+      `**Status:** ${taskContext.status.replace("_", " ")}`,
+    ];
+    if (taskContext.createdAt)
+      lines.push(`**Created:** ${new Date(taskContext.createdAt).toISOString().split("T")[0]}`);
+    if (taskContext.assignedAgent || taskContext.assignedAgentId)
+      lines.push(`**Agent:** ${taskContext.assignedAgent || taskContext.assignedAgentId}`);
+    if (taskContext.description?.trim())
+      lines.push(``, taskContext.description.trim());
+    if (taskContext.linkedDocumentUrl)
+      lines.push(``, `**Doc:** ${taskContext.linkedDocumentUrl}`);
+
+    sendMessage(lines.join("\n"));
+  }, [isTaskMode, taskContext, autoSend, sessionResolved, initialReady, isLoading, isConnected, messages.length, sendMessage]);
 
   // Handle agent change
   const handleAgentChange = useCallback((newAgentId: string) => {
@@ -908,11 +1030,12 @@ export function FloatingChatViewer() {
       if (!text.trim() && (!attachments || attachments.length === 0)) return;
 
       let finalMessage = text;
+
       if (quotedMessage) {
         const quoted = quotedMessage.content.trim();
         const quotedLines = quoted.split("\n").map((l) => `> ${l}`).join("\n");
         const sender = quotedMessage.role === "user" ? "User" : "Assistant";
-        finalMessage = `Replying to ${sender}:\n${quotedLines}\n\n${text}`;
+        finalMessage = `Replying to ${sender}:\n${quotedLines}\n\n${finalMessage}`;
         setQuotedMessage(null);
       }
 
@@ -926,7 +1049,6 @@ export function FloatingChatViewer() {
         });
       }
 
-      setInputValue("");
       await sendMessage(finalMessage, gatewayAttachments);
     },
     [sendMessage, quotedMessage]
@@ -946,6 +1068,123 @@ export function FloatingChatViewer() {
     (index: number) => shouldShowAvatarLocal(mergedMessages, index),
     [mergedMessages]
   );
+
+  // Memoize the entire message node list so it doesn't rebuild on unrelated
+  // state changes (e.g. quotedMessage, showScrollBtn, inputAreaHeight).
+  const messageNodes = useMemo(() => {
+    const nodes: React.ReactNode[] = [];
+
+    for (let index = 0; index < mergedMessages.length; index++) {
+      const message = mergedMessages[index];
+      const isToolMessage = message.role === "assistant" &&
+        ((message as any).toolCalls?.length > 0 ||
+         (message as any).contentBlocks?.some((b: any) => b.type === "toolCall"));
+
+      // Group consecutive tool call messages
+      if (isToolMessage) {
+        const toolMessages: GatewayChatMessage[] = [];
+        let j = index;
+
+        while (j < mergedMessages.length) {
+          const m = mergedMessages[j];
+          const isToolResultMsg = m.role === "tool" || (m.role as string) === "toolResult";
+          const isToolMsg = m.role === "assistant" &&
+            ((m as any).toolCalls?.length > 0 ||
+             (m as any).contentBlocks?.some((b: any) => b.type === "toolCall"));
+
+          if (isToolResultMsg || !isToolMsg) break;
+          toolMessages.push(m);
+          j++;
+        }
+
+        if (toolMessages.length >= 1) {
+          nodes.push(
+            <GroupedToolActions
+              key={`tool-actions-${index}`}
+              toolMessages={toolMessages}
+              toolStates={toolStates}
+              toggleToolExpansion={toggleToolExpansion}
+              showAvatar={shouldShowAvatarCallback(index)}
+              assistantAvatar={assistantAvatar}
+            />
+          );
+          index = j - 1;
+          continue;
+        }
+      }
+
+      // Single message
+      nodes.push(
+        <MessageBubble
+          key={message.id || index}
+          message={message}
+          isUser={message.role === "user"}
+          showAvatar={shouldShowAvatarCallback(index)}
+          isLoading={
+            isLoading &&
+            index === mergedMessages.length - 1 &&
+            message.role === "assistant" &&
+            !message.content.trim()
+          }
+          botPic={avatarUrl}
+          userPic={userAvatar}
+          assistantAvatar={assistantAvatar}
+          toolStates={toolStates}
+          toggleToolExpansion={toggleToolExpansion}
+          onCopy={handleCopy}
+          onReply={handleReply}
+        />
+      );
+    }
+
+    // Thinking indicator
+    if (isLoading) {
+      const lastMsg = mergedMessages[mergedMessages.length - 1];
+      const lastIsEmptyAssistant = lastMsg?.role === "assistant" && !lastMsg.content?.trim() && !(lastMsg as any).toolCalls?.length;
+      const lastIsStreamingText = lastMsg?.role === "assistant" && lastMsg.content?.trim() && !(lastMsg as any).toolCalls?.length;
+
+      if (!lastIsEmptyAssistant && !lastIsStreamingText) {
+        const lastUserIdx = mergedMessages.reduce((acc, m, i) => m.role === "user" ? i : acc, -1);
+        const currentTurn = lastUserIdx >= 0 ? mergedMessages.slice(lastUserIdx + 1) : mergedMessages;
+        const toolCallCount = currentTurn.filter(m =>
+          m.role === "assistant" && (m as any).toolCalls?.length > 0
+        ).length;
+
+        let thinkingText = "AI is thinking";
+        if (toolCallCount > 0) {
+          thinkingText = `Executed ${toolCallCount} action${toolCallCount > 1 ? "s" : ""} — working`;
+        }
+
+        nodes.push(
+          <motion.div
+            key="thinking-indicator"
+            className="flex gap-2 justify-start"
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.3, delay: 0.15, ease: "easeOut" }}
+          >
+            <div className="w-6 h-6 flex-shrink-0">
+              <Avatar className="w-6 h-6">
+                {assistantAvatar?.src ? (
+                  <AvatarImage src={assistantAvatar.src} alt={assistantAvatar.alt} />
+                ) : null}
+                <AvatarFallback className="bg-primary/10 text-primary text-[8px]">
+                  {assistantAvatar?.fallback
+                    ? <span>{assistantAvatar.fallback}</span>
+                    : <CopanionIcon className="w-3 h-3" />}
+                </AvatarFallback>
+              </Avatar>
+            </div>
+            <div className="flex items-center py-1">
+              <AnimatedThinkingText text={thinkingText} />
+            </div>
+          </motion.div>
+        );
+      }
+    }
+
+    return nodes;
+  }, [mergedMessages, toolStates, toggleToolExpansion, isLoading, avatarUrl, userAvatar, assistantAvatar, shouldShowAvatarCallback, handleCopy, handleReply]);
 
   if (!agentId) return null;
 
@@ -1001,19 +1240,76 @@ export function FloatingChatViewer() {
             )}
           />
         </div>
-        <Button
-          variant="ghost"
-          size="iconSm"
-          className="h-7 w-7 shrink-0"
-          onClick={closeChat}
-          title="Close"
-        >
-          <X className="w-3.5 h-3.5" />
-        </Button>
+        <TooltipProvider delayDuration={300}>
+        <div className="flex items-center gap-0.5 shrink-0">
+          {taskContext && (
+            <>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant={autoSend ? "secondary" : "ghost"}
+                    size="iconSm"
+                    className={cn("h-7 w-7", autoSend ? "bg-amber-500/10 text-amber-500" : "text-muted-foreground")}
+                    onClick={toggleAutoSend}
+                  >
+                    <Zap className="w-3.5 h-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {autoSend ? "Auto-send task context is ON — click to disable" : "Auto-send task context is OFF — click to enable"}
+                </TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant={showDetail ? "secondary" : "ghost"}
+                    size="iconSm"
+                    className={cn("h-7 w-7", showDetail && "bg-primary/10 text-primary")}
+                    onClick={() => setShowDetail((v) => !v)}
+                  >
+                    <PanelRight className="w-3.5 h-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {showDetail ? "Hide task details" : "Show task details"}
+                </TooltipContent>
+              </Tooltip>
+            </>
+          )}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="iconSm"
+                className="h-7 w-7"
+                onClick={loadChatHistory}
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Reload chat history</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="iconSm"
+                className="h-7 w-7"
+                onClick={closeChat}
+              >
+                <X className="w-3.5 h-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Close chat</TooltipContent>
+          </Tooltip>
+        </div>
+        </TooltipProvider>
       </div>
 
-      {/* Messages */}
-      <div className="flex-1 min-h-0 relative">
+      {/* Content area: chat + optional detail panel */}
+      <div className="flex-1 flex min-h-0 overflow-hidden">
+      {/* Chat messages */}
+      <div className="flex-1 min-h-0 relative min-w-0">
         <div
           ref={scrollAreaRef}
           className="h-full overflow-y-auto overflow-x-hidden px-3 py-2 customScrollbar2"
@@ -1025,128 +1321,17 @@ export function FloatingChatViewer() {
               <ChatLoadingSkeleton />
             </div>
           ) : messages.length === 0 && !isLoading ? (
-            <div className="flex items-center justify-center h-full">
-              <p className="text-xs text-muted-foreground">
-                Start a conversation with {agentName}
+            <div className="flex items-center justify-center h-full px-6">
+              <p className="text-xs text-muted-foreground text-center">
+                {isTaskMode
+                  ? `Ask ${agentName} anything about this task — context is auto-included`
+                  : `Start a conversation with ${agentName}`}
               </p>
             </div>
           ) : (
             <div className="space-y-2">
               <AnimatePresence>
-                {(() => {
-                  const nodes: React.ReactNode[] = [];
-
-                  for (let index = 0; index < mergedMessages.length; index++) {
-                    const message = mergedMessages[index];
-                    const isToolMessage = message.role === "assistant" &&
-                      ((message as any).toolCalls?.length > 0 ||
-                       (message as any).contentBlocks?.some((b: any) => b.type === "toolCall"));
-
-                    // Group consecutive tool call messages
-                    if (isToolMessage) {
-                      const toolMessages: GatewayChatMessage[] = [];
-                      let j = index;
-
-                      while (j < mergedMessages.length) {
-                        const m = mergedMessages[j];
-                        const isToolResultMsg = m.role === "tool" || (m.role as string) === "toolResult";
-                        const isToolMsg = m.role === "assistant" &&
-                          ((m as any).toolCalls?.length > 0 ||
-                           (m as any).contentBlocks?.some((b: any) => b.type === "toolCall"));
-
-                        if (isToolResultMsg || !isToolMsg) break;
-                        toolMessages.push(m);
-                        j++;
-                      }
-
-                      if (toolMessages.length >= 1) {
-                        nodes.push(
-                          <GroupedToolActions
-                            key={`tool-actions-${index}`}
-                            toolMessages={toolMessages}
-                            toolStates={toolStates}
-                            toggleToolExpansion={toggleToolExpansion}
-                            showAvatar={shouldShowAvatarCallback(index)}
-                            assistantAvatar={assistantAvatar}
-                          />
-                        );
-                        index = j - 1;
-                        continue;
-                      }
-                    }
-
-                    // Single message
-                    nodes.push(
-                      <MessageBubble
-                        key={message.id || index}
-                        message={message}
-                        isUser={message.role === "user"}
-                        showAvatar={shouldShowAvatarCallback(index)}
-                        isLoading={
-                          isLoading &&
-                          index === mergedMessages.length - 1 &&
-                          message.role === "assistant" &&
-                          !message.content.trim()
-                        }
-                        botPic={avatarUrl}
-                        userPic={userAvatar}
-                        assistantAvatar={assistantAvatar}
-                        toolStates={toolStates}
-                        toggleToolExpansion={toggleToolExpansion}
-                        onCopy={handleCopy}
-                        onReply={handleReply}
-                      />
-                    );
-                  }
-
-                  // Thinking indicator — smarter logic matching GatewayChatWidget
-                  if (isLoading) {
-                    const lastMsg = mergedMessages[mergedMessages.length - 1];
-                    const lastIsEmptyAssistant = lastMsg?.role === "assistant" && !lastMsg.content?.trim() && !(lastMsg as any).toolCalls?.length;
-                    const lastIsStreamingText = lastMsg?.role === "assistant" && lastMsg.content?.trim() && !(lastMsg as any).toolCalls?.length;
-
-                    if (!lastIsEmptyAssistant && !lastIsStreamingText) {
-                      const lastUserIdx = mergedMessages.reduce((acc, m, i) => m.role === "user" ? i : acc, -1);
-                      const currentTurn = lastUserIdx >= 0 ? mergedMessages.slice(lastUserIdx + 1) : mergedMessages;
-                      const toolCallCount = currentTurn.filter(m =>
-                        m.role === "assistant" && (m as any).toolCalls?.length > 0
-                      ).length;
-
-                      let thinkingText = "AI is thinking";
-                      if (toolCallCount > 0) {
-                        thinkingText = `Executed ${toolCallCount} action${toolCallCount > 1 ? "s" : ""} — working`;
-                      }
-
-                      nodes.push(
-                        <motion.div
-                          key="thinking-indicator"
-                          className="flex gap-2 justify-start"
-                          initial={{ opacity: 0, y: 6 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          transition={{ duration: 0.3, delay: 0.15, ease: "easeOut" }}
-                        >
-                          <div className="w-6 h-6 flex-shrink-0">
-                            <Avatar className="w-6 h-6">
-                              {assistantAvatar?.src ? (
-                                <AvatarImage src={assistantAvatar.src} alt={assistantAvatar.alt} />
-                              ) : null}
-                              <AvatarFallback className="bg-primary/10 text-primary text-[8px]">
-                                {assistantAvatar?.fallback
-                                  ? <span>{assistantAvatar.fallback}</span>
-                                  : <CopanionIcon className="w-3 h-3" />}
-                              </AvatarFallback>
-                            </Avatar>
-                          </div>
-                          <div className="flex items-center py-1">
-                            <AnimatedThinkingText text={thinkingText} />
-                          </div>
-                        </motion.div>
-                      );
-                    }
-                  }
-
-                  return nodes;
-                })()}
+                {messageNodes}
               </AnimatePresence>
 
               {/* Spacer for input overlay */}
@@ -1218,11 +1403,10 @@ export function FloatingChatViewer() {
           <InputContainer
             onSendMessage={handleSend}
             placeholder={`Message ${agentName}...`}
-            value={inputValue}
-            onChange={setInputValue}
             isLoading={isLoading}
             onStopGeneration={stopGeneration}
             sessionKey={resolvedSessionKey}
+            agentId={effectiveAgentId}
             showAttachments={true}
             showVoiceInput={false}
             showEmojiPicker={false}
@@ -1234,6 +1418,31 @@ export function FloatingChatViewer() {
             allowedFileTypes={["image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml", "image/bmp"]}
           />
         </div>
+      </div>
+
+      {/* Task detail panel (right side) */}
+      <AnimatePresence>
+        {showDetail && taskContext && (
+          <motion.div
+            key="task-detail-panel"
+            initial={{ width: 0, opacity: 0 }}
+            animate={{ width: 260, opacity: 1 }}
+            exit={{ width: 0, opacity: 0 }}
+            transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
+            className="shrink-0 min-h-0 bg-background/60 overflow-hidden border-l border-border/30"
+          >
+            <motion.div
+              initial={{ x: 20, opacity: 0 }}
+              animate={{ x: 0, opacity: 1 }}
+              exit={{ x: 20, opacity: 0 }}
+              transition={{ duration: 0.2, delay: 0.08, ease: "easeOut" }}
+              className="w-[260px] h-full"
+            >
+              <TaskDetailPanel task={taskContext} />
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
       </div>
     </motion.div>
   );

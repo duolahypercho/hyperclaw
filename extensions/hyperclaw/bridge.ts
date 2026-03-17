@@ -209,14 +209,27 @@ export class HyperClawBridge {
   private rowToTask(row: TaskRow): Record<string, unknown> {
     let data: Record<string, unknown> = {};
     try { data = JSON.parse(row.data || "{}"); } catch { /* ignore */ }
+    // Prefer the original _id from the data blob (agent-assigned ID) over the
+    // SQLite row ID so that task IDs stay consistent across bridge/dashboard/agents.
+    const canonicalId = String(data._id || row.id);
+    const { _id: _, ...rest } = data;
     return this.normalizeTaskAssignment({
-      ...data,
-      id: row.id,
-      _id: row.id,
+      ...rest,
+      id: canonicalId,
       listId: row.list_id || "",
       createdAt: new Date(row.created_at).toISOString(),
       updatedAt: new Date(row.updated_at).toISOString(),
     });
+  }
+
+  /** Find a task row by row ID or by _id inside the data blob */
+  private findTaskRow(db: any, id: string): TaskRow | undefined {
+    // Try direct row ID first
+    let row = db.prepare("SELECT * FROM tasks WHERE id = ?").get(id) as TaskRow | undefined;
+    if (row) return row;
+    // Fall back to searching by _id in the JSON data blob
+    row = db.prepare("SELECT * FROM tasks WHERE json_extract(data, '$._id') = ?").get(id) as TaskRow | undefined;
+    return row;
   }
 
   private asString(value: unknown): string | undefined {
@@ -351,8 +364,9 @@ export class HyperClawBridge {
   updateTask(id: string, patch: Record<string, unknown>): Record<string, unknown> | undefined {
     const db = this.getDb();
     if (db) {
-      const row = db.prepare("SELECT * FROM tasks WHERE id = ?").get(id) as TaskRow | undefined;
+      const row = this.findTaskRow(db, id);
       if (!row) return undefined;
+      const rowId = row.id; // actual SQLite row ID
       const task = this.rowToTask(row);
       const now = Date.now();
 
@@ -365,9 +379,9 @@ export class HyperClawBridge {
       Object.assign(task, patch);
       const updated = this.taskToRow(task);
       db.prepare("UPDATE tasks SET list_id = ?, data = ?, updated_at = ? WHERE id = ?").run(
-        updated.list_id, updated.data, now, id
+        updated.list_id, updated.data, now, rowId
       );
-      return this.rowToTask({ ...updated, id, created_at: row.created_at, updated_at: now });
+      return this.rowToTask({ ...updated, id: rowId, created_at: row.created_at, updated_at: now });
     }
 
     // JSON fallback
@@ -393,10 +407,14 @@ export class HyperClawBridge {
   deleteTask(id: string): boolean {
     const db = this.getDb();
     if (db) {
-      const result = db.prepare("DELETE FROM tasks WHERE id = ?").run(id);
+      const row = this.findTaskRow(db, id);
+      if (!row) return false;
+      const rowId = row.id;
+      const result = db.prepare("DELETE FROM tasks WHERE id = ?").run(rowId);
       if (result.changes > 0) {
-        db.prepare("DELETE FROM task_logs WHERE task_id = ?").run(id);
-        db.prepare("DELETE FROM task_sessions WHERE task_id = ?").run(id);
+        // Clean up logs/sessions by both row ID and canonical ID
+        db.prepare("DELETE FROM task_logs WHERE task_id = ? OR task_id = ?").run(rowId, id);
+        db.prepare("DELETE FROM task_sessions WHERE task_id = ? OR task_id = ?").run(rowId, id);
         return true;
       }
       return false;

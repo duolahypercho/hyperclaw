@@ -269,6 +269,43 @@ export const gatewayConnection = {
     if (msg.type === "event" && typeof msg.event === "string" && (msg.event === "chat" || msg.event.startsWith("chat."))) {
       const payload = msg.payload as ChatEventPayload;
       if (payload) {
+        // Accumulate delta text for chat events — the hook expects full accumulated
+        // text (it replaces, not appends), so raw token deltas must be buffered here.
+        if (payload.state === "delta" && payload.runId) {
+          const chatMsg = payload.message as Record<string, unknown> | undefined;
+          if (chatMsg?.role === "assistant" && !chatMsg.tool_calls && !chatMsg.toolCalls) {
+            let deltaText = "";
+            if (Array.isArray(chatMsg.content)) {
+              deltaText = (chatMsg.content as any[])
+                .filter((b: any) => b?.type === "text" && typeof b?.text === "string")
+                .map((b: any) => b.text)
+                .join("");
+            } else if (typeof chatMsg.content === "string") {
+              deltaText = chatMsg.content;
+            }
+            if (deltaText) {
+              if (!this.agentDeltaBuffer) {
+                this.agentDeltaBuffer = new Map();
+                this._agentDeltaTimestamps = new Map();
+              }
+              const existing = this.agentDeltaBuffer.get(payload.runId) || "";
+              let newBuffer = existing + deltaText;
+              if (newBuffer.length > 524_288) newBuffer = newBuffer.slice(-524_288);
+              this.agentDeltaBuffer.set(payload.runId, newBuffer);
+              this._agentDeltaTimestamps?.set(payload.runId, Date.now());
+
+              const accumulated: ChatEventPayload = {
+                ...payload,
+                message: { ...chatMsg, content: [{ type: "text", text: newBuffer }] },
+              };
+              this.chatEventListeners.forEach((handler) => handler(accumulated));
+              return;
+            }
+          }
+        } else if ((payload.state === "final" || payload.state === "aborted") && payload.runId) {
+          this.agentDeltaBuffer?.delete(payload.runId);
+          this._agentDeltaTimestamps?.delete(payload.runId);
+        }
         this.chatEventListeners.forEach((handler) => handler(payload));
       }
       return;
@@ -292,7 +329,9 @@ export const gatewayConnection = {
       }
 
       // Convert agent stream events to chat events
-      if (stream === "assistant" && sessionKey && runId) {
+      // sessionKey may be absent from some gateway payloads — allow events through
+      // and let the hook filter by its own session key
+      if (stream === "assistant" && runId) {
         // Extract text from data - can be in delta, text, or content fields
         const delta = data?.delta as string | undefined;
         const text = data?.text as string | undefined;
@@ -302,9 +341,13 @@ export const gatewayConnection = {
         if (assistantText !== undefined && assistantText !== "") {
           // Get existing buffered text for this run and accumulate
           const existingBuffer = this.agentDeltaBuffer.get(runId) || "";
-          const newBuffer = existingBuffer + assistantText;
+          let newBuffer = existingBuffer + assistantText;
+          // Cap individual buffer at 512KB to prevent OOM
+          if (newBuffer.length > 524_288) newBuffer = newBuffer.slice(-524_288);
           this.agentDeltaBuffer.set(runId, newBuffer);
           this._agentDeltaTimestamps?.set(runId, Date.now());
+          // Periodically prune stale entries (every 50 runs)
+          if (this.agentDeltaBuffer.size > 50) this.pruneAgentDeltaBuffer();
 
           // Send accumulated text (not just delta) so the hook can replace content correctly
           const chatPayload: ChatEventPayload = {
@@ -321,7 +364,7 @@ export const gatewayConnection = {
       // Every lifecycle "end" emits state:"final". The chat hook uses a
       // debounce to avoid premature finalization — new delta events from
       // still-active agents cancel the debounce.
-      if (stream === "lifecycle" && sessionKey && runId) {
+      if (stream === "lifecycle" && runId) {
         const phase = data?.phase as string;
         if (phase === "end") {
           // Get buffered text for this run
@@ -358,7 +401,7 @@ export const gatewayConnection = {
       //   phase "start"  → show tool card with spinner (executing)
       //   phase "update" → ignored (partial output with empty content causes premature completion)
       //   phase "result" → show completed result
-      if (stream === "tool" && sessionKey && runId) {
+      if (stream === "tool" && runId) {
         const phase = (data?.phase as string) || "";
         const toolName = (data?.name || data?.toolName || data?.tool_name) as string | undefined;
         const toolCallId = (data?.callId || data?.id || data?.toolCallId || data?.tool_call_id) as string | undefined;
@@ -515,11 +558,15 @@ export const gatewayConnection = {
     }
 
     if (!allSessions?.sessions) {
+      console.warn("[Gateway WS] sessions.list returned no sessions array. Raw response:", allSessions);
       return { sessions: [] };
     }
     // Filter to only sessions for this agent
     const prefix = `agent:${agentId}:`;
     const agentSessions = allSessions.sessions.filter(s => s.key.startsWith(prefix));
+    if (allSessions.sessions.length > 0 && agentSessions.length === 0) {
+      console.warn(`[Gateway WS] sessions.list returned ${allSessions.sessions.length} sessions but none matched prefix "${prefix}". Keys:`, allSessions.sessions.map(s => s.key));
+    }
     // Sort by updatedAt descending (most recent first)
     agentSessions.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
     // Return top N
@@ -703,7 +750,7 @@ export const gatewayConnection = {
 
   /** Prune stale entries from agentDeltaBuffer (entries older than maxAgeMs) */
   _agentDeltaTimestamps: null as Map<string, number> | null,
-  pruneAgentDeltaBuffer(maxAgeMs = 300_000) {
+  pruneAgentDeltaBuffer(maxAgeMs = 120_000) {
     if (!this.agentDeltaBuffer || !this._agentDeltaTimestamps) return;
     const now = Date.now();
     for (const [runId, ts] of this._agentDeltaTimestamps) {

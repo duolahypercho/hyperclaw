@@ -59,7 +59,7 @@ const AppLayout = memo(
           {showState && (
             <motion.div
               ref={appRef}
-              className="fixed z-10"
+              className="fixed z-10 select-none"
               style={{
                 left: `${position.x}px`,
                 top: `${position.y}px`,

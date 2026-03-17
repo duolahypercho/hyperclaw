@@ -447,23 +447,13 @@ export const useDraggable = ({
     isResizingRef.current = state.isResizing;
   }, [state.isDragging, state.isResizing]);
 
-  // Prevent text selection during drag/resize operations - optimized
+  // Disable global text selection while dragging/resizing
   useEffect(() => {
-    const isDragOrResize = state.isDragging || state.isResizing;
-
-    if (isDragOrResize) {
-      // Remove requestAnimationFrame for immediate response
+    if (state.isDragging || state.isResizing) {
       document.body.classList.add("nonselect");
     } else {
       document.body.classList.remove("nonselect");
     }
-
-    // Cleanup on unmount
-    return () => {
-      if (document.body.classList.contains("nonselect")) {
-        document.body.classList.remove("nonselect");
-      }
-    };
   }, [state.isDragging, state.isResizing]);
 
   // Optimized bounds calculation - only when needed
@@ -506,8 +496,8 @@ export const useDraggable = ({
   // Optimized mouse event handling
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
-      // Use ref instead of state to avoid dependency issues
       if (isDraggingRef.current) {
+        e.preventDefault(); // Prevent text selection while dragging
         dispatch({
           type: "MOUSE_MOVE",
           clientX: e.clientX,
@@ -520,17 +510,14 @@ export const useDraggable = ({
       dispatch({ type: "MOUSE_UP" });
     };
 
-    // Always add listeners, but check ref inside handler
-    document.addEventListener("mousemove", handleMouseMove, {
-      passive: true,
-    });
+    document.addEventListener("mousemove", handleMouseMove);
     document.addEventListener("mouseup", handleMouseUp);
 
     return () => {
       document.removeEventListener("mousemove", handleMouseMove);
       document.removeEventListener("mouseup", handleMouseUp);
     };
-  }, []); // ← Empty dependency array - listeners are always active
+  }, []);
 
   const handleResizeStart = useCallback(
     (e: React.MouseEvent, direction: ResizeDirection) => {
@@ -548,8 +535,8 @@ export const useDraggable = ({
   // Optimized resize event handling
   useEffect(() => {
     const handleResizeMove = (e: MouseEvent) => {
-      // Use ref instead of state to avoid dependency issues
       if (isResizingRef.current) {
+        e.preventDefault(); // Prevent text selection while resizing
         dispatch({
           type: "RESIZE_MOVE",
           clientX: e.clientX,
@@ -562,17 +549,14 @@ export const useDraggable = ({
       dispatch({ type: "RESIZE_END" });
     };
 
-    // Always add listeners, but check ref inside handler
-    document.addEventListener("mousemove", handleResizeMove, {
-      passive: true,
-    });
+    document.addEventListener("mousemove", handleResizeMove);
     document.addEventListener("mouseup", handleResizeEnd);
 
     return () => {
       document.removeEventListener("mousemove", handleResizeMove);
       document.removeEventListener("mouseup", handleResizeEnd);
     };
-  }, []); // ← Empty dependency array - listeners are always active
+  }, []);
 
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {

@@ -286,7 +286,7 @@ function AddDeviceDialog({
   };
 
   const setupCommand = pairing
-    ? `./connector --hub-url wss://hub.hypercho.com --token ${pairing.token} --device-id ${pairing.deviceId}`
+    ? `curl -fsSL https://claw.hypercho.com/downloads/install.sh | bash -s -- --token ${pairing.token} --device-id ${pairing.deviceId}`
     : "";
 
   const copyCommand = () => {

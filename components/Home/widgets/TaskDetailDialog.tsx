@@ -1,7 +1,11 @@
 "use client";
 
-import React, { useEffect, useCallback, useState, useMemo } from "react";
+import React, { useEffect, useCallback, useState, useMemo, useRef } from "react";
+import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
 import { format } from "date-fns";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import remarkBreaks from "remark-breaks";
 import {
   Loader2,
   CheckCircle2,
@@ -68,6 +72,48 @@ const logTypeIcons: Record<string, React.ReactNode> = {
   discovery: <Sparkles className="h-3 w-3 text-violet-400 shrink-0" />,
 };
 
+const LOG_MAX_HEIGHT = 120; // px
+
+function CollapsibleLogContent({ content }: { content: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [overflows, setOverflows] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => {
+    if (ref.current) {
+      setOverflows(ref.current.scrollHeight > LOG_MAX_HEIGHT);
+    }
+  }, [content]);
+
+  return (
+    <div className="mt-1.5">
+      <div
+        ref={ref}
+        className={cn(
+          "prose prose-xs dark:prose-invert max-w-none text-foreground/90 break-words leading-relaxed",
+          "[&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_pre]:my-1 [&_blockquote]:my-1",
+          "[&_code]:text-[11px] [&_code]:bg-muted/60 [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded",
+          "[&_pre_code]:bg-transparent [&_pre_code]:p-0",
+          !expanded && "[overflow:clip]"
+        )}
+        style={!expanded ? { maxHeight: LOG_MAX_HEIGHT } : undefined}
+      >
+        <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>
+          {content}
+        </ReactMarkdown>
+      </div>
+      {overflows && (
+        <button
+          onClick={() => setExpanded((e) => !e)}
+          className="mt-1 text-[11px] text-primary hover:underline"
+        >
+          {expanded ? "Show less" : "Show more"}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export interface TaskDetailDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -103,12 +149,7 @@ export function TaskDetailDialog({
     const taskId = task._id;
 
     // Look up bridge task for sessionKey
-    fetch("/api/hyperclaw-bridge", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "get-tasks" }),
-    })
-      .then((r) => r.json())
+    (bridgeInvoke("get-tasks") as Promise<any[]>)
       .then((tasks: any[]) => {
         if (cancelled) return;
         const bt = tasks.find(
@@ -122,12 +163,7 @@ export function TaskDetailDialog({
     // Fetch task logs (with agent fallback for orphaned logs)
     const agentId = task.assignedAgentId || task.assignedAgent || undefined;
     setLogsLoading(true);
-    fetch("/api/hyperclaw-bridge", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "get-task-logs", taskId, agentId }),
-    })
-      .then((r) => r.json())
+    (bridgeInvoke("get-task-logs", { taskId, agentId }) as Promise<TaskLog[]>)
       .then((logs: TaskLog[]) => {
         if (cancelled) return;
         setTaskLogs(Array.isArray(logs) ? logs : []);
@@ -137,12 +173,7 @@ export function TaskDetailDialog({
 
     // Fetch linked sessions (with agent fallback for orphaned sessions)
     setSessionsLoading(true);
-    fetch("/api/hyperclaw-bridge", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "get-task-sessions", taskId, agentId }),
-    })
-      .then((r) => r.json())
+    (bridgeInvoke("get-task-sessions", { taskId, agentId }) as Promise<TaskSession[]>)
       .then((sessions: TaskSession[]) => {
         if (cancelled) return;
         setTaskSessions(Array.isArray(sessions) ? sessions : []);
@@ -210,9 +241,9 @@ export function TaskDetailDialog({
             <span className="text-muted-foreground text-xs">Updated: {updatedStr}</span>
           </div>
           {task.description?.trim() ? (
-            <p className="pt-2 text-xs text-muted-foreground whitespace-pre-wrap">
-              {task.description.trim()}
-            </p>
+            <div className="pt-2 text-xs text-muted-foreground">
+              <CollapsibleLogContent content={task.description.trim()} />
+            </div>
           ) : null}
           <div className="pt-3 space-y-2 rounded-lg border border-border/40 bg-muted/20 px-3 py-2.5 text-xs">
             {(task.assignedAgent || task.assignedAgentId) && (
@@ -334,9 +365,7 @@ export function TaskDetailDialog({
                             </span>
                           )}
                         </div>
-                        <p className="mt-1.5 text-foreground/90 whitespace-pre-wrap break-words leading-relaxed">
-                          {log.content}
-                        </p>
+                        <CollapsibleLogContent content={log.content} />
                         <div className="mt-1.5 text-[10px] text-muted-foreground">
                           {format(new Date(log.created_at), "MMM d, h:mm a")}
                         </div>

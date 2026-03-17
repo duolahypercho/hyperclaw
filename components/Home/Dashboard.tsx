@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Responsive, WidthProvider, Layout } from "react-grid-layout";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
@@ -90,11 +90,52 @@ const generateDefaultLayout = (widgets: Widget[]): Layout[] => {
   }));
 };
 
-// Widget wrapper component
-const WidgetWrapper: React.FC<CustomProps> = (props) => {
-  const WidgetComponent = props.widget.component;
-  return <WidgetComponent {...props} />;
-};
+// Widget wrapper component — memoized to skip re-renders during drag
+const WidgetWrapper = React.memo<CustomProps>(
+  (props) => {
+    const WidgetComponent = props.widget.component;
+    return <WidgetComponent {...props} />;
+  },
+  (prev, next) =>
+    prev.widget === next.widget &&
+    prev.isMaximized === next.isMaximized &&
+    prev.isEditMode === next.isEditMode &&
+    prev.onMaximize === next.onMaximize &&
+    prev.onConfigChange === next.onConfigChange
+);
+WidgetWrapper.displayName = "WidgetWrapper";
+
+// Memoized grid item — binds widget ID to stable parent callbacks,
+// preventing all siblings from re-rendering during drag.
+const GridItem = React.memo<{
+  widget: Widget;
+  isEditMode: boolean;
+  onMaximize: (id: string) => void;
+  onConfigChange: (id: string, config: Record<string, unknown>) => void;
+}>(
+  ({ widget, isEditMode, onMaximize, onConfigChange }) => {
+    const boundMaximize = useCallback(() => onMaximize(widget.id), [onMaximize, widget.id]);
+    const boundConfigChange = useCallback(
+      (config: Record<string, unknown>) => onConfigChange(widget.id, config),
+      [onConfigChange, widget.id]
+    );
+    return (
+      <WidgetWrapper
+        widget={widget}
+        isMaximized={false}
+        onMaximize={boundMaximize}
+        isEditMode={isEditMode}
+        onConfigChange={boundConfigChange}
+      />
+    );
+  },
+  (prev, next) =>
+    prev.widget === next.widget &&
+    prev.isEditMode === next.isEditMode &&
+    prev.onMaximize === next.onMaximize &&
+    prev.onConfigChange === next.onConfigChange
+);
+GridItem.displayName = "GridItem";
 
 // Static grid styles — extracted to avoid recreating on every render
 const DashboardGridStyles = React.memo(() => (
@@ -219,6 +260,24 @@ export const Dashboard: React.FC<DashboardProps> = ({
     };
   });
 
+  // Refs for stable callback access (avoids re-creating handlers on every render)
+  const layoutsRef = useRef(layouts);
+  layoutsRef.current = layouts;
+  const widgetsRef = useRef(widgets);
+  widgetsRef.current = widgets;
+
+  // Save timer + user-interaction guard — only persist on drag/resize/widget-change,
+  // NOT on mount-triggered onLayoutChange (which would overwrite saved layout with defaults).
+  const layoutSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const userModifiedRef = useRef(false);
+
+  // Clean up pending save timer on unmount
+  useEffect(() => {
+    return () => {
+      if (layoutSaveTimerRef.current) clearTimeout(layoutSaveTimerRef.current);
+    };
+  }, []);
+
   // Widget configs state
   const [widgetConfigs, setWidgetConfigs] = useState<Record<string, Record<string, unknown>>>(() =>
     loadWidgetConfigs()
@@ -296,6 +355,45 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
   const [maximizedWidget, setMaximizedWidget] = useState<string | null>(null);
 
+  // Stable callbacks for grid items (no deps that change during drag)
+  const updateWidgetConfigRef = useRef(updateWidgetConfig);
+  updateWidgetConfigRef.current = updateWidgetConfig;
+
+  const stableOnMaximize = useCallback((widgetId: string) => {
+    setMaximizedWidget((prev) => (prev === widgetId ? null : widgetId));
+  }, []);
+
+  const stableOnConfigChange = useCallback((widgetId: string, config: Record<string, unknown>) => {
+    updateWidgetConfigRef.current(widgetId, config);
+  }, []);
+
+  // Disable global text selection while dragging/resizing grid items
+  const disableGlobalSelect = useCallback(() => {
+    document.body.classList.add("nonselect");
+  }, []);
+  const enableGlobalSelect = useCallback(() => {
+    document.body.classList.remove("nonselect");
+  }, []);
+
+  // Save layout after user drag/resize (not on mount-triggered changes)
+  const handleDragStop = useCallback(() => {
+    enableGlobalSelect();
+    userModifiedRef.current = true;
+    if (layoutSaveTimerRef.current) clearTimeout(layoutSaveTimerRef.current);
+    layoutSaveTimerRef.current = setTimeout(() => {
+      dashboardState.set("dashboard-layout", JSON.stringify(layoutsRef.current));
+    }, 500);
+  }, [enableGlobalSelect]);
+
+  const handleResizeStop = useCallback(() => {
+    enableGlobalSelect();
+    userModifiedRef.current = true;
+    if (layoutSaveTimerRef.current) clearTimeout(layoutSaveTimerRef.current);
+    layoutSaveTimerRef.current = setTimeout(() => {
+      dashboardState.set("dashboard-layout", JSON.stringify(layoutsRef.current));
+    }, 500);
+  }, [enableGlobalSelect]);
+
   // Handle new widgets being added without resetting existing layout
   // Only depends on widgets (not layouts) to avoid re-running on every layout change
   const prevWidgetIdsRef = useRef<string>(widgets.map((w) => w.id).join(","));
@@ -329,46 +427,37 @@ export const Dashboard: React.FC<DashboardProps> = ({
       });
       return updatedLayouts;
     });
-  }, [widgets]);
 
-  // Save layout to SQLite whenever it changes (debounced)
-  const layoutSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => {
+    // Widget list changed (add/remove) — save the updated layout
+    userModifiedRef.current = true;
     if (layoutSaveTimerRef.current) clearTimeout(layoutSaveTimerRef.current);
     layoutSaveTimerRef.current = setTimeout(() => {
-      dashboardState.set("dashboard-layout", JSON.stringify(layouts));
+      dashboardState.set("dashboard-layout", JSON.stringify(layoutsRef.current));
     }, 500);
-    return () => {
-      if (layoutSaveTimerRef.current) clearTimeout(layoutSaveTimerRef.current);
-    };
-  }, [layouts]);
+  }, [widgets]);
 
-  const handleLayoutChange = (
+  const handleLayoutChange = useCallback((
     currentLayout: Layout[],
     allLayouts: { [key: string]: Layout[] }
   ) => {
+    const prevLayouts = layoutsRef.current;
+    const currentWidgets = widgetsRef.current;
+
     // Merge layouts to preserve hidden widgets and fix dimensions
     const mergedLayouts: { [key: string]: Layout[] } = {};
 
     Object.keys(allLayouts).forEach((breakpoint) => {
-      // Get current visible layouts
       const visibleLayouts = allLayouts[breakpoint];
 
-      // Get existing hidden widget layouts from previous state
-      const hiddenLayouts = (layouts[breakpoint] || []).filter(
+      const hiddenLayouts = (prevLayouts[breakpoint] || []).filter(
         (item) => !visibleLayouts.find((l) => l.i === item.i)
       );
 
-      // Fix dimensions for visible layouts
       const fixedVisibleLayouts = visibleLayouts.map((layout) => {
-        // Check if this layout has invalid dimensions (w: 1, h: 1 or w: 0, h: 0)
         if (!layout.w || !layout.h || layout.w <= 1 || layout.h <= 1) {
-          // Try to get saved layout first
-          const savedLayout = (layouts[breakpoint] || []).find(
+          const savedLayout = (prevLayouts[breakpoint] || []).find(
             (l) => l.i === layout.i
           );
-
-          // If saved layout exists and has valid dimensions, use it
           if (savedLayout && savedLayout.w > 1 && savedLayout.h > 1) {
             return {
               ...layout,
@@ -378,9 +467,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
               minH: savedLayout.minH,
             };
           }
-
-          // Otherwise, use widget defaults
-          const widget = widgets.find((w) => w.id === layout.i);
+          const widget = currentWidgets.find((w) => w.id === layout.i);
           if (widget) {
             return {
               ...layout,
@@ -394,24 +481,28 @@ export const Dashboard: React.FC<DashboardProps> = ({
         return layout;
       });
 
-      // Merge both visible and hidden layouts
       mergedLayouts[breakpoint] = [...fixedVisibleLayouts, ...hiddenLayouts];
     });
 
     setLayouts(mergedLayouts);
-  };
+  }, []);
 
   const handleMaximize = (widgetId: string) => {
     setMaximizedWidget((prev) => (prev === widgetId ? null : widgetId));
   };
 
-  // Filter widgets based on visibility and merge configs with persisted configs
-  const displayedWidgets: Widget[] = (visibleWidgets
-    ? widgets.filter((w) => visibleWidgets.includes(w.id))
-    : widgets).map((widget) => ({
+  // Filter widgets based on visibility and merge configs with persisted configs.
+  // Memoized so widget references stay stable during drag (only layouts change).
+  const displayedWidgets = useMemo<Widget[]>(() =>
+    (visibleWidgets
+      ? widgets.filter((w) => visibleWidgets.includes(w.id))
+      : widgets
+    ).map((widget) => ({
       ...widget,
       config: getWidgetConfig(widget.id, widget.config),
-    }));
+    })),
+    [widgets, visibleWidgets, widgetConfigs]
+  );
 
   // If a widget is maximized, show only that widget
   if (maximizedWidget) {
@@ -468,18 +559,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
         isResizable={isEditMode}
         compactType="vertical"
         preventCollision={false}
+        onDragStart={disableGlobalSelect}
+        onDragStop={handleDragStop}
+        onResizeStart={disableGlobalSelect}
+        onResizeStop={handleResizeStop}
       >
         {displayedWidgets.map((widget) => (
           <div
             key={widget.id}
             data-resizable={widget.isResizable !== false && isEditMode}
           >
-            <WidgetWrapper
+            <GridItem
               widget={widget}
-              isMaximized={false}
-              onMaximize={() => handleMaximize(widget.id)}
               isEditMode={isEditMode}
-              onConfigChange={(config) => updateWidgetConfig(widget.id, config)}
+              onMaximize={stableOnMaximize}
+              onConfigChange={stableOnConfigChange}
             />
           </div>
         ))}

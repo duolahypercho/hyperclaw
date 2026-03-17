@@ -18,6 +18,19 @@ import {
 } from "../ToolRegistry";
 
 /**
+ * Detect errors from result content JSON (e.g. {"status": "error", ...})
+ */
+const isResultContentError = (content: string | undefined): boolean => {
+  if (!content) return false;
+  try {
+    const parsed = JSON.parse(content);
+    return parsed?.status === "error" || parsed?.status === "failed";
+  } catch {
+    return false;
+  }
+};
+
+/**
  * Helper function to convert MessageStatusCode to ToolStatus
  */
 const messageStatusToToolStatus = (
@@ -218,8 +231,9 @@ export const useUnifiedToolState = (messages: Message[]) => {
               // If tool result already exists, include it
               if (hasToolResult && toolResultMessage) {
                 const isRejected = isToolRejected(toolResultMessage.content);
+                const toolResultContent = (toolResultMessage as any).toolResults?.[0]?.content || toolResultMessage.content;
                 const isResultError = (toolResultMessage as any).toolResults?.[0]?.isError ||
-                  (toolResultMessage as any).isError || false;
+                  (toolResultMessage as any).isError || isResultContentError(toolResultContent) || false;
                 newState.resultContent = toolResultMessage.content;
                 newState.rejectionMessage = extractRejectionMessage(
                   toolResultMessage.content
@@ -248,7 +262,7 @@ export const useUnifiedToolState = (messages: Message[]) => {
 
             if (toolState) {
               const toolResultContent = (message as any).toolResults?.[0]?.content || message.content;
-              const isError = (message as any).toolResults?.[0]?.isError || false;
+              const isError = (message as any).toolResults?.[0]?.isError || isResultContentError(toolResultContent) || false;
               const isRejected = isToolRejected(toolResultContent);
               const rejectionMessage = extractRejectionMessage(toolResultContent);
 

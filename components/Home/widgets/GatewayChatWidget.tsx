@@ -171,7 +171,12 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
       Promise.all([
         loadChatHistory(),
         gatewayConnection.isConnected()
-          ? gatewayConnection.listSessions(currentAgentId, 20).then(r => setSessions(r.sessions || [])).catch(() => {})
+          ? gatewayConnection.listSessions(currentAgentId, 20).then(r => {
+              console.log("[GatewayChat] Initial sessions loaded:", r.sessions?.length ?? 0);
+              setSessions(r.sessions || []);
+            }).catch((err) => {
+              console.warn("[GatewayChat] Initial session list fetch failed:", err);
+            })
           : Promise.resolve(),
       ]).then(() => {
         setInitialReady(true);
@@ -1132,6 +1137,7 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
                   maxFileSize={5 * 1024 * 1024}
                   allowedFileTypes={["image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml", "image/bmp"]}
                   sessionKey={sessionKey}
+                  agentId={currentAgentId}
                   onStopGeneration={stopGeneration}
                   value={inputValue}
                   onChange={setInputValue}

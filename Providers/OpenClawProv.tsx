@@ -79,8 +79,8 @@ export function OpenClawProvider({ children }: { children: ReactNode }) {
     return () => { cancelled = true; };
   }, [fetchSavedLayouts]);
 
-  // Retry layout fetch when gateway connects — the initial fetch may have failed
-  // because the hub/connector wasn't reachable yet during cold start.
+  // Retry layout fetch + dashboard state hydration when gateway connects —
+  // the initial fetch may have failed because the hub/connector wasn't reachable during cold start.
   useEffect(() => {
     let retried = false;
     const unsub = subscribeGatewayConnection(() => {
@@ -88,11 +88,24 @@ export function OpenClawProvider({ children }: { children: ReactNode }) {
       const { connected } = getGatewayConnectionState();
       if (!connected) return;
       retried = true;
+
+      // Retry saved layouts
       fetchSavedLayouts().then((layouts) => {
         if (layouts && layouts.length > 0) {
           setSavedLayouts(layouts);
         }
       });
+
+      // If initial hydration got no data, retry now that the gateway is connected
+      if (!dashboardState.isHydratedWithData()) {
+        console.log("[OpenClawProv] re-hydrating dashboard state after gateway connect");
+        dashboardState.rehydrate().then((gotData) => {
+          if (gotData) {
+            // Notify dashboard to re-read from cache
+            window.dispatchEvent(new CustomEvent("dashboard-state-rehydrated"));
+          }
+        });
+      }
     });
     return () => unsub();
   }, [fetchSavedLayouts]);

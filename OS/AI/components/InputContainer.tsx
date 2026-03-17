@@ -35,6 +35,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { v4 as uuidv4 } from "uuid";
 import { gatewayConnection, subscribeGatewayConnection } from "$/lib/openclaw-gateway-ws";
 import { useOpenClawContext } from "$/Providers/OpenClawProv";
+import { readOpenClawConfig, getAgentModel } from "$/lib/identity-md";
 import {
   AttachmentPreview,
   AttachmentPreviewModal,
@@ -169,6 +170,7 @@ export const InputContainer: React.FC<InputContainerProps> = ({
   onAttachmentsChange,
   onAddFiles,
   sessionKey,
+  agentId,
   onStopGeneration,
   tokenUsage,
   contextLimit,
@@ -205,28 +207,46 @@ export const InputContainer: React.FC<InputContainerProps> = ({
   // Models from centralized context
   const { models: contextModels } = useOpenClawContext();
   const availableModels = contextModels;
-  const [currentModel, setCurrentModel] = useState<string>("claude-opus-4-6");
+  const [currentModel, setCurrentModel] = useState<string>("");
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const isControlled = controlledValue !== undefined;
   const currentValue = isControlled ? controlledValue : inputValue;
   const setValue = isControlled ? controlledOnChange : setInputValue;
 
-  // Get session model when sessionKey changes
+  // Get session model when sessionKey changes; fall back to agent default from openclaw.json
   useEffect(() => {
-    if (!sessionKey || !gatewayConnection.connected) return;
     let cancelled = false;
     (async () => {
-      try {
-        const sessionModel = await gatewayConnection.getSessionModel(sessionKey);
-        if (!cancelled && sessionModel) {
-          setCurrentModel(sessionModel);
+      // 1. Try session-level model from gateway
+      if (sessionKey && gatewayConnection.connected) {
+        try {
+          const sessionModel = await gatewayConnection.getSessionModel(sessionKey);
+          if (!cancelled && sessionModel) {
+            setCurrentModel(sessionModel);
+            return;
+          }
+        } catch {
+          // ignore
         }
-      } catch {
-        // ignore
+      }
+      // 2. Fall back to agent's default model from openclaw.json
+      if (agentId) {
+        try {
+          const config = await readOpenClawConfig();
+          if (!cancelled && config) {
+            const agentModel = getAgentModel(config, agentId);
+            if (agentModel) {
+              setCurrentModel(agentModel);
+              return;
+            }
+          }
+        } catch {
+          // ignore
+        }
       }
     })();
     return () => { cancelled = true; };
-  }, [sessionKey]);
+  }, [sessionKey, agentId]);
 
   // Use external attachments if provided, otherwise use internal state
   const currentAttachments: AttachmentUnion[] =
@@ -913,7 +933,7 @@ export const InputContainer: React.FC<InputContainerProps> = ({
                     <Cpu className="w-3 h-3" />
                   )}
                   <span className="max-w-[100px] truncate">
-                    {currentModel ? currentModel.split('/').pop() || currentModel : "Select Model"}
+                    {currentModel ? currentModel.split('/').pop() || currentModel : "Default Model"}
                   </span>
                   <ChevronDown
                     className={cn(

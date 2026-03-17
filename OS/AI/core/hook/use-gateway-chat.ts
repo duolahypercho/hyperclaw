@@ -166,25 +166,20 @@ function deduplicateMessages(messages: GatewayChatMessage[]): GatewayChatMessage
   idDeduped.reverse();
 
   // Pass 2: Collapse consecutive messages with the same role + content.
-  // This catches server-side duplicates that have different IDs but identical
-  // content (e.g. the same final assistant response returned 3 times).
-  // Uses fuzzy comparison to handle whitespace differences.
-  // Cache the previous normalized content to avoid re-normalizing on every iteration.
+  // O(n) — only compares each message to its immediate predecessor.
   const result: GatewayChatMessage[] = [];
+  let prevRole = "";
   let prevNorm = "";
   for (const msg of idDeduped) {
-    const prev = result[result.length - 1];
     if (
-      prev &&
-      prev.role === msg.role &&
+      prevRole === msg.role &&
       prevNorm !== "" &&
-      // Don't collapse tool-call messages — they may legitimately repeat
-      !prev.toolCalls?.length &&
       !msg.toolCalls?.length &&
       prevNorm === normalizeForCompare(msg.content)
     ) {
-      continue; // skip duplicate
+      continue; // skip consecutive duplicate
     }
+    prevRole = msg.role;
     prevNorm = msg.content.trim() ? normalizeForCompare(msg.content) : "";
     result.push(msg);
   }
@@ -233,8 +228,12 @@ function mergeHistoryIntoMessages(
     if (currentVersion && !claimedCurrentIds.has(histMsg.id)) {
       claimedCurrentIds.add(histMsg.id);
       const contentChanged = currentVersion.content !== histMsg.content;
-      const toolResultsChanged =
-        JSON.stringify(currentVersion.toolResults) !== JSON.stringify(histMsg.toolResults);
+      // Compare tool results by count + first entry (avoids JSON.stringify on every message)
+      const ctr = currentVersion.toolResults;
+      const htr = histMsg.toolResults;
+      const toolResultsChanged = ctr?.length !== htr?.length ||
+        (ctr?.[0]?.content !== htr?.[0]?.content) ||
+        (ctr?.[0]?.isError !== htr?.[0]?.isError);
       if (contentChanged || toolResultsChanged) {
         merged.push(histMsg);
         hasChanges = true;
@@ -521,6 +520,8 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       sessionKeyRef.current = initialSessionKey;
       // We can't call handleSessionChange here (it's not defined yet), so
       // inline the same reset logic. setSessionKeyState will trigger re-render.
+      // Ref cleanup (currentRunIdRef, noResponseRef, etc.) is handled by
+      // handleSessionChange which runs via the setSessionKey effect.
       setSessionKeyState(initialSessionKey);
       setMessages([]);
       setIsLoading(false);
@@ -546,10 +547,15 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       setError(null);
       currentRunIdRef.current = null;
       streamContentRef.current = "";
+      receivedEventRef.current = false;
       processedEventSeqRef.current.clear();
       if (finalDebounceRef.current) {
         clearTimeout(finalDebounceRef.current);
         finalDebounceRef.current = null;
+      }
+      if (noResponseRef.current) {
+        clearTimeout(noResponseRef.current);
+        noResponseRef.current = null;
       }
     }
   }, []);
@@ -561,11 +567,17 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
   const loadingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const finalDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const idleReloadRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const noResponseRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const receivedEventRef = useRef(false);
+  const isMergingRef = useRef(false);
 
   // Shared helper: fetch history and merge into current messages.
   // Optionally auto-finalizes if the last message is a completed assistant text.
+  // Guarded to prevent concurrent merges from racing.
   const mergeHistoryAndMaybeFinalize = useCallback((autoFinalize: boolean) => {
-    gatewayConnection.getChatHistory(sessionKeyRef.current).then((response) => {
+    if (isMergingRef.current) return; // skip if a merge is already in progress
+    isMergingRef.current = true;
+    gatewayConnection.getChatHistory(sessionKeyRef.current, 50).then((response) => {
       if (!response.messages?.length) return;
       const loaded: GatewayChatMessage[] = [];
       for (const m of response.messages) {
@@ -584,7 +596,9 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
           setIsLoading(false);
         }
       }
-    }).catch(() => {});
+    }).catch(() => {}).finally(() => {
+      isMergingRef.current = false;
+    });
   }, []);
 
   // Shared helper: start (or restart) the 3s finalization debounce.
@@ -604,11 +618,35 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       const eventKey = `${payload.runId}:${payload.state}`;
       if (processedEventSeqRef.current.has(eventKey)) return;
       processedEventSeqRef.current.add(eventKey);
+      // Cap the set to prevent unbounded growth in long-lived sessions
+      if (processedEventSeqRef.current.size > 500) {
+        const iter = processedEventSeqRef.current.values();
+        // Delete the oldest 250 entries (Sets iterate in insertion order)
+        for (let i = 0; i < 250; i++) iter.next();
+        const keep = new Set<string>();
+        for (const v of iter) keep.add(v);
+        processedEventSeqRef.current = keep;
+      }
     }
 
-    // Allow events through when sessionKey is missing (some agent events
-    // don't include it). Only reject if it's explicitly a different session.
-    if (payload.sessionKey && payload.sessionKey !== sessionKeyRef.current) return;
+    // Session key filter — prevent cross-session bleed.
+    // Events WITH a sessionKey must match. Events WITHOUT a sessionKey are only
+    // accepted if they match the current run ID (i.e., we sent the message that
+    // triggered them). This prevents events from other sessions leaking into
+    // the current chat when the gateway omits the sessionKey field.
+    if (payload.sessionKey) {
+      if (payload.sessionKey !== sessionKeyRef.current) return;
+    } else if (currentRunIdRef.current && payload.runId !== currentRunIdRef.current) {
+      // No sessionKey on the event, and the runId doesn't match our active run — skip
+      return;
+    }
+
+    // Mark that we received at least one event — cancels the no-response timer.
+    receivedEventRef.current = true;
+    if (noResponseRef.current) {
+      clearTimeout(noResponseRef.current);
+      noResponseRef.current = null;
+    }
 
     if (payload.state === "delta") {
       // Late-arriving deltas re-activate the conversation after premature finalization.
@@ -793,7 +831,8 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       // Match by runId so subagent text doesn't overwrite the parent agent's text.
       const text = extractText(payload.message);
       if (typeof text === "string") {
-        streamContentRef.current = text;
+        // Cap stream buffer at 512KB to prevent OOM if "final" event never arrives
+        streamContentRef.current = text.length > 524_288 ? text.slice(-524_288) : text;
 
         setMessages((prev) => {
           // Find an existing text message from THIS runId (not just the last message)
@@ -885,11 +924,14 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
     }
   }, [mergeHistoryAndMaybeFinalize, startFinalizeDebounce]);
 
-  // Shared: fetch history and replace messages (used on connect + reconnect)
+  // Shared: fetch history and merge into current messages (used on connect + reconnect).
+  // Loads only the most recent 50 messages for fast initial render.
+  // Uses merge when there are existing messages (e.g. optimistic user messages from
+  // sendMessage) to prevent them from being wiped by a concurrent history fetch.
   const fetchAndSetHistory = useCallback(async () => {
     if (!gatewayConnection.isConnected()) return;
     try {
-      const response = await gatewayConnection.getChatHistory(getSessionKey());
+      const response = await gatewayConnection.getChatHistory(getSessionKey(), 50);
       const loaded: GatewayChatMessage[] = [];
       if (response.messages) {
         for (const msg of response.messages) {
@@ -897,7 +939,13 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
           if (normalized) loaded.push(normalized);
         }
       }
-      setMessages(deduplicateMessages(loaded));
+      const deduped = deduplicateMessages(loaded);
+      setMessages((prev) => {
+        if (prev.length === 0) return deduped;
+        // Merge to preserve optimistic/streaming messages not yet in history
+        const merged = mergeHistoryIntoMessages(prev, deduped);
+        return merged ?? prev;
+      });
     } catch (err) {
       console.error("[GatewayChat] Failed to load history:", err);
     }
@@ -956,6 +1004,9 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       if (idleReloadRef.current) {
         clearTimeout(idleReloadRef.current);
       }
+      if (noResponseRef.current) {
+        clearTimeout(noResponseRef.current);
+      }
     };
   }, []);
 
@@ -995,8 +1046,10 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
   }, []);
 
   // Load chat history
+  // Guard isLoading so a history reload during active streaming doesn't kill the
+  // "AI is generating" state (currentRunIdRef.current !== null while streaming).
   const loadChatHistory = useCallback(async () => {
-    setIsLoading(true);
+    if (currentRunIdRef.current === null) setIsLoading(true);
     setError(null);
     try {
       await fetchAndSetHistory();
@@ -1004,7 +1057,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       console.error("[GatewayChat] loadChatHistory error:", err);
       setError(err instanceof Error ? err.message : "Failed to load history");
     } finally {
-      setIsLoading(false);
+      if (currentRunIdRef.current === null) setIsLoading(false);
     }
   }, [fetchAndSetHistory]);
 
@@ -1082,6 +1135,18 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
 
     currentRunIdRef.current = runId;
     streamContentRef.current = "";
+    receivedEventRef.current = false;
+
+    // No-response check: if no streaming events arrive within 15s after send,
+    // check history — the agent may have completed while events were filtered
+    // (e.g. session key changed mid-flight) or never relayed (hub issue).
+    if (noResponseRef.current) clearTimeout(noResponseRef.current);
+    noResponseRef.current = setTimeout(() => {
+      noResponseRef.current = null;
+      if (!receivedEventRef.current && currentRunIdRef.current !== null) {
+        mergeHistoryAndMaybeFinalize(true);
+      }
+    }, 15_000);
 
     try {
       // Convert attachments to API format
@@ -1123,17 +1188,41 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
 
   // Stop generation
   const stopGeneration = useCallback(async () => {
-    if (!gatewayConnection.isConnected()) {
-      return;
+    // Immediately stop loading — don't wait for the gateway's "aborted" event
+    // which may be slow or never arrive (e.g. disconnected, hub relay delay).
+    const streamedText = streamContentRef.current;
+    if (streamedText.trim()) {
+      setMessages((prev) => {
+        const lastMsg = prev[prev.length - 1];
+        if (lastMsg && lastMsg.role === "assistant") {
+          return [
+            ...prev.slice(0, -1),
+            { ...lastMsg, content: streamedText },
+          ];
+        }
+        return [
+          ...prev,
+          {
+            id: uuidv4(),
+            role: "assistant" as ChatMessageRole,
+            content: streamedText,
+            timestamp: Date.now(),
+          },
+        ];
+      });
     }
+    streamContentRef.current = "";
+    currentRunIdRef.current = null;
+    setIsLoading(false);
 
-    try {
-      await gatewayConnection.abortChat({
+    // Best-effort: tell the gateway to abort (fire-and-forget)
+    if (gatewayConnection.isConnected()) {
+      gatewayConnection.abortChat({
         sessionKey: getSessionKey(),
         runId: currentRunIdRef.current || undefined,
+      }).catch((err) => {
+        console.error("Failed to abort chat:", err);
       });
-    } catch (err) {
-      console.error("Failed to abort chat:", err);
     }
   }, [getSessionKey]);
 
@@ -1147,6 +1236,10 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       clearTimeout(finalDebounceRef.current);
       finalDebounceRef.current = null;
     }
+    if (noResponseRef.current) {
+      clearTimeout(noResponseRef.current);
+      noResponseRef.current = null;
+    }
   }, []);
 
   // Clear loading/finalize timeouts when isLoading becomes false
@@ -1159,6 +1252,10 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       if (finalDebounceRef.current) {
         clearTimeout(finalDebounceRef.current);
         finalDebounceRef.current = null;
+      }
+      if (noResponseRef.current) {
+        clearTimeout(noResponseRef.current);
+        noResponseRef.current = null;
       }
     }
   }, [isLoading]);

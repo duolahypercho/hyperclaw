@@ -45,11 +45,7 @@ interface OpenClawState {
   errors: Record<string, string | null>;
 }
 
-const DEFAULT_MODELS: OpenClawModel[] = [
-  { id: "claude-opus-4-6", provider: "anthropic", displayName: "Claude Opus 4.6" },
-  { id: "claude-sonnet-4-6", provider: "anthropic", displayName: "Claude Sonnet 4.6" },
-  { id: "claude-haiku-4-5", provider: "anthropic", displayName: "Claude Haiku 4.5" },
-];
+const DEFAULT_MODELS: OpenClawModel[] = [];
 
 const initialState: OpenClawState = {
   installed: null,

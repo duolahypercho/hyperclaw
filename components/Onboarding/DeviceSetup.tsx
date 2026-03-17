@@ -215,9 +215,8 @@ export default function DeviceSetup({ onComplete }: DeviceSetupProps) {
     };
   }, [step, pairing, onComplete]);
 
-  const hubBase = process.env.NEXT_PUBLIC_HUB_URL?.replace(/^wss?/, "https") || "https://hub.hypercho.com";
   const installCommand = pairing
-    ? `curl -fsSL ${hubBase}/downloads/install.sh | bash -s -- --token ${pairing.token} --device-id ${pairing.deviceId}`
+    ? `curl -fsSL https://claw.hypercho.com/downloads/install.sh | bash -s -- --token ${pairing.token} --device-id ${pairing.deviceId}`
     : "";
 
   const copyCommand = () => {

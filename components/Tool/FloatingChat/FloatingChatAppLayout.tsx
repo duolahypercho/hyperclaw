@@ -4,24 +4,26 @@ import { useFloatingChatOS } from "@OS/Provider/OSProv";
 import { FloatingChatViewer } from "./FloatingChatViewer";
 
 const FloatingChatAppLayout = memo(() => {
-  const { showState, isMounted } = useFloatingChatOS();
+  const { showState, isMounted, taskContext } = useFloatingChatOS();
+
+  const hasTask = !!taskContext;
 
   const initialSize = useMemo(
     () => ({
       min: {
-        width: 360,
+        width: hasTask ? 560 : 360,
         height: 400,
       },
       max: {
-        width: 700,
+        width: hasTask ? 960 : 700,
         height: 700,
       },
       default: {
-        width: 420,
+        width: hasTask ? 700 : 420,
         height: 520,
       },
     }),
-    []
+    [hasTask]
   );
 
   if (!isMounted) {

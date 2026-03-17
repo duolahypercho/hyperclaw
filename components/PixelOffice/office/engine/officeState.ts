@@ -214,6 +214,38 @@ export class OfficeState {
     return null
   }
 
+  /** Check if another character is physically sitting (TYPE state) at a given seat tile */
+  isSeatPhysicallyOccupied(seatId: string, excludeCharId: number): boolean {
+    const seat = this.seats.get(seatId)
+    if (!seat) return false
+    for (const ch of this.characters.values()) {
+      if (ch.id === excludeCharId) continue
+      if (ch.matrixEffect === 'despawn') continue
+      if (ch.state === CharacterState.TYPE && ch.tileCol === seat.seatCol && ch.tileRow === seat.seatRow) {
+        return true
+      }
+    }
+    return false
+  }
+
+  /** Evict any non-assigned character sitting at a seat tile, moving them to IDLE */
+  private evictOccupantFromSeat(seatId: string, rightfulOwnerId: number): void {
+    const seat = this.seats.get(seatId)
+    if (!seat) return
+    for (const ch of this.characters.values()) {
+      if (ch.id === rightfulOwnerId) continue
+      if (ch.matrixEffect === 'despawn') continue
+      if (ch.state === CharacterState.TYPE && ch.tileCol === seat.seatCol && ch.tileRow === seat.seatRow) {
+        // Kick them out — stand up and move to a nearby walkable tile
+        ch.state = CharacterState.IDLE
+        ch.frame = 0
+        ch.frameTimer = 0
+        ch.wanderTimer = 0.1 // wander away quickly
+        ch.wanderCount = 0
+      }
+    }
+  }
+
   /**
    * Pick a diverse palette for a new agent based on currently active agents.
    * First 6 agents each get a unique skin (random order). Beyond 6, skins
@@ -332,6 +364,8 @@ export class OfficeState {
     if (!seat || seat.assigned) return
     seat.assigned = true
     ch.seatId = seatId
+    // Evict anyone physically sitting at the new seat
+    this.evictOccupantFromSeat(seatId, agentId)
     // Pathfind to new seat (unblock own seat tile for this query)
     const path = this.withOwnSeatUnblocked(ch, () =>
       findPath(ch.tileCol, ch.tileRow, seat.seatCol, seat.seatRow, this.tileMap, this.blockedTiles)
@@ -360,6 +394,8 @@ export class OfficeState {
     if (!ch || !ch.seatId) return
     const seat = this.seats.get(ch.seatId)
     if (!seat) return
+    // Evict anyone else sitting at this seat
+    this.evictOccupantFromSeat(ch.seatId, agentId)
     const path = this.withOwnSeatUnblocked(ch, () =>
       findPath(ch.tileCol, ch.tileRow, seat.seatCol, seat.seatRow, this.tileMap, this.blockedTiles)
     )
@@ -543,7 +579,54 @@ export class OfficeState {
     const ch = this.characters.get(id)
     if (ch) {
       ch.isActive = active
-      if (!active) {
+      if (active && !ch.seatId) {
+        // No seat assigned — try to find a free one
+        const freeSeatId = this.findFreeSeat()
+        if (freeSeatId) {
+          this.seats.get(freeSeatId)!.assigned = true
+          ch.seatId = freeSeatId
+        }
+      }
+      if (active && ch.seatId) {
+        // Immediately navigate to seat (or teleport) so working agents are always at their desk
+        const seat = this.seats.get(ch.seatId)
+        if (seat) {
+          // If someone else is already sitting at this seat, evict them first
+          this.evictOccupantFromSeat(ch.seatId, id)
+          const atSeat = ch.tileCol === seat.seatCol && ch.tileRow === seat.seatRow
+          if (atSeat) {
+            ch.state = CharacterState.TYPE
+            ch.dir = seat.facingDir
+            ch.path = []
+            ch.moveProgress = 0
+            ch.frame = 0
+            ch.frameTimer = 0
+          } else {
+            const path = this.withOwnSeatUnblocked(ch, () =>
+              findPath(ch.tileCol, ch.tileRow, seat.seatCol, seat.seatRow, this.tileMap, this.blockedTiles)
+            )
+            if (path.length > 0) {
+              ch.path = path
+              ch.moveProgress = 0
+              ch.state = CharacterState.WALK
+              ch.frame = 0
+              ch.frameTimer = 0
+            } else {
+              // No path — teleport to seat so they never type in a random spot
+              ch.tileCol = seat.seatCol
+              ch.tileRow = seat.seatRow
+              ch.x = seat.seatCol * TILE_SIZE + TILE_SIZE / 2
+              ch.y = seat.seatRow * TILE_SIZE + TILE_SIZE / 2
+              ch.state = CharacterState.TYPE
+              ch.dir = seat.facingDir
+              ch.path = []
+              ch.moveProgress = 0
+              ch.frame = 0
+              ch.frameTimer = 0
+            }
+          }
+        }
+      } else if (!active) {
         // Capture "mid-walk" before clearing path so we snap to current visual position.
         const isMidWalk = ch.state === CharacterState.WALK && (ch.path.length > 0 || ch.moveProgress > 0)
         // Sentinel -1: signals turn just ended, skip next seat rest timer.
@@ -706,9 +789,61 @@ export class OfficeState {
         }
       }
     }
+    // Enforce one character per seat: if multiple characters are TYPE at the same seat tile,
+    // keep the assigned owner and evict the rest to IDLE
+    this.resolveSeatConflicts()
+
     // Remove characters that finished despawn
     for (const id of toDelete) {
       this.characters.delete(id)
+    }
+  }
+
+  /** Evict non-assigned characters that ended up sitting at someone else's seat */
+  private resolveSeatConflicts(): void {
+    // Build map of seat tile → characters sitting there
+    const tileOccupants = new Map<string, number[]>()
+    for (const ch of this.characters.values()) {
+      if (ch.state !== CharacterState.TYPE) continue
+      if (ch.matrixEffect === 'despawn') continue
+      const key = `${ch.tileCol},${ch.tileRow}`
+      const arr = tileOccupants.get(key)
+      if (arr) {
+        arr.push(ch.id)
+      } else {
+        tileOccupants.set(key, [ch.id])
+      }
+    }
+    // For tiles with >1 occupant, keep the assigned owner, evict the rest
+    for (const [key, ids] of tileOccupants) {
+      if (ids.length <= 1) continue
+      // Find which character is the rightful seat owner
+      let ownerId: number | null = null
+      for (const [seatUid, seat] of this.seats) {
+        if (`${seat.seatCol},${seat.seatRow}` === key) {
+          // Find the character assigned to this seat
+          for (const cid of ids) {
+            const ch = this.characters.get(cid)
+            if (ch && ch.seatId === seatUid) {
+              ownerId = cid
+              break
+            }
+          }
+          if (ownerId !== null) break
+        }
+      }
+      // Evict everyone except the owner (or the first one if no owner found)
+      const keepId = ownerId ?? ids[0]
+      for (const cid of ids) {
+        if (cid === keepId) continue
+        const ch = this.characters.get(cid)
+        if (!ch) continue
+        ch.state = CharacterState.IDLE
+        ch.frame = 0
+        ch.frameTimer = 0
+        ch.wanderTimer = 0.1
+        ch.wanderCount = 0
+      }
     }
   }
 

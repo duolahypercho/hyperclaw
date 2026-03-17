@@ -19,7 +19,6 @@ import {
   Bot,
   Trash2,
   Loader2,
-  ScrollText,
   ChevronLeft,
   ChevronRight,
   Activity,
@@ -60,7 +59,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useFocusMode } from "./hooks/useFocusMode";
 import { AddTaskDialog } from "./AddTaskDialog";
 import { EditTaskDialog } from "./EditTaskDialog";
-import { TaskDetailDialog } from "./TaskDetailDialog";
 import { AddAgentDialog } from "$/components/Tool/Agents/AddAgentDialog";
 import { AgentDetailDialog } from "$/components/Tool/Agents/AgentDetailDialog";
 
@@ -460,7 +458,6 @@ interface MiniKanbanCardProps {
   columnId: KanbanStatus;
   onStatusChange: (taskId: string, status: KanbanStatus) => void;
   onSelect: (taskId: string) => void;
-  onViewDetails: (taskId: string) => void;
   onEdit?: (taskId: string) => void;
   onDelete: (taskId: string) => void;
   isDragging?: boolean;
@@ -470,7 +467,7 @@ interface MiniKanbanCardProps {
 }
 
 const MiniKanbanCard = React.forwardRef<HTMLDivElement, MiniKanbanCardProps>(
-  ({ task, columnId, onStatusChange, onSelect, onViewDetails, onEdit, onDelete, isDragging = false, disableLayout = false, mobileMode = false, onMoveStatus }, ref) => {
+  ({ task, columnId, onStatusChange, onSelect, onEdit, onDelete, isDragging = false, disableLayout = false, mobileMode = false, onMoveStatus }, ref) => {
     // Only allow: Backlog → In Progress, or Review → Done
     const nextCol = useMemo(() => {
       if (columnId === "pending") return COLUMNS[1]; // in_progress
@@ -483,8 +480,6 @@ const MiniKanbanCard = React.forwardRef<HTMLDivElement, MiniKanbanCardProps>(
       task.createdAt || task.assignedAgent || task.assignedAgentId || task.linkedDocumentUrl;
 
     const canDelete = columnId === "pending" || columnId === "blocked" || columnId === "cancelled";
-
-    const showViewDetails = true;
 
     return (
       <ContextMenu>
@@ -560,20 +555,6 @@ const MiniKanbanCard = React.forwardRef<HTMLDivElement, MiniKanbanCardProps>(
               )}
             </div>
             <div className="flex items-center gap-0.5 shrink-0 mt-0.5">
-              {showViewDetails && (
-                <Button
-                  variant="ghost"
-                  size="iconSm"
-                  className="h-4 w-4 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onViewDetails(task._id);
-                  }}
-                  title="See logs & info"
-                >
-                  <ScrollText className="w-2.5 h-2.5" />
-                </Button>
-              )}
               {nextCol && (
                 <Button
                   variant="ghost"
@@ -620,12 +601,6 @@ const MiniKanbanCard = React.forwardRef<HTMLDivElement, MiniKanbanCardProps>(
         </motion.div>
         </ContextMenuTrigger>
         <ContextMenuContent className="w-48">
-          <ContextMenuItem
-            onClick={() => onViewDetails(task._id)}
-          >
-            <ScrollText className="w-3.5 h-3.5 mr-2" />
-            See logs & info
-          </ContextMenuItem>
           {columnId === "pending" && onEdit && (
             <ContextMenuItem
               onClick={() => onEdit(task._id)}
@@ -657,7 +632,6 @@ interface MiniKanbanColumnProps {
   tasks: Task[];
   onStatusChange: (taskId: string, status: KanbanStatus) => void;
   onSelect: (taskId: string) => void;
-  onViewDetails: (taskId: string) => void;
   onEdit?: (taskId: string) => void;
   onDelete: (taskId: string) => void;
   // DnD props (from MissionQueue)
@@ -675,7 +649,6 @@ const MiniKanbanColumn = memo<MiniKanbanColumnProps>(({
   tasks,
   onStatusChange,
   onSelect,
-  onViewDetails,
   onEdit,
   onDelete,
   isDragOver = false,
@@ -747,7 +720,6 @@ const MiniKanbanColumn = memo<MiniKanbanColumnProps>(({
                   columnId={column.id}
                   onStatusChange={onStatusChange}
                   onSelect={onSelect}
-                  onViewDetails={onViewDetails}
                   onEdit={onEdit}
                   onDelete={onDelete}
                   isDragging={draggedTask?._id === task._id}
@@ -1366,8 +1338,6 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
 
   const [addTaskOpen, setAddTaskOpen] = useState(false);
   const [editTask, setEditTask] = useState<Task | null>(null);
-  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
-  const [detailOpen, setDetailOpen] = useState(false);
 
   // HTML5 drag-and-drop state (from MissionQueue)
   const [draggedTask, setDraggedTask] = useState<Task | null>(null);
@@ -1612,15 +1582,6 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
     return () => mq.removeEventListener("change", handler);
   }, []);
 
-  const handleViewDetails = useCallback(
-    (taskId: string) => {
-      const task = tasks.find((t) => t._id === taskId) ?? null;
-      setSelectedTask(task);
-      setDetailOpen(true);
-    },
-    [tasks]
-  );
-
   // Count tasks per agent name (for TeamPanel badge)
   const taskCountByAgent = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -1699,7 +1660,7 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
   );
 
   const handleSelect = useCallback(
-    async (taskId: string) => {
+    (taskId: string) => {
       const task = tasks.find((t) => t._id === taskId) ?? null;
       if (!task) return;
       const agentName = task.assignedAgent || task.assignedAgentId;
@@ -1710,25 +1671,92 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
         : null;
       const agentId = agent?.id || agentName || "main";
 
-      // Try to fetch the task's linked sessions and use the most recent one
-      try {
-        const resp = await fetch("/api/hyperclaw-bridge", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "get-task-sessions", taskId, agentId }),
-        });
-        const sessions = await resp.json();
-        if (Array.isArray(sessions) && sessions.length > 0) {
-          // Use the most recent session (sorted by linked_at desc from API)
-          const sessionKey = sessions[0].session_key;
-          openChat(agentId, sessionKey);
-          return;
+      // Build task context for the floating chat detail panel
+      const taskCtx = {
+        _id: task._id,
+        title: task.title,
+        description: task.description,
+        status: task.status,
+        assignedAgent: task.assignedAgent,
+        assignedAgentId: task.assignedAgentId,
+        linkedDocumentUrl: task.linkedDocumentUrl,
+        createdAt: task.createdAt?.toISOString(),
+        updatedAt: task.updatedAt?.toISOString(),
+        finishedAt: task.finishedAt?.toISOString(),
+        starred: task.starred,
+      };
+
+      // Open chat immediately so the window appears instantly
+      openChat(agentId, undefined, taskCtx);
+
+      // Resolve session in the background — non-blocking.
+      // Each task gets its own session key: `agent:{agentId}:task-{taskId}`.
+      // This prevents cross-contamination from the agent's main/shared session.
+      const taskSessionKey = `agent:${agentId}:task-${taskId}`;
+      (async () => {
+        try {
+          // Check for existing linked session that's task-specific
+          const sessions = await bridgeInvoke("get-task-sessions", { taskId, agentId }) as any[];
+          if (Array.isArray(sessions) && sessions.length > 0) {
+            // Only use linked session if it's task-specific (contains the taskId).
+            // Otherwise it's a shared/reused agent session — ignore it.
+            const linked = sessions.find((s: any) => s.session_key?.includes(taskId));
+            if (linked) {
+              openChat(agentId, linked.session_key, taskCtx);
+              return;
+            }
+          }
+
+          // No valid task-specific session — spawn a new one with the task key
+          const logs = await bridgeInvoke("get-task-logs", { taskId, agentId }).catch(() => []) as any[];
+
+          // Build the spawn prompt
+          const lines: string[] = [`Continue task ${task._id}`, ``];
+
+          // Task info
+          lines.push(`## Task Info`);
+          lines.push(`- **Title:** ${task.title}`);
+          lines.push(`- **Status:** ${task.status.replace("_", " ")}`);
+          if (task.createdAt) lines.push(`- **Created:** ${task.createdAt.toISOString().split("T")[0]}`);
+          if (task.finishedAt) lines.push(`- **Finished:** ${task.finishedAt.toISOString().split("T")[0]}`);
+          if (task.linkedDocumentUrl) lines.push(`- **Linked Doc:** ${task.linkedDocumentUrl}`);
+
+          // Description
+          if (task.description?.trim()) {
+            lines.push(``, `## Description`, task.description.trim());
+          }
+
+          // Recent logs
+          if (Array.isArray(logs) && logs.length > 0) {
+            const recentLogs = logs.slice(0, 10);
+            lines.push(``, `## Recent Logs (${Math.min(logs.length, 10)} entries)`);
+            recentLogs.forEach((l: any, i: number) => {
+              const typeLabel = (l.type || "note").charAt(0).toUpperCase() + (l.type || "note").slice(1);
+              lines.push(`${i + 1}. **${typeLabel}** - ${l.content}`);
+            });
+          }
+
+          // Placeholder for user's first message
+          lines.push(``, `## User's Question/Request`, `[Awaiting user's first message]`);
+
+          const spawnResult = await gatewayConnection.request<{ sessionKey?: string }>("sessions.spawn", {
+            task: lines.join("\n"),
+            agentId,
+            label: `Task: ${task.title}`,
+            runtime: "subagent",
+            mode: "session",
+            key: taskSessionKey, // Force unique session per task
+          });
+
+          const sessionKey = spawnResult?.sessionKey || taskSessionKey;
+          bridgeInvoke("link-task-session", { taskId, sessionKey }).catch(() => {});
+          openChat(agentId, sessionKey, taskCtx);
+        } catch (e) {
+          console.warn("[KanbanWidget] session resolve/spawn failed:", e);
+          // Fallback: use the task-specific key directly
+          openChat(agentId, taskSessionKey, taskCtx);
         }
-      } catch {
-        // Fall through to default
-      }
-      // Fallback: open chat for agent without specific session
-      openChat(agentId);
+      })();
     },
     [tasks, agents, openChat]
   );
@@ -1802,11 +1830,6 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
   const openAddAgent = useCallback(() => setAddAgentOpen(true), []);
   const handleEditAgent = useCallback((agentId: string) => setEditingAgentId(agentId), []);
   const closeAgentDetail = useCallback((open: boolean) => { if (!open) setEditingAgentId(null); }, []);
-  const closeTaskDetail = useCallback((open: boolean) => {
-    setDetailOpen(open);
-    if (!open) setSelectedTask(null);
-  }, []);
-
   return (
     <motion.div
       animate={{
@@ -1868,7 +1891,6 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
                       columnId={mobileTab}
                       onStatusChange={handleMove}
                       onSelect={handleSelect}
-                      onViewDetails={handleViewDetails}
                       onEdit={handleEdit}
                       onDelete={handleDelete}
                       mobileMode
@@ -1917,7 +1939,6 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
                   tasks={grouped[col.id]}
                   onStatusChange={handleMove}
                   onSelect={handleSelect}
-                  onViewDetails={handleViewDetails}
                   onEdit={handleEdit}
                   onDelete={handleDelete}
                   isDragOver={dragOverColumn === col.id}
@@ -1953,13 +1974,6 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
           onOpenChange={(open) => { if (!open) setEditTask(null); }}
           task={editTask}
           preloadedAgents={agents}
-        />
-      )}
-      {detailOpen && selectedTask && (
-        <TaskDetailDialog
-          task={selectedTask}
-          open
-          onOpenChange={closeTaskDetail}
         />
       )}
       {addAgentOpen && (

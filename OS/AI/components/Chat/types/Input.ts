@@ -98,6 +98,9 @@ export interface InputContainerProps {
   // Session management
   sessionKey?: string;
 
+  // Agent identity — used to resolve default model from openclaw.json
+  agentId?: string;
+
   // Context window usage
   tokenUsage?: number;
   contextLimit?: number;

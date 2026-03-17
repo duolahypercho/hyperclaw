@@ -142,6 +142,23 @@ export function updateCharacter(
         ch.frameTimer -= TYPE_FRAME_DURATION_SEC
         ch.frame = (ch.frame + 1) % 2
       }
+      // If active and has a seat, ensure we're actually AT the seat — redirect if not
+      if (ch.isActive && ch.seatId) {
+        const seat = seats.get(ch.seatId)
+        if (seat && (ch.tileCol !== seat.seatCol || ch.tileRow !== seat.seatRow)) {
+          const path = findPath(ch.tileCol, ch.tileRow, seat.seatCol, seat.seatRow, tileMap, blockedTiles)
+          if (path.length > 0) {
+            ch.path = path
+            ch.moveProgress = 0
+            ch.state = CharacterState.WALK
+            ch.frame = 0
+            ch.frameTimer = 0
+          } else {
+            teleportToSeat(ch, seat)
+          }
+          break
+        }
+      }
       // If no longer active, stand up and start wandering (after seatTimer expires)
       if (!ch.isActive) {
         if (ch.seatTimer > 0) {
@@ -163,7 +180,7 @@ export function updateCharacter(
       // No idle animation — static pose
       ch.frame = 0
       if (ch.seatTimer < 0) ch.seatTimer = 0 // clear turn-end sentinel
-      // If became active, pathfind to seat
+      // If became active, pathfind to seat (or teleport if no path)
       if (ch.isActive) {
         if (!ch.seatId) {
           // No seat assigned — type in place
@@ -174,19 +191,25 @@ export function updateCharacter(
         }
         const seat = seats.get(ch.seatId)
         if (seat) {
-          const path = findPath(ch.tileCol, ch.tileRow, seat.seatCol, seat.seatRow, tileMap, blockedTiles)
-          if (path.length > 0) {
-            ch.path = path
-            ch.moveProgress = 0
-            ch.state = CharacterState.WALK
-            ch.frame = 0
-            ch.frameTimer = 0
-          } else {
-            // Already at seat or no path — sit down
+          const atSeat = ch.tileCol === seat.seatCol && ch.tileRow === seat.seatRow
+          if (atSeat) {
+            // Already at seat — sit down
             ch.state = CharacterState.TYPE
             ch.dir = seat.facingDir
             ch.frame = 0
             ch.frameTimer = 0
+          } else {
+            const path = findPath(ch.tileCol, ch.tileRow, seat.seatCol, seat.seatRow, tileMap, blockedTiles)
+            if (path.length > 0) {
+              ch.path = path
+              ch.moveProgress = 0
+              ch.state = CharacterState.WALK
+              ch.frame = 0
+              ch.frameTimer = 0
+            } else {
+              // No path found — teleport to seat so we never type in a random spot
+              teleportToSeat(ch, seat)
+            }
           }
         }
         break
@@ -277,6 +300,9 @@ export function updateCharacter(
             if (seat && ch.tileCol === seat.seatCol && ch.tileRow === seat.seatRow) {
               ch.state = CharacterState.TYPE
               ch.dir = seat.facingDir
+            } else if (seat) {
+              // Not at seat after walk — teleport so we never type in a random spot
+              teleportToSeat(ch, seat)
             } else {
               ch.state = CharacterState.IDLE
             }
@@ -366,6 +392,21 @@ export function getCharacterSprite(ch: Character, sprites: CharacterSprites): Sp
     default:
       return sprites.walk[ch.dir][1]
   }
+}
+
+/** Teleport a character directly to their assigned seat and start typing */
+function teleportToSeat(ch: Character, seat: Seat): void {
+  const center = tileCenter(seat.seatCol, seat.seatRow)
+  ch.tileCol = seat.seatCol
+  ch.tileRow = seat.seatRow
+  ch.x = center.x
+  ch.y = center.y
+  ch.path = []
+  ch.moveProgress = 0
+  ch.state = CharacterState.TYPE
+  ch.dir = seat.facingDir
+  ch.frame = 0
+  ch.frameTimer = 0
 }
 
 function randomRange(min: number, max: number): number {
