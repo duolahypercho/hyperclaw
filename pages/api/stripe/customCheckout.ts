@@ -2,6 +2,8 @@ import { NextResponse, NextRequest } from "next/server";
 import { stripe } from "$/lib/stripe";
 import { absoluteURL } from "$/utils";
 import { NextApiRequest, NextApiResponse } from "next";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/pages/api/auth/[...nextauth]";
 
 async function stripeCheckout({
   email,
@@ -71,9 +73,20 @@ export default async function handler(
     return res.status(405).json({ error: "Method Not Allowed" });
   }
 
+  const session = await getServerSession(req, res, authOptions(req, res));
+  if (!session?.user) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
   try {
     // Parse the request body
     const { email, userId, product, customerId, interval } = req.body;
+
+    // Verify userId matches the authenticated user
+    if (userId && userId !== (session.user as any).userId) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
     if (!email || !userId || !product) {
       return res.status(400).json({
         error: "`email`, `userId`, `product` is required",
