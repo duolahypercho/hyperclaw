@@ -204,7 +204,7 @@ function DeviceCard({ device, onRevoke, onRemove }: { device: Device; onRevoke: 
         showDialog={showRevokeDialog}
         setShowDialog={setShowRevokeDialog}
         onDelete={() => onRevoke(device.id)}
-      />
+      ><span /></AlertDelete>
 
       <AlertDelete
         dialogTitle={`Remove "${device.name}"?`}
@@ -213,7 +213,7 @@ function DeviceCard({ device, onRevoke, onRemove }: { device: Device; onRevoke: 
         showDialog={showRemoveDialog}
         setShowDialog={setShowRemoveDialog}
         onDelete={() => onRemove(device.id)}
-      />
+      ><span /></AlertDelete>
     </motion.div>
   );
 }
