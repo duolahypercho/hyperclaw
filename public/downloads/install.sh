@@ -1,149 +1,119 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
+set -e
 
-# HyperClaw Connector installer
-# Usage: curl -fsSL https://claw.hypercho.com/downloads/install.sh | bash -s -- --token TOKEN --device-id DEVICE_ID
-
-REPO="Hypercho-Inc/hyperclaw-connector"
+HUB_URL="${HUB_URL:-https://hub.hypercho.com}"
 INSTALL_DIR="$HOME/.hyperclaw"
-BIN_NAME="hyperclaw-connector"
 
-# ── Helpers ──────────────────────────────────────────────────────────
-
-info()  { printf "\033[0;34m→\033[0m %s\n" "$*"; }
-ok()    { printf "\033[0;32m✓\033[0m %s\n" "$*"; }
-err()   { printf "\033[0;31m✗\033[0m %s\n" "$*" >&2; }
-fatal() { err "$@"; exit 1; }
-
-# ── Detect platform ─────────────────────────────────────────────────
-
-detect_platform() {
-  local os arch
-
-  case "$(uname -s)" in
-    Darwin) os="darwin" ;;
-    Linux)  os="linux"  ;;
-    MINGW*|MSYS*|CYGWIN*) fatal "Windows is not supported by this installer. Download manually from GitHub releases." ;;
-    *) fatal "Unsupported OS: $(uname -s)" ;;
+# --- Parse arguments ---
+TOKEN=""
+DEVICE_ID=""
+EMAIL=""
+PASSWORD=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --token) TOKEN="$2"; shift 2 ;;
+    --device-id) DEVICE_ID="$2"; shift 2 ;;
+    --email) EMAIL="$2"; shift 2 ;;
+    --password) PASSWORD="$2"; shift 2 ;;
+    --hub-url) HUB_URL="$2"; shift 2 ;;
+    *) TOKEN="$1"; shift ;;  # bare arg = token
   esac
+done
 
-  case "$(uname -m)" in
-    x86_64|amd64)   arch="amd64"  ;;
-    arm64|aarch64)   arch="arm64"  ;;
-    armv7l|armhf)    arch="arm"    ;;
-    *) fatal "Unsupported architecture: $(uname -m)" ;;
-  esac
+# --- Detect OS and architecture ---
+OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+ARCH="$(uname -m)"
 
-  echo "${os}_${arch}"
-}
+case "$ARCH" in
+  x86_64|amd64) ARCH="amd64" ;;
+  arm64|aarch64) ARCH="arm64" ;;
+  *) echo "Unsupported architecture: $ARCH"; exit 1 ;;
+esac
 
-# ── Find latest release ─────────────────────────────────────────────
+case "$OS" in
+  darwin|linux) ;;
+  *) echo "Unsupported OS: $OS"; exit 1 ;;
+esac
 
-get_latest_version() {
-  # Allow manual override via --version flag
-  if [ -n "${FORCE_VERSION:-}" ]; then
-    echo "$FORCE_VERSION"
-    return
+BINARY_NAME="hyperclaw-connector-${OS}-${ARCH}"
+DOWNLOAD_URL="${HUB_URL}/downloads/${BINARY_NAME}"
+
+echo ""
+echo "  ╔══════════════════════════════════════════╗"
+echo "  ║   HyperClaw Connector Installer          ║"
+echo "  ╚══════════════════════════════════════════╝"
+echo ""
+echo "OS: ${OS}/${ARCH}"
+echo "Download: ${DOWNLOAD_URL}"
+echo ""
+
+# --- Check if already installed and running ---
+if [ -x "${INSTALL_DIR}/hyperclaw-connector" ]; then
+  if pgrep -f "hyperclaw-connector" >/dev/null 2>&1; then
+    echo "Connector is already running. Stopping it first..."
+    pkill -f "hyperclaw-connector" 2>/dev/null || true
+    sleep 1
   fi
+  echo "Existing installation found. Updating..."
+fi
 
-  local url="https://api.github.com/repos/${REPO}/releases/latest"
-  local version=""
+# --- Download binary ---
+mkdir -p "$INSTALL_DIR"
+echo "Downloading connector..."
 
-  if command -v curl &>/dev/null; then
-    version=$(curl -fsSL "$url" 2>/dev/null | grep '"tag_name"' | head -1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\(.*\)".*/\1/' || true)
-  elif command -v wget &>/dev/null; then
-    version=$(wget -qO- "$url" 2>/dev/null | grep '"tag_name"' | head -1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\(.*\)".*/\1/' || true)
-  else
-    fatal "Neither curl nor wget found. Install one and try again."
-  fi
-
-  if [ -z "$version" ]; then
-    err "Could not determine latest version from GitHub releases."
-    err "The release may not exist yet, or the repository may be private."
-    err "You can specify a version manually: --version v1.0.0"
-    err "Check https://github.com/${REPO}/releases for available versions."
+if command -v curl &>/dev/null; then
+  HTTP_CODE=$(curl -sL -w "%{http_code}" -o "${INSTALL_DIR}/hyperclaw-connector" "$DOWNLOAD_URL")
+  if [ "$HTTP_CODE" != "200" ]; then
+    echo "Download failed (HTTP $HTTP_CODE). Check your internet connection."
+    rm -f "${INSTALL_DIR}/hyperclaw-connector"
     exit 1
   fi
+elif command -v wget &>/dev/null; then
+  wget -q -O "${INSTALL_DIR}/hyperclaw-connector" "$DOWNLOAD_URL" || {
+    echo "Download failed. Check your internet connection."
+    rm -f "${INSTALL_DIR}/hyperclaw-connector"
+    exit 1
+  }
+else
+  echo "Error: curl or wget is required."
+  exit 1
+fi
 
-  echo "$version"
-}
+chmod +x "${INSTALL_DIR}/hyperclaw-connector"
+echo "Downloaded to ${INSTALL_DIR}/hyperclaw-connector"
 
-# ── Download and install ─────────────────────────────────────────────
+# --- Save credentials ---
+if [ -n "$TOKEN" ]; then
+  echo "$TOKEN" > "${INSTALL_DIR}/device.token"
+  echo "Saved device token."
+fi
 
-download_binary() {
-  local version="$1"
-  local platform="$2"
-  local filename="${BIN_NAME}-${platform}"
-  local url="https://github.com/${REPO}/releases/download/${version}/${filename}"
-  local tmp
+if [ -n "$DEVICE_ID" ]; then
+  echo "$DEVICE_ID" > "${INSTALL_DIR}/device.id"
+  echo "Saved device ID."
+fi
 
-  tmp=$(mktemp)
-  trap "rm -f '$tmp'" EXIT
+# --- Write .env for connector ---
+{
+  [ -n "$TOKEN" ] && echo "DEVICE_TOKEN=$TOKEN"
+  [ -n "$DEVICE_ID" ] && echo "DEVICE_ID=$DEVICE_ID"
+  echo "HUB_URL=${HUB_URL/https/wss}"
+} > "${INSTALL_DIR}/.env"
 
-  info "Downloading ${filename} (${version})..."
+# --- Install as service (also auto-installs OpenClaw plugin) ---
+echo ""
+echo "Installing as background service..."
+"${INSTALL_DIR}/hyperclaw-connector" install
 
-  if command -v curl &>/dev/null; then
-    if ! curl -fSL --progress-bar "$url" -o "$tmp"; then
-      fatal "Download failed. Check if release exists: https://github.com/${REPO}/releases/tag/${version}"
-    fi
-  elif command -v wget &>/dev/null; then
-    if ! wget -q --show-progress "$url" -O "$tmp"; then
-      fatal "Download failed. Check if release exists: https://github.com/${REPO}/releases/tag/${version}"
-    fi
-  fi
-
-  mkdir -p "$INSTALL_DIR"
-  mv "$tmp" "${INSTALL_DIR}/${BIN_NAME}"
-  chmod +x "${INSTALL_DIR}/${BIN_NAME}"
-  trap - EXIT
-
-  ok "Installed to ${INSTALL_DIR}/${BIN_NAME}"
-}
-
-# ── Main ─────────────────────────────────────────────────────────────
-
-main() {
-  # Parse --version flag before anything else
-  local args=()
-  for arg in "$@"; do
-    case "$arg" in
-      --version=*) FORCE_VERSION="${arg#--version=}" ;;
-      *) args+=("$arg") ;;
-    esac
-  done
-  set -- "${args[@]}"
-
-  echo ""
-  echo "  ╔══════════════════════════════════════════╗"
-  echo "  ║   HyperClaw Connector Installer          ║"
-  echo "  ╚══════════════════════════════════════════╝"
-  echo ""
-
-  # Check if already installed and running
-  if [ -x "${INSTALL_DIR}/${BIN_NAME}" ]; then
-    if pgrep -f "${BIN_NAME}" >/dev/null 2>&1; then
-      info "Connector is already running. Stopping it first..."
-      pkill -f "${BIN_NAME}" 2>/dev/null || true
-      sleep 1
-    fi
-    info "Existing installation found. Updating..."
-  fi
-
-  local platform
-  platform=$(detect_platform)
-  info "Platform: ${platform}"
-
-  local version
-  version=$(get_latest_version)
-  info "Latest version: ${version}"
-
-  download_binary "$version" "$platform"
-
-  # Pass through all arguments (--token, --device-id, etc.)
-  info "Starting connector..."
-  echo ""
-
-  exec "${INSTALL_DIR}/${BIN_NAME}" "$@"
-}
-
-main "$@"
+echo ""
+echo "Done! HyperClaw Connector is installed and running."
+echo ""
+echo "What happened:"
+echo "  1. Downloaded connector binary"
+echo "  2. Installed as background service (auto-starts on login)"
+echo "  3. Installed OpenClaw plugin (hyperclaw_* tools now available)"
+echo ""
+echo "Useful commands:"
+echo "  ~/.hyperclaw/hyperclaw-connector status      # Check service status"
+echo "  ~/.hyperclaw/hyperclaw-connector version      # Show version"
+echo "  ~/.hyperclaw/hyperclaw-connector uninstall    # Remove completely"

@@ -216,7 +216,7 @@ export default function DeviceSetup({ onComplete }: DeviceSetupProps) {
   }, [step, pairing, onComplete]);
 
   const installCommand = pairing
-    ? `curl -fsSL https://claw.hypercho.com/downloads/install.sh | bash -s -- --token ${pairing.token} --device-id ${pairing.deviceId}`
+    ? `curl -fsSL https://hub.hypercho.com/downloads/install.sh | bash -s -- --token ${pairing.token} --device-id ${pairing.deviceId}`
     : "";
 
   const copyCommand = () => {
