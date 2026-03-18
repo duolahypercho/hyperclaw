@@ -98,11 +98,14 @@ export interface UseGatewayChatReturn {
   isConnected: boolean;
   error: string | null;
   sessionKey: string;
+  hasMoreHistory: boolean;
+  isLoadingMore: boolean;
 
   // Actions
   sendMessage: (content: string, attachments?: GatewayChatAttachment[]) => Promise<void>;
   stopGeneration: () => Promise<void>;
   loadChatHistory: () => Promise<void>;
+  loadMoreHistory: () => Promise<void>;
   clearChat: () => void;
   setSessionKey: (key: string) => void;
 
@@ -377,8 +380,11 @@ function normalizeMessage(message: unknown): GatewayChatMessage | null {
     }
   }
 
-  // Also process legacy msg.content array if present
-  if (Array.isArray(msg.content)) {
+  // Also process legacy msg.content array if present — but only if
+  // contentBlocks didn't already provide text (otherwise the same text
+  // gets concatenated twice, causing duplicated responses like
+  // "Hey! ...Hey! ...").
+  if (Array.isArray(msg.content) && !content) {
     for (const block of msg.content) {
       if (!block || typeof block !== "object") continue;
       const b = block as Record<string, unknown>;
@@ -557,6 +563,9 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
         clearTimeout(noResponseRef.current);
         noResponseRef.current = null;
       }
+      // Reset history pagination state for new session
+      historyTierRef.current = 0;
+      setHasMoreHistory(false);
     }
   }, []);
 
@@ -574,6 +583,9 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
   // Shared helper: fetch history and merge into current messages.
   // Optionally auto-finalizes if the last message is a completed assistant text.
   // Guarded to prevent concurrent merges from racing.
+  // During active streaming, only checks for auto-finalization — does NOT merge
+  // into state, because the delta handler maintains the correct message list and
+  // merging mid-stream can drop messages due to content mismatch or window limits.
   const mergeHistoryAndMaybeFinalize = useCallback((autoFinalize: boolean) => {
     if (isMergingRef.current) return; // skip if a merge is already in progress
     isMergingRef.current = true;
@@ -585,10 +597,13 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
         if (norm) loaded.push(norm);
       }
       const deduped = deduplicateMessages(loaded);
-      setMessages((prev) => {
-        const merged = mergeHistoryIntoMessages(prev, deduped);
-        return merged ?? prev;
-      });
+      // Only merge into state when NOT actively streaming
+      if (currentRunIdRef.current === null) {
+        setMessages((prev) => {
+          const merged = mergeHistoryIntoMessages(prev, deduped);
+          return merged ?? prev;
+        });
+      }
       if (autoFinalize) {
         const lastMsg = deduped[deduped.length - 1];
         if (lastMsg?.role === "assistant" && !lastMsg.toolCalls?.length && lastMsg.content?.trim()) {
@@ -924,14 +939,23 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
     }
   }, [mergeHistoryAndMaybeFinalize, startFinalizeDebounce]);
 
+  // Track current fetch limit and whether more history may exist.
+  // Start small (20) for fast initial render; user can load more by scrolling up.
+  const HISTORY_TIERS = [20, 50, 200, 1000] as const;
+  const historyTierRef = useRef(0); // index into HISTORY_TIERS
+  const [hasMoreHistory, setHasMoreHistory] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+
   // Shared: fetch history and merge into current messages (used on connect + reconnect).
-  // Loads only the most recent 50 messages for fast initial render.
+  // Loads the most recent N messages (default 10 — tier 0). If the returned count
+  // equals the limit, there may be older messages — hasMoreHistory will be set to true.
   // Uses merge when there are existing messages (e.g. optimistic user messages from
   // sendMessage) to prevent them from being wiped by a concurrent history fetch.
-  const fetchAndSetHistory = useCallback(async () => {
+  const fetchAndSetHistory = useCallback(async (limit?: number) => {
     if (!gatewayConnection.isConnected()) return;
+    const fetchLimit = limit ?? HISTORY_TIERS[historyTierRef.current];
     try {
-      const response = await gatewayConnection.getChatHistory(getSessionKey(), 50);
+      const response = await gatewayConnection.getChatHistory(getSessionKey(), fetchLimit);
       const loaded: GatewayChatMessage[] = [];
       if (response.messages) {
         for (const msg of response.messages) {
@@ -939,6 +963,8 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
           if (normalized) loaded.push(normalized);
         }
       }
+      // If we got exactly the limit back, there may be more history
+      setHasMoreHistory(loaded.length >= fetchLimit && fetchLimit < 1000);
       const deduped = deduplicateMessages(loaded);
       setMessages((prev) => {
         if (prev.length === 0) return deduped;
@@ -960,7 +986,12 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       setIsConnected(state.connected);
 
       if (state.connected && !previousConnected) {
-        fetchAndSetHistory();
+        // Skip refetch during active streaming — the delta handler maintains
+        // the correct message state. Refetching with tier-0 (20 msgs) mid-stream
+        // can shrink the message list and cause messages to disappear.
+        if (currentRunIdRef.current === null) {
+          fetchAndSetHistory();
+        }
       }
 
       if (!state.connected) {
@@ -1001,11 +1032,23 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       if (unsubscribeRef.current) {
         unsubscribeRef.current();
       }
+      // Clean up ALL timer refs on unmount to prevent stale callbacks firing
+      // after the component is gone (setState on unmounted component).
       if (idleReloadRef.current) {
         clearTimeout(idleReloadRef.current);
+        idleReloadRef.current = null;
       }
       if (noResponseRef.current) {
         clearTimeout(noResponseRef.current);
+        noResponseRef.current = null;
+      }
+      if (loadingTimeoutRef.current) {
+        clearTimeout(loadingTimeoutRef.current);
+        loadingTimeoutRef.current = null;
+      }
+      if (finalDebounceRef.current) {
+        clearTimeout(finalDebounceRef.current);
+        finalDebounceRef.current = null;
       }
     };
   }, []);
@@ -1060,6 +1103,24 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       if (currentRunIdRef.current === null) setIsLoading(false);
     }
   }, [fetchAndSetHistory]);
+
+  // Load more (older) history — steps through tiers: 10 → 50 → 200 → 1000.
+  // Re-fetches the full tail with a larger window; the gateway returns the last N
+  // messages so increasing the limit surfaces older messages.
+  const loadMoreHistory = useCallback(async () => {
+    if (!hasMoreHistory || isLoadingMore) return;
+    const nextTier = Math.min(historyTierRef.current + 1, HISTORY_TIERS.length - 1);
+    if (nextTier === historyTierRef.current) return; // already at max
+    historyTierRef.current = nextTier;
+    setIsLoadingMore(true);
+    try {
+      await fetchAndSetHistory(HISTORY_TIERS[nextTier]);
+    } catch (err) {
+      console.error("[GatewayChat] loadMoreHistory error:", err);
+    } finally {
+      setIsLoadingMore(false);
+    }
+  }, [hasMoreHistory, isLoadingMore, fetchAndSetHistory]);
 
   // Send a message
   const sendMessage = useCallback(async (content: string, attachments?: GatewayChatAttachment[]) => {
@@ -1190,6 +1251,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
   const stopGeneration = useCallback(async () => {
     // Immediately stop loading — don't wait for the gateway's "aborted" event
     // which may be slow or never arrive (e.g. disconnected, hub relay delay).
+    const runIdToAbort = currentRunIdRef.current;
     const streamedText = streamContentRef.current;
     if (streamedText.trim()) {
       setMessages((prev) => {
@@ -1216,13 +1278,15 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
     setIsLoading(false);
 
     // Best-effort: tell the gateway to abort (fire-and-forget)
-    if (gatewayConnection.isConnected()) {
-      gatewayConnection.abortChat({
-        sessionKey: getSessionKey(),
-        runId: currentRunIdRef.current || undefined,
-      }).catch((err) => {
-        console.error("Failed to abort chat:", err);
-      });
+    if (gatewayConnection.isConnected() && runIdToAbort) {
+      gatewayConnection
+        .abortChat({
+          sessionKey: getSessionKey(),
+          runId: runIdToAbort,
+        })
+        .catch(() => {
+          /* abort is best-effort; hub/device timeouts are expected */
+        });
     }
   }, [getSessionKey]);
 
@@ -1277,9 +1341,12 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
     isConnected,
     error,
     sessionKey: sessionKeyState,
+    hasMoreHistory,
+    isLoadingMore,
     sendMessage,
     stopGeneration,
     loadChatHistory,
+    loadMoreHistory,
     clearChat,
     setSessionKey: handleSessionChange,
     connect,
@@ -1290,9 +1357,12 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
     isConnected,
     error,
     sessionKeyState,
+    hasMoreHistory,
+    isLoadingMore,
     sendMessage,
     stopGeneration,
     loadChatHistory,
+    loadMoreHistory,
     clearChat,
     handleSessionChange,
     connect,

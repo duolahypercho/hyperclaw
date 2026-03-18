@@ -253,6 +253,21 @@ declare global {
       hyperClawBridge: HyperClawBridgeAPI;
       noteFS: any;
       memoryFS: MemoryAPI;
+      // Voice Overlay - global voice input (Alt+Space)
+      voiceOverlay?: {
+        hide: () => Promise<void>;
+        isVisible: () => Promise<boolean>;
+        sendMessage: (data: { text: string; agentId: string; sessionKey: string }) => void;
+        onTranscript: (callback: (data: { text: string; agentId?: string; sessionKey?: string }) => void) => void;
+        removeTranscriptListener: () => void;
+        onVoiceMessage: (callback: (data: { text: string; agentId: string; sessionKey: string }) => void) => void;
+        removeVoiceMessageListener: () => void;
+        sensevoice?: {
+          initialize: () => Promise<{ success: boolean; info?: any; error?: string }>;
+          transcribe: (audioData: number[]) => Promise<{ success: boolean; text?: string; error?: string }>;
+          getStatus: () => Promise<{ ready: boolean; info?: any }>;
+        };
+      };
     };
   }
 }

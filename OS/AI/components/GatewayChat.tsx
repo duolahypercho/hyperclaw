@@ -14,7 +14,7 @@ import ReactMarkdown, { Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkBreaks from "remark-breaks";
 import remarkMath from "remark-math";
-import rehypeRaw from "rehype-raw";
+import { rehypePlugins } from "@OS/AI/components/rehypeConfig";
 import HyperchoTooltip from "$/components/UI/HyperchoTooltip";
 import CopanionIcon from "@OS/assets/copanion";
 import { useGatewayChat, GatewayChatMessage, GatewayChatAttachment } from "@OS/AI/core/hook/use-gateway-chat";
@@ -412,7 +412,7 @@ const MessageBubble: React.FC<{
                 remarkBreaks,
                 [remarkMath, { singleDollarTextMath: false }],
               ]}
-              rehypePlugins={[rehypeRaw]}
+              rehypePlugins={rehypePlugins}
             >
               {message.content}
             </MemoizedReactMarkdown>

@@ -40,19 +40,29 @@ detect_platform() {
 # ── Find latest release ─────────────────────────────────────────────
 
 get_latest_version() {
+  # Allow manual override via --version flag
+  if [ -n "${FORCE_VERSION:-}" ]; then
+    echo "$FORCE_VERSION"
+    return
+  fi
+
   local url="https://api.github.com/repos/${REPO}/releases/latest"
-  local version
+  local version=""
 
   if command -v curl &>/dev/null; then
-    version=$(curl -fsSL "$url" 2>/dev/null | grep '"tag_name"' | head -1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\(.*\)".*/\1/')
+    version=$(curl -fsSL "$url" 2>/dev/null | grep '"tag_name"' | head -1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\(.*\)".*/\1/' || true)
   elif command -v wget &>/dev/null; then
-    version=$(wget -qO- "$url" 2>/dev/null | grep '"tag_name"' | head -1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\(.*\)".*/\1/')
+    version=$(wget -qO- "$url" 2>/dev/null | grep '"tag_name"' | head -1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\(.*\)".*/\1/' || true)
   else
     fatal "Neither curl nor wget found. Install one and try again."
   fi
 
   if [ -z "$version" ]; then
-    fatal "Could not determine latest version. Check https://github.com/${REPO}/releases"
+    err "Could not determine latest version from GitHub releases."
+    err "The release may not exist yet, or the repository may be private."
+    err "You can specify a version manually: --version v1.0.0"
+    err "Check https://github.com/${REPO}/releases for available versions."
+    exit 1
   fi
 
   echo "$version"
@@ -93,6 +103,16 @@ download_binary() {
 # ── Main ─────────────────────────────────────────────────────────────
 
 main() {
+  # Parse --version flag before anything else
+  local args=()
+  for arg in "$@"; do
+    case "$arg" in
+      --version=*) FORCE_VERSION="${arg#--version=}" ;;
+      *) args+=("$arg") ;;
+    esac
+  done
+  set -- "${args[@]}"
+
   echo ""
   echo "  ╔══════════════════════════════════════════╗"
   echo "  ║   HyperClaw Connector Installer          ║"

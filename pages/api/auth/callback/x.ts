@@ -106,7 +106,7 @@ export default async function handler(
     res.setHeader("Content-Type", "text/html");
     res.end(`
       <script>
-        window.opener?.postMessage({ source: "twitter-oauth", success: true }, "*");
+        window.opener?.postMessage({ source: "twitter-oauth", success: true }, window.location.origin);
         window.close();
       </script>
       `);
@@ -117,7 +117,7 @@ export default async function handler(
     if (e instanceof OAuth2RequestError) {
       res.end(`
         <script>
-        window.opener?.postMessage({ source: "twitter-oauth", success: false, error: "OAuth2 Request Error"  }, "*");
+        window.opener?.postMessage({ source: "twitter-oauth", success: false, error: "OAuth2 Request Error"  }, window.location.origin);
         window.close();
       </script>
       `);
@@ -125,7 +125,7 @@ export default async function handler(
 
     res.end(`
       <script>
-      window.opener?.postMessage({ source: "twitter-oauth", success: false, error: "Internal server error"  }, "*");
+      window.opener?.postMessage({ source: "twitter-oauth", success: false, error: "Internal server error"  }, window.location.origin);
       window.close();
     </script>
     `);

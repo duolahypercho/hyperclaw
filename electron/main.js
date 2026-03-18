@@ -8,6 +8,8 @@ const {
   nativeImage,
   shell,
   session,
+  globalShortcut,
+  screen,
 } = require("electron");
 const path = require("path");
 const fs = require("fs");
@@ -15,6 +17,35 @@ const https = require("https");
 const http = require("http");
 
 const isDev = process.env.NODE_ENV === "development";
+
+// Lazy-load SenseVoice to avoid startup delays
+let sensevoice = null;
+const getSenseVoice = () => {
+  if (!sensevoice) {
+    try {
+      sensevoice = require("./sensevoice-service");
+    } catch (error) {
+      console.error("[Hyperclaw] Failed to load SenseVoice:", error);
+    }
+  }
+  return sensevoice;
+};
+
+// Lazy-load WordsDB
+let wordsdb = null;
+const getWordsDB = () => {
+  if (!wordsdb) {
+    try {
+      wordsdb = require("./wordsdb");
+    } catch (error) {
+      console.error("[Hyperclaw] Failed to load WordsDB:", error);
+    }
+  }
+  return wordsdb;
+};
+
+// Insert text storage
+let savedInsertText = "";
 
 
 // Log crashes so we can debug "opens then closes" (run from Terminal to see output)
@@ -1283,12 +1314,251 @@ if (process.platform === "darwin") {
   });
 }
 
+// ─── Voice Overlay Window ──────────────────────────────────────────────────────────
+
+let voiceOverlayWindow = null;
+
+function createVoiceOverlay() {
+  if (voiceOverlayWindow && !voiceOverlayWindow.isDestroyed()) {
+    voiceOverlayWindow.show();
+    voiceOverlayWindow.focus();
+    return;
+  }
+
+  const { width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().workAreaSize;
+  const overlayWidth = 500;
+  const overlayHeight = 200;
+
+  voiceOverlayWindow = new BrowserWindow({
+    width: overlayWidth,
+    height: overlayHeight,
+    x: Math.round((screenWidth - overlayWidth) / 2),
+    y: Math.round((screenHeight - overlayHeight) / 2),
+    frame: false,
+    transparent: true,
+    resizable: false,
+    movable: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    focusable: true,
+    show: false,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, "preload.js"),
+    },
+  });
+
+  // Load the overlay page - use static HTML for reliability
+  if (isDev) {
+    // In dev, try Next.js first, fallback to static
+    voiceOverlayWindow.loadURL("http://localhost:1000/voice-overlay").catch(() => {
+      voiceOverlayWindow.loadFile(path.join(__dirname, "../public/voice-overlay.html"));
+    });
+  } else {
+    // In production, use static HTML
+    voiceOverlayWindow.loadFile(path.join(__dirname, "../public/voice-overlay.html"));
+  }
+
+  voiceOverlayWindow.once("ready-to-show", () => {
+    voiceOverlayWindow.show();
+    voiceOverlayWindow.focus();
+  });
+
+  voiceOverlayWindow.on("blur", () => {
+    // Optionally hide on blur - can be toggled
+  });
+
+  voiceOverlayWindow.on("closed", () => {
+    voiceOverlayWindow = null;
+  });
+}
+
+function hideVoiceOverlay() {
+  if (voiceOverlayWindow && !voiceOverlayWindow.isDestroyed()) {
+    voiceOverlayWindow.hide();
+  }
+}
+
+function toggleVoiceOverlay() {
+  if (voiceOverlayWindow && !voiceOverlayWindow.isDestroyed() && voiceOverlayWindow.isVisible()) {
+    hideVoiceOverlay();
+  } else {
+    createVoiceOverlay();
+  }
+}
+
+// Register global hotkey for voice input
+function registerVoiceHotkey() {
+  // On macOS, Alt+Space conflicts with input source switching.
+  // Use Cmd+Shift+Space on macOS, Alt+Space elsewhere.
+  const hotkey =
+    process.platform === "darwin" ? "Command+Shift+Space" : "Alt+Space";
+  const ret = globalShortcut.register(hotkey, () => {
+    console.log(`[Hyperclaw] ${hotkey} pressed - toggling voice overlay`);
+    toggleVoiceOverlay();
+  });
+
+  if (!ret) {
+    console.error(`[Hyperclaw] Failed to register ${hotkey} hotkey`);
+  } else {
+    console.log(`[Hyperclaw] Registered ${hotkey} for voice input`);
+  }
+}
+
+// IPC handlers for voice overlay
+ipcMain.handle("hide-voice-overlay", () => {
+  hideVoiceOverlay();
+});
+
+ipcMain.handle("get-voice-overlay-visible", () => {
+  return voiceOverlayWindow && !voiceOverlayWindow.isDestroyed() && voiceOverlayWindow.isVisible();
+});
+
+// Handle voice message from overlay - send to main window
+ipcMain.on("voice-message", (event, data) => {
+  console.log("[Hyperclaw] Voice message received:", data);
+  
+  // Send to main window
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("voice-input-message", data);
+  }
+});
+
+// SenseVoice IPC handlers
+ipcMain.handle("sensevoice-initialize", async () => {
+  try {
+    const sv = getSenseVoice();
+    if (sv) {
+      await sv.initialize();
+      return { success: true, ready: sv.isReady() };
+    }
+    return { success: false, error: "SenseVoice not available" };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle("sensevoice-transcribe", async (event, audioData) => {
+  try {
+    const sv = getSenseVoice();
+    
+    // If audio data is provided as array, convert to buffer
+    let audioBuffer;
+    if (Array.isArray(audioData)) {
+      audioBuffer = Buffer.from(audioData);
+    } else if (Buffer.isBuffer(audioData)) {
+      audioBuffer = audioData;
+    } else {
+      return { success: false, error: "Invalid audio data format" };
+    }
+    
+    if (sv && sv.isReady()) {
+      const result = await sv.transcribe(audioBuffer);
+      if (result.success) {
+        return { success: true, text: result.text || "" };
+      }
+      return { success: false, error: result.error };
+    }
+    
+    // If not ready, try to initialize first
+    if (sv) {
+      await sv.initialize();
+      if (sv.isReady()) {
+        const result = await sv.transcribe(audioBuffer);
+        if (result.success) {
+          return { success: true, text: result.text || "" };
+        }
+        return { success: false, error: result.error };
+      }
+    }
+    
+    return { success: false, error: "SenseVoice not initialized" };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle("sensevoice-status", async () => {
+  const sv = getSenseVoice();
+  if (sv) {
+    return { ready: sv.isReady() };
+  }
+  return { ready: false };
+});
+
+// Words Database IPC handlers
+ipcMain.handle("get-words", async () => {
+  try {
+    const wdb = getWordsDB();
+    const words = wdb.getWords();
+    return { success: true, words };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle("add-word", async (event, { word, definition }) => {
+  try {
+    const wdb = getWordsDB();
+    const words = wdb.addWord(word, definition);
+    return { success: true, words };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle("delete-word", async (event, index) => {
+  try {
+    const wdb = getWordsDB();
+    const words = wdb.deleteWord(index);
+    return { success: true, words };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// Insert Text IPC handlers
+ipcMain.on("save-insert-text", (event, text) => {
+  savedInsertText = text;
+  console.log("[Hyperclaw] Saved insert text:", text ? text.substring(0, 30) + "..." : "(empty)");
+});
+
+ipcMain.handle("get-insert-text", async () => {
+  return { text: savedInsertText };
+});
+
+// Register global hotkey for text insertion (Ctrl+Shift+V)
+function registerTextInsertHotkey() {
+  const ret = globalShortcut.register("Ctrl+Shift+V", () => {
+    console.log("[Hyperclaw] Ctrl+Shift+V pressed - inserting saved text");
+    if (savedInsertText) {
+      // Use clipboard to insert text
+      const { clipboard } = require("electron");
+      clipboard.writeText(savedInsertText);
+      
+      // Simulate paste in the focused window
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("insert-text", savedInsertText);
+      }
+    }
+  });
+  
+  if (!ret) {
+    console.error("[Hyperclaw] Failed to register Ctrl+Shift+V hotkey");
+  } else {
+    console.log("[Hyperclaw] Registered Ctrl+Shift+V for text insertion");
+  }
+}
+
 // ─── App Lifecycle ──────────────────────────────────────────────────────────
 
 app.whenReady().then(() => {
   writeToBridgeLog("Hyperclaw main process started");
   createTray();
   createWindow();
+  registerVoiceHotkey(); // Register voice input hotkey (Cmd+Shift+Space on macOS, Alt+Space elsewhere)
+  registerTextInsertHotkey(); // Register Ctrl+Shift+V for text insertion
 
   if (!isDev && app.isPackaged && isRemoteMode && autoUpdater) {
     setTimeout(
@@ -1301,4 +1571,5 @@ app.whenReady().then(() => {
 app.on("before-quit", () => {
   appIsQuiting = true;
   if (tray) tray.destroy();
+  globalShortcut.unregisterAll(); // Unregister all global shortcuts including voice hotkey
 });

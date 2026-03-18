@@ -9,98 +9,102 @@ import logger from "$/lib/logger";
 
 export const authOptions = (req: any, res: any) => {
   const useSecureCookies = process.env.NEXTAUTH_URL!.startsWith("https://");
-  const googleClientId = process.env.GOOGLE_CLIENT_ID!;
-  const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET!;
+  const googleClientId = process.env.GOOGLE_CLIENT_ID;
+  const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET;
   const cookieDomain =
     process.env.NODE_ENV === "production" && process.env.DOMAIN
       ? process.env.DOMAIN
       : undefined;
-  const authOption: NextAuthOptions = {
-    //Configure JWT
-    providers: [
-      CredentialsProvider({
-        name: "Credentials",
-        credentials: {
-          email: { label: "email", type: "email" },
-          password: { label: "Password", type: "password" },
-        },
-        async authorize(credentials) {
-          const { password: Password, email }: any = credentials;
-          try {
-            const login = await loginAuth(email, Password);
-            // check pasword and return result
-            const { status, message, userData } = await login.data;
-            if (status === 200) {
-              const {
-                email: userEmail,
-                profilePic: image,
-                _id: userId,
-                Verified,
-                channel,
-                Firstname,
-                Lastname,
-                username,
-                aboutme,
-              }: {
-                email: string;
-                profilePic: string;
-                _id: string;
-                Verified: boolean;
-                channel: { _id?: string; tier?: string };
-                Firstname: string;
-                Lastname: string;
-                username: string;
-                aboutme: string;
-              } = userData;
-              const info = {
-                email: userEmail,
-                image,
-                id: userId,
+
+  // Build providers list — only include Google if credentials are configured
+  const providers: NextAuthOptions["providers"] = [
+    CredentialsProvider({
+      name: "Credentials",
+      credentials: {
+        email: { label: "email", type: "email" },
+        password: { label: "Password", type: "password" },
+      },
+      async authorize(credentials) {
+        const { password: Password, email }: any = credentials;
+        try {
+          const login = await loginAuth(email, Password);
+          // check pasword and return result
+          const { status, message, userData } = await login.data;
+          if (status === 200) {
+            const {
+              email: userEmail,
+              profilePic: image,
+              _id: userId,
+              Verified,
+              channel,
+              Firstname,
+              Lastname,
+              username,
+              aboutme,
+            }: {
+              email: string;
+              profilePic: string;
+              _id: string;
+              Verified: boolean;
+              channel: { _id?: string; tier?: string };
+              Firstname: string;
+              Lastname: string;
+              username: string;
+              aboutme: string;
+            } = userData;
+            const info = {
+              email: userEmail,
+              image,
+              id: userId,
+              userId,
+              Verified,
+              channel,
+              Firstname,
+              Lastname,
+              username,
+              aboutme,
+            };
+            deleteCookie(`hypercho_user_token`, { req, res, path: "/" });
+            if (userId) {
+              // set the new id to the cookie
+              const newToken = Jwt.sign(
                 userId,
-                Verified,
-                channel,
-                Firstname,
-                Lastname,
-                username,
-                aboutme,
-              };
-              deleteCookie(`hypercho_user_token`, { req, res, path: "/" });
-              if (userId) {
-                // set the new id to the cookie
-                const newToken = Jwt.sign(
-                  userId,
-                  process.env.NEXTAUTH_SECRET!
-                );
-                setCookie(`hypercho_user_token`, newToken, {
-                  req,
-                  res,
-                  httpOnly: true,
-                  secure: useSecureCookies,
-                  maxAge: 60 * 60 * 24 * 30,
-                  sameSite: "lax",
-                  path: "/",
-                  ...(cookieDomain ? { domain: cookieDomain } : {}),
-                });
-              }
-              return info; //return when change successful
-              //return when change successful
-            } else {
-              throw new Error("Invalid email or password");
+                process.env.NEXTAUTH_SECRET!
+              );
+              setCookie(`hypercho_user_token`, newToken, {
+                req,
+                res,
+                httpOnly: true,
+                secure: useSecureCookies,
+                maxAge: 60 * 60 * 24 * 30,
+                sameSite: "lax",
+                path: "/",
+                ...(cookieDomain ? { domain: cookieDomain } : {}),
+              });
             }
-          } catch (e: any) {
-            logger.warn({ err: e }, "Login failed");
-            const errorMessage = e?.response?.data?.message as string | undefined;
-            if (
-              errorMessage === "Incorrect Password" ||
-              errorMessage === "This user doesn't exist"
-            ) {
-              throw new Error("Invalid email or password");
-            } else {
-              throw new Error("Something went wrong");
-            }
+            return info; //return when change successful
+            //return when change successful
+          } else {
+            throw new Error("Invalid email or password");
           }
-        },
-      }),
+        } catch (e: any) {
+          logger.warn({ err: e }, "Login failed");
+          const errorMessage = e?.response?.data?.message as string | undefined;
+          if (
+            errorMessage === "Incorrect Password" ||
+            errorMessage === "This user doesn't exist"
+          ) {
+            throw new Error("Invalid email or password");
+          } else {
+            throw new Error("Something went wrong");
+          }
+        }
+      },
+    }),
+  ];
+
+  if (googleClientId && googleClientSecret) {
+    providers.push(
       GoogleProvider({
         clientId: googleClientId,
         clientSecret: googleClientSecret,
@@ -109,8 +113,15 @@ export const authOptions = (req: any, res: any) => {
             prompt: "select_account", // Always show Google account picker (e.g. after logout)
           },
         },
-      }),
-    ],
+      })
+    );
+  } else {
+    logger.warn("Google OAuth credentials not configured — Google sign-in disabled");
+  }
+
+  const authOption: NextAuthOptions = {
+    //Configure JWT
+    providers,
     // callbacks
     callbacks: {
       jwt: async ({ token, user, account, trigger, session }: any) => {

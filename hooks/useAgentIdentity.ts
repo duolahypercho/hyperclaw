@@ -95,10 +95,12 @@ async function fetchIdentity(agentId: string): Promise<AgentIdentity | null> {
   const promise = gatewayConnection.getAgentIdentity({ agentId }).then(async (result) => {
     inflight.delete(agentId);
     if (result) {
-      // If the avatar is a local filename (e.g. "avatar.png"), read it as a data URI
+      // If the avatar is a local filename (e.g. "avatar.png"), read it as a data URI.
+      // If the file doesn't exist, clear the avatar so the emoji fallback can kick in
+      // instead of showing the raw filename as text.
       if (result.avatar && isLocalAvatarFile(result.avatar)) {
         const dataUri = await readAvatarAsDataUri(agentId, result.avatar).catch(() => null);
-        if (dataUri) result.avatar = dataUri;
+        result.avatar = dataUri ?? undefined;
       }
 
       // Relative gateway paths (e.g. /avatar/main) can't be reached through the hub relay —

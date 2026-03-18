@@ -165,6 +165,9 @@ export class GatewayClient extends EventEmitter {
   private hubMode = false;
   private hubDeviceId: string | null = null;
 
+  /** Guard to prevent concurrent flushMessageQueue calls */
+  private _flushing = false;
+
   constructor() {
     super();
     this.lastPingPong = Date.now();
@@ -435,16 +438,34 @@ export class GatewayClient extends EventEmitter {
   }
 
   private flushMessageQueue(): void {
+    // Prevent concurrent flushes — if a flush is already in progress (e.g.
+    // rapid reconnect cycles), skip. The in-progress flush already took
+    // ownership of the queue.
+    if (this._flushing) return;
+    this._flushing = true;
+
     const queue = [...this.messageQueue];
     this.messageQueue = [];
+
+    let remaining = queue.length;
+    const onDone = () => {
+      remaining--;
+      if (remaining <= 0) {
+        this._flushing = false;
+      }
+    };
 
     queue.forEach((item, index) => {
       setTimeout(() => {
         this.request(item.method, item.params)
-          .then(item.resolve)
-          .catch(item.reject);
+          .then((v) => { item.resolve(v); onDone(); })
+          .catch((e) => { item.reject(e); onDone(); });
       }, index * 50); // Stagger requests to avoid burst
     });
+
+    if (queue.length === 0) {
+      this._flushing = false;
+    }
 
     if (queue.length > 0) {
       this.emit("flushed", queue.length);

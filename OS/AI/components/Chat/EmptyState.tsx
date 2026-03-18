@@ -63,7 +63,9 @@ export const EmptyState = ({
           alt={assistantAvatar?.alt || "Copanion"}
         />
         <AvatarFallback className="bg-primary/10 text-primary text-sm">
-          <CopanionIcon className="w-4 h-4" />
+          {assistantAvatar?.fallback
+            ? <span>{assistantAvatar.fallback}</span>
+            : <CopanionIcon className="w-4 h-4" />}
         </AvatarFallback>
       </Avatar>
 

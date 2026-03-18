@@ -1,4 +1,6 @@
 import { NextApiRequest, NextApiResponse } from "next";
+import { getServerSession } from "next-auth";
+import { authOptions } from "$/pages/api/auth/[...nextauth]";
 import { openai } from "../../lib/openai";
 
 interface RequestBody {
@@ -9,6 +11,11 @@ interface RequestBody {
 }
 
 const handler = async (req: NextApiRequest, res: NextApiResponse) => {
+  const session = await getServerSession(req, res, authOptions(req, res));
+  if (!session?.user) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
   const { body }: { body: RequestBody } = req;
   const { messages, maxTokens, stop, stream } = body;
   if (!messages) {

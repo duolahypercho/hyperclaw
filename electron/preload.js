@@ -123,6 +123,55 @@ contextBridge.exposeInMainWorld("electronAPI", {
     reorderFolder: (folderId, newIndex) => ipcRenderer.invoke("notes:reorderFolder", { folderId, newIndex }),
     uploadAttachment: (folderId, noteId, attachment) => ipcRenderer.invoke("notes:uploadAttachment", { folderId, noteId, attachment }),
   },
+
+  // Voice Overlay - for global voice input (Alt+Space)
+  voiceOverlay: {
+    hide: () => ipcRenderer.invoke("hide-voice-overlay"),
+    isVisible: () => ipcRenderer.invoke("get-voice-overlay-visible"),
+    // Send voice message from overlay to main window (via main process relay)
+    sendMessage: (data) => ipcRenderer.send("voice-message", data),
+    // Listen for voice transcript results
+    onTranscript: (callback) => {
+      if (typeof callback !== "function") return;
+      ipcRenderer.on("voice-transcript", (event, data) => callback(data));
+    },
+    removeTranscriptListener: () => {
+      ipcRenderer.removeAllListeners("voice-transcript");
+    },
+    // Listen for voice messages (from overlay to main window)
+    onVoiceMessage: (callback) => {
+      if (typeof callback !== "function") return;
+      ipcRenderer.on("voice-input-message", (event, data) => callback(data));
+    },
+    removeVoiceMessageListener: () => {
+      ipcRenderer.removeAllListeners("voice-input-message");
+    },
+    // Listen for insert text events
+    onInsertText: (callback) => {
+      if (typeof callback !== "function") return;
+      ipcRenderer.on("insert-text", (event, data) => callback(data));
+    },
+    removeInsertTextListener: () => {
+      ipcRenderer.removeAllListeners("insert-text");
+    },
+    // SenseVoice API
+    sensevoice: {
+      initialize: () => ipcRenderer.invoke("sensevoice-initialize"),
+      transcribe: (audioData) => ipcRenderer.invoke("sensevoice-transcribe", audioData),
+      getStatus: () => ipcRenderer.invoke("sensevoice-status"),
+    },
+    // Words Database API
+    words: {
+      getAll: () => ipcRenderer.invoke("get-words"),
+      add: (word, definition) => ipcRenderer.invoke("add-word", { word, definition }),
+      delete: (index) => ipcRenderer.invoke("delete-word", index),
+    },
+    // Insert Text API
+    insertText: {
+      save: (text) => ipcRenderer.send("save-insert-text", text),
+      get: () => ipcRenderer.invoke("get-insert-text"),
+    },
+  },
 });
 
 // You can add more APIs here as needed for your Hypercho OS features

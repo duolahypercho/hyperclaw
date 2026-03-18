@@ -85,6 +85,10 @@ export const gatewayConnection = {
   error: null as string | null,
   reconnectAttempt: 0,
   reconnectTimer: null as ReturnType<typeof setTimeout> | null,
+  /** Monotonically increasing counter — incremented every time a new WebSocket
+   *  is created. Stale onclose/onerror handlers compare their captured
+   *  generation to the current value and bail out if they differ. */
+  _connectionGeneration: 0,
   listeners: new Set<() => void>(),
   pendingRequests: new Map<string, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>(),
   deviceIdentity: null as { deviceId: string; publicKeyPem: string } | null,
@@ -94,6 +98,16 @@ export const gatewayConnection = {
   eventHandlers: new Map<string, Set<(msg: Record<string, unknown>) => void>>(),
   // Buffer for accumulating delta text from agent events
   agentDeltaBuffer: null as Map<string, string> | null,
+  // Track which event source ("chat" or "agent") owns each runId's buffer.
+  // The gateway may send the same delta through both chat.* and agent.* events;
+  // only the first source to claim a runId is allowed to accumulate text.
+  _deltaSourceOwner: null as Map<string, "chat" | "agent"> | null,
+
+  // Keepalive: application-level ping/pong
+  _pingTimer: null as ReturnType<typeof setInterval> | null,
+  _lastPong: 0 as number,
+  _PING_INTERVAL: 30_000,
+  _PONG_TIMEOUT: 60_000,
 
   notify() {
     this.listeners.forEach((cb) => cb());
@@ -154,6 +168,12 @@ export const gatewayConnection = {
     // Normalize "evt" → "event" (hub may forward connector events with either type)
     if (msgType === "evt") {
       msg.type = "event";
+    }
+
+    // Handle pong (keepalive response from hub or gateway)
+    if (msgType === "pong" || (msg.type === "event" && event === "pong")) {
+      this._lastPong = Date.now();
+      return;
     }
 
     if (msg.type === "res") {
@@ -288,6 +308,15 @@ export const gatewayConnection = {
                 this.agentDeltaBuffer = new Map();
                 this._agentDeltaTimestamps = new Map();
               }
+              if (!this._deltaSourceOwner) this._deltaSourceOwner = new Map();
+              // Skip if the "agent" path already owns this runId's buffer
+              const owner = this._deltaSourceOwner.get(payload.runId);
+              if (owner === "agent") {
+                // Don't double-accumulate — pass through as non-accumulating event
+                this.chatEventListeners.forEach((handler) => handler(payload));
+                return;
+              }
+              if (!owner) this._deltaSourceOwner.set(payload.runId, "chat");
               const existing = this.agentDeltaBuffer.get(payload.runId) || "";
               let newBuffer = existing + deltaText;
               if (newBuffer.length > 524_288) newBuffer = newBuffer.slice(-524_288);
@@ -305,6 +334,7 @@ export const gatewayConnection = {
         } else if ((payload.state === "final" || payload.state === "aborted") && payload.runId) {
           this.agentDeltaBuffer?.delete(payload.runId);
           this._agentDeltaTimestamps?.delete(payload.runId);
+          this._deltaSourceOwner?.delete(payload.runId);
         }
         this.chatEventListeners.forEach((handler) => handler(payload));
       }
@@ -339,6 +369,14 @@ export const gatewayConnection = {
         const assistantText = delta || text || content;
 
         if (assistantText !== undefined && assistantText !== "") {
+          if (!this._deltaSourceOwner) this._deltaSourceOwner = new Map();
+          // Skip if the "chat" path already owns this runId's buffer
+          const owner = this._deltaSourceOwner.get(runId);
+          if (owner === "chat") {
+            // Don't double-accumulate — the chat path already handles this runId
+            return;
+          }
+          if (!owner) this._deltaSourceOwner.set(runId, "agent");
           // Get existing buffered text for this run and accumulate
           const existingBuffer = this.agentDeltaBuffer.get(runId) || "";
           let newBuffer = existingBuffer + assistantText;
@@ -371,6 +409,7 @@ export const gatewayConnection = {
           const bufferedText = this.agentDeltaBuffer.get(runId) || "";
           this.agentDeltaBuffer.delete(runId);
           this._agentDeltaTimestamps?.delete(runId);
+          this._deltaSourceOwner?.delete(runId);
           // Prune stale entries (agents that crashed without lifecycle end)
           this.pruneAgentDeltaBuffer();
 
@@ -386,6 +425,7 @@ export const gatewayConnection = {
         } else if (phase === "error") {
           this.agentDeltaBuffer.delete(runId);
           this._agentDeltaTimestamps?.delete(runId);
+          this._deltaSourceOwner?.delete(runId);
           const errorMsg = (data?.error || data?.errorMessage) as string | undefined;
           const chatPayload: ChatEventPayload = {
             runId,
@@ -490,12 +530,16 @@ export const gatewayConnection = {
     });
   },
 
-  /** Abort an in-progress chat run */
+  /** Abort an in-progress chat run (longer timeout: hub relay can be slow) */
   abortChat(params: { sessionKey: string; runId?: string }): Promise<unknown> {
-    return this.request("chat.abort", {
-      sessionKey: params.sessionKey,
-      ...(params.runId && { runId: params.runId }),
-    });
+    return this.request(
+      "chat.abort",
+      {
+        sessionKey: params.sessionKey,
+        ...(params.runId && { runId: params.runId }),
+      },
+      60_000
+    );
   },
 
   /** Get chat history */
@@ -596,6 +640,33 @@ export const gatewayConnection = {
     }
   },
 
+  startPing() {
+    this.stopPing();
+    this._lastPong = Date.now();
+    this._pingTimer = setInterval(() => {
+      if (Date.now() - this._lastPong > this._PONG_TIMEOUT) {
+        console.warn("[Gateway WS] No pong received in", this._PONG_TIMEOUT, "ms — forcing reconnect");
+        this.stopPing();
+        if (this.ws) {
+          try { this.ws.close(); } catch { /* ignore */ }
+        }
+        return;
+      }
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        try {
+          this.ws.send(JSON.stringify({ type: "ping", payload: { clientTime: Date.now() } }));
+        } catch { /* ignore send errors */ }
+      }
+    }, this._PING_INTERVAL);
+  },
+
+  stopPing() {
+    if (this._pingTimer != null) {
+      clearInterval(this._pingTimer);
+      this._pingTimer = null;
+    }
+  },
+
   connect(wsUrl: string, options: GatewayConnectOptions = {}) {
     const sameUrl = this.wsUrl === wsUrl;
     const sameToken = this.token === (options.token ?? null);
@@ -615,6 +686,7 @@ export const gatewayConnection = {
     // Clean up existing connection. IMPORTANT: detach handlers from the old WS
     // BEFORE closing it. Otherwise the old WS's onclose fires asynchronously
     // after the new WS is created and clobbers this.ws with null.
+    this.stopPing();
     if (this.reconnectTimer != null) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -635,6 +707,10 @@ export const gatewayConnection = {
     this.token = token;
     this.hubMode = !!options.hubMode;
     this.hubDeviceId = options.hubDeviceId ?? null;
+    // Increment generation BEFORE creating the new WebSocket. Stale handlers
+    // from any previous connection will see a mismatched generation and bail.
+    this._connectionGeneration++;
+    const gen = this._connectionGeneration;
     try {
       this.ws = new WebSocket(wsUrl);
     } catch (e) {
@@ -643,12 +719,16 @@ export const gatewayConnection = {
       return;
     }
 
-    // Capture the WS instance so handlers can guard against stale callbacks
+    // Capture the WS instance so handlers can guard against stale callbacks.
+    // The generation counter (`gen`) is the primary guard — it catches async
+    // onclose/onerror events that fire after a new connection has been created,
+    // even if `this.ws` was briefly set to the same value.
     const currentWs = this.ws;
 
     this.ws.onopen = () => {
-      if (this.ws !== currentWs) return; // stale
+      if (gen !== this._connectionGeneration) return; // stale
       this.reconnectAttempt = 0;
+      this.startPing();
       // In hub mode, the hub authenticates via JWT and doesn't use the
       // gateway's challenge-response handshake. Mark connected immediately.
       if (this.hubMode) {
@@ -656,7 +736,7 @@ export const gatewayConnection = {
       }
     };
     this.ws.onmessage = (ev: MessageEvent) => {
-      if (this.ws !== currentWs) return; // stale
+      if (gen !== this._connectionGeneration) return; // stale
       try {
         const msg = typeof ev.data === "string" ? JSON.parse(ev.data) : null;
         if (!msg) return;
@@ -666,11 +746,12 @@ export const gatewayConnection = {
       }
     };
     this.ws.onerror = () => {
-      if (this.ws !== currentWs) return; // stale
+      if (gen !== this._connectionGeneration) return; // stale
       this.setState(false, this.error ?? "Connection failed");
     };
     this.ws.onclose = (ev: CloseEvent) => {
-      if (this.ws !== currentWs) return; // stale
+      if (gen !== this._connectionGeneration) return; // stale
+      this.stopPing();
       const { code, reason } = ev;
       this.ws = null;
       const connectionRefused = code === 1006 || (reason && /refused|ECONNREFUSED/i.test(String(reason)));
@@ -723,6 +804,7 @@ export const gatewayConnection = {
   },
 
   disconnect() {
+    this.stopPing();
     if (this.reconnectTimer != null) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -806,7 +888,11 @@ export const gatewayConnection = {
   },
 };
 
-// Auto-reconnect when the browser tab regains focus
+// Auto-reconnect when the browser tab regains focus.
+// NOTE: This listener is intentionally never removed. `gatewayConnection` is a
+// module-level singleton that lives for the entire page lifetime, so the
+// listener's lifetime matches the singleton's. Removing it would require an
+// explicit teardown API that no consumer currently needs.
 if (typeof document !== "undefined") {
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible" && !gatewayConnection.connected && gatewayConnection.wsUrl) {
@@ -903,16 +989,26 @@ export async function sendChatMessageWs(sessionKey: string, message: string): Pr
       hubDeviceId: config.hubDeviceId,
     });
 
-    // Wait for connection (max 5s)
+    // Wait for connection (max 5s).
+    // Only reject on errors when the connection is truly terminal (not
+    // reconnecting). Transient errors during reconnection should be ignored —
+    // the reconnect backoff will keep trying until the timeout fires.
     await new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error("Connection timeout")), 5000);
+      const timeout = setTimeout(() => {
+        unsub();
+        reject(new Error("Connection timeout"));
+      }, 5000);
       const unsub = subscribeGatewayConnection(() => {
         const state = getGatewayConnectionState();
         if (state.connected) {
           clearTimeout(timeout);
           unsub();
           resolve(true);
-        } else if (state.error) {
+        } else if (state.error && !gatewayConnection.wsUrl) {
+          // Only reject if the connection URL has been cleared — that means
+          // the connection is truly dead (e.g. browser mode, no gateway).
+          // If wsUrl is still set, reconnection is in progress and we should
+          // keep waiting for the timeout.
           clearTimeout(timeout);
           unsub();
           reject(new Error(state.error));

@@ -3,7 +3,7 @@
 import React, { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { CustomProps } from "$/components/Home/widgets/types/widgets";
-import { X, Paperclip, Pencil } from "lucide-react";
+import { X, Paperclip, Pencil, Loader2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -136,9 +136,12 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
     isConnected,
     error,
     sessionKey: currentSessionKey,
+    hasMoreHistory,
+    isLoadingMore,
     sendMessage,
     stopGeneration,
     loadChatHistory,
+    loadMoreHistory,
     clearChat,
     setSessionKey,
   } = useGatewayChat({
@@ -366,6 +369,26 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
     prevLoadingRef2.current = isLoading;
   }, [isLoading, messageQueue, sendMessage]);
 
+  // Listen for voice input messages from overlay (Alt+Space)
+  useEffect(() => {
+    if (!window.electronAPI?.voiceOverlay) return;
+    
+    const handleVoiceMessage = (data: { text: string; agentId: string; sessionKey: string }) => {
+      // Only handle if this is for the current agent/session
+      const expectedSessionKey = `agent:${currentAgentId}:${sessionKey}`;
+      if (data.sessionKey === expectedSessionKey || data.agentId === currentAgentId) {
+        // Auto-send the voice message
+        sendMessage(data.text);
+      }
+    };
+    
+    window.electronAPI.voiceOverlay.onVoiceMessage(handleVoiceMessage);
+    
+    return () => {
+      window.electronAPI?.voiceOverlay?.removeVoiceMessageListener();
+    };
+  }, [currentAgentId, sessionKey, sendMessage]);
+
   // Queue handlers
   const handleEditQueueItem = useCallback(
     (id: string) => {
@@ -409,6 +432,11 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
     }
   }, []);
 
+  // Timestamp of last user-sent message. For a short grace period after sending,
+  // always auto-scroll so the response is visible (avoids rAF race conditions
+  // where the assistant message arrives before the user-message scroll executes).
+  const lastSentAtRef = useRef<number>(0);
+
   // Auto-scroll only when user is near bottom AND the new message is user text
   // or assistant text (not tool actions). Tool actions accumulate rapidly and
   // scrolling to each one is disorienting.
@@ -432,14 +460,19 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
 
     const newMsg = messages[messages.length - 1];
 
-    // Always scroll for user messages (just sent). For all other messages
-    // (including tool actions), scroll if user is already near the bottom.
+    // Always scroll for user messages (just sent). Scroll synchronously —
+    // deferring to rAF causes a race where the assistant response arrives
+    // and fails the nearBottom check before the user-message scroll executes.
     if (newMsg?.role === "user") {
-      requestAnimationFrame(() => scrollToBottom(false));
+      lastSentAtRef.current = Date.now();
+      scrollToBottom(false);
     } else if (scrollAreaRef.current) {
       const el = scrollAreaRef.current;
       const nearBottom = el.scrollHeight - el.scrollTop <= el.clientHeight + 150;
-      if (nearBottom) {
+      // Auto-scroll if near bottom OR within 3s of sending a message
+      // (the response should always be visible right after sending).
+      const justSent = Date.now() - lastSentAtRef.current < 3000;
+      if (nearBottom || justSent) {
         requestAnimationFrame(() => scrollToBottom(false));
       }
     }
@@ -768,7 +801,7 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
             >
               {!initialReady ? (
                 <div className="p-4">
-                  <ChatLoadingSkeleton />
+                  <ChatLoadingSkeleton assistantAvatar={assistantAvatar} />
                 </div>
               ) : (
               <>
@@ -797,6 +830,33 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
                     />
                   ) : (
                     <>
+                      {/* Load older messages button */}
+                      {hasMoreHistory && (
+                        <div className="flex justify-center py-2">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-xs text-muted-foreground hover:text-foreground gap-1.5 h-7"
+                            onClick={async () => {
+                              // Preserve scroll position after prepending older messages
+                              const el = scrollAreaRef.current;
+                              const prevHeight = el?.scrollHeight ?? 0;
+                              await loadMoreHistory();
+                              requestAnimationFrame(() => {
+                                if (el) {
+                                  el.scrollTop = el.scrollHeight - prevHeight;
+                                }
+                              });
+                            }}
+                            disabled={isLoadingMore}
+                          >
+                            {isLoadingMore ? (
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                            ) : null}
+                            {isLoadingMore ? "Loading..." : "Load older messages"}
+                          </Button>
+                        </div>
+                      )}
                       {(() => {
                         const nodes: React.ReactNode[] = [];
 
@@ -808,16 +868,6 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
                         for (let index = 0; index < mergedMessages.length; index++) {
                           const message = mergedMessages[index];
                           const isToolMessage = msgHasToolCalls(message);
-
-                          // Skip text-only assistant messages when another assistant message follows.
-                          // Only the LAST assistant message in a turn is the final response —
-                          // everything before it (preamble, intermediate narration) is skipped.
-                          if (!isToolMessage && message.role === "assistant" && message.content?.trim()) {
-                            const next = mergedMessages[index + 1];
-                            if (next && next.role === "assistant") {
-                              continue;
-                            }
-                          }
 
                           // Deduplicate: skip text-only assistant messages with identical content
                           // to the previous message (gateway sometimes sends same text twice).
