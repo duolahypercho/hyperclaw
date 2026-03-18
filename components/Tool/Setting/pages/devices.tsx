@@ -41,6 +41,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { AlertDelete } from "$/components/UI/AlertDelete";
 
 interface Device {
   id: string;
@@ -83,9 +84,11 @@ function DeviceStatusBadge({ status }: { status: Device["status"] }) {
   );
 }
 
-function DeviceCard({ device, onRevoke }: { device: Device; onRevoke: (id: string) => void }) {
+function DeviceCard({ device, onRevoke, onRemove }: { device: Device; onRevoke: (id: string) => void; onRemove: (id: string) => void }) {
   const [showMenu, setShowMenu] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [showRevokeDialog, setShowRevokeDialog] = useState(false);
+  const [showRemoveDialog, setShowRemoveDialog] = useState(false);
   const Icon = TYPE_ICONS[device.type] || Monitor;
 
   return (
@@ -136,14 +139,23 @@ function DeviceCard({ device, onRevoke }: { device: Device; onRevoke: (id: strin
                   {device.status !== "revoked" && (
                     <button
                       onClick={() => {
-                        onRevoke(device.id);
                         setShowMenu(false);
+                        setShowRevokeDialog(true);
                       }}
                       className="w-full px-3 py-1.5 text-left text-xs hover:bg-accent flex items-center gap-2 text-destructive"
                     >
                       <Trash2 className="w-3 h-3" /> Revoke
                     </button>
                   )}
+                  <button
+                    onClick={() => {
+                      setShowMenu(false);
+                      setShowRemoveDialog(true);
+                    }}
+                    className="w-full px-3 py-1.5 text-left text-xs hover:bg-accent flex items-center gap-2 text-destructive"
+                  >
+                    <Trash2 className="w-3 h-3" /> Remove
+                  </button>
                 </motion.div>
               </>
             )}
@@ -184,6 +196,24 @@ function DeviceCard({ device, onRevoke }: { device: Device; onRevoke: (id: strin
           ))}
         </div>
       )}
+
+      <AlertDelete
+        dialogTitle={`Revoke "${device.name}"?`}
+        dialogDescription="This will disconnect the device and invalidate its credentials. You can remove it afterwards."
+        deleteButtonTitle="Revoke"
+        showDialog={showRevokeDialog}
+        setShowDialog={setShowRevokeDialog}
+        onDelete={() => onRevoke(device.id)}
+      />
+
+      <AlertDelete
+        dialogTitle={`Remove "${device.name}"?`}
+        dialogDescription="This will permanently remove the device. This action cannot be undone."
+        deleteButtonTitle="Remove"
+        showDialog={showRemoveDialog}
+        setShowDialog={setShowRemoveDialog}
+        onDelete={() => onRemove(device.id)}
+      />
     </motion.div>
   );
 }
@@ -444,7 +474,6 @@ const DevicesSettings = () => {
   }, []);
 
   const handleRevoke = async (deviceId: string) => {
-    if (!confirm("Are you sure you want to revoke this device?")) return;
     try {
       const response = await hubFetch(`/api/devices/${deviceId}/revoke`, {
         method: "POST",
@@ -453,6 +482,18 @@ const DevicesSettings = () => {
       await fetchDevices();
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to revoke device");
+    }
+  };
+
+  const handleRemove = async (deviceId: string) => {
+    try {
+      const response = await hubFetch(`/api/devices/${deviceId}`, {
+        method: "DELETE",
+      });
+      if (!response.ok) throw new Error("Failed to remove device");
+      await fetchDevices();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to remove device");
     }
   };
 
@@ -518,7 +559,7 @@ const DevicesSettings = () => {
       {!loading && !error && devices.length > 0 && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {devices.map((device) => (
-            <DeviceCard key={device.id} device={device} onRevoke={handleRevoke} />
+            <DeviceCard key={device.id} device={device} onRevoke={handleRevoke} onRemove={handleRemove} />
           ))}
         </div>
       )}

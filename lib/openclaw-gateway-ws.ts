@@ -946,35 +946,51 @@ export function subscribeGatewayConnection(cb: () => void): () => void {
 
 /** Get gateway config — always returns hub connection info (no direct local gateway). */
 export async function getGatewayConfig(): Promise<{ gatewayUrl: string; token: string | null; hubMode?: boolean; hubDeviceId?: string }> {
-  // Priority 1: Hub config from window cache or Electron preload
+  let hubUrl: string | null = null;
+  let token: string | null = null;
+
+  // Step 1: Get hub URL and token from Electron preload or window cache
   if (typeof window !== "undefined") {
     const w = window as unknown as {
       electronAPI?: { hyperClawBridge?: { getHubConfig?: () => { enabled: boolean; url: string; deviceId: string; jwt?: string } | null } };
       __hubConfig?: { enabled: boolean; url: string; deviceId: string; jwt?: string };
     };
     const hubCfg = w.__hubConfig?.enabled ? w.__hubConfig : w.electronAPI?.hyperClawBridge?.getHubConfig?.();
-    if (hubCfg?.enabled && hubCfg.url && hubCfg.deviceId) {
-      return { gatewayUrl: hubCfg.url, token: hubCfg.jwt ?? null, hubMode: true, hubDeviceId: hubCfg.deviceId };
+    if (hubCfg?.enabled && hubCfg.url) {
+      hubUrl = hubCfg.url;
+      token = hubCfg.jwt ?? null;
     }
   }
 
-  // Priority 2: Hub direct — use env var + session
+  // Step 2: Fall back to env var + session for URL/token
+  if (!hubUrl) {
+    try {
+      const { getHubApiUrl, getUserToken } = await import("$/lib/hub-direct");
+      hubUrl = getHubApiUrl();
+      token = await getUserToken();
+    } catch {
+      /* hub not available */
+    }
+  }
+
+  if (!hubUrl) return { gatewayUrl: "", token: null };
+
+  // Step 3: Always resolve device ID dynamically to pick the active online device
   try {
-    const { getHubApiUrl, getUserToken, getActiveDeviceId } = await import("$/lib/hub-direct");
-    const hubUrl = getHubApiUrl();
-    const token = await getUserToken();
-    if (hubUrl && token) {
-      const deviceId = await getActiveDeviceId(token);
+    const { getActiveDeviceId, getUserToken } = await import("$/lib/hub-direct");
+    const jwt = token || (await getUserToken());
+    if (jwt) {
+      const deviceId = await getActiveDeviceId(jwt);
       if (deviceId) {
         return { gatewayUrl: hubUrl, token, hubMode: true, hubDeviceId: deviceId };
       }
     }
   } catch {
-    /* hub not available */
+    /* device resolution failed */
   }
 
-  // No hub configured — gateway not available
-  return { gatewayUrl: "", token: null };
+  // Hub available but no device found
+  return { gatewayUrl: hubUrl, token, hubMode: true };
 }
 
 /** Send a chat message via WebSocket */

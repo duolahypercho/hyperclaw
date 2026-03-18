@@ -466,6 +466,15 @@ const StatusWidgetContent = memo((props: CustomProps) => {
     }
   }, [fetchAgents, fetchAgentSessions]);
 
+  // Re-run refresh when the context agents list changes (e.g. initial load completes)
+  const prevAgentCountRef = useRef(openClawAgents.length);
+  useEffect(() => {
+    if (openClawAgents.length > 0 && prevAgentCountRef.current === 0) {
+      refresh();
+    }
+    prevAgentCountRef.current = openClawAgents.length;
+  }, [openClawAgents, refresh]);
+
   // Initial load + auto-refresh (30s, pauses when tab hidden)
   useEffect(() => {
     isMounted.current = true;

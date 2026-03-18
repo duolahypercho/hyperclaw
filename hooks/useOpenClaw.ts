@@ -468,26 +468,78 @@ export function useOpenClaw(autoRefreshMs = 0) {
 
   // Wait for a valid session token before first refresh — OpenClawProvider
   // mounts at _app level before auth, so getSession() may not be ready yet.
+  // After initial fast polling (10s), fall back to slower retries (every 5s)
+  // so the connection recovers if the session is slow to initialize.
   useEffect(() => {
     let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let attempt = 0;
+
     const tryRefresh = async () => {
-      // Poll for token readiness (max ~10s)
-      for (let i = 0; i < 20; i++) {
-        if (cancelled) return;
-        const token = await getUserToken();
-        if (token) {
-          refreshAll().catch((err) => {
-            console.warn("[useOpenClaw] initial refresh failed:", err);
-          });
-          return;
-        }
-        await new Promise((r) => setTimeout(r, 500));
+      if (cancelled) return;
+      const token = await getUserToken();
+      if (cancelled) return;
+      if (token) {
+        refreshAll().catch((err) => {
+          console.warn("[useOpenClaw] initial refresh failed:", err);
+        });
+        return;
       }
-      // Give up waiting — user may not be logged in
+      attempt++;
+      // Fast poll for first 10s (500ms × 20), then slower 5s retries for ~60s more
+      const delay = attempt < 20 ? 500 : 5000;
+      if (attempt < 32) {
+        timer = setTimeout(tryRefresh, delay);
+      }
     };
+
     tryRefresh();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      // Reset module-level guards so a re-mount (e.g. React Strict Mode) can run refreshAll
+      globalRefreshInProgress = false;
+    };
   }, []);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Eager WebSocket connection: initiate the WS as soon as a token is
+  // available, independent of refreshAll. This prevents the WS from being
+  // blocked by the full refresh chain (cron fetches, install checks, etc.)
+  // and ensures it connects even if refreshAll is delayed or skipped.
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const tryConnect = async () => {
+      if (cancelled) return;
+      if (getGatewayConnectionState().connected) return;
+
+      const token = await getUserToken();
+      if (!token || cancelled) return;
+
+      try {
+        const config = await getGatewayConfig();
+        if (cancelled || !config.gatewayUrl) return;
+
+        connectGatewayWs(config.gatewayUrl, {
+          token: config.token,
+          hubMode: config.hubMode,
+          hubDeviceId: config.hubDeviceId,
+        });
+      } catch {
+        // Retry after delay if connection setup failed
+        if (!cancelled) {
+          timer = setTimeout(tryConnect, 5000);
+        }
+      }
+    };
+
+    tryConnect();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
