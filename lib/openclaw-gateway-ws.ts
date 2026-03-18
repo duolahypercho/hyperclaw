@@ -530,12 +530,16 @@ export const gatewayConnection = {
     });
   },
 
-  /** Abort an in-progress chat run */
+  /** Abort an in-progress chat run (longer timeout: hub relay can be slow) */
   abortChat(params: { sessionKey: string; runId?: string }): Promise<unknown> {
-    return this.request("chat.abort", {
-      sessionKey: params.sessionKey,
-      ...(params.runId && { runId: params.runId }),
-    });
+    return this.request(
+      "chat.abort",
+      {
+        sessionKey: params.sessionKey,
+        ...(params.runId && { runId: params.runId }),
+      },
+      60_000
+    );
   },
 
   /** Get chat history */

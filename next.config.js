@@ -1,8 +1,8 @@
 /** @type {import('next').NextConfig} */
 const isDev = process.env.NODE_ENV !== "production";
 
-function buildConnectSrc() {
-  const parts = [
+function buildCSP() {
+  const connectParts = [
     "connect-src 'self'",
     "https://api.hypercho.com",
     "https://hub.hypercho.com",
@@ -10,18 +10,30 @@ function buildConnectSrc() {
   ];
 
   if (isDev) {
-    parts.push("http://127.0.0.1:9979", "http://localhost:9979");
+    connectParts.push("http://127.0.0.1:9979", "http://localhost:9979");
     // Local OpenClaw gateway WebSocket ports
     const ports = (process.env.NEXT_PUBLIC_OPENCLAW_GATEWAY_PORTS || "18789")
       .split(",")
       .map((p) => p.trim())
       .filter(Boolean);
     for (const p of ports) {
-      parts.push(`ws://127.0.0.1:${p}`, `ws://localhost:${p}`, `wss://127.0.0.1:${p}`, `wss://localhost:${p}`);
+      connectParts.push(`ws://127.0.0.1:${p}`, `ws://localhost:${p}`, `wss://127.0.0.1:${p}`, `wss://localhost:${p}`);
     }
   }
 
-  return parts.join(" ");
+  const directives = [
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: https: blob:",
+    "font-src 'self' data:",
+    connectParts.join(" "),
+    "frame-ancestors 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+  ];
+
+  return directives.join("; ");
 }
 
 const nextConfig = {
@@ -37,7 +49,23 @@ const nextConfig = {
         headers: [
           {
             key: "Content-Security-Policy",
-            value: buildConnectSrc(),
+            value: buildCSP(),
+          },
+          {
+            key: "Strict-Transport-Security",
+            value: "max-age=31536000; includeSubDomains",
+          },
+          {
+            key: "X-Content-Type-Options",
+            value: "nosniff",
+          },
+          {
+            key: "X-Frame-Options",
+            value: "DENY",
+          },
+          {
+            key: "Referrer-Policy",
+            value: "strict-origin-when-cross-origin",
           },
         ],
       },

@@ -1251,6 +1251,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
   const stopGeneration = useCallback(async () => {
     // Immediately stop loading — don't wait for the gateway's "aborted" event
     // which may be slow or never arrive (e.g. disconnected, hub relay delay).
+    const runIdToAbort = currentRunIdRef.current;
     const streamedText = streamContentRef.current;
     if (streamedText.trim()) {
       setMessages((prev) => {
@@ -1277,13 +1278,15 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
     setIsLoading(false);
 
     // Best-effort: tell the gateway to abort (fire-and-forget)
-    if (gatewayConnection.isConnected()) {
-      gatewayConnection.abortChat({
-        sessionKey: getSessionKey(),
-        runId: currentRunIdRef.current || undefined,
-      }).catch((err) => {
-        console.error("Failed to abort chat:", err);
-      });
+    if (gatewayConnection.isConnected() && runIdToAbort) {
+      gatewayConnection
+        .abortChat({
+          sessionKey: getSessionKey(),
+          runId: runIdToAbort,
+        })
+        .catch(() => {
+          /* abort is best-effort; hub/device timeouts are expected */
+        });
     }
   }, [getSessionKey]);
 

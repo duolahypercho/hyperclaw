@@ -1,6 +1,6 @@
 import { APIRoute } from "next-s3-upload";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/pages/api/auth/[...nextauth]";
+import { authOptions } from "$/pages/api/auth/[...nextauth]";
 import type { NextApiRequest, NextApiResponse } from "next";
 
 const s3Route = APIRoute.configure({
