@@ -5,7 +5,16 @@
   "author": "Hypercho",
   "main": "main.js",
   "scripts": {
-    "electron:dev": "electron ."
+    "electron:build:win:local": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win",
+    "electron:build:win:remote": "node scripts/set-config.js remote && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win",
+    "electron:build:win:portable": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win --config.win.target=portable",
+    "electron:build:mac:local": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --config.mac.target=zip",
+    "electron:build:mac:remote": "node scripts/set-config.js remote && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --config.mac.target=zip --x64 --arm64",
+    "electron:build:mac:remote:dmg": "node scripts/set-config.js remote && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --config.mac.target=dmg --x64 --arm64",
+    "electron:build:mac:dmg": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=true electron-builder --mac --config.mac.target=dmg",
+    "electron:build:mac:zip": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --config.mac.target=zip",
+    "electron:build:linux:remote": "node scripts/set-config.js remote && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --linux",
+    "electron:build:linux:local": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --linux"
   },
   "dependencies": {
     "electron-updater": "^6.1.7",
@@ -61,7 +70,7 @@
       "allowToChangeInstallationDirectory": true,
       "allowElevation": true,
       "runAfterFinish": true,
-      "artifactName": "Hyperclaw-Setup-Remote-${version}.${ext}",
+      "artifactName": "Hyperclaw-Setup-Local-${version}.${ext}",
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Hyperclaw",
@@ -72,23 +81,11 @@
     "extraResources": [
       {
         "from": "../.next",
-        "to": "../.next",
+        "to": ".next",
         "filter": [
           "**/*"
         ]
       }
     ]
-  },
-  "scripts": {
-    "electron:build:win:local": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win",
-    "electron:build:win:remote": "node scripts/set-config.js remote && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win",
-    "electron:build:win:portable": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win --config.win.target=portable",
-    "electron:build:mac:local": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --config.mac.target=zip",
-    "electron:build:mac:remote": "node scripts/set-config.js remote && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --config.mac.target=zip --x64 --arm64",
-    "electron:build:mac:remote:dmg": "node scripts/set-config.js remote && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --config.mac.target=dmg --x64 --arm64",
-    "electron:build:mac:dmg": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=true electron-builder --mac --config.mac.target=dmg",
-    "electron:build:mac:zip": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --config.mac.target=zip",
-    "electron:build:linux:remote": "node scripts/set-config.js remote && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --linux",
-    "electron:build:linux:local": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --linux"
   }
 }

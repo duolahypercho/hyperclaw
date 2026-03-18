@@ -1388,17 +1388,21 @@ function toggleVoiceOverlay() {
   }
 }
 
-// Register global hotkey for voice input (Alt+Space)
+// Register global hotkey for voice input
 function registerVoiceHotkey() {
-  const ret = globalShortcut.register("Alt+Space", () => {
-    console.log("[Hyperclaw] Alt+Space pressed - toggling voice overlay");
+  // On macOS, Alt+Space conflicts with input source switching.
+  // Use Cmd+Shift+Space on macOS, Alt+Space elsewhere.
+  const hotkey =
+    process.platform === "darwin" ? "Command+Shift+Space" : "Alt+Space";
+  const ret = globalShortcut.register(hotkey, () => {
+    console.log(`[Hyperclaw] ${hotkey} pressed - toggling voice overlay`);
     toggleVoiceOverlay();
   });
 
   if (!ret) {
-    console.error("[Hyperclaw] Failed to register Alt+Space hotkey");
+    console.error(`[Hyperclaw] Failed to register ${hotkey} hotkey`);
   } else {
-    console.log("[Hyperclaw] Registered Alt+Space for voice input");
+    console.log(`[Hyperclaw] Registered ${hotkey} for voice input`);
   }
 }
 
@@ -1553,7 +1557,7 @@ app.whenReady().then(() => {
   writeToBridgeLog("Hyperclaw main process started");
   createTray();
   createWindow();
-  registerVoiceHotkey(); // Register Alt+Space for voice input
+  registerVoiceHotkey(); // Register voice input hotkey (Cmd+Shift+Space on macOS, Alt+Space elsewhere)
   registerTextInsertHotkey(); // Register Ctrl+Shift+V for text insertion
 
   if (!isDev && app.isPackaged && isRemoteMode && autoUpdater) {

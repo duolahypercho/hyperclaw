@@ -88,7 +88,7 @@ export const GatewayChatCustomHeader: React.FC<GatewayChatHeaderProps> = ({
             onClick={() => setAgentDetailOpen(true)}
             title="View agent details"
           >
-            <Avatar className="w-10 h-10 transition-opacity group-hover:opacity-80">
+            <Avatar key={headerAvatarUrl || "no-avatar"} className="w-10 h-10 transition-opacity group-hover:opacity-80">
               {headerAvatarUrl ? (
                 <AvatarImage src={headerAvatarUrl} alt={headerIdentity?.name || agent.name} />
               ) : null}

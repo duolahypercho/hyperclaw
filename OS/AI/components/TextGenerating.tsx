@@ -184,34 +184,33 @@ export const LoaderFour = ({ text = "Loading...", className }: { text?: string, 
 };
 
 export const LoaderFive = ({ text, className }: { text: string, className?: string }) => {
+  // CSS shimmer animation — runs continuously via @keyframes so it never
+  // restarts when the text prop changes (e.g. tool count updates).
   return (
-    <div className={cn("font-medium [--shadow-color:var(--color-neutral-500)] dark:[--shadow-color:var(--color-neutral-100)]", className)}>
-      {text.split("").map((char, i) => (
-        <motion.span
-          key={i}
-          className="inline-block"
-          initial={{ scale: 1, opacity: 0.5 }}
-          animate={{
-            scale: [1, 1.1, 1],
-            textShadow: [
-              "0 0 0 var(--shadow-color)",
-              "0 0 1px var(--shadow-color)",
-              "0 0 0 var(--shadow-color)",
-            ],
-            opacity: [0.5, 1, 0.5],
-          }}
-          transition={{
-            duration: 0.5,
-            repeat: Infinity,
-            repeatType: "loop",
-            delay: i * 0.05,
-            ease: "easeInOut",
-            repeatDelay: 2,
-          }}
-        >
-          {char === " " ? "\u00A0" : char}
-        </motion.span>
-      ))}
-    </div>
+    <span
+      className={cn(
+        "font-medium animate-text-shimmer bg-[length:200%_100%] bg-clip-text text-transparent",
+        "bg-gradient-to-r from-current via-current/40 to-current",
+        className,
+      )}
+      style={{
+        // @ts-expect-error -- CSS custom property
+        "--tw-text-opacity": 1,
+        WebkitBackgroundClip: "text",
+        WebkitTextFillColor: "transparent",
+        backgroundSize: "200% 100%",
+        backgroundImage:
+          "linear-gradient(90deg, currentColor 0%, currentColor 35%, color-mix(in srgb, currentColor 40%, transparent) 50%, currentColor 65%, currentColor 100%)",
+        animation: "text-shimmer 2.5s ease-in-out infinite",
+      }}
+    >
+      <style>{`
+        @keyframes text-shimmer {
+          0%, 100% { background-position: 100% 50%; }
+          50% { background-position: 0% 50%; }
+        }
+      `}</style>
+      {text}
+    </span>
   );
 };

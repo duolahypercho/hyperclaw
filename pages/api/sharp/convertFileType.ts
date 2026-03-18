@@ -1,6 +1,8 @@
 // Next.js API route support: https://nextjs.org/docs/api-routes/introduction
 import { convertType } from "@/types/form";
 import type { NextApiRequest, NextApiResponse } from "next";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import sharp from "sharp";
 
 type optionsType = {
@@ -59,6 +61,12 @@ export default async function handler(
   if (req.method !== "POST") {
     return res.status(405).end();
   }
+
+  const session = await getServerSession(req, res, authOptions(req, res));
+  if (!session?.user) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
   try {
     //convert req.body to json
     const { options, image } = JSON.parse(req.body);

@@ -128,6 +128,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   voiceOverlay: {
     hide: () => ipcRenderer.invoke("hide-voice-overlay"),
     isVisible: () => ipcRenderer.invoke("get-voice-overlay-visible"),
+    // Send voice message from overlay to main window (via main process relay)
+    sendMessage: (data) => ipcRenderer.send("voice-message", data),
     // Listen for voice transcript results
     onTranscript: (callback) => {
       if (typeof callback !== "function") return;

@@ -112,16 +112,28 @@ function unwrapHubResponse(raw: unknown): unknown {
 
 // --- Gateway connection helper ---
 // Shares a single connection-wait promise across concurrent callers.
+// Once settled, the promise is cleared so the next caller gets a fresh attempt.
 let _gwReadyPromise: Promise<boolean> | null = null;
+let _gwReadySettled = false;
 
 /**
  * Ensure the gateway WebSocket is connected in hub mode.
- * If already connected → returns true immediately.
- * If connecting → waits up to 5s for connection.
- * If not connecting → initiates connection with cached credentials, then waits.
+ * If already connected -> returns true immediately.
+ * If connecting -> waits up to 5s for connection.
+ * If not connecting -> initiates connection with cached credentials, then waits.
+ *
+ * The shared promise is only reused while it is still pending. Once it settles
+ * (whether success or failure), it is cleared so the next caller retries from
+ * scratch — preventing a stale rejected/false promise from blocking all
+ * subsequent callers indefinitely.
  */
 async function ensureGatewayConnected(): Promise<boolean> {
-  if (_gwReadyPromise) return _gwReadyPromise;
+  // Reuse in-flight promise only while it is still pending
+  if (_gwReadyPromise && !_gwReadySettled) return _gwReadyPromise;
+
+  // Clear any settled promise from a previous attempt
+  _gwReadyPromise = null;
+  _gwReadySettled = false;
 
   _gwReadyPromise = (async () => {
     try {
@@ -174,7 +186,7 @@ async function ensureGatewayConnected(): Promise<boolean> {
     } catch {
       return false;
     } finally {
-      _gwReadyPromise = null;
+      _gwReadySettled = true;
     }
   })();
 

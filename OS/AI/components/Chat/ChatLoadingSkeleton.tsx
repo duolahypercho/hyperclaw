@@ -1,8 +1,12 @@
 import { motion } from "framer-motion";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import CopanionIcon from "@OS/assets/copanion";
 
-export const ChatLoadingSkeleton = () => {
+export const ChatLoadingSkeleton = ({
+  assistantAvatar,
+}: {
+  assistantAvatar?: { src?: string; fallback?: string; alt?: string };
+} = {}) => {
   return (
     <motion.div
       className="flex gap-3 justify-start"
@@ -12,8 +16,13 @@ export const ChatLoadingSkeleton = () => {
     >
       <div className="w-8 h-8 flex-shrink-0">
         <Avatar className="w-8 h-8">
+          {assistantAvatar?.src ? (
+            <AvatarImage src={assistantAvatar.src} alt={assistantAvatar.alt} />
+          ) : null}
           <AvatarFallback className="bg-primary/10 text-primary">
-            <CopanionIcon className="w-4 h-4" />
+            {assistantAvatar?.fallback
+              ? <span className="text-xs">{assistantAvatar.fallback}</span>
+              : <CopanionIcon className="w-4 h-4" />}
           </AvatarFallback>
         </Avatar>
       </div>

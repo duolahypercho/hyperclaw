@@ -20,7 +20,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import remarkBreaks from "remark-breaks";
-import rehypeRaw from "rehype-raw";
+import { rehypePlugins } from "@OS/AI/components/rehypeConfig";
 import createMarkdownComponents from "../createMarkdownComponents";
 
 export const DefaultToolRenderer: React.FC<ToolRendererProps> = ({
@@ -254,7 +254,7 @@ export const DefaultToolRenderer: React.FC<ToolRendererProps> = ({
                             remarkBreaks,
                             [remarkMath, { singleDollarTextMath: false }],
                           ]}
-                          rehypePlugins={[rehypeRaw]}
+                          rehypePlugins={rehypePlugins}
                           components={markdownComponents}
                         >
                           {toolState.resultContent}

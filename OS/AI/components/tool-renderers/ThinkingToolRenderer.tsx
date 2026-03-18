@@ -16,7 +16,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import remarkBreaks from "remark-breaks";
-import rehypeRaw from "rehype-raw";
+import { rehypePlugins } from "@OS/AI/components/rehypeConfig";
 import createThoughtsMarkdownComponents from "@OS/AI/components/createMarkdownComponents";
 
 // Animated thinking dots component
@@ -168,7 +168,7 @@ export const ThinkingToolRenderer: React.FC<ToolRendererProps> = ({
                         remarkBreaks,
                         [remarkMath, { singleDollarTextMath: false }],
                       ]}
-                      rehypePlugins={[rehypeRaw]}
+                      rehypePlugins={rehypePlugins}
                     >
                       {thoughts}
                     </ReactMarkdown>
@@ -194,7 +194,7 @@ export const ThinkingToolRenderer: React.FC<ToolRendererProps> = ({
                         remarkBreaks,
                         [remarkMath, { singleDollarTextMath: false }],
                       ]}
-                      rehypePlugins={[rehypeRaw]}
+                      rehypePlugins={rehypePlugins}
                     >
                       {toolState.resultContent}
                     </ReactMarkdown>

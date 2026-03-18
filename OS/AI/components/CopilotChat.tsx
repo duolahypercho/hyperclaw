@@ -34,7 +34,7 @@ import ReactMarkdown, { Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import remarkBreaks from "remark-breaks";
-import rehypeRaw from "rehype-raw";
+import { rehypePlugins } from "@OS/AI/components/rehypeConfig";
 import HyperchoTooltip from "$/components/UI/HyperchoTooltip";
 import CopanionIcon from "@OS/assets/copanion";
 import { useCopanionChatLogic } from "@OS/AI/core/hook/use-copanion-chat-logic";
@@ -344,7 +344,7 @@ const EnhancedMessageBubble = memo(
                 remarkBreaks,
                 [remarkMath, { singleDollarTextMath: false }],
               ]}
-              rehypePlugins={[rehypeRaw]}
+              rehypePlugins={rehypePlugins}
             >
               {content}
             </MemoizedReactMarkdown>

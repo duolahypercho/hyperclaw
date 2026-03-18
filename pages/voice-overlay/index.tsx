@@ -6,10 +6,6 @@ import { Mic, Square, X, Send, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-// Types
-interface VoiceOverlayProps {
-  className?: string;
-}
 
 export default function VoiceOverlayPage() {
   const [isListening, setIsListening] = useState(false);
@@ -173,12 +169,12 @@ export default function VoiceOverlayPage() {
     const text = transcript.trim();
     if (!text) return;
 
-    // Send via IPC to main process
-    if (window.electronAPI?.openClaw) {
-      window.electronAPI.openClaw.sendMessage({
+    // Send via IPC to main process → relayed to main window
+    if (window.electronAPI?.voiceOverlay) {
+      window.electronAPI.voiceOverlay.sendMessage({
+        text,
         agentId: selectedAgent,
         sessionKey: `agent:${selectedAgent}:${selectedSession}`,
-        message: text,
       });
     }
 
@@ -217,10 +213,7 @@ export default function VoiceOverlayPage() {
         initial={{ opacity: 0, scale: 0.95, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95, y: 20 }}
-        className={cn(
-          "w-full max-w-lg bg-background/95 backdrop-blur-lg rounded-2xl shadow-2xl border border-border/50 overflow-hidden",
-          className
-        )}
+        className="w-full max-w-lg bg-background/95 backdrop-blur-lg rounded-2xl shadow-2xl border border-border/50 overflow-hidden"
       >
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-border/30">

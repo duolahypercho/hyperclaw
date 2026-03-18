@@ -18,7 +18,7 @@ import ReactMarkdown, { Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import remarkBreaks from "remark-breaks";
-import rehypeRaw from "rehype-raw";
+import { rehypePlugins } from "@OS/AI/components/rehypeConfig";
 import { getMediaUrl } from "$/utils";
 import { gatewayConnection } from "$/lib/openclaw-gateway-ws";
 import {
@@ -550,7 +550,7 @@ const MessageBubble = memo(
                             <MemoizedReactMarkdown
                               components={memoizedMarkdownComponents.assistant}
                               remarkPlugins={[remarkGfm, remarkBreaks, [remarkMath, { singleDollarTextMath: false }]]}
-                              rehypePlugins={[rehypeRaw]}
+                              rehypePlugins={rehypePlugins}
                             >
                               {block.thinking}
                             </MemoizedReactMarkdown>
@@ -594,7 +594,7 @@ const MessageBubble = memo(
                         ? [remarkGfm, remarkBreaks, [remarkMath, { singleDollarTextMath: false }]]
                         : [remarkGfm, [remarkMath, { singleDollarTextMath: false }]]
                     }
-                    rehypePlugins={[rehypeRaw]}
+                    rehypePlugins={rehypePlugins}
                   >
                     {processedContent}
                   </MemoizedReactMarkdown>
@@ -617,7 +617,7 @@ const MessageBubble = memo(
               ? [remarkGfm, remarkBreaks, [remarkMath, { singleDollarTextMath: false }]]
               : [remarkGfm, [remarkMath, { singleDollarTextMath: false }]]
           }
-          rehypePlugins={[rehypeRaw]}
+          rehypePlugins={rehypePlugins}
         >
           {processedContent}
         </MemoizedReactMarkdown>
@@ -869,9 +869,12 @@ export function FloatingChatViewer() {
     isLoading,
     isConnected,
     error,
+    hasMoreHistory,
+    isLoadingMore,
     sendMessage,
     stopGeneration,
     loadChatHistory,
+    loadMoreHistory,
     clearChat,
     setSessionKey,
   } = useGatewayChat({ sessionKey: resolvedSessionKey, autoConnect: true });
@@ -942,6 +945,9 @@ export function FloatingChatViewer() {
     return () => ro.disconnect();
   }, []);
 
+  // Timestamp of last user-sent message (grace period for auto-scroll).
+  const lastSentAtRef = useRef<number>(0);
+
   // Auto-scroll on new messages
   const prevLenRef = useRef(0);
   useEffect(() => {
@@ -958,10 +964,13 @@ export function FloatingChatViewer() {
     const newMsg = messages[messages.length - 1];
     const isToolAction = newMsg?.toolCalls?.length || newMsg?.toolResults?.length;
     if (newMsg?.role === "user") {
-      requestAnimationFrame(() => scrollToBottom());
+      lastSentAtRef.current = Date.now();
+      scrollToBottom(); // synchronous — avoid rAF race with assistant response
     } else if (!isToolAction && scrollAreaRef.current) {
       const el = scrollAreaRef.current;
-      if (el.scrollHeight - el.scrollTop <= el.clientHeight + 150) {
+      const nearBottom = el.scrollHeight - el.scrollTop <= el.clientHeight + 150;
+      const justSent = Date.now() - lastSentAtRef.current < 3000;
+      if (nearBottom || justSent) {
         requestAnimationFrame(() => scrollToBottom());
       }
     }
@@ -1198,7 +1207,7 @@ export function FloatingChatViewer() {
       {/* Header */}
       <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-border/50 shrink-0">
         <div className="flex items-center gap-2 min-w-0">
-          <Avatar className="w-7 h-7 shrink-0">
+          <Avatar key={avatarUrl || "no-avatar"} className="w-7 h-7 shrink-0">
             {avatarUrl && <AvatarImage src={avatarUrl} alt={agentName} />}
             <AvatarFallback className="bg-primary/10 text-primary text-[10px]">
               {avatarText || identity?.emoji || agentName.slice(0, 2).toUpperCase()}
@@ -1318,7 +1327,7 @@ export function FloatingChatViewer() {
         >
           {!initialReady ? (
             <div className="p-3">
-              <ChatLoadingSkeleton />
+              <ChatLoadingSkeleton assistantAvatar={assistantAvatar} />
             </div>
           ) : messages.length === 0 && !isLoading ? (
             <div className="flex items-center justify-center h-full px-6">
@@ -1330,6 +1339,32 @@ export function FloatingChatViewer() {
             </div>
           ) : (
             <div className="space-y-2">
+              {/* Load older messages button */}
+              {hasMoreHistory && (
+                <div className="flex justify-center py-1.5">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-xs text-muted-foreground hover:text-foreground gap-1.5 h-6"
+                    onClick={async () => {
+                      const el = scrollAreaRef.current;
+                      const prevHeight = el?.scrollHeight ?? 0;
+                      await loadMoreHistory();
+                      requestAnimationFrame(() => {
+                        if (el) {
+                          el.scrollTop = el.scrollHeight - prevHeight;
+                        }
+                      });
+                    }}
+                    disabled={isLoadingMore}
+                  >
+                    {isLoadingMore ? (
+                      <RefreshCw className="w-3 h-3 animate-spin" />
+                    ) : null}
+                    {isLoadingMore ? "Loading..." : "Load older messages"}
+                  </Button>
+                </div>
+              )}
               <AnimatePresence>
                 {messageNodes}
               </AnimatePresence>

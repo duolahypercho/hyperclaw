@@ -9,7 +9,7 @@ import ReactMarkdown, { Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import remarkBreaks from "remark-breaks";
-import rehypeRaw from "rehype-raw";
+import { rehypePlugins } from "@OS/AI/components/rehypeConfig";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import CopanionIcon from "@OS/assets/copanion";
 import { getMediaUrl } from "$/utils";
@@ -164,7 +164,7 @@ export const EnhancedMessageBubble = memo(
                                   remarkBreaks,
                                   [remarkMath, { singleDollarTextMath: false }],
                                 ]}
-                                rehypePlugins={[rehypeRaw]}
+                                rehypePlugins={rehypePlugins}
                               >
                                 {block.thinking}
                               </MemoizedReactMarkdown>
@@ -220,7 +220,7 @@ export const EnhancedMessageBubble = memo(
                         ? [remarkGfm, remarkBreaks, [remarkMath, { singleDollarTextMath: false }]]
                         : [remarkGfm, [remarkMath, { singleDollarTextMath: false }]]
                     }
-                    rehypePlugins={[rehypeRaw]}
+                    rehypePlugins={rehypePlugins}
                   >
                     {processedContent}
                   </MemoizedReactMarkdown>
@@ -249,7 +249,7 @@ export const EnhancedMessageBubble = memo(
               ? [remarkGfm, remarkBreaks, [remarkMath, { singleDollarTextMath: false }]]
               : [remarkGfm, [remarkMath, { singleDollarTextMath: false }]]
           }
-          rehypePlugins={[rehypeRaw]}
+          rehypePlugins={rehypePlugins}
         >
           {processedContent}
         </MemoizedReactMarkdown>
