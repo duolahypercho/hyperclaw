@@ -448,7 +448,7 @@ export default function VoiceOverlayPage() {
     if (resizeDebounceRef.current) clearTimeout(resizeDebounceRef.current);
     resizeDebounceRef.current = setTimeout(resizeWindow, isChatLoading ? 200 : 50);
     return () => { if (resizeDebounceRef.current) clearTimeout(resizeDebounceRef.current); };
-  }, [transcript, interimTranscript, isListening, isTranscribing, showInserted, mode, overlayState, typedText, attachments, transcriptionError, messages.length, isChatLoading, screenshotDataUrl, inputAttachments.length, resizeWindow]);
+  }, [transcript, interimTranscript, isListening, isTranscribing, showInserted, mode, overlayState, typedText, attachments, transcriptionError, messages.length, isChatLoading, screenshotDataUrl, resizeWindow]);
 
   // ResizeObserver — catches content height changes from collapsible tool
   // expansions, accordion toggles, etc. that don't trigger state changes.
