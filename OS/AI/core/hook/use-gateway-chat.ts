@@ -539,9 +539,8 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       sessionKeyRef.current = initialSessionKey;
       // We can't call handleSessionChange here (it's not defined yet), so
       // inline the same reset logic. setSessionKeyState will trigger re-render.
-      // Ref cleanup (currentRunIdRef, noResponseRef, etc.) is handled by
-      // handleSessionChange which runs via the setSessionKey effect.
-      if (currentRunIdRef.current) runIdOwners.delete(currentRunIdRef.current);
+      // Ref cleanup (currentRunIdRef, runIdOwners, noResponseRef, etc.) is
+      // handled by handleSessionChange which runs via the setSessionKey effect.
       setSessionKeyState(initialSessionKey);
       setMessages([]);
       setIsLoading(false);
