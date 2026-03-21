@@ -10,6 +10,11 @@ import {
 } from "$/lib/openclaw-gateway-ws";
 import { v4 as uuidv4 } from "uuid";
 
+// Module-level registry: maps active runId → sessionKey.
+// Prevents cross-chat event bleed when multiple useGatewayChat instances
+// are streaming simultaneously and events arrive without sessionKey.
+const runIdOwners = new Map<string, string>();
+
 // Types for chat (matching OpenClaw's protocol)
 export type ChatMessageRole = "user" | "assistant" | "system" | "tool" | "toolResult";
 
@@ -536,6 +541,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       // inline the same reset logic. setSessionKeyState will trigger re-render.
       // Ref cleanup (currentRunIdRef, noResponseRef, etc.) is handled by
       // handleSessionChange which runs via the setSessionKey effect.
+      if (currentRunIdRef.current) runIdOwners.delete(currentRunIdRef.current);
       setSessionKeyState(initialSessionKey);
       setMessages([]);
       setIsLoading(false);
@@ -559,6 +565,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       setMessages([]);
       setIsLoading(false);
       setError(null);
+      if (currentRunIdRef.current) runIdOwners.delete(currentRunIdRef.current);
       currentRunIdRef.current = null;
       streamContentRef.current = "";
       receivedEventRef.current = false;
@@ -677,11 +684,20 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
     if (payload.sessionKey) {
       if (payload.sessionKey !== sessionKeyRef.current) return;
     } else if (currentRunIdRef.current !== null) {
-      // Active conversation — accept events from any runId.
-      // Adopt the first runId for text message association, but don't reject
-      // events with different runIds (sub-agents, tool events via agent path).
+      // Active conversation — check the runId registry to prevent cross-chat bleed.
+      // If the event's runId is registered to a DIFFERENT session, reject it.
+      // Unknown runIds (sub-agents) are still accepted.
+      if (payload.runId) {
+        const ownerSession = runIdOwners.get(payload.runId);
+        if (ownerSession && ownerSession !== sessionKeyRef.current) return;
+      }
+      // Adopt the first runId for text message association.
       if (!receivedEventRef.current && payload.runId) {
+        // Replace client-side runId registration with the server-side runId
+        const oldRunId = currentRunIdRef.current;
+        if (oldRunId) runIdOwners.delete(oldRunId);
         currentRunIdRef.current = payload.runId;
+        runIdOwners.set(payload.runId, sessionKeyRef.current);
       }
     } else {
       // No active conversation and no sessionKey — only accept if this is a
@@ -1232,6 +1248,10 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
         clearTimeout(disconnectGraceRef.current);
         disconnectGraceRef.current = null;
       }
+      // Clean up runId registry to prevent stale entries
+      if (currentRunIdRef.current) {
+        runIdOwners.delete(currentRunIdRef.current);
+      }
     };
   }, []);
 
@@ -1377,6 +1397,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
     }, 300_000);
 
     currentRunIdRef.current = runId;
+    runIdOwners.set(runId, sessionKeyRef.current);
     streamContentRef.current = "";
     receivedEventRef.current = false;
 

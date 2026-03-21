@@ -428,22 +428,15 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
     }
   }, []);
 
-  // Auto-scroll only when user is near bottom. If the user scrolls up to
-  // read earlier text during generation, we stop auto-scrolling.
+  // Auto-scroll only on initial load / session switch and when the user sends a message.
+  // Do NOT auto-scroll during streaming or when assistant messages arrive.
   const prevMessagesLengthRef = useRef<number>(0);
   useEffect(() => {
     const prevLen = prevMessagesLengthRef.current;
 
     if (messages.length <= prevLen) {
       prevMessagesLengthRef.current = messages.length;
-      // Streaming delta — scroll only if user hasn't scrolled away.
-      if (scrollAreaRef.current && !userScrolledAwayRef.current) {
-        const el = scrollAreaRef.current;
-        const nearBottom = el.scrollHeight - el.scrollTop <= el.clientHeight + 150;
-        if (nearBottom) {
-          requestAnimationFrame(() => scrollToBottom(false));
-        }
-      }
+      // Streaming delta — do not auto-scroll.
       return;
     }
 
@@ -462,13 +455,8 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
       // User just sent — always scroll and reset the flag.
       userScrolledAwayRef.current = false;
       scrollToBottom(false);
-    } else if (scrollAreaRef.current && !userScrolledAwayRef.current) {
-      const el = scrollAreaRef.current;
-      const nearBottom = el.scrollHeight - el.scrollTop <= el.clientHeight + 150;
-      if (nearBottom) {
-        requestAnimationFrame(() => scrollToBottom(false));
-      }
     }
+    // Do not auto-scroll for assistant messages or other new messages.
     prevMessagesLengthRef.current = messages.length;
   }, [messages.length, messages, scrollToBottom]);
 

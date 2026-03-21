@@ -926,21 +926,14 @@ export function FloatingChatViewer({ agentId, sessionKey: providedSessionKey, ta
     return () => ro.disconnect();
   }, []);
 
-  // Auto-scroll on new messages and streaming deltas.
-  // Stops scrolling if the user has scrolled up to read earlier content.
+  // Auto-scroll only on initial load / session switch and when the user sends a message.
+  // Do NOT auto-scroll during streaming or when assistant messages arrive.
   const prevLenRef = useRef(0);
   useEffect(() => {
     const prevLen = prevLenRef.current;
     if (messages.length <= prevLen) {
       prevLenRef.current = messages.length;
-      // Streaming delta — scroll only if user hasn't scrolled away.
-      if (scrollAreaRef.current && !userScrolledAwayRef.current) {
-        const el = scrollAreaRef.current;
-        const nearBottom = el.scrollHeight - el.scrollTop <= el.clientHeight + 150;
-        if (nearBottom) {
-          requestAnimationFrame(() => scrollToBottom());
-        }
-      }
+      // Streaming delta — do not auto-scroll.
       return;
     }
     if (prevLen === 0 && messages.length > 1) {
@@ -953,13 +946,8 @@ export function FloatingChatViewer({ agentId, sessionKey: providedSessionKey, ta
     if (newMsg?.role === "user") {
       userScrolledAwayRef.current = false;
       scrollToBottom();
-    } else if (scrollAreaRef.current && !userScrolledAwayRef.current) {
-      const el = scrollAreaRef.current;
-      const nearBottom = el.scrollHeight - el.scrollTop <= el.clientHeight + 150;
-      if (nearBottom) {
-        requestAnimationFrame(() => scrollToBottom());
-      }
     }
+    // Do not auto-scroll for assistant messages or other new messages.
     prevLenRef.current = messages.length;
   }, [messages.length, messages, scrollToBottom]);
 

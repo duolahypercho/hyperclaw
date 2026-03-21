@@ -57,31 +57,34 @@ export const CompactChatView = memo(({
   // true when user has scrolled away from the bottom during generation
   const userScrolledAwayRef = useRef(false);
 
-  // Auto-scroll on new messages and streaming deltas.
-  // Stops scrolling if the user has scrolled up to read earlier content.
+  // Auto-scroll only on initial load and when the user sends a message.
+  // Do NOT auto-scroll during streaming or when assistant messages arrive.
   useEffect(() => {
     if (!scrollRef.current) return;
     const el = scrollRef.current;
+    const prevLen = prevLenRef.current;
 
-    if (messages.length > prevLenRef.current) {
-      const newMsg = messages[messages.length - 1];
-      if (newMsg?.role === "user") {
-        // User just sent — always scroll and reset flag.
-        userScrolledAwayRef.current = false;
-        requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
-      } else if (!userScrolledAwayRef.current) {
-        const nearBottom = el.scrollHeight - el.scrollTop <= el.clientHeight + 100;
-        if (nearBottom) {
-          requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
-        }
-      }
-    } else if (!userScrolledAwayRef.current) {
-      // Streaming delta — scroll if near bottom.
-      const nearBottom = el.scrollHeight - el.scrollTop <= el.clientHeight + 100;
-      if (nearBottom) {
-        requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
-      }
+    if (messages.length <= prevLen) {
+      prevLenRef.current = messages.length;
+      // Streaming delta — do not auto-scroll.
+      return;
     }
+
+    // Bulk history load: previous was 0 or empty, now has many messages.
+    if (prevLen === 0 && messages.length > 1) {
+      prevLenRef.current = messages.length;
+      userScrolledAwayRef.current = false;
+      requestAnimationFrame(() => requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; }));
+      return;
+    }
+
+    const newMsg = messages[messages.length - 1];
+    if (newMsg?.role === "user") {
+      // User just sent — always scroll and reset flag.
+      userScrolledAwayRef.current = false;
+      requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
+    }
+    // Do not auto-scroll for assistant messages or other new messages.
     prevLenRef.current = messages.length;
   }, [messages.length, messages]);
 
