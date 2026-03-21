@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // Clear persisted auth (cookies + storage) so logout works in Electron (no "remembered" Google login).
   clearAuthSession: () => ipcRenderer.invoke("clear-auth-session"),
 
+
   // Notifications
   showNotification: (title, body) =>
     ipcRenderer.invoke("show-notification", { title, body }),
@@ -124,12 +125,62 @@ contextBridge.exposeInMainWorld("electronAPI", {
     uploadAttachment: (folderId, noteId, attachment) => ipcRenderer.invoke("notes:uploadAttachment", { folderId, noteId, attachment }),
   },
 
-  // Voice Overlay - for global voice input (Alt+Space)
+  // Voice Overlay - persistent floating voice input
   voiceOverlay: {
     hide: () => ipcRenderer.invoke("hide-voice-overlay"),
+    expand: () => ipcRenderer.invoke("voice-overlay-expand"),
+    minimize: () => ipcRenderer.invoke("voice-overlay-minimize"),
+    resize: (width, height) => ipcRenderer.invoke("voice-overlay-resize", { width, height }),
+    setClickThrough: (ignore) => ipcRenderer.invoke("voice-overlay-set-clickthrough", ignore),
     isVisible: () => ipcRenderer.invoke("get-voice-overlay-visible"),
-    // Send voice message from overlay to main window (via main process relay)
-    sendMessage: (data) => ipcRenderer.send("voice-message", data),
+    getGlassConfig: () => ipcRenderer.invoke("voice-overlay-glass-config"),
+    // Listen for minimize events from main process
+    onMinimize: (callback) => {
+      if (typeof callback !== "function") return;
+      ipcRenderer.on("voice-overlay-minimize", () => callback());
+    },
+    removeMinimizeListener: () => {
+      ipcRenderer.removeAllListeners("voice-overlay-minimize");
+    },
+    // Insert text into the previously focused app's input field (clipboard + paste)
+    insertText: (text) => ipcRenderer.invoke("voice-insert-text", text),
+    // Push-to-talk events from main process (hold shortcut = start, release = stop)
+    // Payload: { action: "start"|"stop", mode: "dictation"|"agent-chat" }
+    onPushToTalk: (callback) => {
+      if (typeof callback !== "function") return;
+      ipcRenderer.on("voice-push-to-talk", (event, data) => {
+        // Normalize: support both old string format and new object format
+        if (typeof data === "string") {
+          callback(data, "dictation");
+        } else {
+          callback(data.action, data.mode);
+        }
+      });
+    },
+    removePushToTalkListener: () => {
+      ipcRenderer.removeAllListeners("voice-push-to-talk");
+    },
+    // Quick chat activation (Option+Space) — opens agent-chat with screenshot
+    onQuickChat: (callback) => {
+      if (typeof callback !== "function") return;
+      ipcRenderer.on("voice-quick-chat", (event, data) => callback(data));
+    },
+    removeQuickChatListener: () => {
+      ipcRenderer.removeAllListeners("voice-quick-chat");
+    },
+    onQuickChatScreenshot: (callback) => {
+      if (typeof callback !== "function") return;
+      ipcRenderer.on("voice-quick-chat-screenshot", (event, dataUrl) => callback(dataUrl));
+    },
+    removeQuickChatScreenshotListener: () => {
+      ipcRenderer.removeAllListeners("voice-quick-chat-screenshot");
+      ipcRenderer.removeAllListeners("voice-quick-chat-screenshot-error");
+    },
+    onQuickChatScreenshotError: (callback) => {
+      if (typeof callback !== "function") return;
+      ipcRenderer.on("voice-quick-chat-screenshot-error", (event, error) => callback(error));
+    },
+    captureScreen: () => ipcRenderer.invoke("capture-screenshot"),
     // Listen for voice transcript results
     onTranscript: (callback) => {
       if (typeof callback !== "function") return;
@@ -138,14 +189,6 @@ contextBridge.exposeInMainWorld("electronAPI", {
     removeTranscriptListener: () => {
       ipcRenderer.removeAllListeners("voice-transcript");
     },
-    // Listen for voice messages (from overlay to main window)
-    onVoiceMessage: (callback) => {
-      if (typeof callback !== "function") return;
-      ipcRenderer.on("voice-input-message", (event, data) => callback(data));
-    },
-    removeVoiceMessageListener: () => {
-      ipcRenderer.removeAllListeners("voice-input-message");
-    },
     // Listen for insert text events
     onInsertText: (callback) => {
       if (typeof callback !== "function") return;
@@ -153,6 +196,20 @@ contextBridge.exposeInMainWorld("electronAPI", {
     },
     removeInsertTextListener: () => {
       ipcRenderer.removeAllListeners("insert-text");
+    },
+    // Wake Word API
+    wakeWord: {
+      toggle: (enabled) => ipcRenderer.invoke("voice-overlay-wake-word-toggle", enabled),
+      getStatus: () => ipcRenderer.invoke("voice-overlay-wake-word-status"),
+      triggerDetected: () => ipcRenderer.invoke("voice-overlay-wake-word-triggered"),
+    },
+    // Listen for wake word activation event (main process → renderer)
+    onWakeWordActivated: (callback) => {
+      if (typeof callback !== "function") return;
+      ipcRenderer.on("voice-overlay-wake-word-activated", () => callback());
+    },
+    removeWakeWordActivatedListener: () => {
+      ipcRenderer.removeAllListeners("voice-overlay-wake-word-activated");
     },
     // SenseVoice API
     sensevoice: {

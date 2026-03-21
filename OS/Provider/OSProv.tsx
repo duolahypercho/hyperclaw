@@ -21,6 +21,7 @@ import {
   BarChart3,
   Shield,
   Network,
+  MessageSquare,
 } from "lucide-react";
 import { useRouter } from "next/router";
 import { Button } from "@/components/ui/button";
@@ -139,15 +140,12 @@ type CronsContextType = BaseWidgetContextType;
 type PomodoroContextType = BaseWidgetContextType;
 type StatisticsContextType = BaseWidgetContextType;
 
-interface DocsFloatingContextType {
-  showState: boolean;
-  path: string | null;
-  openDoc: (path: string) => void;
-  closeDoc: () => void;
-  isMounted: boolean;
+export interface FloatingDocInstance {
+  id: string;
+  path: string;
 }
 
-interface FloatingChatTaskContext {
+export interface FloatingChatTaskContext {
   _id: string;
   title: string;
   description?: string;
@@ -161,13 +159,25 @@ interface FloatingChatTaskContext {
   starred?: boolean;
 }
 
-interface FloatingChatContextType {
-  showState: boolean;
-  agentId: string | null;
+export interface FloatingChatInstance {
+  id: string;
+  agentId: string;
   sessionKey: string | null;
   taskContext: FloatingChatTaskContext | null;
+}
+
+interface DocsFloatingContextType {
+  instances: Map<string, FloatingDocInstance>;
+  openDoc: (path: string) => void;
+  closeDoc: (id: string) => void;
+  isMounted: boolean;
+}
+
+interface FloatingChatContextType {
+  instances: Map<string, FloatingChatInstance>;
   openChat: (agentId: string, sessionKey?: string, task?: FloatingChatTaskContext | null) => void;
-  closeChat: () => void;
+  closeChat: (id: string) => void;
+  updateChatInstance: (id: string, updates: Partial<FloatingChatInstance>) => void;
   isMounted: boolean;
 }
 
@@ -283,28 +293,49 @@ export const OSProvider: React.FC<OSProviderProps> = ({ children }) => {
     Record<string, AppSettings>
   >("app-settings", {});
 
-  // Floating doc window: path when open, null when closed (not persisted)
-  const [floatingDocPath, setFloatingDocPath] = useState<string | null>(null);
+  // Floating doc windows: Map of instances (multi-window support)
+  const [floatingDocs, setFloatingDocs] = useState<Map<string, FloatingDocInstance>>(new Map());
   const openFloatingDoc = useCallback((path: string) => {
-    setFloatingDocPath(path);
+    const id = `doc-${path}`;
+    setFloatingDocs(prev => {
+      const next = new Map(prev);
+      next.set(id, { id, path });
+      return next;
+    });
   }, []);
-  const closeFloatingDoc = useCallback(() => {
-    setFloatingDocPath(null);
+  const closeFloatingDoc = useCallback((id: string) => {
+    setFloatingDocs(prev => {
+      const next = new Map(prev);
+      next.delete(id);
+      return next;
+    });
   }, []);
 
-  // Floating chat window: agentId when open, null when closed
-  const [floatingChatAgentId, setFloatingChatAgentId] = useState<string | null>(null);
-  const [floatingChatSessionKey, setFloatingChatSessionKey] = useState<string | null>(null);
-  const [floatingChatTask, setFloatingChatTask] = useState<FloatingChatTaskContext | null>(null);
+  // Floating chat windows: Map of instances (multi-window support)
+  const [floatingChats, setFloatingChats] = useState<Map<string, FloatingChatInstance>>(new Map());
   const openFloatingChat = useCallback((agentId: string, sessionKey?: string, task?: FloatingChatTaskContext | null) => {
-    setFloatingChatAgentId(agentId);
-    setFloatingChatSessionKey(sessionKey ?? null);
-    setFloatingChatTask(task ?? null);
+    const id = task ? `chat-task-${task._id}` : `chat-${agentId}`;
+    setFloatingChats(prev => {
+      const next = new Map(prev);
+      next.set(id, { id, agentId, sessionKey: sessionKey ?? null, taskContext: task ?? null });
+      return next;
+    });
   }, []);
-  const closeFloatingChat = useCallback(() => {
-    setFloatingChatAgentId(null);
-    setFloatingChatSessionKey(null);
-    setFloatingChatTask(null);
+  const closeFloatingChat = useCallback((id: string) => {
+    setFloatingChats(prev => {
+      const next = new Map(prev);
+      next.delete(id);
+      return next;
+    });
+  }, []);
+  const updateFloatingChatInstance = useCallback((id: string, updates: Partial<FloatingChatInstance>) => {
+    setFloatingChats(prev => {
+      const inst = prev.get(id);
+      if (!inst) return prev;
+      const next = new Map(prev);
+      next.set(id, { ...inst, ...updates });
+      return next;
+    });
   }, []);
 
 
@@ -394,6 +425,17 @@ export const OSProvider: React.FC<OSProviderProps> = ({ children }) => {
         },
         href: "/Tool/TodoList",
       }, */
+      {
+        id: "chat",
+        name: "Chat",
+        description: "Chat with your OpenClaw AI agents",
+        icon: <MessageSquare className="w-3.5 h-3.5" />,
+        onClick: () => {
+          if (activeTool?.id === "chat") return;
+          createToolClickHandler("/Tool/Chat", "chat")();
+        },
+        href: "/Tool/Chat",
+      },
       {
         id: "crons",
         name: "Crons",
@@ -727,26 +769,23 @@ export const OSProvider: React.FC<OSProviderProps> = ({ children }) => {
 
   const docsFloatingValue: DocsFloatingContextType = useMemo(
     () => ({
-      showState: floatingDocPath !== null,
-      path: floatingDocPath,
+      instances: floatingDocs,
       openDoc: openFloatingDoc,
       closeDoc: closeFloatingDoc,
       isMounted,
     }),
-    [floatingDocPath, openFloatingDoc, closeFloatingDoc, isMounted]
+    [floatingDocs, openFloatingDoc, closeFloatingDoc, isMounted]
   );
 
   const floatingChatValue: FloatingChatContextType = useMemo(
     () => ({
-      showState: floatingChatAgentId !== null,
-      agentId: floatingChatAgentId,
-      sessionKey: floatingChatSessionKey,
-      taskContext: floatingChatTask,
+      instances: floatingChats,
       openChat: openFloatingChat,
       closeChat: closeFloatingChat,
+      updateChatInstance: updateFloatingChatInstance,
       isMounted,
     }),
-    [floatingChatAgentId, floatingChatSessionKey, floatingChatTask, openFloatingChat, closeFloatingChat, isMounted]
+    [floatingChats, openFloatingChat, closeFloatingChat, updateFloatingChatInstance, isMounted]
   );
 
 

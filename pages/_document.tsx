@@ -4,7 +4,7 @@ import { GeistMono } from "geist/font/mono";
 
 export default function Document() {
   return (
-    <Html lang="en" className={`${GeistSans.variable} ${GeistMono.variable}`}>
+    <Html lang="en" className={`${GeistSans.variable} ${GeistMono.variable}`} style={{ background: "transparent" }}>
       <Head>
         {/* Default meta tags that will be overridden by page-specific SEO component */}
         {/* These ensure basic tags are present even if client-side rendering is delayed */}
@@ -15,7 +15,7 @@ export default function Document() {
         <link rel="icon" href="/favicon.ico" />
         <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
       </Head>
-      <body>
+      <body style={{ background: "transparent" }}>
         <Main />
         <NextScript />
       </body>

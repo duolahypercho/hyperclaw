@@ -256,12 +256,33 @@ declare global {
       // Voice Overlay - global voice input (Alt+Space)
       voiceOverlay?: {
         hide: () => Promise<void>;
+        expand: () => Promise<void>;
+        minimize: () => Promise<void>;
         isVisible: () => Promise<boolean>;
-        sendMessage: (data: { text: string; agentId: string; sessionKey: string }) => void;
+        /** useNativeWindowBlur: macOS + Windows 11+ (native blur). Linux / Win10 use CSS frosted glass in-page. */
+        getGlassConfig: () => Promise<{ useNativeWindowBlur?: boolean }>;
+        resize: (width: number, height: number) => Promise<void>;
+        setClickThrough: (ignore: boolean) => Promise<void>;
+        insertText: (text: string) => Promise<{ success: boolean; error?: string }>;
+        onPushToTalk: (callback: (action: "start" | "stop", mode: "dictation" | "agent-chat") => void) => void;
+        removePushToTalkListener: () => void;
+        onQuickChat: (callback: (data: { screenshot?: string | null }) => void) => void;
+        removeQuickChatListener: () => void;
+        onQuickChatScreenshot: (callback: (dataUrl: string) => void) => void;
+        onQuickChatScreenshotError?: (callback: (error: string) => void) => void;
+        removeQuickChatScreenshotListener: () => void;
+        captureScreen?: () => Promise<{ dataUrl?: string; error?: string }>;
+        onMinimize: (callback: () => void) => void;
+        removeMinimizeListener: () => void;
         onTranscript: (callback: (data: { text: string; agentId?: string; sessionKey?: string }) => void) => void;
         removeTranscriptListener: () => void;
-        onVoiceMessage: (callback: (data: { text: string; agentId: string; sessionKey: string }) => void) => void;
-        removeVoiceMessageListener: () => void;
+        wakeWord?: {
+          toggle: (enabled: boolean) => Promise<{ success: boolean; enabled: boolean }>;
+          getStatus: () => Promise<{ enabled: boolean }>;
+          triggerDetected: () => Promise<{ success: boolean }>;
+        };
+        onWakeWordActivated?: (callback: () => void) => void;
+        removeWakeWordActivatedListener?: () => void;
         sensevoice?: {
           initialize: () => Promise<{ success: boolean; info?: any; error?: string }>;
           transcribe: (audioData: number[]) => Promise<{ success: boolean; text?: string; error?: string }>;

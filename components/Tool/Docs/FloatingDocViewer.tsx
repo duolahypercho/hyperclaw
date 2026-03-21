@@ -6,10 +6,13 @@ import { FileText, Loader2, AlertCircle, Save, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
-import { useDocsFloatingOS } from "@OS/Provider/OSProv";
 
-export function FloatingDocViewer() {
-  const { path, closeDoc } = useDocsFloatingOS();
+interface FloatingDocViewerProps {
+  path: string;
+  onClose: () => void;
+}
+
+export function FloatingDocViewer({ path, onClose }: FloatingDocViewerProps) {
   const [content, setContent] = useState<string>("");
   const [originalContent, setOriginalContent] = useState<string>("");
   const [loading, setLoading] = useState(true);
@@ -71,8 +74,6 @@ export function FloatingDocViewer() {
     }
   }, [path, content, saving]);
 
-  if (!path) return null;
-
   const docName = path.split("/").pop() ?? path;
 
   return (
@@ -114,7 +115,7 @@ export function FloatingDocViewer() {
             variant="ghost"
             size="iconSm"
             className="h-7 w-7"
-            onClick={closeDoc}
+            onClick={onClose}
             title="Close"
           >
             <X className="w-3.5 h-3.5" />

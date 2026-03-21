@@ -1,6 +1,8 @@
 /**
- * SenseVoice Transcription Service
- * Manages Python subprocess for ONNX transcription
+ * Whisper ONNX Transcription Service
+ * Manages Python subprocess for local speech-to-text.
+ * Uses bundled whisper-tiny ONNX model — no network dependency at runtime.
+ * (File kept as sensevoice-service.js to avoid breaking IPC handler references.)
  */
 
 const { spawn } = require("child_process");
@@ -12,8 +14,9 @@ const { Buffer } = require("buffer");
 // Configuration
 const CONFIG = {
   pythonPath: process.platform === "win32" ? "python" : "python3",
-  serverScript: path.join(__dirname, "python", "sensevoice_server.py"),
+  serverScript: path.join(__dirname, "python", "whisper_server.py"),
   startupTimeout: 30000, // 30 seconds
+  requestTimeout: 15000, // 15 seconds per request
 };
 
 // Singleton instance
@@ -21,6 +24,8 @@ let serverProcess = null;
 let initialized = false;
 let ready = false;
 let messageQueue = [];
+// Deferred pattern: store the Promise AND its resolve/reject callbacks separately
+let initPromise = null;
 let initResolve = null;
 let initReject = null;
 let buffer = "";
@@ -38,7 +43,7 @@ function getPythonDir() {
 function writeWavFile(audioData) {
   const tempDir = os.tmpdir();
   const tempFile = path.join(tempDir, `sensevoice_${Date.now()}.wav`);
-  
+
   // Convert to Float32Array if needed
   let floatData;
   if (Array.isArray(audioData)) {
@@ -59,7 +64,7 @@ function writeWavFile(audioData) {
   } else {
     throw new Error("Unsupported audio data format");
   }
-  
+
   // Create WAV file
   const numChannels = 1;
   const sampleRate = 16000;
@@ -69,15 +74,15 @@ function writeWavFile(audioData) {
   const byteRate = sampleRate * blockAlign;
   const dataSize = floatData.length * bytesPerSample;
   const fileSize = 36 + dataSize;
-  
+
   const wavBuffer = Buffer.alloc(44 + dataSize);
   let offset = 0;
-  
+
   // RIFF header
   wavBuffer.write("RIFF", offset); offset += 4;
   wavBuffer.writeUInt32LE(fileSize, offset); offset += 4;
   wavBuffer.write("WAVE", offset); offset += 4;
-  
+
   // fmt chunk
   wavBuffer.write("fmt ", offset); offset += 4;
   wavBuffer.writeUInt32LE(16, offset); offset += 4; // chunk size
@@ -87,11 +92,11 @@ function writeWavFile(audioData) {
   wavBuffer.writeUInt32LE(byteRate, offset); offset += 4;
   wavBuffer.writeUInt16LE(blockAlign, offset); offset += 2;
   wavBuffer.writeUInt16LE(bitsPerSample, offset); offset += 2;
-  
+
   // data chunk
   wavBuffer.write("data", offset); offset += 4;
   wavBuffer.writeUInt32LE(dataSize, offset); offset += 4;
-  
+
   // Write audio samples
   for (let i = 0; i < floatData.length; i++) {
     const sample = Math.max(-1, Math.min(1, floatData[i]));
@@ -99,7 +104,7 @@ function writeWavFile(audioData) {
     wavBuffer.writeInt16LE(int16, offset);
     offset += 2;
   }
-  
+
   fs.writeFileSync(tempFile, wavBuffer);
   return tempFile;
 }
@@ -108,18 +113,17 @@ function writeWavFile(audioData) {
  * Initialize the SenseVoice server
  */
 function initialize() {
-  return new Promise((resolve, reject) => {
-    if (initialized && ready) {
-      resolve(true);
-      return;
-    }
+  if (initialized && ready) {
+    return Promise.resolve(true);
+  }
 
-    // If there's already an init in progress, wait for it
-    if (initResolve) {
-      initResolve.then(resolve).catch(reject);
-      return;
-    }
+  // If there's already an init in progress, return the same promise (safe re-entry)
+  if (initPromise) {
+    return initPromise;
+  }
 
+  initPromise = new Promise((resolve, reject) => {
+    // Store callbacks so handleResponse can resolve/reject from outside
     initResolve = resolve;
     initReject = reject;
     buffer = ""; // Reset buffer
@@ -130,8 +134,8 @@ function initialize() {
       serverProcess = spawn(CONFIG.pythonPath, [CONFIG.serverScript], {
         cwd: getPythonDir(),
         stdio: ["pipe", "pipe", "pipe"],
-        env: { 
-          ...process.env, 
+        env: {
+          ...process.env,
           PYTHONPATH: getPythonDir(),
           PYTHONUNBUFFERED: "1"
         },
@@ -158,46 +162,58 @@ function initialize() {
         }
       });
 
-      // Handle process exit
+      // Handle process exit — reject queued requests so they don't hang
       serverProcess.on("close", (code) => {
         console.log("[SenseVoice] Server closed with code:", code);
         serverProcess = null;
         ready = false;
         initialized = false;
+        initPromise = null;
+
+        // Reject any pending requests
+        while (messageQueue.length > 0) {
+          const [, rej] = messageQueue.shift();
+          rej(new Error("Server process exited"));
+        }
       });
 
       serverProcess.on("error", (err) => {
         console.error("[SenseVoice] Server error:", err);
-        if (initReject) {
-          initReject(err);
-          initReject = null;
-        }
+        initPromise = null;
+        initResolve = null;
+        initReject = null;
+        reject(err);
       });
 
-      // Send init request after a short delay
+      // Send init request after a short delay (let Python start up)
       setTimeout(() => {
-        sendRequest({ action: "init" });
+        if (serverProcess && !serverProcess.killed) {
+          const requestStr = JSON.stringify({ action: "init" }) + "\n";
+          serverProcess.stdin.write(requestStr);
+        }
       }, 1500);
 
       // Timeout
       setTimeout(() => {
         if (!ready) {
           console.error("[SenseVoice] Startup timeout");
-          if (initReject) {
-            initReject(new Error("Startup timeout"));
-            initReject = null;
-          }
+          initPromise = null;
+          initResolve = null;
+          initReject = null;
+          reject(new Error("Startup timeout"));
         }
       }, CONFIG.startupTimeout);
 
     } catch (error) {
       console.error("[SenseVoice] Failed to start:", error);
-      if (initReject) {
-        initReject(error);
-        initReject = null;
-      }
+      initPromise = null;
+      initResolve = null;
+      initReject = null;
+      reject(error);
     }
   });
+
+  return initPromise;
 }
 
 /**
@@ -208,8 +224,8 @@ function handleResponse(line) {
     const response = JSON.parse(line.trim());
     console.log("[SenseVoice] Response:", JSON.stringify(response).substring(0, 100));
 
+    // Init response — Python returns { "initialized": true/false }
     if (response.initialized !== undefined && !ready) {
-      // Init response
       ready = response.initialized;
       initialized = true;
 
@@ -218,10 +234,12 @@ function handleResponse(line) {
         if (initResolve) {
           initResolve(true);
           initResolve = null;
+          initReject = null;
         }
       } else {
         if (initReject) {
           initReject(new Error(response.error || "Init failed"));
+          initResolve = null;
           initReject = null;
         }
       }
@@ -231,7 +249,7 @@ function handleResponse(line) {
     // Handle queued messages
     if (messageQueue.length > 0) {
       const [resolve, reject] = messageQueue.shift();
-      
+
       if (response.success) {
         resolve(response);
       } else {
@@ -254,7 +272,18 @@ function sendRequest(request) {
       return;
     }
 
-    messageQueue.push([resolve, reject]);
+    // Add timeout so requests don't hang if Python crashes mid-request
+    const timer = setTimeout(() => {
+      // Remove this entry from the queue
+      const idx = messageQueue.findIndex(([r]) => r === wrappedResolve);
+      if (idx !== -1) messageQueue.splice(idx, 1);
+      reject(new Error("Transcription timed out"));
+    }, CONFIG.requestTimeout);
+
+    const wrappedResolve = (val) => { clearTimeout(timer); resolve(val); };
+    const wrappedReject = (err) => { clearTimeout(timer); reject(err); };
+
+    messageQueue.push([wrappedResolve, wrappedReject]);
     const requestStr = JSON.stringify(request) + "\n";
     serverProcess.stdin.write(requestStr);
   });
@@ -269,12 +298,12 @@ async function transcribe(audioData) {
   }
 
   let tempFile = null;
-  
+
   try {
     // Write audio to WAV file
     tempFile = writeWavFile(audioData);
     console.log("[SenseVoice] Transcribing file:", tempFile);
-    
+
     // Send transcription request
     const result = await sendRequest({
       action: "transcribe",
@@ -323,11 +352,15 @@ function isReady() {
 function stop() {
   if (serverProcess) {
     serverProcess.kill();
-    serverProcess = null;
-    ready = false;
-    initialized = false;
     console.log("[SenseVoice] Server stopped");
   }
+  // Always reset state, even if no process was running
+  serverProcess = null;
+  ready = false;
+  initialized = false;
+  initPromise = null;
+  initResolve = null;
+  initReject = null;
 }
 
 /**
@@ -346,4 +379,7 @@ module.exports = {
   stop,
   restart,
   getPythonDir,
+  // Exported for testing
+  _writeWavFile: writeWavFile,
+  _handleResponse: handleResponse,
 };

@@ -1,3 +1,5 @@
+import React from "react";
+
 export interface InputAttachment {
   id: string;
   type: string;
@@ -35,6 +37,14 @@ export interface AttachmentType {
   url?: string;
 }
 
+/** Imperative handle for controlling InputContainer from parent without controlled mode */
+export interface InputContainerHandle {
+  clear: () => void;
+  focus: () => void;
+  getValue: () => string;
+  setValue: (val: string) => void;
+}
+
 export interface InputContainerProps {
   // Core props
   onSendMessage: (
@@ -46,6 +56,10 @@ export interface InputContainerProps {
   placeholder?: string;
   value?: string;
   onChange?: (value: string) => void;
+  /** Lightweight change notification — fires on every keystroke without requiring controlled mode */
+  onInputChange?: (value: string) => void;
+  /** Imperative ref for clear/focus/getValue without controlled mode */
+  inputRef?: React.MutableRefObject<InputContainerHandle | null>;
   maxLength?: number;
   rows?: number;
   disabled?: boolean;

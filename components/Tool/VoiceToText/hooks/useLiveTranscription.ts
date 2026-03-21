@@ -1,58 +1,45 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 
-interface SpeechRecognition extends EventTarget {
-    continuous: boolean;
-    interimResults: boolean;
-    lang: string;
-    start: () => void;
-    stop: () => void;
-    abort: () => void;
-    onresult: (event: SpeechRecognitionEvent) => void;
-    onerror: (event: SpeechRecognitionErrorEvent) => void;
-    onend: () => void;
-}
-
-interface SpeechRecognitionEvent {
-    resultIndex: number;
-    results: SpeechRecognitionResultList;
-}
-
-interface SpeechRecognitionErrorEvent {
-    error: string;
-    message: string;
-}
-
-interface SpeechRecognitionResultList {
-    length: number;
-    [index: number]: SpeechRecognitionResult;
-}
-
-interface SpeechRecognitionResult {
-    [index: number]: SpeechRecognitionAlternative;
-    isFinal: boolean;
-}
-
-interface SpeechRecognitionAlternative {
-    transcript: string;
-    confidence: number;
-}
+/** Interval (ms) between interim transcription chunks while recording. */
+const INTERIM_INTERVAL_MS = 2500;
 
 export const useLiveTranscription = () => {
     const [transcript, setTranscript] = useState("");
+    const [interimTranscript, setInterimTranscript] = useState("");
     const [isListening, setIsListening] = useState(false);
+    const [isTranscribing, setIsTranscribing] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [audioData, setAudioData] = useState<number[]>([]);
-    const recognitionRef = useRef<SpeechRecognition | null>(null);
     const audioContextRef = useRef<AudioContext | null>(null);
     const analyserRef = useRef<AnalyserNode | null>(null);
     const mediaStreamRef = useRef<MediaStream | null>(null);
     const animationFrameRef = useRef<number | null>(null);
+    const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+    const audioChunksRef = useRef<Blob[]>([]);
 
-    // Stop audio analysis
+    // PCM capture for chunked transcription
+    const pcmBufferRef = useRef<Float32Array>(new Float32Array(0));
+    const scriptNodeRef = useRef<ScriptProcessorNode | null>(null);
+    const interimTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const sampleRateRef = useRef<number>(44100);
+
+    // Stop audio analysis (waveform visualization + mic stream)
     const stopAudioAnalysis = useCallback(() => {
         if (animationFrameRef.current) {
             cancelAnimationFrame(animationFrameRef.current);
             animationFrameRef.current = null;
+        }
+
+        // Stop interim transcription timer
+        if (interimTimerRef.current) {
+            clearInterval(interimTimerRef.current);
+            interimTimerRef.current = null;
+        }
+
+        // Disconnect ScriptProcessorNode
+        if (scriptNodeRef.current) {
+            try { scriptNodeRef.current.disconnect(); } catch {}
+            scriptNodeRef.current = null;
         }
 
         if (mediaStreamRef.current) {
@@ -69,7 +56,59 @@ export const useLiveTranscription = () => {
         setAudioData([]);
     }, []);
 
-    // Start audio analysis for waveform visualization
+    // Resample Float32Array from source sample rate to 16kHz Int16
+    const resampleToInt16 = useCallback((float32Data: Float32Array, sourceSampleRate: number): number[] => {
+        const targetSampleRate = 16000;
+        let resampled: Float32Array;
+
+        if (sourceSampleRate !== targetSampleRate) {
+            const ratio = sourceSampleRate / targetSampleRate;
+            const newLength = Math.round(float32Data.length / ratio);
+            resampled = new Float32Array(newLength);
+            for (let i = 0; i < newLength; i++) {
+                const srcIndex = Math.round(i * ratio);
+                resampled[i] = float32Data[Math.min(srcIndex, float32Data.length - 1)];
+            }
+        } else {
+            resampled = float32Data;
+        }
+
+        const int16Array: number[] = new Array(resampled.length);
+        for (let i = 0; i < resampled.length; i++) {
+            const sample = Math.max(-1, Math.min(1, resampled[i]));
+            int16Array[i] = Math.round(sample * 32767);
+        }
+        return int16Array;
+    }, []);
+
+    // Send accumulated PCM buffer for interim transcription
+    const sendInterimTranscription = useCallback(async () => {
+        const sensevoice = window.electronAPI?.voiceOverlay?.sensevoice;
+        if (!sensevoice) return;
+
+        const buffer = pcmBufferRef.current;
+        if (buffer.length < 4000) return; // Too short, skip
+
+        try {
+            const status = await sensevoice.getStatus();
+            if (!status.ready) {
+                const initResult = await sensevoice.initialize();
+                if (!initResult.success) return;
+            }
+
+            const audioData = resampleToInt16(buffer, sampleRateRef.current);
+            if (audioData.length === 0) return;
+
+            const result = await sensevoice.transcribe(audioData);
+            if (result.success && result.text) {
+                setInterimTranscript(result.text.trim());
+            }
+        } catch {
+            // Silently ignore interim transcription errors
+        }
+    }, [resampleToInt16]);
+
+    // Start audio analysis for waveform visualization + MediaRecorder for SenseVoice
     const startAudioAnalysis = useCallback(async () => {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -77,6 +116,7 @@ export const useLiveTranscription = () => {
 
             const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
             audioContextRef.current = audioContext;
+            sampleRateRef.current = audioContext.sampleRate;
 
             const analyser = audioContext.createAnalyser();
             analyser.fftSize = 256;
@@ -85,6 +125,33 @@ export const useLiveTranscription = () => {
 
             const source = audioContext.createMediaStreamSource(stream);
             source.connect(analyser);
+
+            // ScriptProcessorNode to capture raw PCM for chunked transcription
+            pcmBufferRef.current = new Float32Array(0);
+            const scriptNode = audioContext.createScriptProcessor(4096, 1, 1);
+            scriptNodeRef.current = scriptNode;
+
+            scriptNode.onaudioprocess = (e) => {
+                const input = e.inputBuffer.getChannelData(0);
+                const prev = pcmBufferRef.current;
+                const next = new Float32Array(prev.length + input.length);
+                next.set(prev);
+                next.set(input, prev.length);
+                pcmBufferRef.current = next;
+            };
+
+            source.connect(scriptNode);
+            // ScriptProcessorNode must connect to destination to fire events,
+            // but route through a silent GainNode to avoid echoing mic to speakers
+            const silentGain = audioContext.createGain();
+            silentGain.gain.value = 0;
+            scriptNode.connect(silentGain);
+            silentGain.connect(audioContext.destination);
+
+            // Start interim transcription interval
+            interimTimerRef.current = setInterval(() => {
+                sendInterimTranscription();
+            }, INTERIM_INTERVAL_MS);
 
             // Analyze audio data for waveform
             const dataArray = new Uint8Array(analyser.frequencyBinCount);
@@ -102,7 +169,6 @@ export const useLiveTranscription = () => {
                 for (let i = 0; i < bars; i++) {
                     const index = i * step;
                     const value = dataArray[index] || 0;
-                    // Normalize to 0-1 range (0-255 -> 0-1)
                     normalizedData.push(value / 255);
                 }
 
@@ -111,168 +177,169 @@ export const useLiveTranscription = () => {
             };
 
             updateAudioData();
+
+            // Start MediaRecorder to capture audio for final SenseVoice transcription
+            audioChunksRef.current = [];
+            const recorder = new MediaRecorder(stream, {
+                mimeType: MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+                    ? 'audio/webm;codecs=opus'
+                    : 'audio/webm',
+            });
+
+            recorder.ondataavailable = (event) => {
+                if (event.data.size > 0) {
+                    audioChunksRef.current.push(event.data);
+                }
+            };
+
+            mediaRecorderRef.current = recorder;
+            recorder.start(1000); // Collect data every second
+
         } catch (err: any) {
-            console.warn('Error starting audio analysis:', err);
-            // Don't fail transcription if audio analysis fails
-        }
-    }, []);
-
-    const stopListening = useCallback(() => {
-        if (recognitionRef.current) {
-            try {
-                recognitionRef.current.stop();
-            } catch (err) {
-                // Recognition might already be stopped
-                console.warn('Error stopping recognition:', err);
+            if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+                setError('Microphone access denied. Please allow microphone access in your browser settings and reload the page.');
+            } else if (err.name === 'NotFoundError') {
+                setError('No microphone found. Please connect a microphone and try again.');
+            } else {
+                console.warn('Error starting audio analysis:', err);
+                setError(`Failed to access microphone: ${err.message || 'Unknown error'}`);
             }
-            recognitionRef.current = null;
-            setIsListening(false);
+            throw err; // Re-throw so startListening knows it failed
         }
-        stopAudioAnalysis();
-    }, [stopAudioAnalysis]);
+    }, [sendInterimTranscription]);
 
-    const startListening = useCallback(async () => {
-        // Standard check for browser support
-        const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
-        if (!SpeechRecognition) {
-            setError('Speech recognition is not supported in this browser');
+    // Convert recorded audio blob to PCM Int16 array for SenseVoice
+    const blobToInt16Array = useCallback(async (blob: Blob): Promise<number[]> => {
+        const arrayBuffer = await blob.arrayBuffer();
+        const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+
+        try {
+            const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+            const float32Data = audioBuffer.getChannelData(0);
+            return resampleToInt16(float32Data, audioBuffer.sampleRate);
+        } finally {
+            await audioContext.close();
+        }
+    }, [resampleToInt16]);
+
+    // Send recorded audio to SenseVoice for transcription
+    const transcribeWithSenseVoice = useCallback(async (audioBlob: Blob) => {
+        const sensevoice = window.electronAPI?.voiceOverlay?.sensevoice;
+        if (!sensevoice) {
+            setError('SenseVoice transcription is not available');
+            setIsTranscribing(false);
             return;
         }
 
-        // Request microphone permission first (required for speech recognition)
+        setIsTranscribing(true);
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            // Stop the stream immediately - we just wanted to get permission
-            stream.getTracks().forEach(track => track.stop());
-        } catch (permErr: any) {
-            if (permErr.name === 'NotAllowedError' || permErr.name === 'PermissionDeniedError') {
-                setError('Microphone access denied. Please allow microphone access in your browser settings and reload the page.');
+            // Initialize SenseVoice if needed
+            const status = await sensevoice.getStatus();
+            if (!status.ready) {
+                const initResult = await sensevoice.initialize();
+                if (!initResult.success) {
+                    setError(`Failed to initialize transcription: ${initResult.error || 'Unknown error'}`);
+                    return;
+                }
+            }
+
+            // Convert audio to PCM Int16 array
+            const audioData = await blobToInt16Array(audioBlob);
+
+            if (audioData.length === 0) {
+                setError('No audio data recorded');
                 return;
             }
-            // Other permission errors - continue anyway, let speech recognition try
-            console.warn('Microphone permission error:', permErr);
+
+            // Send to SenseVoice via IPC
+            const result = await sensevoice.transcribe(audioData);
+
+            if (result.success && result.text) {
+                setTranscript(result.text.trim());
+                setInterimTranscript(""); // Clear interim once final is ready
+            } else if (!result.success) {
+                setError(result.error || 'Transcription failed');
+            }
+            // If success but empty text, leave transcript empty (silence)
+        } catch (err: any) {
+            console.error('SenseVoice transcription error:', err);
+            setError(`Transcription error: ${err.message || 'Unknown error'}`);
+        } finally {
+            setIsTranscribing(false);
+        }
+    }, [blobToInt16Array]);
+
+    const stopListening = useCallback(() => {
+        // Stop MediaRecorder and collect audio for transcription
+        const recorder = mediaRecorderRef.current;
+        if (recorder && recorder.state !== 'inactive') {
+            // Use onstop to get the final blob after all data is flushed
+            recorder.onstop = () => {
+                const audioBlob = new Blob(audioChunksRef.current, { type: recorder.mimeType });
+                audioChunksRef.current = [];
+                mediaRecorderRef.current = null;
+
+                // Transcribe the recorded audio
+                if (audioBlob.size > 0) {
+                    transcribeWithSenseVoice(audioBlob);
+                }
+            };
+            recorder.stop();
+        } else {
+            mediaRecorderRef.current = null;
         }
 
-        // Stop any existing recognition
-        if (recognitionRef.current) {
-            stopListening();
-        }
+        setIsListening(false);
+        stopAudioAnalysis();
+    }, [stopAudioAnalysis, transcribeWithSenseVoice]);
 
-        const recognition = new SpeechRecognition() as SpeechRecognition;
-        recognition.continuous = true;
-        recognition.interimResults = true; // THE "LIGHTNING SPEED" KEY
-        recognition.lang = 'en-US';
-
-        recognition.onresult = (event: SpeechRecognitionEvent) => {
-            const segments: Array<{ text: string; isFinal: boolean }> = [];
-
-            // Collect all segments with their finalization status
-            for (let i = 0; i < event.results.length; ++i) {
-                const result = event.results[i];
-                const text = result[0].transcript.trim();
-                if (text) {
-                    segments.push({
-                        text,
-                        isFinal: result.isFinal
-                    });
-                }
-            }
-
-            // Intelligently join segments with space or newline
-            let fullText = "";
-            for (let i = 0; i < segments.length; ++i) {
-                const current = segments[i];
-                const previous = i > 0 ? segments[i - 1] : null;
-
-                if (i > 0) {
-                    // Determine separator: newline or space
-                    const shouldUseNewline =
-                        previous &&
-                        previous.isFinal && // Previous segment is finalized
-                        /[.!?]\s*$/.test(previous.text) && // Ends with sentence punctuation
-                        /^[A-Z]/.test(current.text); // Current starts with capital letter
-
-                    fullText += shouldUseNewline ? "\n" : " ";
-                }
-
-                fullText += current.text;
-            }
-
-            setTranscript(fullText);
-        };
-
-        recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-            console.error('Speech recognition error:', event.error, event.message);
-
-            // Provide helpful messages for specific errors
-            let userMessage: string;
-            switch (event.error) {
-                case 'not-allowed':
-                    userMessage = 'Microphone access denied. Please allow microphone access in your browser settings and reload the page.';
-                    break;
-                case 'no-speech':
-                    userMessage = 'No speech detected. Please try again.';
-                    break;
-                case 'audio-capture':
-                    userMessage = 'No microphone found. Please connect a microphone and try again.';
-                    break;
-                case 'network':
-                    userMessage = 'Network error. Please check your internet connection.';
-                    break;
-                default:
-                    userMessage = `Speech recognition error: ${event.error}`;
-            }
-
-            setError(userMessage);
-            setIsListening(false);
-            stopAudioAnalysis();
-            recognitionRef.current = null;
-        };
-
-        recognition.onend = () => {
-            setIsListening(false);
-            recognitionRef.current = null;
-        };
+    const startListening = useCallback(async () => {
+        setError(null);
+        setTranscript("");
+        setInterimTranscript("");
 
         try {
-            recognition.start();
-            recognitionRef.current = recognition;
+            // Start audio analysis (waveform) and MediaRecorder (for SenseVoice)
+            await startAudioAnalysis();
             setIsListening(true);
-            setError(null);
-
-            // Start audio analysis for waveform
-            startAudioAnalysis();
         } catch (err: any) {
-            console.error('Error starting recognition:', err);
-            setError(`Failed to start recognition: ${err.message || 'Unknown error'}`);
+            // Error already set in startAudioAnalysis
             setIsListening(false);
             stopAudioAnalysis();
         }
-    }, [stopListening, startAudioAnalysis, stopAudioAnalysis]);
+    }, [startAudioAnalysis, stopAudioAnalysis]);
 
     // Cleanup on unmount
     useEffect(() => {
         return () => {
-            if (recognitionRef.current) {
+            if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
                 try {
-                    recognitionRef.current.abort();
+                    mediaRecorderRef.current.stop();
                 } catch (err) {
                     // Ignore errors during cleanup
                 }
-                recognitionRef.current = null;
+                mediaRecorderRef.current = null;
             }
+            if (interimTimerRef.current) {
+                clearInterval(interimTimerRef.current);
+                interimTimerRef.current = null;
+            }
+            stopAudioAnalysis();
         };
-    }, []);
+    }, [stopAudioAnalysis]);
 
     const clearTranscript = useCallback(() => {
         setTranscript("");
+        setInterimTranscript("");
     }, []);
 
     return {
         transcript,
+        interimTranscript,
         isListening,
+        isTranscribing,
         error,
-        audioData, // Audio data for waveform visualization
+        audioData,
         startListening,
         stopListening,
         clearTranscript

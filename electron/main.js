@@ -13,6 +13,7 @@ const {
 } = require("electron");
 const path = require("path");
 const fs = require("fs");
+const os = require("os");
 const https = require("https");
 const http = require("http");
 
@@ -46,6 +47,9 @@ const getWordsDB = () => {
 
 // Insert text storage
 let savedInsertText = "";
+
+// Wake word state
+let wakeWordEnabled = false;
 
 
 // Log crashes so we can debug "opens then closes" (run from Terminal to see output)
@@ -325,6 +329,14 @@ function createTrayWithIcon(trayIcon) {
         label: "Minimize to Tray",
         click: () => {
           if (mainWindow) mainWindow.hide();
+        },
+      },
+      { type: "separator" },
+      {
+        label: "Voice Input",
+        accelerator: process.platform === "darwin" ? "Control+Command" : "Ctrl+Super",
+        click: () => {
+          toggleVoiceOverlay();
         },
       },
       { type: "separator" },
@@ -1317,31 +1329,32 @@ if (process.platform === "darwin") {
 // ─── Voice Overlay Window ──────────────────────────────────────────────────────────
 
 let voiceOverlayWindow = null;
+const MINI_SIZE = 44;
+const BOTTOM_GAP = 16; // gap from bottom of screen
 
 function createVoiceOverlay() {
   if (voiceOverlayWindow && !voiceOverlayWindow.isDestroyed()) {
     voiceOverlayWindow.show();
-    voiceOverlayWindow.focus();
     return;
   }
 
   const { width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().workAreaSize;
-  const overlayWidth = 500;
-  const overlayHeight = 200;
 
   voiceOverlayWindow = new BrowserWindow({
-    width: overlayWidth,
-    height: overlayHeight,
-    x: Math.round((screenWidth - overlayWidth) / 2),
-    y: Math.round((screenHeight - overlayHeight) / 2),
+    width: MINI_SIZE,
+    height: MINI_SIZE,
+    x: Math.round((screenWidth - MINI_SIZE) / 2),
+    y: screenHeight - MINI_SIZE - BOTTOM_GAP,
     frame: false,
     transparent: true,
     resizable: false,
     movable: true,
     alwaysOnTop: true,
     skipTaskbar: true,
-    focusable: true,
+    focusable: false,
     show: false,
+    hasShadow: false,
+    roundedCorners: true,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -1349,24 +1362,17 @@ function createVoiceOverlay() {
     },
   });
 
-  // Load the overlay page - use static HTML for reliability
-  if (isDev) {
-    // In dev, try Next.js first, fallback to static
-    voiceOverlayWindow.loadURL("http://localhost:1000/voice-overlay").catch(() => {
-      voiceOverlayWindow.loadFile(path.join(__dirname, "../public/voice-overlay.html"));
-    });
-  } else {
-    // In production, use static HTML
-    voiceOverlayWindow.loadFile(path.join(__dirname, "../public/voice-overlay.html"));
-  }
+  const overlayUrl = isRemoteMode
+    ? `${appConfig.remoteUrl}/voice-overlay`
+    : `${appConfig.localUrl}/voice-overlay`;
+
+  voiceOverlayWindow.loadURL(overlayUrl).catch((err) => {
+    console.error("[Hyperclaw] Failed to load voice overlay:", err.message);
+  });
 
   voiceOverlayWindow.once("ready-to-show", () => {
     voiceOverlayWindow.show();
-    voiceOverlayWindow.focus();
-  });
-
-  voiceOverlayWindow.on("blur", () => {
-    // Optionally hide on blur - can be toggled
+    if (isDev) voiceOverlayWindow.webContents.openDevTools({ mode: "detach" });
   });
 
   voiceOverlayWindow.on("closed", () => {
@@ -1374,9 +1380,51 @@ function createVoiceOverlay() {
   });
 }
 
+/** Windows 11+ build ≥ 22000 — acrylic backdrop behind transparent windows. */
+function isWindows11OrLater() {
+  if (process.platform !== "win32") return false;
+  const build = parseInt(String(os.release()).split(".")[2] || "0", 10);
+  return !Number.isNaN(build) && build >= 22000;
+}
+
+function setVoiceOverlayNativeBackdrop(/* enabled */) {
+  // No-op: Electron 39 vibrancy conflicts with transparent:true.
+  // Glassmorphism achieved via transparent window + semi-transparent CSS panels.
+}
+
+// Track whether quick chat overlay is currently expanded
+let quickChatOpen = false;
+
+function expandVoiceOverlay() {
+  if (!voiceOverlayWindow || voiceOverlayWindow.isDestroyed()) {
+    createVoiceOverlay();
+  }
+  if (!voiceOverlayWindow || voiceOverlayWindow.isDestroyed()) return;
+  voiceOverlayWindow.setFocusable(true);
+  voiceOverlayWindow.show();
+  voiceOverlayWindow.focus();
+  setVoiceOverlayNativeBackdrop(true);
+}
+
+function minimizeVoiceOverlay() {
+  quickChatOpen = false;
+  if (!voiceOverlayWindow || voiceOverlayWindow.isDestroyed()) return;
+  setVoiceOverlayNativeBackdrop(false);
+  const { width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().workAreaSize;
+  voiceOverlayWindow.setFocusable(false);
+  voiceOverlayWindow.setBounds({
+    x: Math.round((screenWidth - MINI_SIZE) / 2),
+    y: screenHeight - MINI_SIZE - BOTTOM_GAP,
+    width: MINI_SIZE,
+    height: MINI_SIZE,
+  });
+}
+
 function hideVoiceOverlay() {
+  quickChatOpen = false;
   if (voiceOverlayWindow && !voiceOverlayWindow.isDestroyed()) {
-    voiceOverlayWindow.hide();
+    minimizeVoiceOverlay();
+    voiceOverlayWindow.webContents.send("voice-overlay-minimize");
   }
 }
 
@@ -1388,21 +1436,276 @@ function toggleVoiceOverlay() {
   }
 }
 
-// Register global hotkey for voice input
-function registerVoiceHotkey() {
-  // On macOS, Alt+Space conflicts with input source switching.
-  // Use Cmd+Shift+Space on macOS, Alt+Space elsewhere.
-  const hotkey =
-    process.platform === "darwin" ? "Command+Shift+Space" : "Alt+Space";
-  const ret = globalShortcut.register(hotkey, () => {
-    console.log(`[Hyperclaw] ${hotkey} pressed - toggling voice overlay`);
-    toggleVoiceOverlay();
-  });
+// Screenshot capture for quick-chat mode
+// Requires Screen Recording permission on macOS (System Settings → Privacy → Screen Recording)
+let screenPermissionPrompted = false;
 
-  if (!ret) {
-    console.error(`[Hyperclaw] Failed to register ${hotkey} hotkey`);
-  } else {
-    console.log(`[Hyperclaw] Registered ${hotkey} for voice input`);
+// macOS: use native screencapture CLI (more reliable than desktopCapturer)
+async function captureScreenshotMac() {
+  const path = require("path");
+  const os = require("os");
+  const fs = require("fs");
+  const { execFile } = require("child_process");
+
+  const tmpFile = path.join(os.tmpdir(), `hyperclaw-screenshot-${Date.now()}.jpg`);
+
+  return new Promise((resolve) => {
+    // -x = no sound, -t jpg = JPEG for smaller size, -o = no shadow on window captures
+    execFile("screencapture", ["-x", "-t", "jpg", tmpFile], { timeout: 5000 }, (err) => {
+      if (err) {
+        if (!screenPermissionPrompted) {
+          screenPermissionPrompted = true;
+          const { shell } = require("electron");
+          shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture");
+        }
+        resolve({ error: `screencapture: ${err.message}` });
+        return;
+      }
+      try {
+        const buffer = fs.readFileSync(tmpFile);
+        fs.unlinkSync(tmpFile);
+        if (buffer.length < 1000) {
+          resolve({ error: "screencapture-blank" });
+          return;
+        }
+        // Resize if over 4MB using nativeImage
+        const { nativeImage } = require("electron");
+        let img = nativeImage.createFromBuffer(buffer);
+        const size = img.getSize();
+        // Scale down to max 1280px wide for reasonable file size
+        if (size.width > 1280) {
+          img = img.resize({ width: 1280, quality: "good" });
+        }
+        const jpegBuffer = img.toJPEG(70); // quality 70 keeps it well under 5MB
+        const dataUrl = `data:image/jpeg;base64,${jpegBuffer.toString("base64")}`;
+        screenPermissionPrompted = false;
+        resolve({ dataUrl });
+      } catch (readErr) {
+        resolve({ error: `read: ${readErr.message}` });
+      }
+    });
+  });
+}
+
+// Linux/Windows: use Electron desktopCapturer
+async function captureScreenshotDesktop() {
+  const { desktopCapturer, nativeImage } = require("electron");
+  const sources = await desktopCapturer.getSources({
+    types: ["screen"],
+    thumbnailSize: { width: 1280, height: 800 },
+  });
+  if (sources.length === 0) {
+    return { error: "no-sources" };
+  }
+  // Convert to JPEG at quality 70 to stay under 5MB
+  const jpegBuffer = sources[0].thumbnail.toJPEG(70);
+  if (jpegBuffer.length < 500) {
+    return { error: `blank-${jpegBuffer.length}B` };
+  }
+  const dataUrl = `data:image/jpeg;base64,${jpegBuffer.toString("base64")}`;
+  return { dataUrl };
+}
+
+async function captureScreenshot() {
+  // Try desktopCapturer first (no permission prompt if already granted)
+  try {
+    const desktopResult = await captureScreenshotDesktop();
+    if (desktopResult.dataUrl) return desktopResult;
+  } catch (_) {
+    // desktopCapturer failed — fall through to platform fallback
+  }
+
+  // macOS fallback: native screencapture CLI
+  if (process.platform === "darwin") {
+    try {
+      return await captureScreenshotMac();
+    } catch (err) {
+      return { error: err?.message || String(err) };
+    }
+  }
+
+  return { error: "no-capture-method" };
+}
+
+// IPC handler: renderer can request a screenshot directly
+ipcMain.handle("capture-screenshot", async () => {
+  const result = await Promise.race([
+    captureScreenshot(),
+    new Promise((resolve) => setTimeout(() => resolve({ error: "timeout" }), 3000)),
+  ]);
+  return result;
+});
+
+// Open voice overlay in agent-chat mode with an auto-attached screenshot
+function openQuickChat() {
+  // Toggle off if already open
+  if (quickChatOpen) {
+    quickChatOpen = false;
+    hideVoiceOverlay();
+    return;
+  }
+
+  quickChatOpen = true;
+
+  // Hide overlay while capturing so it doesn't appear in the screenshot
+  if (voiceOverlayWindow && !voiceOverlayWindow.isDestroyed()) {
+    voiceOverlayWindow.hide();
+  }
+
+  // Wait for macOS to finish hiding the window, then capture
+  const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+  delay(200).then(() => captureScreenshot()).then((result) => {
+    // Show overlay and send quick-chat event
+    expandVoiceOverlay();
+    if (voiceOverlayWindow && !voiceOverlayWindow.isDestroyed()) {
+      voiceOverlayWindow.webContents.send("voice-quick-chat", { screenshot: null });
+      if (result.dataUrl) {
+        voiceOverlayWindow.webContents.send("voice-quick-chat-screenshot", result.dataUrl);
+      }
+    }
+  }).catch(() => {
+    // Still show overlay even if capture fails
+    expandVoiceOverlay();
+    if (voiceOverlayWindow && !voiceOverlayWindow.isDestroyed()) {
+      voiceOverlayWindow.webContents.send("voice-quick-chat", { screenshot: null });
+    }
+  });
+}
+
+// Ctrl+Cmd/Win hotkey — short press toggles quick chat, hold activates push-to-talk
+// Shift modifier: Ctrl+Shift+Cmd = agent-chat mode (instead of dictation)
+const HOLD_THRESHOLD_MS = 300; // ms — hold longer than this = voice recording
+let voiceHotkeyActive = false;
+let voiceHotkeyMode = "dictation"; // "dictation" | "agent-chat"
+let uiohookStarted = false;
+let uiohookWorking = false; // true once we receive at least one event
+
+function registerVoiceHotkey() {
+  if (uiohookStarted) return;
+
+  // Register globalShortcut for quick chat (Option+Space)
+  // Note: Ctrl+Cmd+Space is reserved by macOS for Emoji picker
+  const chatToggleHotkey = process.platform === "darwin" ? "Alt+Space" : "Alt+Space";
+  const registered = globalShortcut.register(chatToggleHotkey, () => {
+    openQuickChat();
+  });
+  if (registered) {
+    console.log(`[Hyperclaw] Quick chat registered: ${chatToggleHotkey}`);
+  }
+
+  // Also register Ctrl+Cmd+V for voice overlay toggle (no hold detection, but reliable)
+  const voiceToggleHotkey = process.platform === "darwin" ? "Control+Command+V" : "Ctrl+Super+V";
+  const voiceRegistered = globalShortcut.register(voiceToggleHotkey, () => {
+    expandVoiceOverlay();
+    // Start recording immediately
+    setTimeout(() => {
+      if (voiceOverlayWindow && !voiceOverlayWindow.isDestroyed()) {
+        voiceOverlayWindow.webContents.send("voice-push-to-talk", { action: "start", mode: "dictation" });
+      }
+    }, 150);
+  });
+  if (voiceRegistered) {
+    console.log(`[Hyperclaw] Voice toggle registered: ${voiceToggleHotkey}`);
+  }
+
+  // Try uiohook for the fancy hold-to-talk on modifier-only combo (Ctrl+Cmd)
+  // Requires Input Monitoring permission on macOS 13+ (Ventura/Sequoia)
+  if (process.platform === "darwin") {
+    const { systemPreferences } = require("electron");
+    const isTrusted = systemPreferences.isTrustedAccessibilityClient(false);
+    if (!isTrusted) {
+      if (!registerVoiceHotkey._prompted) {
+        registerVoiceHotkey._prompted = true;
+        systemPreferences.isTrustedAccessibilityClient(true);
+        console.log("[Hyperclaw] Accessibility permission not granted — macOS prompt shown.");
+      }
+      console.log("[Hyperclaw] uiohook skipped (no Accessibility). globalShortcut active.");
+      return;
+    }
+    console.log("[Hyperclaw] Accessibility permission granted!");
+  }
+
+  try {
+    const { uIOhook, UiohookKey } = require("uiohook-napi");
+
+    // Track which modifier keys are currently held
+    let ctrlHeld = false;
+    let metaHeld = false; // Cmd on macOS, Win on Windows/Linux
+    let shiftHeld = false;
+
+    // Short-press vs hold detection
+    let holdTimer = null;
+    let hotkeyPending = false; // true = keys pressed, waiting to see if it's a tap or hold
+
+    const CTRL_CODES = [UiohookKey.Ctrl, UiohookKey.CtrlRight];
+    const META_CODES = [UiohookKey.Meta, UiohookKey.MetaRight];
+    const SHIFT_CODES = [UiohookKey.Shift, UiohookKey.ShiftRight];
+
+    uIOhook.on("keydown", (e) => {
+      if (!uiohookWorking) {
+        uiohookWorking = true;
+        console.log("[Hyperclaw] uiohook receiving events — hold-to-talk active");
+      }
+      if (CTRL_CODES.includes(e.keycode)) ctrlHeld = true;
+      if (META_CODES.includes(e.keycode)) metaHeld = true;
+      if (SHIFT_CODES.includes(e.keycode)) shiftHeld = true;
+
+      // Both Ctrl + Cmd/Win held → start hold detection
+      if (ctrlHeld && metaHeld && !voiceHotkeyActive && !hotkeyPending) {
+        hotkeyPending = true;
+        voiceHotkeyMode = shiftHeld ? "agent-chat" : "dictation";
+
+        // Start timer — if still held after threshold, it's a hold → push-to-talk
+        holdTimer = setTimeout(() => {
+          holdTimer = null;
+          if (!hotkeyPending) return; // already released (short press)
+          hotkeyPending = false;
+          voiceHotkeyActive = true;
+          console.log(`[Hyperclaw] Ctrl+Cmd/Win held — push-to-talk started (${voiceHotkeyMode})`);
+          expandVoiceOverlay();
+
+          const mode = voiceHotkeyMode;
+          setTimeout(() => {
+            if (voiceOverlayWindow && !voiceOverlayWindow.isDestroyed()) {
+              voiceOverlayWindow.webContents.send("voice-push-to-talk", { action: "start", mode });
+            }
+          }, 150);
+        }, HOLD_THRESHOLD_MS);
+      }
+    });
+
+    uIOhook.on("keyup", (e) => {
+      if (CTRL_CODES.includes(e.keycode)) ctrlHeld = false;
+      if (META_CODES.includes(e.keycode)) metaHeld = false;
+      if (SHIFT_CODES.includes(e.keycode)) shiftHeld = false;
+
+      // Released before hold threshold → short press → toggle floating chat
+      if (hotkeyPending && (!ctrlHeld || !metaHeld)) {
+        hotkeyPending = false;
+        if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
+        console.log("[Hyperclaw] Ctrl+Cmd/Win short press — opening quick chat");
+        openQuickChat();
+        return;
+      }
+
+      // Released after hold threshold → stop push-to-talk
+      if (voiceHotkeyActive && (!ctrlHeld || !metaHeld)) {
+        const mode = voiceHotkeyMode;
+        voiceHotkeyActive = false;
+        console.log(`[Hyperclaw] Ctrl+Cmd/Win released — push-to-talk stopped (${mode})`);
+        if (voiceOverlayWindow && !voiceOverlayWindow.isDestroyed()) {
+          voiceOverlayWindow.webContents.send("voice-push-to-talk", { action: "stop", mode });
+        }
+      }
+    });
+
+    uIOhook.start();
+    uiohookStarted = true;
+    console.log("[Hyperclaw] uiohook started (Ctrl+Cmd hold-to-talk). Waiting for first event to confirm...");
+
+  } catch (error) {
+    console.error("[Hyperclaw] uiohook failed:", error.message);
+    console.log("[Hyperclaw] Using globalShortcut only (no hold-to-talk).");
   }
 }
 
@@ -1411,18 +1714,105 @@ ipcMain.handle("hide-voice-overlay", () => {
   hideVoiceOverlay();
 });
 
+ipcMain.handle("voice-overlay-expand", () => {
+  expandVoiceOverlay();
+});
+
+ipcMain.handle("voice-overlay-minimize", () => {
+  minimizeVoiceOverlay();
+  if (voiceOverlayWindow && !voiceOverlayWindow.isDestroyed()) {
+    voiceOverlayWindow.webContents.send("voice-overlay-minimize");
+  }
+});
+
 ipcMain.handle("get-voice-overlay-visible", () => {
   return voiceOverlayWindow && !voiceOverlayWindow.isDestroyed() && voiceOverlayWindow.isVisible();
 });
 
-// Handle voice message from overlay - send to main window
-ipcMain.on("voice-message", (event, data) => {
-  console.log("[Hyperclaw] Voice message received:", data);
-  
-  // Send to main window
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send("voice-input-message", data);
+ipcMain.handle("voice-overlay-glass-config", () => ({
+  useNativeWindowBlur: process.platform === "darwin" || isWindows11OrLater(),
+}));
+
+// Resize overlay — bottom edge stays fixed, window grows upward
+ipcMain.handle("voice-overlay-resize", (event, { width, height }) => {
+  if (!voiceOverlayWindow || voiceOverlayWindow.isDestroyed()) return;
+  const { width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().workAreaSize;
+  voiceOverlayWindow.setBounds({
+    x: Math.round((screenWidth - width) / 2),
+    y: screenHeight - height - BOTTOM_GAP,
+    width: Math.round(width),
+    height: Math.round(height),
+  });
+});
+
+// Insert voice transcript into the previously focused app's input field
+ipcMain.handle("voice-insert-text", async (event, text) => {
+  if (!text) return { success: false, error: "No text" };
+
+  try {
+    const { clipboard } = require("electron");
+
+    // Save current clipboard content to restore later
+    const previousClipboard = clipboard.readText();
+
+    // Write transcript to clipboard
+    clipboard.writeText(text);
+
+    // Hide the overlay first so the previous app regains focus
+    hideVoiceOverlay();
+
+    // Small delay to let the previous app regain focus
+    await new Promise((r) => setTimeout(r, 150));
+
+    // Simulate Cmd+V (macOS) or Ctrl+V (Windows/Linux) to paste
+    const modifier = process.platform === "darwin" ? "command" : "control";
+    const robot = require("child_process");
+    if (process.platform === "darwin") {
+      robot.execSync(`osascript -e 'tell application "System Events" to keystroke "v" using command down'`);
+    } else {
+      // On Windows/Linux, use xdotool or powershell
+      try {
+        robot.execSync(process.platform === "win32"
+          ? `powershell -command "$wsh = New-Object -ComObject WScript.Shell; $wsh.SendKeys('^v')"`
+          : `xdotool key ctrl+v`
+        );
+      } catch (e) {
+        console.warn("[Hyperclaw] Failed to simulate paste:", e.message);
+      }
+    }
+
+    // Restore previous clipboard after a short delay
+    setTimeout(() => {
+      clipboard.writeText(previousClipboard);
+    }, 500);
+
+    return { success: true };
+  } catch (error) {
+    console.error("[Hyperclaw] Insert text error:", error);
+    return { success: false, error: error.message };
   }
+});
+
+// Wake Word IPC handlers
+ipcMain.handle("voice-overlay-wake-word-toggle", (event, enabled) => {
+  wakeWordEnabled = !!enabled;
+  console.log(`[Hyperclaw] Wake word ${wakeWordEnabled ? "enabled" : "disabled"}`);
+  return { success: true, enabled: wakeWordEnabled };
+});
+
+ipcMain.handle("voice-overlay-wake-word-status", () => {
+  return { enabled: wakeWordEnabled };
+});
+
+// Called by the renderer when the wake word is detected
+ipcMain.handle("voice-overlay-wake-word-triggered", () => {
+  console.log("[Hyperclaw] Wake word detected — expanding overlay");
+  expandVoiceOverlay();
+  // Notify the overlay renderer to enter agent-chat mode
+  if (voiceOverlayWindow && !voiceOverlayWindow.isDestroyed()) {
+    voiceOverlayWindow.webContents.send("voice-overlay-wake-word-activated");
+  }
+  return { success: true };
 });
 
 // SenseVoice IPC handlers
@@ -1555,10 +1945,40 @@ function registerTextInsertHotkey() {
 
 app.whenReady().then(() => {
   writeToBridgeLog("Hyperclaw main process started");
+
+  // Grant microphone permission for voice input (audio only, deny camera/geolocation/etc.)
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+    if (permission === "media") {
+      // Allow audio (microphone) access from our own app
+      callback(true);
+      return;
+    }
+    // Deny all other permissions by default
+    callback(false);
+  });
+
+  // Also set permission check handler — Electron 20+ checks permissions before requesting them.
+  // Without this, getUserMedia can be silently denied before setPermissionRequestHandler fires.
+  session.defaultSession.setPermissionCheckHandler((webContents, permission) => {
+    if (permission === "media") return true;
+    return false;
+  });
+
+  // macOS: request system-level microphone access early so the OS prompt appears on first use
+  if (process.platform === "darwin") {
+    const { systemPreferences } = require("electron");
+    if (systemPreferences.getMediaAccessStatus("microphone") !== "granted") {
+      systemPreferences.askForMediaAccess("microphone").catch(console.error);
+    }
+  }
+
   createTray();
   createWindow();
   registerVoiceHotkey(); // Register voice input hotkey (Cmd+Shift+Space on macOS, Alt+Space elsewhere)
   registerTextInsertHotkey(); // Register Ctrl+Shift+V for text insertion
+
+  // Launch the persistent mini voice overlay after a short delay (let main window load first)
+  setTimeout(() => createVoiceOverlay(), 2000);
 
   if (!isDev && app.isPackaged && isRemoteMode && autoUpdater) {
     setTimeout(

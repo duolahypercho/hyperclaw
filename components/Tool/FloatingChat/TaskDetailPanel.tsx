@@ -21,9 +21,14 @@ import {
   Sparkles,
   Activity,
   Ban,
+  ChevronDown,
+  Inbox,
+  PlayCircle,
+  Eye,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { TranscriptViewer } from "$/components/Home/widgets/TranscriptViewer";
+import { updateTodoTaskAPI } from "$/services/tools/todo/local";
 
 const statusLabels: Record<string, string> = {
   pending: "Backlog",
@@ -114,6 +119,16 @@ function LoadMoreSentinel({ onVisible }: { onVisible: () => void }) {
   );
 }
 
+type KanbanStatus = "pending" | "in_progress" | "blocked" | "completed" | "cancelled";
+
+const STATUS_OPTIONS: { id: KanbanStatus; label: string; icon: React.ReactNode; dotClass: string }[] = [
+  { id: "pending", label: "Backlog", icon: <Inbox className="h-3 w-3" />, dotClass: "bg-muted-foreground" },
+  { id: "in_progress", label: "In Progress", icon: <PlayCircle className="h-3 w-3" />, dotClass: "bg-primary" },
+  { id: "blocked", label: "Review", icon: <Eye className="h-3 w-3" />, dotClass: "bg-amber-500" },
+  { id: "completed", label: "Done", icon: <CheckCircle2 className="h-3 w-3" />, dotClass: "bg-emerald-500" },
+  { id: "cancelled", label: "Cancelled", icon: <Ban className="h-3 w-3" />, dotClass: "bg-rose-500" },
+];
+
 export interface TaskDetailPanelTask {
   _id: string;
   title: string;
@@ -128,12 +143,52 @@ export interface TaskDetailPanelTask {
   starred?: boolean;
 }
 
-export function TaskDetailPanel({ task }: { task: TaskDetailPanelTask }) {
+export function TaskDetailPanel({ task, onStatusChange }: { task: TaskDetailPanelTask; onStatusChange?: (taskId: string, newStatus: KanbanStatus) => void }) {
   const [sessionKey, setSessionKey] = useState<string | null>(null);
   const [transcriptOpen, setTranscriptOpen] = useState(false);
   const [taskLogs, setTaskLogs] = useState<TaskLog[]>([]);
   const [logsLoading, setLogsLoading] = useState(false);
   const [visibleLogCount, setVisibleLogCount] = useState(10);
+  const [statusOpen, setStatusOpen] = useState(false);
+  const [localStatus, setLocalStatus] = useState(task.status);
+  const [statusUpdating, setStatusUpdating] = useState(false);
+  const statusRef = useRef<HTMLDivElement>(null);
+
+  // Sync local status when task prop changes
+  useEffect(() => {
+    setLocalStatus(task.status);
+  }, [task.status]);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    if (!statusOpen) return;
+    const handleClick = (e: MouseEvent) => {
+      if (statusRef.current && !statusRef.current.contains(e.target as Node)) {
+        setStatusOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [statusOpen]);
+
+  const handleChangeStatus = useCallback(async (newStatus: KanbanStatus) => {
+    if (newStatus === localStatus) {
+      setStatusOpen(false);
+      return;
+    }
+    setStatusUpdating(true);
+    setLocalStatus(newStatus);
+    setStatusOpen(false);
+    try {
+      await updateTodoTaskAPI({ id: task._id, status: newStatus });
+      onStatusChange?.(task._id, newStatus);
+    } catch (e) {
+      console.error("[TaskDetailPanel] status update failed:", e);
+      setLocalStatus(task.status); // revert on error
+    } finally {
+      setStatusUpdating(false);
+    }
+  }, [localStatus, task._id, task.status, onStatusChange]);
 
   useEffect(() => {
     if (!task?._id) {
@@ -174,7 +229,7 @@ export function TaskDetailPanel({ task }: { task: TaskDetailPanelTask }) {
   }, [task?._id]);
 
 
-  const statusLabel = statusLabels[task.status] ?? task.status;
+  const statusLabel = statusLabels[localStatus] ?? localStatus;
   const createdStr = task.createdAt
     ? format(new Date(task.createdAt), "MMM d, yyyy · h:mm a")
     : "—";
@@ -195,20 +250,53 @@ export function TaskDetailPanel({ task }: { task: TaskDetailPanelTask }) {
         </h3>
 
         <div className="flex flex-wrap items-center gap-2 text-xs">
-          <span className="flex items-center gap-1 font-medium">
-            {task.status === "in_progress" ? (
-              <Loader2 className="h-3 w-3 text-primary shrink-0 animate-spin" />
-            ) : task.status === "completed" ? (
-              <CheckCircle2 className="h-3 w-3 text-emerald-500 shrink-0" />
-            ) : task.status === "blocked" ? (
-              <XCircle className="h-3 w-3 text-destructive shrink-0" />
-            ) : task.status === "cancelled" ? (
-              <Ban className="h-3 w-3 text-rose-500 shrink-0" />
-            ) : (
-              <Clock className="h-3 w-3 text-muted-foreground shrink-0" />
+          <div ref={statusRef} className="relative">
+            <button
+              onClick={() => setStatusOpen((p) => !p)}
+              className={cn(
+                "flex items-center gap-1.5 font-medium rounded-md border border-border/50 px-2 py-1 hover:bg-muted/40 transition-colors",
+                statusUpdating && "opacity-60 pointer-events-none"
+              )}
+            >
+              {statusUpdating ? (
+                <Loader2 className="h-3 w-3 animate-spin shrink-0" />
+              ) : (
+                (() => {
+                  const opt = STATUS_OPTIONS.find((o) => o.id === localStatus);
+                  return opt ? (
+                    <>
+                      <span className={cn("h-2 w-2 rounded-full shrink-0", opt.dotClass)} />
+                      {opt.label}
+                    </>
+                  ) : (
+                    <>
+                      <Clock className="h-3 w-3 text-muted-foreground shrink-0" />
+                      {statusLabel}
+                    </>
+                  );
+                })()
+              )}
+              <ChevronDown className={cn("h-3 w-3 text-muted-foreground transition-transform", statusOpen && "rotate-180")} />
+            </button>
+            {statusOpen && (
+              <div className="absolute left-0 top-full mt-1 z-50 min-w-[140px] rounded-md border border-border bg-popover shadow-md py-1">
+                {STATUS_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.id}
+                    onClick={() => handleChangeStatus(opt.id)}
+                    className={cn(
+                      "flex items-center gap-2 w-full px-2.5 py-1.5 text-xs hover:bg-muted/50 transition-colors",
+                      localStatus === opt.id && "bg-muted/30 font-medium"
+                    )}
+                  >
+                    <span className={cn("h-2 w-2 rounded-full shrink-0", opt.dotClass)} />
+                    {opt.label}
+                    {localStatus === opt.id && <CheckCircle2 className="h-3 w-3 ml-auto text-primary" />}
+                  </button>
+                ))}
+              </div>
             )}
-            {statusLabel}
-          </span>
+          </div>
           <span className="text-muted-foreground text-xs">{updatedStr}</span>
         </div>
 

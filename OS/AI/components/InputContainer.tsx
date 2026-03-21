@@ -143,6 +143,8 @@ export const InputContainer: React.FC<InputContainerProps> = ({
   placeholder = "Type your message...",
   value: controlledValue,
   onChange: controlledOnChange,
+  onInputChange,
+  inputRef,
   maxLength,
   rows = 2,
   disabled = false,
@@ -211,7 +213,35 @@ export const InputContainer: React.FC<InputContainerProps> = ({
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const isControlled = controlledValue !== undefined;
   const currentValue = isControlled ? controlledValue : inputValue;
-  const setValue = isControlled ? controlledOnChange : setInputValue;
+  const baseSetValue = isControlled ? controlledOnChange : setInputValue;
+
+  // Wrap setValue to also fire onInputChange notification
+  const setValue = useCallback((val: string) => {
+    baseSetValue?.(val);
+    onInputChange?.(val);
+  }, [baseSetValue, onInputChange]);
+
+  // Keep a ref to the current value for imperative getValue()
+  const currentValueRef = useRef(currentValue);
+  currentValueRef.current = currentValue;
+
+  // Expose imperative handle for parent components
+  useEffect(() => {
+    if (!inputRef) return;
+    inputRef.current = {
+      clear: () => {
+        if (!isControlled) setInputValue("");
+        onInputChange?.("");
+      },
+      focus: () => textareaRef.current?.focus(),
+      getValue: () => currentValueRef.current,
+      setValue: (val: string) => {
+        if (!isControlled) setInputValue(val);
+        onInputChange?.(val);
+      },
+    };
+    return () => { if (inputRef) inputRef.current = null; };
+  }, [inputRef, isControlled, onInputChange]);
 
   // Get session model when sessionKey changes; fall back to agent default from openclaw.json
   useEffect(() => {
@@ -944,7 +974,7 @@ export const InputContainer: React.FC<InputContainerProps> = ({
                 </Button>
               </PopoverTrigger>
               <PopoverContent
-                className="w-48 p-1 bg-card/95 backdrop-blur-sm border-primary/20 max-h-64 overflow-y-auto"
+                className="w-48 p-1 bg-card/95 backdrop-blur-sm border-primary/20 max-h-64 overflow-y-auto customScrollbar2"
                 align="start"
                 side="top"
               >
@@ -963,8 +993,8 @@ export const InputContainer: React.FC<InputContainerProps> = ({
                         setIsPopoverOpen(false);
                       }}
                     >
-                      <div className="flex items-center gap-2">
-                        <Cpu className="w-3 h-3" />
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Cpu className="w-3 h-3 flex-shrink-0" />
                         <span className="truncate">{model.id.split('/').pop() || model.id}</span>
                       </div>
                       {currentModel === model.id && (

@@ -19,7 +19,7 @@ import {
   ChatLoadingSkeleton,
   EmptyState,
 } from "@OS/AI/components/Chat";
-import type { AttachmentType } from "@OS/AI/components/Chat";
+import type { AttachmentType, InputContainerHandle } from "@OS/AI/components/Chat";
 import { InputContainer } from "@OS/AI/components/InputContainer";
 import { useFocusMode } from "./hooks/useFocusMode";
 import { useUnifiedToolState } from "@OS/AI/components/hooks/useUnifiedToolState";
@@ -53,8 +53,8 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
     configAgentId
   );
 
-  // Input field state - ephemeral, kept in component state only
-  const [inputValue, setInputValue] = useState<string>("");
+  // Imperative ref for InputContainer (clear/focus without controlled mode)
+  const inputHandleRef = useRef<InputContainerHandle | null>(null);
 
   // Slash command menu state
   const [slashMenuVisible, setSlashMenuVisible] = useState(false);
@@ -72,7 +72,15 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const [sessionsError, setSessionsError] = useState<string | null>(null);
 
-  // Update selectedSessionKey when configSessionKey changes (e.g., new widget added)
+  // Sync config → local state when config loads after mount (e.g., async SQLite hydration).
+  // useState initializers only run once, so late-arriving config needs an effect to propagate.
+  useEffect(() => {
+    if (configAgentId && !selectedAgentId) {
+      setSelectedAgentId(configAgentId);
+      setUserHasSelectedAgent(true);
+    }
+  }, [configAgentId, selectedAgentId]);
+
   useEffect(() => {
     if (configSessionKey && !selectedSessionKey) {
       setSelectedSessionKey(configSessionKey);
@@ -86,14 +94,25 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
 
   // Persist widget config to dashboardState (SQLite) so it syncs across devices.
   // Only persist agentId and sessionKey — inputValue is ephemeral.
+  // On unmount, flush the pending save instead of discarding it so navigation
+  // within 500ms doesn't silently drop the user's last selection.
   const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const persistValuesRef = useRef({ agentId: selectedAgentId, sessionKey: selectedSessionKey });
+  persistValuesRef.current = { agentId: selectedAgentId, sessionKey: selectedSessionKey };
+
   useEffect(() => {
     if (persistTimerRef.current) clearTimeout(persistTimerRef.current);
     persistTimerRef.current = setTimeout(() => {
       onConfigChangeRef.current?.({ agentId: selectedAgentId, sessionKey: selectedSessionKey });
+      persistTimerRef.current = null;
     }, 500);
     return () => {
-      if (persistTimerRef.current) clearTimeout(persistTimerRef.current);
+      // Flush on unmount — save pending changes instead of losing them
+      if (persistTimerRef.current) {
+        clearTimeout(persistTimerRef.current);
+        persistTimerRef.current = null;
+        onConfigChangeRef.current?.(persistValuesRef.current);
+      }
     };
   }, [selectedAgentId, selectedSessionKey]);
 
@@ -224,16 +243,6 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
     fetchSessions();
   }, [currentAgentId]);
 
-  // Reset session selection ONLY when agent actually changes
-  // (not on connection toggles, which would wipe the user's session during heartbeats)
-  const prevAgentIdForResetRef = useRef(currentAgentId);
-  useEffect(() => {
-    if (prevAgentIdForResetRef.current !== currentAgentId) {
-      prevAgentIdForResetRef.current = currentAgentId;
-      setSelectedSessionKey(undefined);
-    }
-  }, [currentAgentId]);
-
   // Manual fetch sessions callback (for dropdown)
   const fetchSessions = useCallback(async () => {
     if (!gatewayConnection.isConnected()) return;
@@ -295,8 +304,10 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
     setSelectedAgentId(agentId);
     setUserHasSelectedAgent(true); // Mark that user has manually selected
 
-    // Generate new session key and explicitly tell the hook
+    // Generate new session key and persist both agent + session together
+    // so the persist effect saves the correct pair to SQLite.
     const newSessionKey = `agent:${agentId}:main`;
+    setSelectedSessionKey(newSessionKey);
     setSessionKey(newSessionKey); // This will clear state in the hook
   }, [setSessionKey]);
 
@@ -369,32 +380,12 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
     prevLoadingRef2.current = isLoading;
   }, [isLoading, messageQueue, sendMessage]);
 
-  // Listen for voice input messages from overlay (Alt+Space)
-  useEffect(() => {
-    if (!window.electronAPI?.voiceOverlay) return;
-    
-    const handleVoiceMessage = (data: { text: string; agentId: string; sessionKey: string }) => {
-      // Only handle if this is for the current agent/session
-      const expectedSessionKey = `agent:${currentAgentId}:${sessionKey}`;
-      if (data.sessionKey === expectedSessionKey || data.agentId === currentAgentId) {
-        // Auto-send the voice message
-        sendMessage(data.text);
-      }
-    };
-    
-    window.electronAPI.voiceOverlay.onVoiceMessage(handleVoiceMessage);
-    
-    return () => {
-      window.electronAPI?.voiceOverlay?.removeVoiceMessageListener();
-    };
-  }, [currentAgentId, sessionKey, sendMessage]);
-
   // Queue handlers
   const handleEditQueueItem = useCallback(
     (id: string) => {
       const item = messageQueue.find((m) => m.id === id);
       if (item) {
-        setInputValue(item.displayText);
+        inputHandleRef.current?.setValue(item.displayText);
         setMessageQueue((prev) => prev.filter((m) => m.id !== id));
       }
     },
@@ -446,6 +437,16 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
 
     if (messages.length <= prevLen) {
       prevMessagesLengthRef.current = messages.length;
+      // Length didn't change but messages reference did — streaming delta
+      // updated an existing message's content. Scroll if near bottom.
+      if (scrollAreaRef.current) {
+        const el = scrollAreaRef.current;
+        const nearBottom = el.scrollHeight - el.scrollTop <= el.clientHeight + 150;
+        const justSent = Date.now() - lastSentAtRef.current < 30000;
+        if (nearBottom || justSent) {
+          requestAnimationFrame(() => scrollToBottom(false));
+        }
+      }
       return;
     }
 
@@ -469,9 +470,9 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
     } else if (scrollAreaRef.current) {
       const el = scrollAreaRef.current;
       const nearBottom = el.scrollHeight - el.scrollTop <= el.clientHeight + 150;
-      // Auto-scroll if near bottom OR within 3s of sending a message
-      // (the response should always be visible right after sending).
-      const justSent = Date.now() - lastSentAtRef.current < 3000;
+      // Auto-scroll if near bottom OR within 30s of sending a message
+      // (the full response should stay visible while streaming).
+      const justSent = Date.now() - lastSentAtRef.current < 30000;
       if (nearBottom || justSent) {
         requestAnimationFrame(() => scrollToBottom(false));
       }
@@ -540,25 +541,25 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
     if (isLoading) return;
     clearChat();
     setShowScrollButton(false);
-    setInputValue("");
+    inputHandleRef.current?.clear();
   }, [isLoading, clearChat]);
 
-  // Slash command menu — show/hide based on input value
-  useEffect(() => {
-    if (inputValue.startsWith("/")) {
+  // Lightweight input change handler — only updates slash state when needed
+  const handleInputChange = useCallback((value: string) => {
+    if (value.startsWith("/")) {
       setSlashMenuVisible(true);
-      setSlashQuery(inputValue);
+      setSlashQuery(value);
     } else {
-      setSlashMenuVisible(false);
-      setSlashQuery("");
+      setSlashMenuVisible((prev) => prev ? false : prev);
+      setSlashQuery((prev) => prev ? "" : prev);
     }
-  }, [inputValue]);
+  }, []);
 
   // Execute a slash command and clear the input
   const handleSlashCommand = useCallback(
     (cmd: SlashCommand) => {
       setSlashMenuVisible(false);
-      setInputValue("");
+      inputHandleRef.current?.clear();
 
       switch (cmd.name) {
         case "/new":
@@ -625,11 +626,9 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
             attachments: gatewayAttachments,
           },
         ]);
-        setInputValue("");
         return;
       }
 
-      setInputValue("");
       await sendMessage(finalMessage, gatewayAttachments);
     },
     [sendMessage, quotedMessage, isLoading, toGatewayAttachments, handleSlashCommand]
@@ -929,7 +928,7 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
                                 }
                                 nodes.push(
                                   <EnhancedMessageBubble
-                                    key={`tool-text-${chainBreakerKey}`}
+                                    key={`tool-text-${index}-${chainBreakerKey}`}
                                     message={textOnly}
                                     isUser={false}
                                     showAvatar={false}
@@ -1037,13 +1036,13 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
                   initial={{ opacity: 0, scale: 0.8, y: 20 }}
                   animate={{ opacity: 1, scale: 1, y: 0 }}
                   exit={{ opacity: 0, scale: 0.8, y: 20 }}
-                  className="absolute w-full flex justify-center z-50"
+                  className="absolute w-full flex justify-center z-50 pointer-events-none"
                   style={{ bottom: `${inputAreaHeight}px` }}
                 >
                   <Button
                     onClick={() => scrollToBottom(true)}
                     size="icon"
-                    className="rounded-full h-fit w-fit p-1.5 shadow-lg"
+                    className="rounded-full h-fit w-fit p-1.5 shadow-lg pointer-events-auto"
                   >
                     <svg
                       xmlns="http://www.w3.org/2000/svg"
@@ -1189,8 +1188,8 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
                   sessionKey={sessionKey}
                   agentId={currentAgentId}
                   onStopGeneration={stopGeneration}
-                  value={inputValue}
-                  onChange={setInputValue}
+                  onInputChange={handleInputChange}
+                  inputRef={inputHandleRef}
                   tokenUsage={tokenUsage}
                   contextLimit={contextLimit}
                 />

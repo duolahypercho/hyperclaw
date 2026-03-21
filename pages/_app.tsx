@@ -26,8 +26,30 @@ Router.events.on("routeChangeStart", nProgress.start);
 Router.events.on("routeChangeError", nProgress.done);
 Router.events.on("routeChangeComplete", nProgress.done);
 
-function MyApp({ Component, pageProps }: any) {
+function MyApp({ Component, pageProps, router }: any) {
   const getLayout = Component.getLayout || ((page: NextPage) => page);
+
+  // Voice overlay runs in its own Electron window — skip heavy providers and global UI
+  const isVoiceOverlay = router.pathname === "/voice-overlay";
+
+  if (isVoiceOverlay) {
+    return (
+      <main className={GeistSans.className} suppressHydrationWarning style={{ background: "transparent" }}>
+        <SessionProvider session={pageProps.session} refetchInterval={15 * 60} refetchOnWindowFocus={false}>
+          <ThemeProvider attribute="class" enableSystem disableTransitionOnChange>
+            <OpenClawProvider>
+              <TooltipProvider>
+                <UserProvider>
+                  <Component {...pageProps} />
+                </UserProvider>
+              </TooltipProvider>
+            </OpenClawProvider>
+          </ThemeProvider>
+        </SessionProvider>
+      </main>
+    );
+  }
+
   return (
     <ErrorBoundary>
     <main className={GeistSans.className} suppressHydrationWarning>

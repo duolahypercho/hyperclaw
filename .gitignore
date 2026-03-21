@@ -52,3 +52,4 @@ electron/*.rpm
 # plugin tarball (generated at build time for Vercel)
 public/hyperclaw-plugin.tgz
 
+.gstack/

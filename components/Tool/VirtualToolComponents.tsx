@@ -16,6 +16,7 @@ import {
   Monitor,
   Shield,
   Network,
+  MessageSquare,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
@@ -540,5 +541,13 @@ export const VirtualOrgChart: React.FC = () => (
     toolName="Org Chart"
     description="Visualize your AI agent team hierarchy and delegation"
     icon={<Network />}
+  />
+);
+
+export const VirtualChat: React.FC = () => (
+  <VirtualToolBase
+    toolName="Chat"
+    description="Chat with your OpenClaw AI agents in real time"
+    icon={<MessageSquare />}
   />
 );

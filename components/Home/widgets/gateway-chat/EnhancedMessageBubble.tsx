@@ -206,7 +206,12 @@ export const EnhancedMessageBubble = memo(
                     .trim();
                   if (!blockText) return null;
                 }
-                const processedContent = blockText.replace(/<(\w+)>/g, "@$1");
+                // Strip model protocol markers (e.g. <final>, <thinking>, </final>)
+                // then escape remaining HTML-like tags so Markdown doesn't interpret them
+                const processedContent = blockText
+                  .replace(/<\/?\s*(?:final|thinking|NO_REPLY)\s*\/?>/gi, "")
+                  .replace(/<(\w+)>/g, "@$1")
+                  .trim();
                 return (
                   <MemoizedReactMarkdown
                     key={`text-${index}`}
@@ -234,8 +239,11 @@ export const EnhancedMessageBubble = memo(
       }
 
       // Fallback to simple content rendering
-      // Pre-process content to handle unknown HTML tags like <username>
-      const processedContent = content.replace(/<(\w+)>/g, "@$1");
+      // Strip model protocol markers, then escape remaining HTML-like tags
+      const processedContent = content
+        .replace(/<\/?\s*(?:final|thinking|NO_REPLY)\s*\/?>/gi, "")
+        .replace(/<(\w+)>/g, "@$1")
+        .trim();
 
       return (
         <MemoizedReactMarkdown
@@ -378,7 +386,7 @@ export const EnhancedMessageBubble = memo(
                     {userPic?.src && (
                       <AvatarImage src={userPic.src} alt={userPic.alt} />
                     )}
-                    <AvatarFallback className="bg-secondary">
+                    <AvatarFallback className="bg-secondary text-secondary-foreground">
                       {defaultIcon}
                     </AvatarFallback>
                   </Avatar>

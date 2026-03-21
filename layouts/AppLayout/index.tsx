@@ -13,6 +13,8 @@ interface AppLayoutProps {
   moveable?: boolean;
   expandActive?: boolean;
   variant?: "minimal" | "default" | "expandable";
+  zIndex?: number;
+  onFocus?: () => void;
 }
 
 const AppLayout = memo(
@@ -25,6 +27,8 @@ const AppLayout = memo(
     moveable = true,
     expandActive = false,
     variant = "default",
+    zIndex,
+    onFocus,
   }: AppLayoutProps) => {
     const appRef = useRef<HTMLDivElement>(null);
     const { position, size, handleMouseDown, handleResizeStart } = useDraggable(
@@ -59,13 +63,15 @@ const AppLayout = memo(
           {showState && (
             <motion.div
               ref={appRef}
-              className="fixed z-10 select-none"
+              className="fixed select-none"
               style={{
                 left: `${position.x}px`,
                 top: `${position.y}px`,
                 width: size.width,
                 height: "auto",
+                zIndex: zIndex ?? 10,
               }}
+              onMouseDownCapture={onFocus}
               initial={animationVariants.initial}
               animate={animationVariants.animate}
               exit={animationVariants.exit}
@@ -115,14 +121,16 @@ const AppLayout = memo(
       <AnimatePresence>
         {showState && (
           <motion.div
-            ref={appRef} // Add ref to the motion.div
-            className="fixed z-10 select-none"
+            ref={appRef}
+            className="fixed select-none"
             style={{
               left: `${position.x}px`,
               top: `${position.y}px`,
               width: size.width,
               height: size.height,
+              zIndex: zIndex ?? 10,
             }}
+            onMouseDownCapture={onFocus}
             initial={animationVariants.initial}
             animate={animationVariants.animate}
             exit={animationVariants.exit}

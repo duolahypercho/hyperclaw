@@ -147,6 +147,11 @@ function extractText(message: unknown): string | null {
   return null;
 }
 
+// Strip model protocol markers that leak into content (e.g. <final>, <thinking>, NO_REPLY)
+function stripProtocolMarkers(s: string): string {
+  return s.replace(/<\/?\s*(?:final|thinking|NO_REPLY)\s*\/?>/gi, "").trim();
+}
+
 // Normalize content for fuzzy comparison — the server sometimes returns the
 // same message with slightly different whitespace (e.g. single vs double newline).
 function normalizeForCompare(s: string): string {
@@ -489,10 +494,13 @@ function normalizeMessage(message: unknown): GatewayChatMessage | null {
     stableId = `result-${toolResults[0].toolCallId}`;
   }
 
+  // Strip model protocol markers (e.g. <final>, <thinking>) that leak into content
+  const cleanContent = stripProtocolMarkers(content || "");
+
   return {
     id: stableId,
     role: role as ChatMessageRole,
-    content: content || "",
+    content: cleanContent,
     timestamp,
     ...(thinking && { thinking }),
     ...(toolCalls && toolCalls.length > 0 && { toolCalls }),
@@ -563,6 +571,10 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
         clearTimeout(noResponseRef.current);
         noResponseRef.current = null;
       }
+      if (disconnectGraceRef.current) {
+        clearTimeout(disconnectGraceRef.current);
+        disconnectGraceRef.current = null;
+      }
       // Reset history pagination state for new session
       historyTierRef.current = 0;
       setHasMoreHistory(false);
@@ -579,13 +591,15 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
   const noResponseRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const receivedEventRef = useRef(false);
   const isMergingRef = useRef(false);
+  const disconnectGraceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Shared helper: fetch history and merge into current messages.
   // Optionally auto-finalizes if the last message is a completed assistant text.
   // Guarded to prevent concurrent merges from racing.
-  // During active streaming, only checks for auto-finalization — does NOT merge
-  // into state, because the delta handler maintains the correct message list and
-  // merging mid-stream can drop messages due to content mismatch or window limits.
+  // Merges history into current messages even during streaming — the server stores
+  // tool calls WITH their associated text content, which enables the chain breaker
+  // logic to interleave text between tool groups. Without this, streaming tool calls
+  // arrive with empty content and all group together until finalization.
   const mergeHistoryAndMaybeFinalize = useCallback((autoFinalize: boolean) => {
     if (isMergingRef.current) return; // skip if a merge is already in progress
     isMergingRef.current = true;
@@ -597,13 +611,13 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
         if (norm) loaded.push(norm);
       }
       const deduped = deduplicateMessages(loaded);
-      // Only merge into state when NOT actively streaming
-      if (currentRunIdRef.current === null) {
-        setMessages((prev) => {
-          const merged = mergeHistoryIntoMessages(prev, deduped);
-          return merged ?? prev;
-        });
-      }
+      // Merge history into state — even during streaming. The server stores tool
+      // call messages with their text content (chain breaker data), so merging
+      // mid-stream provides the interleaved text+tools view.
+      setMessages((prev) => {
+        const merged = mergeHistoryIntoMessages(prev, deduped);
+        return merged ?? prev;
+      });
       if (autoFinalize) {
         const lastMsg = deduped[deduped.length - 1];
         if (lastMsg?.role === "assistant" && !lastMsg.toolCalls?.length && lastMsg.content?.trim()) {
@@ -617,13 +631,22 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
   }, []);
 
   // Shared helper: start (or restart) the 3s finalization debounce.
+  // 3s allows enough headroom for multi-tool agent runs where there can be
+  // >1s gaps between consecutive lifecycle "end" events.
+  // After the first history merge, schedules a re-check — the parent agent's
+  // final text may not be committed to history by the time the sub-agent's
+  // lifecycle "end" fires (text and tools use different runIds).
   const startFinalizeDebounce = useCallback(() => {
     if (finalDebounceRef.current) clearTimeout(finalDebounceRef.current);
     finalDebounceRef.current = setTimeout(() => {
       currentRunIdRef.current = null;
       setIsLoading(false);
       mergeHistoryAndMaybeFinalize(false);
-    }, 1000);
+      // Re-check history after 3s — parent agent's response may be committed late
+      setTimeout(() => mergeHistoryAndMaybeFinalize(false), 3000);
+      // Final re-check after 8s for slow server commits
+      setTimeout(() => mergeHistoryAndMaybeFinalize(false), 8000);
+    }, 3000);
   }, [mergeHistoryAndMaybeFinalize]);
 
   // Handle incoming chat events
@@ -645,15 +668,27 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
     }
 
     // Session key filter — prevent cross-session bleed.
-    // Events WITH a sessionKey must match. Events WITHOUT a sessionKey are only
-    // accepted if they match the current run ID (i.e., we sent the message that
-    // triggered them). This prevents events from other sessions leaking into
-    // the current chat when the gateway omits the sessionKey field.
+    // Events WITH a sessionKey must match ours exactly.
+    // Events WITHOUT a sessionKey: during an active conversation, accept events
+    // from ANY runId — tool events (agent path) and text events (chat path) often
+    // carry different runIds, and sub-agents have their own runIds. This matches
+    // OpenClaw's approach of filtering by sessionKey only, never by runId.
+    // When idle (no active run), use runId to decide whether to re-activate.
     if (payload.sessionKey) {
       if (payload.sessionKey !== sessionKeyRef.current) return;
-    } else if (currentRunIdRef.current && payload.runId !== currentRunIdRef.current) {
-      // No sessionKey on the event, and the runId doesn't match our active run — skip
-      return;
+    } else if (currentRunIdRef.current !== null) {
+      // Active conversation — accept events from any runId.
+      // Adopt the first runId for text message association, but don't reject
+      // events with different runIds (sub-agents, tool events via agent path).
+      if (!receivedEventRef.current && payload.runId) {
+        currentRunIdRef.current = payload.runId;
+      }
+    } else {
+      // No active conversation and no sessionKey — only accept if this is a
+      // late-arriving delta that should re-activate the conversation.
+      if (!payload.runId) return;
+      if (payload.state !== "delta") return;
+      // Re-activate handled below in the delta handler
     }
 
     // Mark that we received at least one event — cancels the no-response timer.
@@ -726,21 +761,10 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
             updated[existingIdx] = toolResultMsg;
             return updated;
           }
-          // Insert before any trailing assistant text messages — tool results
-          // logically precede the final text even if events arrive out of order.
-          // Use a timestamp just before the text so history merge sorting preserves order.
-          let insertIdx = prev.length;
-          for (let i = prev.length - 1; i >= 0; i--) {
-            if (prev[i].role === "assistant" && !prev[i].toolCalls?.length && prev[i].content?.trim()) {
-              insertIdx = i;
-            } else {
-              break;
-            }
-          }
-          if (insertIdx < prev.length) {
-            toolResultMsg.timestamp = prev[insertIdx].timestamp - 1;
-          }
-          return [...prev.slice(0, insertIdx), toolResultMsg, ...prev.slice(insertIdx)];
+          // Append at end — tool results arrive in chronological order
+          // alongside tool calls. The gateway splits text at tool boundaries,
+          // so inserting before trailing text would break segment ordering.
+          return [...prev, toolResultMsg];
         });
 
         return;
@@ -817,25 +841,17 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
                 updated[existingIdx] = { ...updated[existingIdx], toolCalls: normalizedToolCalls };
                 return updated;
               }
-              // Insert before any trailing assistant text messages — tool calls
-              // logically precede the final text even if events arrive out of order.
-              // Use a timestamp just before the text so history merge sorting preserves order.
-              let insertIdx = prev.length;
-              for (let i = prev.length - 1; i >= 0; i--) {
-                if (prev[i].role === "assistant" && !prev[i].toolCalls?.length && prev[i].content?.trim()) {
-                  insertIdx = i;
-                } else {
-                  break;
-                }
-              }
-              const toolTimestamp = insertIdx < prev.length ? prev[insertIdx].timestamp - 1 : Date.now();
-              return [...prev.slice(0, insertIdx), {
+              // Append at end — the gateway splits text at tool boundaries, so
+              // text segments and tool calls arrive in the correct chronological
+              // order. Inserting before trailing text would undo the segment split
+              // by pushing tool calls before intermediate text messages.
+              return [...prev, {
                 id: toolCallMsgId,
                 role: "assistant" as ChatMessageRole,
                 content: "",
-                timestamp: toolTimestamp,
+                timestamp: Date.now(),
                 toolCalls: normalizedToolCalls,
-              }, ...prev.slice(insertIdx)];
+              }];
             });
             return;
           }
@@ -843,28 +859,102 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       }
 
       // Regular text delta - streaming content update.
-      // Match by runId so subagent text doesn't overwrite the parent agent's text.
-      const text = extractText(payload.message);
-      if (typeof text === "string") {
+      // The gateway splits text at tool boundaries — when a tool starts, it commits
+      // the current text buffer and resets it. So each delta here contains only the
+      // text for the CURRENT segment (after the last tool group).
+      // If no split occurred, the delta contains the full accumulated text as before.
+      const rawText = extractText(payload.message);
+      // Strip protocol markers that models sometimes emit (e.g. <final>, <thinking>)
+      const text = typeof rawText === "string" ? stripProtocolMarkers(rawText) : null;
+      if (typeof text === "string" && text) {
         // Cap stream buffer at 512KB to prevent OOM if "final" event never arrives
         streamContentRef.current = text.length > 524_288 ? text.slice(-524_288) : text;
 
         setMessages((prev) => {
-          // Find an existing text message from THIS runId (not just the last message)
           const runId = payload.runId || "";
-          const ownIdx = prev.findIndex(
-            (m) => m.role === "assistant" && !m.toolCalls?.length &&
-              (m.id === runId || m.id?.startsWith(runId + "-cont"))
-          );
+
+          // Find the LAST text message from this run in the CURRENT turn only.
+          // The gateway may reuse runIds across conversation turns, so searching
+          // the entire history would update an OLD message from a previous turn
+          // instead of creating a new one for the current response.
+          // Limit search to messages after the last user message.
+          let lastUserIdx = -1;
+          for (let i = prev.length - 1; i >= 0; i--) {
+            if (prev[i].role === "user") { lastUserIdx = i; break; }
+          }
+          const searchStart = Math.max(lastUserIdx + 1, 0);
+
+          let ownIdx = -1;
+          for (let i = prev.length - 1; i >= searchStart; i--) {
+            const m = prev[i];
+            if (m.role === "assistant" && !m.toolCalls?.length &&
+              (m.id === runId || m.id?.startsWith(runId + "-cont"))) {
+              ownIdx = i;
+              break;
+            }
+          }
 
           if (ownIdx !== -1) {
-            // Update existing message from this runId
+            const existingContent = prev[ownIdx].content;
+            const extends_ = text.startsWith(existingContent) || existingContent.startsWith(text) || existingContent === text;
+
+            // If the new text extends or matches the existing content, this is
+            // a normal streaming update for the same segment — update in place.
+            if (extends_) {
+              if (prev[ownIdx].content === text) return prev; // no change
+              const updated = [...prev];
+              updated[ownIdx] = { ...prev[ownIdx], content: text };
+              return updated;
+            }
+
+            // The new text does NOT extend the existing content — this is a NEW
+            // segment (the gateway cleared its buffer when a tool started).
+            // Check if there are tool call messages after the existing text message;
+            // if so, create a new text message to break up the tool groups.
+            let hasToolCallsAfter = false;
+            for (let i = ownIdx + 1; i < prev.length; i++) {
+              if (prev[i].role === "assistant" && prev[i].toolCalls?.length) {
+                hasToolCallsAfter = true;
+                break;
+              }
+            }
+
+            if (hasToolCallsAfter) {
+              // New segment — create a new text message after the tool group
+              const baseId = runId || uuidv4();
+              let msgId = baseId;
+              let suffix = 0;
+              while (prev.some((m) => m.id === msgId)) {
+                suffix++;
+                msgId = `${baseId}-cont${suffix}`;
+              }
+              return [
+                ...prev,
+                {
+                  id: msgId,
+                  role: "assistant" as ChatMessageRole,
+                  content: text,
+                  timestamp: Date.now(),
+                },
+              ];
+            }
+
+            // No tool calls after — fall back to update in place
             const updated = [...prev];
             updated[ownIdx] = { ...prev[ownIdx], content: text };
             return updated;
           }
 
           // No existing message for this runId — create one.
+          // Guard: if another assistant text message already has this exact content
+          // (e.g. chat.* and agent.* paths emitting with different runIds for the
+          // same logical run), skip creating a duplicate.
+          if (text.trim() && prev.some(
+            (m) => m.role === "assistant" && !m.toolCalls?.length && m.content === text
+          )) {
+            return prev;
+          }
+
           // Use a unique ID — the same runId may already be used for an earlier
           // text segment (before tool calls), so suffix to avoid key collisions.
           const baseId = runId || uuidv4();
@@ -886,11 +976,33 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
         });
       }
     } else if (payload.state === "final") {
-      // Don't touch messages here. The streaming deltas already built the
-      // message content. The history merge (fired by the debounce below)
-      // will reconcile with the server's authoritative version.
-      // Processing the final event's message was causing duplicates because
-      // the server assigns different IDs and whitespace on every call.
+      // If the final event carries a message and no text was streamed via deltas
+      // (e.g. tool events were the only deltas, or deltas were lost), add the
+      // final text to messages as a fallback. This prevents the "missing final
+      // message" bug where the response only appears after history refresh.
+      const finalText = extractText(payload.message);
+      const cleanFinalText = typeof finalText === "string" ? stripProtocolMarkers(finalText) : null;
+      if (cleanFinalText && cleanFinalText.trim()) {
+        setMessages((prev) => {
+          // Check if this text already exists (from streaming deltas)
+          const normalizedFinal = normalizeForCompare(cleanFinalText);
+          const alreadyExists = prev.some(
+            (m) => m.role === "assistant" && !m.toolCalls?.length &&
+              m.content.trim() && normalizeForCompare(m.content) === normalizedFinal
+          );
+          if (alreadyExists) return prev;
+
+          // Add as new message — use a unique ID to avoid collision with
+          // streaming text messages that may share the same runId.
+          // History merge uses content-based matching, so ID doesn't need to match.
+          return [...prev, {
+            id: `final-${payload.runId || uuidv4()}`,
+            role: "assistant" as ChatMessageRole,
+            content: cleanFinalText,
+            timestamp: Date.now(),
+          }];
+        });
+      }
       streamContentRef.current = "";
 
       // Every lifecycle "end" (from any agent) restarts the 3s debounce.
@@ -940,8 +1052,8 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
   }, [mergeHistoryAndMaybeFinalize, startFinalizeDebounce]);
 
   // Track current fetch limit and whether more history may exist.
-  // Start small (20) for fast initial render; user can load more by scrolling up.
-  const HISTORY_TIERS = [20, 50, 200, 1000] as const;
+  // Start with 100 so the user sees a meaningful history on first load.
+  const HISTORY_TIERS = [100, 200, 500, 1000] as const;
   const historyTierRef = useRef(0); // index into HISTORY_TIERS
   const [hasMoreHistory, setHasMoreHistory] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -986,16 +1098,38 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       setIsConnected(state.connected);
 
       if (state.connected && !previousConnected) {
-        // Skip refetch during active streaming — the delta handler maintains
-        // the correct message state. Refetching with tier-0 (20 msgs) mid-stream
-        // can shrink the message list and cause messages to disappear.
+        // Cancel disconnect grace timer — we reconnected in time.
+        if (disconnectGraceRef.current) {
+          clearTimeout(disconnectGraceRef.current);
+          disconnectGraceRef.current = null;
+        }
+        // If we were mid-stream, the agent is still running on the server and
+        // events will resume on the new WS automatically (same singleton listener).
+        // DON'T clear currentRunIdRef or isLoading — let streaming continue.
+        // Only fetch history if we were idle (no active stream to resume).
         if (currentRunIdRef.current === null) {
           fetchAndSetHistory();
         }
       }
 
       if (!state.connected) {
-        setIsLoading(false);
+        // DON'T immediately kill isLoading — the WS will auto-reconnect
+        // (exponential backoff: 1s, 2s, 4s...) and streaming resumes.
+        // Use a 10s grace period: if we don't reconnect by then, reset state.
+        if (currentRunIdRef.current !== null && !disconnectGraceRef.current) {
+          disconnectGraceRef.current = setTimeout(() => {
+            disconnectGraceRef.current = null;
+            // Still disconnected after grace period — agent response is lost.
+            // Reset so the UI doesn't show a forever-spinner.
+            if (!getGatewayConnectionState().connected) {
+              currentRunIdRef.current = null;
+              setIsLoading(false);
+            }
+          }, 10_000);
+        } else if (currentRunIdRef.current === null) {
+          // Not streaming — safe to reset immediately
+          setIsLoading(false);
+        }
       }
       previousConnected = state.connected;
     };
@@ -1049,6 +1183,10 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       if (finalDebounceRef.current) {
         clearTimeout(finalDebounceRef.current);
         finalDebounceRef.current = null;
+      }
+      if (disconnectGraceRef.current) {
+        clearTimeout(disconnectGraceRef.current);
+        disconnectGraceRef.current = null;
       }
     };
   }, []);

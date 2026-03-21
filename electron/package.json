@@ -1,25 +1,26 @@
 {
   "name": "Hyperclaw",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Hypercho Hyperclaw - AI-powered desktop application",
   "author": "Hypercho",
   "main": "main.js",
   "scripts": {
-    "electron:build:win:local": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win",
-    "electron:build:win:remote": "node scripts/set-config.js remote && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win",
-    "electron:build:win:portable": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win --config.win.target=portable",
-    "electron:build:mac:local": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --config.mac.target=zip",
-    "electron:build:mac:remote": "node scripts/set-config.js remote && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --config.mac.target=zip --x64 --arm64",
-    "electron:build:mac:remote:dmg": "node scripts/set-config.js remote && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --config.mac.target=dmg --x64 --arm64",
-    "electron:build:mac:dmg": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=true electron-builder --mac --config.mac.target=dmg",
-    "electron:build:mac:zip": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --config.mac.target=zip",
-    "electron:build:linux:remote": "node scripts/set-config.js remote && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --linux",
-    "electron:build:linux:local": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --linux"
+    "electron:build:win:local": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false APPLE_ID= APPLE_APP_SPECIFIC_PASSWORD= APPLE_TEAM_ID= electron-builder --win",
+    "electron:build:win:remote": "node scripts/set-config.js remote && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=true electron-builder --win",
+    "electron:build:win:portable": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false APPLE_ID= APPLE_APP_SPECIFIC_PASSWORD= APPLE_TEAM_ID= electron-builder --win --config.win.target=portable",
+    "electron:build:mac:local": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false APPLE_ID= APPLE_APP_SPECIFIC_PASSWORD= APPLE_TEAM_ID= electron-builder --mac --config.mac.target=zip",
+    "electron:build:mac:remote": "node scripts/set-config.js remote && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=true electron-builder --mac --config.mac.target=zip --config.mac.hardenedRuntime=true --config.mac.gatekeeperAssess=false --config.mac.identity=18F65824DF8FEF47D0F84D1EE05DC98D91E3F8EB --config.mac.entitlements=./entitlements.plist --config.mac.entitlementsInherit=./entitlements.plist --x64 --arm64",
+    "electron:build:mac:remote:dmg": "node scripts/set-config.js remote && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=true electron-builder --mac --config.mac.target=dmg --config.mac.hardenedRuntime=true --config.mac.gatekeeperAssess=false --config.mac.identity=18F65824DF8FEF47D0F84D1EE05DC98D91E3F8EB --config.mac.entitlements=./entitlements.plist --config.mac.entitlementsInherit=./entitlements.plist --x64 --arm64",
+    "electron:build:mac:dmg": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=true electron-builder --mac --config.mac.target=dmg --config.mac.hardenedRuntime=true --config.mac.gatekeeperAssess=false --config.mac.identity=18F65824DF8FEF47D0F84D1EE05DC98D91E3F8EB --config.mac.entitlements=./entitlements.plist --config.mac.entitlementsInherit=./entitlements.plist",
+    "electron:build:mac:zip": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false APPLE_ID= APPLE_APP_SPECIFIC_PASSWORD= APPLE_TEAM_ID= electron-builder --mac --config.mac.target=zip",
+    "electron:build:linux:remote": "node scripts/set-config.js remote && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=true electron-builder --linux",
+    "electron:build:linux:local": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false APPLE_ID= APPLE_APP_SPECIFIC_PASSWORD= APPLE_TEAM_ID= electron-builder --linux"
   },
   "dependencies": {
     "electron-updater": "^6.1.7",
     "onnxruntime-node": "^1.24.3",
-    "python-shell": "^5.0.0"
+    "python-shell": "^5.0.0",
+    "uiohook-napi": "^1.5.4"
   },
   "devDependencies": {
     "cross-env": "^7.0.3",
@@ -30,6 +31,9 @@
     "appId": "com.hypercho.hyperclaw",
     "productName": "Hyperclaw",
     "asar": true,
+    "asarUnpack": [
+      "node_modules/uiohook-napi/**"
+    ],
     "directories": {
       "output": "dist-electron"
     },
@@ -49,13 +53,7 @@
         "zip"
       ],
       "icon": "../public/Logopic.png",
-      "category": "public.app-category.productivity",
-      "hardenedRuntime": true,
-      "gatekeeperAssess": false,
-      "identity": "18F65824DF8FEF47D0F84D1EE05DC98D91E3F8EB",
-      "cscKeyPassword": "HxC0d3$1gn2026!Z1w",
-      "entitlements": "./entitlements.plist",
-      "entitlementsInherit": "./entitlements.plist"
+      "category": "public.app-category.productivity"
     },
     "linux": {
       "target": [
@@ -83,7 +81,9 @@
         "from": "../.next",
         "to": ".next",
         "filter": [
-          "**/*"
+          "**/*",
+          "!cache",
+          "!cache/**/*"
         ]
       }
     ]

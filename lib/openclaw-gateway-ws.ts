@@ -31,6 +31,17 @@ export interface ChatEventPayload {
   errorMessage?: string;
 }
 
+// Notification event types (pushed when a long-running agent task completes)
+export interface NotificationPayload {
+  kind: string;       // e.g. "agent_completed"
+  sessionKey: string;
+  agentId: string;
+  summary: string;
+  runId?: string;
+  duration?: number;   // ms
+  timestamp: number;
+}
+
 export type GatewayConnectOptions = { token?: string | null; hubMode?: boolean; hubDeviceId?: string };
 
 const RECONNECT_BACKOFF_MS = [1000, 2000, 4000, 8000, 16000, 30000];
@@ -94,6 +105,8 @@ export const gatewayConnection = {
   deviceIdentity: null as { deviceId: string; publicKeyPem: string } | null,
   // Chat event handlers
   chatEventListeners: new Set<(payload: ChatEventPayload) => void>(),
+  // Notification event handlers (agent task completion, etc.)
+  notificationListeners: new Set<(payload: NotificationPayload) => void>(),
   // Generic event handlers keyed by event name (e.g. "device_connected")
   eventHandlers: new Map<string, Set<(msg: Record<string, unknown>) => void>>(),
   // Buffer for accumulating delta text from agent events
@@ -102,6 +115,18 @@ export const gatewayConnection = {
   // The gateway may send the same delta through both chat.* and agent.* events;
   // only the first source to claim a runId is allowed to accumulate text.
   _deltaSourceOwner: null as Map<string, "chat" | "agent"> | null,
+  // Turn-level text stream lock: the first event source ("chat" or "agent") to
+  // emit a text delta claims the turn. The other source is suppressed entirely.
+  // This handles the case where chat.* and agent.* events carry DIFFERENT runIds
+  // for the same logical stream (so per-runId _deltaSourceOwner can't correlate).
+  // Cleared with a 5s delay after terminal events so late-arriving events from
+  // the suppressed path don't slip through the gap.
+  _activeTextSource: null as "chat" | "agent" | null,
+  _activeTextSourceTimer: null as ReturnType<typeof setTimeout> | null,
+  // Track committed text segments per runId — when a tool "start" event arrives,
+  // the current text buffer is committed here so the hook can create separate
+  // text messages interleaved between tool groups.
+  _committedSegments: null as Map<string, string> | null,
 
   // Keepalive: application-level ping/pong
   _pingTimer: null as ReturnType<typeof setInterval> | null,
@@ -111,6 +136,17 @@ export const gatewayConnection = {
 
   notify() {
     this.listeners.forEach((cb) => cb());
+  },
+
+  /** Schedule delayed clearing of the turn-level text source lock.
+   *  Late-arriving events from the suppressed path can arrive after lifecycle
+   *  "end" / chat.final — the 5s delay ensures they're still blocked. */
+  _scheduleTextSourceClear() {
+    if (this._activeTextSourceTimer) clearTimeout(this._activeTextSourceTimer);
+    this._activeTextSourceTimer = setTimeout(() => {
+      this._activeTextSource = null;
+      this._activeTextSourceTimer = null;
+    }, 5000);
   },
 
   setState(connected: boolean, error: string | null) {
@@ -304,16 +340,21 @@ export const gatewayConnection = {
               deltaText = chatMsg.content;
             }
             if (deltaText) {
+              // Turn-level lock: if the agent path already claimed this turn's
+              // text stream (possibly under a different runId), suppress chat path.
+              if (this._activeTextSource === "agent") {
+                return;
+              }
+              if (!this._activeTextSource) this._activeTextSource = "chat";
+
               if (!this.agentDeltaBuffer) {
                 this.agentDeltaBuffer = new Map();
                 this._agentDeltaTimestamps = new Map();
               }
               if (!this._deltaSourceOwner) this._deltaSourceOwner = new Map();
-              // Skip if the "agent" path already owns this runId's buffer
+              // Also skip if the "agent" path already owns this specific runId.
               const owner = this._deltaSourceOwner.get(payload.runId);
               if (owner === "agent") {
-                // Don't double-accumulate — pass through as non-accumulating event
-                this.chatEventListeners.forEach((handler) => handler(payload));
                 return;
               }
               if (!owner) this._deltaSourceOwner.set(payload.runId, "chat");
@@ -331,10 +372,13 @@ export const gatewayConnection = {
               return;
             }
           }
-        } else if ((payload.state === "final" || payload.state === "aborted") && payload.runId) {
+        } else if ((payload.state === "final" || payload.state === "aborted" || payload.state === "error") && payload.runId) {
           this.agentDeltaBuffer?.delete(payload.runId);
           this._agentDeltaTimestamps?.delete(payload.runId);
           this._deltaSourceOwner?.delete(payload.runId);
+          this._committedSegments?.delete(payload.runId);
+          // Delay-release turn-level lock — late chat deltas can arrive after this
+          this._scheduleTextSourceClear();
         }
         this.chatEventListeners.forEach((handler) => handler(payload));
       }
@@ -367,13 +411,18 @@ export const gatewayConnection = {
         const text = data?.text as string | undefined;
         const content = data?.content as string | undefined;
         const assistantText = delta || text || content;
-
         if (assistantText !== undefined && assistantText !== "") {
+          // Turn-level lock: if the chat path already claimed this turn's
+          // text stream (possibly under a different runId), suppress agent path.
+          if (this._activeTextSource === "chat") {
+            return;
+          }
+          if (!this._activeTextSource) this._activeTextSource = "agent";
+
           if (!this._deltaSourceOwner) this._deltaSourceOwner = new Map();
-          // Skip if the "chat" path already owns this runId's buffer
+          // Also skip if the "chat" path already owns this specific runId
           const owner = this._deltaSourceOwner.get(runId);
           if (owner === "chat") {
-            // Don't double-accumulate — the chat path already handles this runId
             return;
           }
           if (!owner) this._deltaSourceOwner.set(runId, "agent");
@@ -410,6 +459,9 @@ export const gatewayConnection = {
           this.agentDeltaBuffer.delete(runId);
           this._agentDeltaTimestamps?.delete(runId);
           this._deltaSourceOwner?.delete(runId);
+          this._committedSegments?.delete(runId);
+          // Delay-release turn-level lock — late deltas from the other path can arrive
+          this._scheduleTextSourceClear();
           // Prune stale entries (agents that crashed without lifecycle end)
           this.pruneAgentDeltaBuffer();
 
@@ -426,6 +478,8 @@ export const gatewayConnection = {
           this.agentDeltaBuffer.delete(runId);
           this._agentDeltaTimestamps?.delete(runId);
           this._deltaSourceOwner?.delete(runId);
+          this._committedSegments?.delete(runId);
+          this._scheduleTextSourceClear();
           const errorMsg = (data?.error || data?.errorMessage) as string | undefined;
           const chatPayload: ChatEventPayload = {
             runId,
@@ -457,6 +511,22 @@ export const gatewayConnection = {
 
         if (toolCallId && toolName) {
           if (phase === "start") {
+            // Commit current text buffer as a completed segment before starting
+            // the tool. This lets the hook create separate text messages between
+            // tool groups (matching OpenClaw's chatStreamSegments approach).
+            // Without this, all text accumulates in one buffer and the hook sees
+            // one giant message — tool groups never get interleaved with text.
+            const hadBuffer = this.agentDeltaBuffer?.has(runId);
+            const bufferContent = this.agentDeltaBuffer?.get(runId) || "";
+            if (hadBuffer) {
+              if (bufferContent) {
+                // Track committed text so we can offset future segments
+                if (!this._committedSegments) this._committedSegments = new Map();
+                this._committedSegments.set(runId, bufferContent);
+              }
+              this.agentDeltaBuffer.delete(runId);
+            }
+
             // Tool execution started — show card with spinner
             const chatPayload: ChatEventPayload = {
               runId,
@@ -495,6 +565,15 @@ export const gatewayConnection = {
       return;
     }
 
+    // Handle notification events (pushed by connector when long-running agent tasks complete)
+    if (msg.type === "event" && event === "notification") {
+      const payload = msg.payload as NotificationPayload;
+      if (payload && payload.kind) {
+        this.notificationListeners.forEach((handler) => handler(payload));
+      }
+      // Also emit to generic event handlers below
+    }
+
     // Emit to generic event handlers
     if (msg.type === "event" && typeof event === "string") {
       const handlers = this.eventHandlers.get(event);
@@ -508,6 +587,17 @@ export const gatewayConnection = {
   onChatEvent(callback: (payload: ChatEventPayload) => void): () => void {
     this.chatEventListeners.add(callback);
     return () => this.chatEventListeners.delete(callback);
+  },
+
+  /** Subscribe to notification events (agent task completion, etc.) */
+  onNotification(callback: (payload: NotificationPayload) => void): () => void {
+    this.notificationListeners.add(callback);
+    return () => this.notificationListeners.delete(callback);
+  },
+
+  /** Unsubscribe from notification events */
+  offNotification(callback: (payload: NotificationPayload) => void): void {
+    this.notificationListeners.delete(callback);
   },
 
   /** Subscribe to a named event (e.g. "device_connected", "device_disconnected") */
@@ -608,8 +698,10 @@ export const gatewayConnection = {
     // Filter to only sessions for this agent
     const prefix = `agent:${agentId}:`;
     const agentSessions = allSessions.sessions.filter(s => s.key.startsWith(prefix));
-    if (allSessions.sessions.length > 0 && agentSessions.length === 0) {
-      console.warn(`[Gateway WS] sessions.list returned ${allSessions.sessions.length} sessions but none matched prefix "${prefix}". Keys:`, allSessions.sessions.map(s => s.key));
+    if (agentSessions.length === 0) {
+      // No sessions for this agent yet — return a default "main" session so callers have something to work with
+      console.debug(`[Gateway WS] No sessions found for agent "${agentId}", returning default main session`);
+      return { sessions: [{ key: `agent:${agentId}:main`, createdAt: Date.now(), updatedAt: Date.now() }] };
     }
     // Sort by updatedAt descending (most recent first)
     agentSessions.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
@@ -702,6 +794,8 @@ export const gatewayConnection = {
     }
     this.agentDeltaBuffer?.clear();
     this.agentDeltaBuffer = null;
+    this._activeTextSource = null;
+    if (this._activeTextSourceTimer) { clearTimeout(this._activeTextSourceTimer); this._activeTextSourceTimer = null; }
 
     this.wsUrl = wsUrl;
     this.token = token;
@@ -825,6 +919,8 @@ export const gatewayConnection = {
     this.hubDeviceId = null;
     this.agentDeltaBuffer?.clear();
     this.agentDeltaBuffer = null;
+    this._activeTextSource = null;
+    if (this._activeTextSourceTimer) { clearTimeout(this._activeTextSourceTimer); this._activeTextSourceTimer = null; }
     this._sessionsListInflight = null;
     this._sessionsListCache = null;
     this.setState(false, null);

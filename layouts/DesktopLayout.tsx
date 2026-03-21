@@ -19,8 +19,6 @@ const SIDEBAR_WIDTH = 300;
 const MemoizedChildren = memo(
   ({
     children,
-    isCopanionOpen,
-    navbarHeight,
   }: {
     children: React.ReactNode;
     isCopanionOpen: boolean;
@@ -28,10 +26,7 @@ const MemoizedChildren = memo(
   }) => {
     return (
       <div
-        style={{
-          height: `calc(100vh - ${navbarHeight}px)`,
-        }}
-        className="w-full transition-all duration-500 ease-out bg-background"
+        className="w-full h-full bg-background"
       >
         {children}
       </div>

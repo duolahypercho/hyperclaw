@@ -41,15 +41,17 @@ import {
 } from "@/components/ui/accordion";
 import * as Collapsible from "@radix-ui/react-collapsible";
 import createMarkdownComponents from "@OS/AI/components/createMarkdownComponents";
+import { mergeToolCallsWithResults } from "@OS/AI/utils/mergeToolCalls";
 import CopanionIcon from "@OS/assets/copanion";
 import {
   useAgentIdentity,
   resolveAvatarUrl,
   isAvatarText,
 } from "$/hooks/useAgentIdentity";
+import SessionHistoryDropdown from "$/components/SessionHistoryDropdown";
 import { PanelRight, Zap } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { useFloatingChatOS } from "@OS/Provider/OSProv";
+import type { FloatingChatTaskContext } from "@OS/Provider/OSProv";
 import { TaskDetailPanel } from "./TaskDetailPanel";
 import { useUnifiedToolState } from "@OS/AI/components/hooks/useUnifiedToolState";
 import { GenericToolMessage } from "@OS/AI/components/GenericToolMessage";
@@ -81,88 +83,6 @@ function shouldShowAvatarLocal(messages: GatewayChatMessage[], index: number): b
   return prevMsg.role !== currMsg.role;
 }
 
-// ── Detect error from result content JSON ─────────────────────────────
-function isResultContentError(content: string | undefined): boolean {
-  if (!content) return false;
-  try {
-    const parsed = JSON.parse(content);
-    return parsed?.status === "error" || parsed?.status === "failed";
-  } catch {
-    return false;
-  }
-}
-
-// ── Merge tool calls with their results ───────────────────────────────
-function mergeToolCallsWithResults(messages: GatewayChatMessage[]): GatewayChatMessage[] {
-  const merged: GatewayChatMessage[] = [];
-
-  for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i];
-
-    if ((msg.role as string) === "toolResult" || msg.role === "tool") continue;
-
-    const hasToolCalls =
-      (msg.toolCalls?.length || 0) > 0 ||
-      (msg.contentBlocks?.some((b: any) => b.type === "toolCall") || false);
-
-    if (msg.role === "assistant" && hasToolCalls) {
-      const toolCalls = msg.toolCalls || [];
-
-      const mergedToolCalls = toolCalls.map((tc) => {
-        const toolId = tc.id || tc.function?.name || "";
-        const toolResultMsg = messages.find((m) => {
-          const role = m.role as string;
-          if (role !== "tool" && role !== "toolResult") return false;
-          const msgToolCallId = (m as any).toolCallId || (m as any).toolResults?.[0]?.toolCallId;
-          return msgToolCallId === toolId;
-        });
-
-        const resultContent = toolResultMsg
-          ? ((toolResultMsg as any).toolResults?.[0]?.content || (toolResultMsg as any).content)
-          : undefined;
-        const resultIsError = toolResultMsg
-          ? ((toolResultMsg as any).toolResults?.[0]?.isError || (toolResultMsg as any).isError || isResultContentError(resultContent) || false)
-          : false;
-
-        return { ...tc, result: resultContent, isError: resultIsError };
-      });
-
-      const contentBlocks = msg.contentBlocks?.filter((b: any) => b.type === "toolCall") || [];
-      const mergedContentBlocks = contentBlocks.map((block: any) => {
-        const toolId = block.id;
-        const toolResultMsg = messages.find((m) => {
-          const role = m.role as string;
-          if (role !== "tool" && role !== "toolResult") return false;
-          const msgToolCallId = (m as any).toolCallId || (m as any).toolResults?.[0]?.toolCallId;
-          return msgToolCallId === toolId;
-        });
-        const blockResultContent = toolResultMsg
-          ? ((toolResultMsg as any).toolResults?.[0]?.content || (toolResultMsg as any).content)
-          : undefined;
-        return {
-          ...block,
-          result: blockResultContent,
-          isError: toolResultMsg
-            ? ((toolResultMsg as any).toolResults?.[0]?.isError || (toolResultMsg as any).isError || isResultContentError(blockResultContent) || false)
-            : false,
-        };
-      });
-
-      merged.push({
-        ...msg,
-        toolCalls: mergedToolCalls as any,
-        contentBlocks: [
-          ...(msg.contentBlocks?.filter((b: any) => b.type !== "toolCall") || []),
-          ...mergedContentBlocks,
-        ],
-      } as GatewayChatMessage);
-    } else {
-      merged.push(msg);
-    }
-  }
-
-  return merged;
-}
 
 // ── Compact ToolCallFallback ──────────────────────────────────────────
 const ToolCallFallback: React.FC<{
@@ -584,7 +504,11 @@ const MessageBubble = memo(
                     .trim();
                   if (!blockText) return null;
                 }
-                const processedContent = blockText.replace(/<(\w+)>/g, "@$1");
+                // Strip model protocol markers, then escape remaining HTML-like tags
+                const processedContent = blockText
+                  .replace(/<\/?\s*(?:final|thinking|NO_REPLY)\s*\/?>/gi, "")
+                  .replace(/<(\w+)>/g, "@$1")
+                  .trim();
                 return (
                   <MemoizedReactMarkdown
                     key={`text-${idx}`}
@@ -607,8 +531,11 @@ const MessageBubble = memo(
         );
       }
 
-      // Simple content fallback
-      const processedContent = content.replace(/<(\w+)>/g, "@$1");
+      // Simple content fallback — strip protocol markers, then escape tags
+      const processedContent = content
+        .replace(/<\/?\s*(?:final|thinking|NO_REPLY)\s*\/?>/gi, "")
+        .replace(/<(\w+)>/g, "@$1")
+        .trim();
       return (
         <MemoizedReactMarkdown
           components={isUser ? memoizedMarkdownComponents.user : memoizedMarkdownComponents.assistant}
@@ -763,8 +690,15 @@ const MessageBubble = memo(
 );
 
 // ── Main FloatingChatViewer ───────────────────────────────────────────
-export function FloatingChatViewer() {
-  const { agentId, sessionKey: providedSessionKey, taskContext, closeChat } = useFloatingChatOS();
+interface FloatingChatViewerProps {
+  agentId: string;
+  sessionKey: string | null;
+  taskContext: FloatingChatTaskContext | null;
+  onClose: () => void;
+  onNewMessage?: () => void;
+}
+
+export function FloatingChatViewer({ agentId, sessionKey: providedSessionKey, taskContext, onClose, onNewMessage }: FloatingChatViewerProps) {
   const { agents } = useOpenClawContext();
   const { userInfo } = useUser();
 
@@ -889,6 +823,49 @@ export function FloatingChatViewer() {
   // Unified tool state management
   const { toolStates, toggleToolExpansion } = useUnifiedToolState(messages as any);
 
+  // Session history state (non-task mode only)
+  const [sessions, setSessions] = useState<Array<{ key: string; label?: string; updatedAt?: number }>>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [sessionsError, setSessionsError] = useState<string | null>(null);
+
+  // Fetch sessions callback
+  const fetchSessions = useCallback(async () => {
+    if (!gatewayConnection.isConnected()) return;
+    setSessionsLoading(true);
+    setSessionsError(null);
+    try {
+      const result = await gatewayConnection.listSessions(effectiveAgentId, 50);
+      setSessions(result.sessions || []);
+    } catch (err) {
+      console.error("[FloatingChat] Failed to fetch sessions:", err);
+      setSessionsError(err instanceof Error ? err.message : "Failed to load sessions");
+    } finally {
+      setSessionsLoading(false);
+    }
+  }, [effectiveAgentId]);
+
+  // Handle session switch
+  const handleSessionSwitch = useCallback((newSessionKey: string) => {
+    setResolvedSessionKey(newSessionKey);
+    setSessionKey(newSessionKey);
+    setSessionResolved(true);
+  }, [setSessionKey]);
+
+  // Handle new chat (non-task mode)
+  const handleNewChat = useCallback(async () => {
+    const newKey = `agent:${effectiveAgentId}:chat-${Date.now()}`;
+    setResolvedSessionKey(newKey);
+    setSessionKey(newKey);
+    setSessionResolved(true);
+    // Refresh session list
+    if (gatewayConnection.isConnected()) {
+      try {
+        const result = await gatewayConnection.listSessions(effectiveAgentId, 50);
+        setSessions(result.sessions || []);
+      } catch {}
+    }
+  }, [setSessionKey, effectiveAgentId]);
+
   // Merge tool calls with results
   const mergedMessages = useMemo(() => mergeToolCallsWithResults(messages), [messages]);
 
@@ -948,12 +925,21 @@ export function FloatingChatViewer() {
   // Timestamp of last user-sent message (grace period for auto-scroll).
   const lastSentAtRef = useRef<number>(0);
 
-  // Auto-scroll on new messages
+  // Auto-scroll on new messages and streaming deltas
   const prevLenRef = useRef(0);
   useEffect(() => {
     const prevLen = prevLenRef.current;
     if (messages.length <= prevLen) {
       prevLenRef.current = messages.length;
+      // Length didn't change but messages reference did — streaming delta.
+      if (scrollAreaRef.current) {
+        const el = scrollAreaRef.current;
+        const nearBottom = el.scrollHeight - el.scrollTop <= el.clientHeight + 150;
+        const justSent = Date.now() - lastSentAtRef.current < 30000;
+        if (nearBottom || justSent) {
+          requestAnimationFrame(() => scrollToBottom());
+        }
+      }
       return;
     }
     if (prevLen === 0 && messages.length > 1) {
@@ -962,20 +948,32 @@ export function FloatingChatViewer() {
       return;
     }
     const newMsg = messages[messages.length - 1];
-    const isToolAction = newMsg?.toolCalls?.length || newMsg?.toolResults?.length;
     if (newMsg?.role === "user") {
       lastSentAtRef.current = Date.now();
-      scrollToBottom(); // synchronous — avoid rAF race with assistant response
-    } else if (!isToolAction && scrollAreaRef.current) {
+      scrollToBottom();
+    } else if (scrollAreaRef.current) {
       const el = scrollAreaRef.current;
       const nearBottom = el.scrollHeight - el.scrollTop <= el.clientHeight + 150;
-      const justSent = Date.now() - lastSentAtRef.current < 3000;
+      const justSent = Date.now() - lastSentAtRef.current < 30000;
       if (nearBottom || justSent) {
         requestAnimationFrame(() => scrollToBottom());
       }
     }
     prevLenRef.current = messages.length;
   }, [messages.length, messages, scrollToBottom]);
+
+  // Notify parent of new assistant messages (for tab unread dots)
+  const notifyLenRef = useRef(0);
+  useEffect(() => {
+    const prev = notifyLenRef.current;
+    notifyLenRef.current = messages.length;
+    // Skip initial history load (0 → N) — only fire on incremental growth
+    if (prev === 0 || messages.length <= prev) return;
+    const latest = messages[messages.length - 1];
+    if (latest?.role === "assistant" && onNewMessage) {
+      onNewMessage();
+    }
+  }, [messages.length, messages, onNewMessage]);
 
   // Show skeleton until first history load completes
   const initialLoadDoneRef = useRef(false);
@@ -1298,13 +1296,24 @@ export function FloatingChatViewer() {
             </TooltipTrigger>
             <TooltipContent side="bottom">Reload chat history</TooltipContent>
           </Tooltip>
+          {!isTaskMode && (
+            <SessionHistoryDropdown
+              sessions={sessions}
+              isLoading={sessionsLoading}
+              error={sessionsError}
+              currentSessionKey={resolvedSessionKey}
+              onLoadSession={handleSessionSwitch}
+              onNewChat={handleNewChat}
+              onFetchSessions={fetchSessions}
+            />
+          )}
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
                 variant="ghost"
                 size="iconSm"
                 className="h-7 w-7"
-                onClick={closeChat}
+                onClick={onClose}
               >
                 <X className="w-3.5 h-3.5" />
               </Button>
@@ -1382,13 +1391,13 @@ export function FloatingChatViewer() {
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 10 }}
-              className="absolute w-full flex justify-center z-50"
+              className="absolute w-full flex justify-center z-50 pointer-events-none"
               style={{ bottom: `${inputAreaHeight}px` }}
             >
               <Button
                 variant="secondary"
                 size="iconSm"
-                className="h-7 w-7 rounded-full shadow-md"
+                className="h-7 w-7 rounded-full shadow-md pointer-events-auto"
                 onClick={scrollToBottom}
               >
                 <ChevronDown className="w-3.5 h-3.5" />

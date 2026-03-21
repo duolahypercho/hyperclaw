@@ -21,6 +21,7 @@ import { useGatewayChat, GatewayChatMessage, GatewayChatAttachment } from "@OS/A
 import type { AttachmentType } from "@OS/AI/components/Chat";
 import { gatewayConnection } from "$/lib/openclaw-gateway-ws";
 import { InputContainer } from "@OS/AI/components/InputContainer";
+import SessionHistoryDropdown from "$/components/SessionHistoryDropdown";
 import createMarkdownComponents from "@OS/AI/components/createMarkdownComponents";
 import { EmptyState, AnimatedThinkingText } from "@OS/AI/components/Chat";
 import { GenericToolMessage } from "@OS/AI/components/GenericToolMessage";
@@ -472,7 +473,6 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
   const { personality } = useAssistant();
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
-  const [inputValue, setInputValue] = useState("");
   const [sessionKeyState, setSessionKeyState] = useState(sessionKey || "default");
 
   // Sync sessionKey prop with internal state and reload when it changes
@@ -501,29 +501,82 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
   // Unified tool state management
   const { toolStates, toggleToolExpansion, resetToolStates } = useUnifiedToolState(messages as any);
 
+  // Session history state
+  const [sessions, setSessions] = useState<Array<{ key: string; label?: string; updatedAt?: number }>>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [sessionsError, setSessionsError] = useState<string | null>(null);
+
+  // Parse agentId from session key (format: agent:{id}:rest)
+  const currentAgentId = useMemo(() => {
+    const parts = sessionKeyState.split(":");
+    return parts.length >= 2 && parts[0] === "agent" ? parts[1] : "default";
+  }, [sessionKeyState]);
+
+  // Fetch sessions callback
+  const fetchSessions = useCallback(async () => {
+    if (!gatewayConnection.isConnected()) return;
+    setSessionsLoading(true);
+    setSessionsError(null);
+    try {
+      const result = await gatewayConnection.listSessions(currentAgentId, 50);
+      setSessions(result.sessions || []);
+    } catch (err) {
+      console.error("[GatewayChat] Failed to fetch sessions:", err);
+      setSessionsError(err instanceof Error ? err.message : "Failed to load sessions");
+    } finally {
+      setSessionsLoading(false);
+    }
+  }, [currentAgentId]);
+
+  // Handle session switch
+  const handleSessionChange = useCallback((newSessionKey: string) => {
+    setSessionKeyState(newSessionKey);
+    setHookSessionKey(newSessionKey);
+  }, [setHookSessionKey]);
+
+  // Handle new chat
+  const handleNewChat = useCallback(async () => {
+    const newKey = `agent:${currentAgentId}:chat-${Date.now()}`;
+    setSessionKeyState(newKey);
+    setHookSessionKey(newKey);
+    // Refresh session list so the previous session appears in history
+    if (gatewayConnection.isConnected()) {
+      try {
+        const result = await gatewayConnection.listSessions(currentAgentId, 50);
+        setSessions(result.sessions || []);
+      } catch {}
+    }
+  }, [setHookSessionKey, currentAgentId]);
+
   // Track previous message count for smart scrolling
   const prevMessagesLengthRef = useRef<number>(0);
+  const lastSentAtRef = useRef<number>(0);
 
-  // Scroll to bottom when messages change - but only if user is near bottom
+  // Scroll to bottom when messages change — both new messages and streaming deltas
   useEffect(() => {
-    if (scrollAreaRef.current && messages.length > 0) {
-      const isNewMessage = messages.length > prevMessagesLengthRef.current;
-      prevMessagesLengthRef.current = messages.length;
+    if (!scrollAreaRef.current || messages.length === 0) return;
 
-      if (isNewMessage) {
-        const { scrollTop, scrollHeight, clientHeight } = scrollAreaRef.current;
-        const isNearBottom = scrollHeight - scrollTop - clientHeight < 200;
+    const prevLen = prevMessagesLengthRef.current;
+    prevMessagesLengthRef.current = messages.length;
 
-        // Only auto-scroll if already near bottom
-        if (isNearBottom) {
-          scrollAreaRef.current.scrollTo({
-            top: scrollAreaRef.current.scrollHeight,
-            behavior: "smooth",
-          });
-        }
+    const el = scrollAreaRef.current;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 200;
+    const justSent = Date.now() - lastSentAtRef.current < 30000;
+
+    if (messages.length > prevLen) {
+      // New message added
+      const newMsg = messages[messages.length - 1];
+      if (newMsg?.role === "user") {
+        lastSentAtRef.current = Date.now();
+        el.scrollTop = el.scrollHeight;
+      } else if (nearBottom || justSent) {
+        requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
       }
+    } else if (nearBottom || justSent) {
+      // Streaming delta — length unchanged but content updated
+      requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
     }
-  }, [messages.length]);
+  }, [messages.length, messages]);
 
   // Check scroll position
   const checkScrollPosition = useCallback(() => {
@@ -538,7 +591,6 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
   const handleSendMessage = useCallback(
     async (message: string, attachments?: AttachmentType[]) => {
       if (!message.trim() && (!attachments || attachments.length === 0)) return;
-      setInputValue("");
 
       const gatewayAttachments: GatewayChatAttachment[] | undefined = attachments?.length
         ? attachments.map((att) => {
@@ -641,20 +693,22 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
               <Button
                 variant="ghost"
                 size="iconSm"
-                onClick={() => {
-                  // Parse agentId from current session key (format: agent:{id}:rest)
-                  const parts = sessionKeyState.split(":");
-                  const agentId = parts.length >= 2 && parts[0] === "agent" ? parts[1] : "default";
-                  // Generate a new unique session key so the old session is preserved
-                  const newKey = `agent:${agentId}:chat-${Date.now()}`;
-                  setSessionKeyState(newKey);
-                  setHookSessionKey(newKey);
-                }}
+                onClick={handleNewChat}
                 disabled={!hasChatStarted || isLoading}
               >
                 <Plus className="w-3.5 h-3.5" />
               </Button>
             </HyperchoTooltip>
+
+            <SessionHistoryDropdown
+              sessions={sessions}
+              isLoading={sessionsLoading}
+              error={sessionsError}
+              currentSessionKey={sessionKeyState}
+              onLoadSession={handleSessionChange}
+              onNewChat={handleNewChat}
+              onFetchSessions={fetchSessions}
+            />
           </div>
         </div>
       </CardHeader>
@@ -718,7 +772,7 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
                           break;
                         }
 
-                        if (toolMessages.length >= 2) {
+                        if (toolMessages.length >= 1) {
                           nodes.push(
                             <ToolActionsGroupMessage
                               key={`tool-actions-${index}`}
@@ -824,7 +878,7 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
               initial={{ opacity: 0, scale: 0.8, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.8, y: 20 }}
-              className="absolute w-full flex justify-center z-50"
+              className="absolute w-full flex justify-center z-50 pointer-events-none"
               style={{ bottom: "100px" }}
             >
               <HyperchoTooltip value="Scroll to bottom">
@@ -836,7 +890,7 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
                     });
                   }}
                   size="icon"
-                  className="rounded-full h-fit w-fit p-1.5 shadow-lg"
+                  className="rounded-full h-fit w-fit p-1.5 shadow-lg pointer-events-auto"
                 >
                   <ChevronDown className="w-3 h-3" />
                 </Button>
@@ -868,8 +922,6 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
             allowedFileTypes={["image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml", "image/bmp"]}
             sessionKey={sessionKeyState}
             onStopGeneration={stopGeneration}
-            value={inputValue}
-            onChange={setInputValue}
           />
         </div>
       </div>

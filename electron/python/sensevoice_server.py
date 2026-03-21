@@ -88,7 +88,7 @@ def handle_request(line):
         
         if action == "init":
             success = server.initialize()
-            return json.dumps({"success": success})
+            return json.dumps({"initialized": success})
         
         elif action == "transcribe":
             if not server.initialized:

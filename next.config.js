@@ -119,4 +119,7 @@ module.exports = withSentryConfig(nextConfig, {
   project: process.env.SENTRY_PROJECT || "",
   disableServerWebpackPlugin: !process.env.SENTRY_AUTH_TOKEN,
   disableClientWebpackPlugin: !process.env.SENTRY_AUTH_TOKEN,
+  webpack: {
+    excludeServerRoutes: ["/api/auth/[...nextauth]"],
+  },
 });

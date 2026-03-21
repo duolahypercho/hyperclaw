@@ -19,6 +19,7 @@ import {
   VirtualOpenClaw,
   VirtualApprovals,
   VirtualOrgChart,
+  VirtualChat,
 } from "$/components/Tool/VirtualToolComponents";
 import { TimerProvider } from "$/Providers/TimerProv";
 import { useInterim } from "$/Providers/InterimProv";
@@ -93,6 +94,7 @@ const MainLayout = ({ children }: any) => {
     { path: "/Tool/Usage", component: VirtualUsage, name: "Token Usage" },
     { path: "/Tool/Approvals", component: VirtualApprovals, name: "Approvals" },
     { path: "/Tool/OrgChart", component: VirtualOrgChart, name: "Org Chart" },
+    { path: "/Tool/Chat", component: VirtualChat, name: "Chat" },
     { path: "/Settings", component: VirtualSettings, name: "Settings" },
   ];
 
