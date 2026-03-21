@@ -53,7 +53,12 @@
         "zip"
       ],
       "icon": "../public/Logopic.png",
-      "category": "public.app-category.productivity"
+      "category": "public.app-category.productivity",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "./entitlements.plist",
+      "entitlementsInherit": "./entitlements.plist",
+      "notarize": true
     },
     "linux": {
       "target": [
