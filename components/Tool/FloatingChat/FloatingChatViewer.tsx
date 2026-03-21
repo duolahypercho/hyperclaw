@@ -902,10 +902,14 @@ export function FloatingChatViewer({ agentId, sessionKey: providedSessionKey, ta
     }
   }, []);
 
+  const userScrolledAwayRef = useRef(false);
+
   const checkScroll = useCallback(() => {
     if (!scrollAreaRef.current) return;
     const el = scrollAreaRef.current;
-    setShowScrollBtn(el.scrollHeight - el.scrollTop > el.clientHeight + 10);
+    const isAtBottom = el.scrollHeight - el.scrollTop <= el.clientHeight + 10;
+    setShowScrollBtn(!isAtBottom);
+    userScrolledAwayRef.current = !isAtBottom;
   }, []);
 
   // Measure input area height
@@ -922,21 +926,18 @@ export function FloatingChatViewer({ agentId, sessionKey: providedSessionKey, ta
     return () => ro.disconnect();
   }, []);
 
-  // Timestamp of last user-sent message (grace period for auto-scroll).
-  const lastSentAtRef = useRef<number>(0);
-
-  // Auto-scroll on new messages and streaming deltas
+  // Auto-scroll on new messages and streaming deltas.
+  // Stops scrolling if the user has scrolled up to read earlier content.
   const prevLenRef = useRef(0);
   useEffect(() => {
     const prevLen = prevLenRef.current;
     if (messages.length <= prevLen) {
       prevLenRef.current = messages.length;
-      // Length didn't change but messages reference did — streaming delta.
-      if (scrollAreaRef.current) {
+      // Streaming delta — scroll only if user hasn't scrolled away.
+      if (scrollAreaRef.current && !userScrolledAwayRef.current) {
         const el = scrollAreaRef.current;
         const nearBottom = el.scrollHeight - el.scrollTop <= el.clientHeight + 150;
-        const justSent = Date.now() - lastSentAtRef.current < 30000;
-        if (nearBottom || justSent) {
+        if (nearBottom) {
           requestAnimationFrame(() => scrollToBottom());
         }
       }
@@ -944,18 +945,18 @@ export function FloatingChatViewer({ agentId, sessionKey: providedSessionKey, ta
     }
     if (prevLen === 0 && messages.length > 1) {
       prevLenRef.current = messages.length;
+      userScrolledAwayRef.current = false;
       requestAnimationFrame(() => requestAnimationFrame(() => scrollToBottom()));
       return;
     }
     const newMsg = messages[messages.length - 1];
     if (newMsg?.role === "user") {
-      lastSentAtRef.current = Date.now();
+      userScrolledAwayRef.current = false;
       scrollToBottom();
-    } else if (scrollAreaRef.current) {
+    } else if (scrollAreaRef.current && !userScrolledAwayRef.current) {
       const el = scrollAreaRef.current;
       const nearBottom = el.scrollHeight - el.scrollTop <= el.clientHeight + 150;
-      const justSent = Date.now() - lastSentAtRef.current < 30000;
-      if (nearBottom || justSent) {
+      if (nearBottom) {
         requestAnimationFrame(() => scrollToBottom());
       }
     }

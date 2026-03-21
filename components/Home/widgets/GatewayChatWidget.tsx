@@ -407,6 +407,9 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
     navigator.clipboard.writeText(content);
   }, []);
 
+  // true when the user has manually scrolled away from the bottom during generation
+  const userScrolledAwayRef = useRef(false);
+
   // Check scroll position
   const checkScrollPosition = useCallback(() => {
     if (!scrollAreaRef.current) return;
@@ -414,6 +417,8 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
     const isAtBottom =
       element.scrollHeight - element.scrollTop <= element.clientHeight + 10;
     setShowScrollButton(!isAtBottom);
+    // Track whether the user scrolled away — if they scroll back to bottom, re-enable auto-scroll
+    userScrolledAwayRef.current = !isAtBottom;
   }, []);
 
   // Scroll to bottom - instant, no animation
@@ -423,27 +428,19 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
     }
   }, []);
 
-  // Timestamp of last user-sent message. For a short grace period after sending,
-  // always auto-scroll so the response is visible (avoids rAF race conditions
-  // where the assistant message arrives before the user-message scroll executes).
-  const lastSentAtRef = useRef<number>(0);
-
-  // Auto-scroll only when user is near bottom AND the new message is user text
-  // or assistant text (not tool actions). Tool actions accumulate rapidly and
-  // scrolling to each one is disorienting.
+  // Auto-scroll only when user is near bottom. If the user scrolls up to
+  // read earlier text during generation, we stop auto-scrolling.
   const prevMessagesLengthRef = useRef<number>(0);
   useEffect(() => {
     const prevLen = prevMessagesLengthRef.current;
 
     if (messages.length <= prevLen) {
       prevMessagesLengthRef.current = messages.length;
-      // Length didn't change but messages reference did — streaming delta
-      // updated an existing message's content. Scroll if near bottom.
-      if (scrollAreaRef.current) {
+      // Streaming delta — scroll only if user hasn't scrolled away.
+      if (scrollAreaRef.current && !userScrolledAwayRef.current) {
         const el = scrollAreaRef.current;
         const nearBottom = el.scrollHeight - el.scrollTop <= el.clientHeight + 150;
-        const justSent = Date.now() - lastSentAtRef.current < 30000;
-        if (nearBottom || justSent) {
+        if (nearBottom) {
           requestAnimationFrame(() => scrollToBottom(false));
         }
       }
@@ -454,26 +451,21 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
     // Always scroll to bottom so the user sees the latest messages.
     if (prevLen === 0 && messages.length > 1) {
       prevMessagesLengthRef.current = messages.length;
-      // Double rAF to ensure React has committed the DOM
+      userScrolledAwayRef.current = false;
       requestAnimationFrame(() => requestAnimationFrame(() => scrollToBottom(false)));
       return;
     }
 
     const newMsg = messages[messages.length - 1];
 
-    // Always scroll for user messages (just sent). Scroll synchronously —
-    // deferring to rAF causes a race where the assistant response arrives
-    // and fails the nearBottom check before the user-message scroll executes.
     if (newMsg?.role === "user") {
-      lastSentAtRef.current = Date.now();
+      // User just sent — always scroll and reset the flag.
+      userScrolledAwayRef.current = false;
       scrollToBottom(false);
-    } else if (scrollAreaRef.current) {
+    } else if (scrollAreaRef.current && !userScrolledAwayRef.current) {
       const el = scrollAreaRef.current;
       const nearBottom = el.scrollHeight - el.scrollTop <= el.clientHeight + 150;
-      // Auto-scroll if near bottom OR within 30s of sending a message
-      // (the full response should stay visible while streaming).
-      const justSent = Date.now() - lastSentAtRef.current < 30000;
-      if (nearBottom || justSent) {
+      if (nearBottom) {
         requestAnimationFrame(() => scrollToBottom(false));
       }
     }

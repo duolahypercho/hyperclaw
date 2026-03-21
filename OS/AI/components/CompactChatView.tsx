@@ -54,16 +54,29 @@ export const CompactChatView = memo(({
   // Unified tool state — same as GatewayChatWidget
   const { toolStates, toggleToolExpansion } = useUnifiedToolState(messages as any);
 
-  // Auto-scroll on new messages and streaming deltas
+  // true when user has scrolled away from the bottom during generation
+  const userScrolledAwayRef = useRef(false);
+
+  // Auto-scroll on new messages and streaming deltas.
+  // Stops scrolling if the user has scrolled up to read earlier content.
   useEffect(() => {
     if (!scrollRef.current) return;
     const el = scrollRef.current;
 
     if (messages.length > prevLenRef.current) {
-      // New message added — always scroll
-      requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
-    } else {
-      // Streaming delta — length unchanged, content updated. Scroll if near bottom.
+      const newMsg = messages[messages.length - 1];
+      if (newMsg?.role === "user") {
+        // User just sent — always scroll and reset flag.
+        userScrolledAwayRef.current = false;
+        requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
+      } else if (!userScrolledAwayRef.current) {
+        const nearBottom = el.scrollHeight - el.scrollTop <= el.clientHeight + 100;
+        if (nearBottom) {
+          requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
+        }
+      }
+    } else if (!userScrolledAwayRef.current) {
+      // Streaming delta — scroll if near bottom.
       const nearBottom = el.scrollHeight - el.scrollTop <= el.clientHeight + 100;
       if (nearBottom) {
         requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
@@ -305,6 +318,11 @@ export const CompactChatView = memo(({
         ref={scrollRef}
         className="overflow-y-auto overflow-x-hidden space-y-2 p-4 min-w-0 customScrollbar2"
         style={{ maxHeight: `${maxHeight}px`, ...(minHeight != null && { minHeight: `${minHeight}px` }), overscrollBehavior: "contain" }}
+        onScroll={() => {
+          if (!scrollRef.current) return;
+          const el = scrollRef.current;
+          userScrolledAwayRef.current = el.scrollHeight - el.scrollTop > el.clientHeight + 10;
+        }}
       >
         {nodes}
       </div>
