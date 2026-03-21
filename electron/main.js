@@ -1438,93 +1438,26 @@ function toggleVoiceOverlay() {
 
 // Screenshot capture for quick-chat mode
 // Requires Screen Recording permission on macOS (System Settings → Privacy → Screen Recording)
-let screenPermissionPrompted = false;
-
-// macOS: use native screencapture CLI (more reliable than desktopCapturer)
-async function captureScreenshotMac() {
-  const path = require("path");
-  const os = require("os");
-  const fs = require("fs");
-  const { execFile } = require("child_process");
-
-  const tmpFile = path.join(os.tmpdir(), `hyperclaw-screenshot-${Date.now()}.jpg`);
-
-  return new Promise((resolve) => {
-    // -x = no sound, -t jpg = JPEG for smaller size, -o = no shadow on window captures
-    execFile("screencapture", ["-x", "-t", "jpg", tmpFile], { timeout: 5000 }, (err) => {
-      if (err) {
-        if (!screenPermissionPrompted) {
-          screenPermissionPrompted = true;
-          const { shell } = require("electron");
-          shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture");
-        }
-        resolve({ error: `screencapture: ${err.message}` });
-        return;
-      }
-      try {
-        const buffer = fs.readFileSync(tmpFile);
-        fs.unlinkSync(tmpFile);
-        if (buffer.length < 1000) {
-          resolve({ error: "screencapture-blank" });
-          return;
-        }
-        // Resize if over 4MB using nativeImage
-        const { nativeImage } = require("electron");
-        let img = nativeImage.createFromBuffer(buffer);
-        const size = img.getSize();
-        // Scale down to max 1280px wide for reasonable file size
-        if (size.width > 1280) {
-          img = img.resize({ width: 1280, quality: "good" });
-        }
-        const jpegBuffer = img.toJPEG(70); // quality 70 keeps it well under 5MB
-        const dataUrl = `data:image/jpeg;base64,${jpegBuffer.toString("base64")}`;
-        screenPermissionPrompted = false;
-        resolve({ dataUrl });
-      } catch (readErr) {
-        resolve({ error: `read: ${readErr.message}` });
-      }
-    });
-  });
-}
-
-// Linux/Windows: use Electron desktopCapturer
-async function captureScreenshotDesktop() {
-  const { desktopCapturer, nativeImage } = require("electron");
-  const sources = await desktopCapturer.getSources({
-    types: ["screen"],
-    thumbnailSize: { width: 1280, height: 800 },
-  });
-  if (sources.length === 0) {
-    return { error: "no-sources" };
-  }
-  // Convert to JPEG at quality 70 to stay under 5MB
-  const jpegBuffer = sources[0].thumbnail.toJPEG(70);
-  if (jpegBuffer.length < 500) {
-    return { error: `blank-${jpegBuffer.length}B` };
-  }
-  const dataUrl = `data:image/jpeg;base64,${jpegBuffer.toString("base64")}`;
-  return { dataUrl };
-}
-
 async function captureScreenshot() {
-  // Try desktopCapturer first (no permission prompt if already granted)
   try {
-    const desktopResult = await captureScreenshotDesktop();
-    if (desktopResult.dataUrl) return desktopResult;
-  } catch (_) {
-    // desktopCapturer failed — fall through to platform fallback
-  }
-
-  // macOS fallback: native screencapture CLI
-  if (process.platform === "darwin") {
-    try {
-      return await captureScreenshotMac();
-    } catch (err) {
-      return { error: err?.message || String(err) };
+    const { desktopCapturer } = require("electron");
+    const sources = await desktopCapturer.getSources({
+      types: ["screen"],
+      thumbnailSize: { width: 1280, height: 800 },
+    });
+    if (sources.length === 0) {
+      return { error: "no-sources" };
     }
+    // JPEG at quality 70 keeps it well under the 5MB attachment limit
+    const jpegBuffer = sources[0].thumbnail.toJPEG(70);
+    if (jpegBuffer.length < 500) {
+      return { error: "blank" };
+    }
+    const dataUrl = `data:image/jpeg;base64,${jpegBuffer.toString("base64")}`;
+    return { dataUrl };
+  } catch (err) {
+    return { error: err?.message || String(err) };
   }
-
-  return { error: "no-capture-method" };
 }
 
 // IPC handler: renderer can request a screenshot directly
@@ -1614,11 +1547,6 @@ function registerVoiceHotkey() {
     const { systemPreferences } = require("electron");
     const isTrusted = systemPreferences.isTrustedAccessibilityClient(false);
     if (!isTrusted) {
-      if (!registerVoiceHotkey._prompted) {
-        registerVoiceHotkey._prompted = true;
-        systemPreferences.isTrustedAccessibilityClient(true);
-        console.log("[Hyperclaw] Accessibility permission not granted — macOS prompt shown.");
-      }
       console.log("[Hyperclaw] uiohook skipped (no Accessibility). globalShortcut active.");
       return;
     }

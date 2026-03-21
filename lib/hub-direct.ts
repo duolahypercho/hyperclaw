@@ -4,29 +4,22 @@
  * Auth: JWT from NextAuth session.
  * Device: fetched from Hub /api/devices and cached.
  */
-import { getSession } from "next-auth/react";
+import { getCachedToken } from "./auth-token-cache";
 
 const HUB_API_URL =
   process.env.NEXT_PUBLIC_HUB_API_URL || "https://hub.hypercho.com";
 
-// --- Token cache ---
-let _tokenCache: { token: string; expiresAt: number } | null = null;
-const TOKEN_CACHE_TTL = 5 * 60 * 1000; // 5 min
-
+/**
+ * Returns the cached JWT. Never calls getSession() to avoid flooding
+ * /api/auth/session — the token is populated by UserProvider from the
+ * SessionProvider context.
+ */
 export async function getUserToken(): Promise<string> {
-  if (_tokenCache && Date.now() < _tokenCache.expiresAt) {
-    return _tokenCache.token;
-  }
-  const session = await getSession();
-  const token = (session?.user as any)?.token || "";
-  if (token) {
-    _tokenCache = { token, expiresAt: Date.now() + TOKEN_CACHE_TTL };
-  }
-  return token;
+  return getCachedToken() || "";
 }
 
 export function clearTokenCache() {
-  _tokenCache = null;
+  // no-op — token lifecycle is managed by auth-token-cache
 }
 
 // --- Device cache ---

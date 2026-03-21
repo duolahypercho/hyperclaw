@@ -945,10 +945,34 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
             return updated;
           }
 
-          // No existing message for this runId — create one.
-          // Guard: if another assistant text message already has this exact content
-          // (e.g. chat.* and agent.* paths emitting with different runIds for the
-          // same logical run), skip creating a duplicate.
+          // No existing message for this runId — check for content overlap.
+          // The gateway may emit the same logical response via different event
+          // paths (chat.* vs agent.*) with different runIds. Without this, each
+          // path creates its own message, causing duplicate streaming text.
+          // First, look for an assistant text message in the current turn whose
+          // content is a prefix of (or equal to) the incoming text, or vice versa.
+          let overlapIdx = -1;
+          for (let i = prev.length - 1; i >= searchStart; i--) {
+            const m = prev[i];
+            if (m.role === "assistant" && !m.toolCalls?.length && m.content.trim()) {
+              if (text.startsWith(m.content) || m.content.startsWith(text) || m.content === text) {
+                overlapIdx = i;
+                break;
+              }
+            }
+          }
+
+          if (overlapIdx !== -1) {
+            // Update the existing message with the longer (more complete) text
+            const longer = text.length >= prev[overlapIdx].content.length ? text : prev[overlapIdx].content;
+            if (prev[overlapIdx].content === longer) return prev; // no change
+            const updated = [...prev];
+            updated[overlapIdx] = { ...prev[overlapIdx], content: longer };
+            return updated;
+          }
+
+          // Exact-content guard (handles the case where content matches but
+          // neither is a prefix of the other due to whitespace differences).
           if (text.trim() && prev.some(
             (m) => m.role === "assistant" && !m.toolCalls?.length && m.content === text
           )) {
@@ -984,13 +1008,33 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       const cleanFinalText = typeof finalText === "string" ? stripProtocolMarkers(finalText) : null;
       if (cleanFinalText && cleanFinalText.trim()) {
         setMessages((prev) => {
-          // Check if this text already exists (from streaming deltas)
+          // Check if this text already exists (from streaming deltas) —
+          // either an exact normalized match OR a prefix/overlap relationship
+          // (streaming may still be slightly behind the final text).
           const normalizedFinal = normalizeForCompare(cleanFinalText);
-          const alreadyExists = prev.some(
-            (m) => m.role === "assistant" && !m.toolCalls?.length &&
-              m.content.trim() && normalizeForCompare(m.content) === normalizedFinal
-          );
-          if (alreadyExists) return prev;
+
+          // Find last user message to scope the search to the current turn
+          let lastUserIdx = -1;
+          for (let i = prev.length - 1; i >= 0; i--) {
+            if (prev[i].role === "user") { lastUserIdx = i; break; }
+          }
+          const searchStart = Math.max(lastUserIdx + 1, 0);
+
+          for (let i = prev.length - 1; i >= searchStart; i--) {
+            const m = prev[i];
+            if (m.role !== "assistant" || m.toolCalls?.length || !m.content.trim()) continue;
+            const normExisting = normalizeForCompare(m.content);
+            // Exact match — already have the full text
+            if (normExisting === normalizedFinal) return prev;
+            // Streaming message is a prefix of the final — upgrade it in place
+            if (cleanFinalText.startsWith(m.content) || m.content.startsWith(cleanFinalText)) {
+              const longer = cleanFinalText.length >= m.content.length ? cleanFinalText : m.content;
+              if (m.content === longer) return prev;
+              const updated = [...prev];
+              updated[i] = { ...m, content: longer };
+              return updated;
+            }
+          }
 
           // Add as new message — use a unique ID to avoid collision with
           // streaming text messages that may share the same runId.
