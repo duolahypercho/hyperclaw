@@ -40,8 +40,10 @@ const MainLayout = ({ children }: any) => {
   const hasBeenAuthenticatedRef = useRef(false);
   const [setupSkipped, setSetupSkipped] = useState(false);
 
-  // Check devices from hub
-  const { needsSetup, loading: devicesLoading, refetch: refetchDevices } = useDevices();
+  // Check devices from hub — only fetch once authenticated so the JWT is
+  // available. Without this gate, a premature 401 silently empties the
+  // device list and shows the setup/onboarding screen on every new device.
+  const { needsSetup, loading: devicesLoading, refetch: refetchDevices } = useDevices(status === "authenticated");
 
   // Use the professional auth guard hook
   const { isLoading, isRedirecting } = useAuthGuard({

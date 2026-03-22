@@ -593,38 +593,17 @@ export class OfficeState {
         if (seat) {
           // If someone else is already sitting at this seat, evict them first
           this.evictOccupantFromSeat(ch.seatId, id)
-          const atSeat = ch.tileCol === seat.seatCol && ch.tileRow === seat.seatRow
-          if (atSeat) {
-            ch.state = CharacterState.TYPE
-            ch.dir = seat.facingDir
-            ch.path = []
-            ch.moveProgress = 0
-            ch.frame = 0
-            ch.frameTimer = 0
-          } else {
-            const path = this.withOwnSeatUnblocked(ch, () =>
-              findPath(ch.tileCol, ch.tileRow, seat.seatCol, seat.seatRow, this.tileMap, this.blockedTiles)
-            )
-            if (path.length > 0) {
-              ch.path = path
-              ch.moveProgress = 0
-              ch.state = CharacterState.WALK
-              ch.frame = 0
-              ch.frameTimer = 0
-            } else {
-              // No path — teleport to seat so they never type in a random spot
-              ch.tileCol = seat.seatCol
-              ch.tileRow = seat.seatRow
-              ch.x = seat.seatCol * TILE_SIZE + TILE_SIZE / 2
-              ch.y = seat.seatRow * TILE_SIZE + TILE_SIZE / 2
-              ch.state = CharacterState.TYPE
-              ch.dir = seat.facingDir
-              ch.path = []
-              ch.moveProgress = 0
-              ch.frame = 0
-              ch.frameTimer = 0
-            }
-          }
+          // Always teleport directly to seat when becoming active
+          ch.tileCol = seat.seatCol
+          ch.tileRow = seat.seatRow
+          ch.x = seat.seatCol * TILE_SIZE + TILE_SIZE / 2
+          ch.y = seat.seatRow * TILE_SIZE + TILE_SIZE / 2
+          ch.state = CharacterState.TYPE
+          ch.dir = seat.facingDir
+          ch.path = []
+          ch.moveProgress = 0
+          ch.frame = 0
+          ch.frameTimer = 0
         }
       } else if (!active) {
         // Capture "mid-walk" before clearing path so we snap to current visual position.
