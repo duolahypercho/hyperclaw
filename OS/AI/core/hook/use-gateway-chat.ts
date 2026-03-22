@@ -15,6 +15,13 @@ import { v4 as uuidv4 } from "uuid";
 // are streaming simultaneously and events arrive without sessionKey.
 const runIdOwners = new Map<string, string>();
 
+/** Remove ALL runIdOwners entries belonging to a session (primary + sub-agent runIds). */
+const clearRunIdOwnership = (sessionKey: string) => {
+  runIdOwners.forEach((owner, runId) => {
+    if (owner === sessionKey) runIdOwners.delete(runId);
+  });
+};
+
 // Types for chat (matching OpenClaw's protocol)
 export type ChatMessageRole = "user" | "assistant" | "system" | "tool" | "toolResult";
 
@@ -564,7 +571,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       setMessages([]);
       setIsLoading(false);
       setError(null);
-      if (currentRunIdRef.current) runIdOwners.delete(currentRunIdRef.current);
+      clearRunIdOwnership(oldKey);
       currentRunIdRef.current = null;
       streamContentRef.current = "";
       receivedEventRef.current = false;
@@ -685,10 +692,15 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
     } else if (currentRunIdRef.current !== null) {
       // Active conversation — check the runId registry to prevent cross-chat bleed.
       // If the event's runId is registered to a DIFFERENT session, reject it.
-      // Unknown runIds (sub-agents) are still accepted.
+      // Unknown runIds (sub-agents) are claimed by the first instance to process
+      // them — since JS is single-threaded, this prevents other instances from
+      // also accepting events from the same sub-agent.
       if (payload.runId) {
         const ownerSession = runIdOwners.get(payload.runId);
         if (ownerSession && ownerSession !== sessionKeyRef.current) return;
+        if (!ownerSession) {
+          runIdOwners.set(payload.runId, sessionKeyRef.current);
+        }
       }
       // Adopt the first runId for text message association.
       if (!receivedEventRef.current && payload.runId) {
@@ -703,6 +715,9 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       // late-arriving delta that should re-activate the conversation.
       if (!payload.runId) return;
       if (payload.state !== "delta") return;
+      // Don't re-activate if this runId is already owned by another session
+      const ownerSession = runIdOwners.get(payload.runId);
+      if (ownerSession && ownerSession !== sessionKeyRef.current) return;
       // Re-activate handled below in the delta handler
     }
 
@@ -717,6 +732,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       // Late-arriving deltas re-activate the conversation after premature finalization.
       if (currentRunIdRef.current === null && payload.runId) {
         currentRunIdRef.current = payload.runId;
+        runIdOwners.set(payload.runId, sessionKeyRef.current);
         setIsLoading(true);
       }
 
@@ -1247,10 +1263,8 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
         clearTimeout(disconnectGraceRef.current);
         disconnectGraceRef.current = null;
       }
-      // Clean up runId registry to prevent stale entries
-      if (currentRunIdRef.current) {
-        runIdOwners.delete(currentRunIdRef.current);
-      }
+      // Clean up runId registry to prevent stale entries (primary + sub-agent runIds)
+      clearRunIdOwnership(sessionKeyRef.current);
     };
   }, []);
 

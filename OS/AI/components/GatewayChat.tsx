@@ -550,41 +550,50 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
 
   // Track previous message count for smart scrolling
   const prevMessagesLengthRef = useRef<number>(0);
-  const lastSentAtRef = useRef<number>(0);
+  // true when the user has manually scrolled away from the bottom during generation
+  const userScrolledAwayRef = useRef(false);
 
-  // Scroll to bottom when messages change — both new messages and streaming deltas
+  // Auto-scroll only on initial load / session switch and when the user sends a message.
+  // Do NOT auto-scroll during streaming or when assistant messages arrive.
   useEffect(() => {
     if (!scrollAreaRef.current || messages.length === 0) return;
 
     const prevLen = prevMessagesLengthRef.current;
-    prevMessagesLengthRef.current = messages.length;
 
-    const el = scrollAreaRef.current;
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 200;
-    const justSent = Date.now() - lastSentAtRef.current < 30000;
-
-    if (messages.length > prevLen) {
-      // New message added
-      const newMsg = messages[messages.length - 1];
-      if (newMsg?.role === "user") {
-        lastSentAtRef.current = Date.now();
-        el.scrollTop = el.scrollHeight;
-      } else if (nearBottom || justSent) {
-        requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
-      }
-    } else if (nearBottom || justSent) {
-      // Streaming delta — length unchanged but content updated
-      requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
+    if (messages.length <= prevLen) {
+      prevMessagesLengthRef.current = messages.length;
+      // Streaming delta — do not auto-scroll.
+      return;
     }
+
+    // Bulk history load: previous was 0 or empty, now has many messages.
+    if (prevLen === 0 && messages.length > 1) {
+      prevMessagesLengthRef.current = messages.length;
+      userScrolledAwayRef.current = false;
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (scrollAreaRef.current) scrollAreaRef.current.scrollTop = scrollAreaRef.current.scrollHeight;
+      }));
+      return;
+    }
+
+    const newMsg = messages[messages.length - 1];
+    if (newMsg?.role === "user") {
+      // User just sent — always scroll and reset the flag.
+      userScrolledAwayRef.current = false;
+      if (scrollAreaRef.current) scrollAreaRef.current.scrollTop = scrollAreaRef.current.scrollHeight;
+    }
+    // Do not auto-scroll for assistant messages or other new messages.
+    prevMessagesLengthRef.current = messages.length;
   }, [messages.length, messages]);
 
-  // Check scroll position
+  // Check scroll position and track whether user scrolled away
   const checkScrollPosition = useCallback(() => {
     if (!scrollAreaRef.current) return;
     const element = scrollAreaRef.current;
     const isAtBottom =
       element.scrollHeight - element.scrollTop <= element.clientHeight + 50;
     setShowScrollButton(!isAtBottom);
+    userScrolledAwayRef.current = !isAtBottom;
   }, []);
 
   // Handle send message with attachment support

@@ -95,7 +95,8 @@ export const CompactChatView = memo(({
     const el = scrollRef.current;
     if (!el) return;
     const observer = new MutationObserver(() => {
-      // If user is near bottom, scroll to show new content
+      // Only auto-scroll on DOM changes if user hasn't scrolled away
+      if (userScrolledAwayRef.current) return;
       const nearBottom = el.scrollHeight - el.scrollTop <= el.clientHeight + 100;
       if (nearBottom) {
         requestAnimationFrame(() => {
