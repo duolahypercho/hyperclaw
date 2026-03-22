@@ -291,8 +291,18 @@ export const Dashboard: React.FC<DashboardProps> = ({
     };
   };
 
-  // Save configs whenever they change
+  // Save configs whenever they change — skip the very first value to avoid
+  // overwriting persisted (but not-yet-hydrated) data with an empty object.
+  // This mirrors the baseline-ref pattern used in Home/index.tsx for other keys.
+  const widgetConfigsBaselineRef = useRef<string | null>(null);
   useEffect(() => {
+    const json = JSON.stringify(widgetConfigs);
+    if (widgetConfigsBaselineRef.current === null) {
+      widgetConfigsBaselineRef.current = json;
+      return; // don't save the initial value — it may be empty pre-hydration
+    }
+    if (json === widgetConfigsBaselineRef.current) return;
+    widgetConfigsBaselineRef.current = json;
     saveWidgetConfigs(widgetConfigs);
   }, [widgetConfigs]);
 

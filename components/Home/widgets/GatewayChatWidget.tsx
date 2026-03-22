@@ -94,13 +94,20 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
 
   // Persist widget config to dashboardState (SQLite) so it syncs across devices.
   // Only persist agentId and sessionKey — inputValue is ephemeral.
+  // Skip the very first render to avoid overwriting hydrated config with defaults.
   // On unmount, flush the pending save instead of discarding it so navigation
   // within 500ms doesn't silently drop the user's last selection.
   const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const persistValuesRef = useRef({ agentId: selectedAgentId, sessionKey: selectedSessionKey });
   persistValuesRef.current = { agentId: selectedAgentId, sessionKey: selectedSessionKey };
+  const persistMountedRef = useRef(false);
 
   useEffect(() => {
+    // Skip initial mount — don't overwrite persisted config with default/empty values
+    if (!persistMountedRef.current) {
+      persistMountedRef.current = true;
+      return;
+    }
     if (persistTimerRef.current) clearTimeout(persistTimerRef.current);
     persistTimerRef.current = setTimeout(() => {
       onConfigChangeRef.current?.({ agentId: selectedAgentId, sessionKey: selectedSessionKey });
