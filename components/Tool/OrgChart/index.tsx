@@ -35,6 +35,13 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { AgentIdentity, useAgentIdentities, resolveAvatarUrl, isAvatarText } from "$/hooks/useAgentIdentity";
+
+/** Returns the identity name only if it looks like a real name (not template placeholder text). */
+function resolvedName(identity?: AgentIdentity, fallback?: string): string {
+  const n = identity?.name;
+  if (n && !n.startsWith("_(") && !n.startsWith("(your")) return n;
+  return fallback || "";
+}
 import { syncToIdentityMd } from "$/lib/identity-md";
 import {
   useAgentIdentityEditor,
@@ -159,7 +166,7 @@ function AgentCard({
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
             <span className="text-[13px] font-semibold text-foreground truncate">
-              {identity?.name || node.name}
+              {resolvedName(identity, node.name)}
             </span>
           </div>
           <p className="text-[11px] text-muted-foreground truncate">{node.role}</p>
@@ -236,7 +243,7 @@ function OrchestratorCard({
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <span className="text-base font-bold text-foreground truncate">
-              {identity?.name || node.name}
+              {resolvedName(identity, node.name)}
             </span>
           </div>
           <p className="text-xs text-muted-foreground truncate">{node.role}</p>
@@ -536,20 +543,20 @@ function NodeDetailPanel({
   const completedTasks = tasks.filter((t) => t.status === "done");
 
   const ed = useAgentIdentityEditor(node.agentId, {
-    identityName: identity?.name || node.name,
+    identityName: resolvedName(identity, node.name),
     identityEmoji: identity?.emoji,
     identityAvatarUrl: resolveAvatarUrl(identity?.avatar),
   });
 
   // Keep name/role in sync with OrgChart node data when switching nodes
-  const [localName, setLocalName] = useState(identity?.name || node.name);
+  const [localName, setLocalName] = useState(resolvedName(identity, node.name));
   const [localRole, setLocalRole] = useState(node.role);
 
   // Re-sync when loaded from IDENTITY.md
   const prevAgentId = React.useRef(node.agentId);
   if (prevAgentId.current !== node.agentId) {
     prevAgentId.current = node.agentId;
-    setLocalName(identity?.name || node.name);
+    setLocalName(resolvedName(identity, node.name));
     setLocalRole(node.role);
   }
   // Also sync once loading finishes
@@ -562,7 +569,7 @@ function NodeDetailPanel({
 
   /* ── Auto-save-on-blur handlers ── */
   const handleNameBlur = () => {
-    const origName = identity?.name || node.name;
+    const origName = resolvedName(identity, node.name);
     if (localName !== origName) {
       onUpdateNode(node.id, { name: localName });
     }
