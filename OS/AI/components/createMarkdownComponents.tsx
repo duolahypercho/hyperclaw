@@ -69,11 +69,30 @@ const LANGUAGE_DISPLAY_NAMES: Record<string, string> = {
   svelte: "Svelte",
 };
 
+function copyToClipboard(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    return navigator.clipboard.writeText(text).catch(() => fallbackCopy(text));
+  }
+  return fallbackCopy(text);
+}
+
+function fallbackCopy(text: string): Promise<void> {
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  document.body.removeChild(textarea);
+  return Promise.resolve();
+}
+
 function CopyButton({ content, isUser }: { content: string; isUser?: boolean }) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(() => {
-    navigator.clipboard.writeText(content).then(() => {
+    copyToClipboard(content).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     });
@@ -81,7 +100,7 @@ function CopyButton({ content, isUser }: { content: string; isUser?: boolean }) 
 
   return (
     <button
-      onClick={handleCopy}
+      onClick={(e) => { e.stopPropagation(); handleCopy(); }}
       className={`text-xs px-2 py-1 rounded transition-colors duration-200 ${
         copied
           ? "text-green-400"
