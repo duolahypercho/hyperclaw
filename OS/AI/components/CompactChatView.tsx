@@ -117,7 +117,19 @@ export const CompactChatView = memo(({
 
   // Copy & reply handlers
   const handleCopy = useCallback((message: GatewayChatMessage) => {
-    navigator.clipboard.writeText(message.content || "");
+    const text = message.content || "";
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).catch(() => {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+      });
+    }
   }, []);
 
   const handleReply = useCallback((_message: GatewayChatMessage) => {

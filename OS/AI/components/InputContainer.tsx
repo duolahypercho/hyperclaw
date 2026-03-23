@@ -595,48 +595,54 @@ export const InputContainer: React.FC<InputContainerProps> = ({
     const textData = event.clipboardData.getData("text/plain");
     const hasLongText = textData.length > 50000;
 
+    // Scan all items for an image first — clipboard item order varies by
+    // platform (macOS/Chromium often puts text/plain before image/png),
+    // so a linear scan that breaks on text/plain would miss the image.
+    let imageItem: DataTransferItem | null = null;
+    let pdfItem: DataTransferItem | null = null;
+    let hasText = false;
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
-      if (item.type.indexOf("image") === 0) {
-        event.preventDefault();
-        if (currentAttachments.length === maxAttachments) {
-          toast({
-            title: "Max files reached",
-            description: `You can only upload ${maxAttachments} files`,
-            variant: "destructive",
-          });
-          return;
-        }
-        const file = item.getAsFile();
-        if (file) {
-          addFiles([file]);
-        }
-        break;
-      }
-      if (item.type.indexOf("text/plain") === 0) {
-        // Only prevent default if text is long (will create file)
-        // For short text, let browser handle it naturally to maintain undo stack
-        if (hasLongText) {
-          event.preventDefault();
-          // Create a file for long text
-          const textFile = new File([textData], `pasted-text-${Date.now()}.txt`, {
-            type: "text/plain",
-          });
-          addFiles([textFile]);
-        }
-        // If text is short (≤500 chars), don't prevent default - let browser handle it
-        // This maintains the native undo/redo stack
-        break;
-      }
-      if (item.type.indexOf("application/pdf") === 0) {
-        event.preventDefault(); // Prevent default paste behavior
-        const file = item.getAsFile();
-        if (file) {
-          addFiles([file]);
-        }
-        break;
-      }
+      if (!imageItem && item.type.indexOf("image") === 0) imageItem = item;
+      else if (!pdfItem && item.type.indexOf("application/pdf") === 0) pdfItem = item;
+      else if (item.type.indexOf("text/plain") === 0) hasText = true;
     }
+
+    // Prioritise image > pdf > text
+    if (imageItem) {
+      event.preventDefault();
+      if (currentAttachments.length === maxAttachments) {
+        toast({
+          title: "Max files reached",
+          description: `You can only upload ${maxAttachments} files`,
+          variant: "destructive",
+        });
+        return;
+      }
+      const file = imageItem.getAsFile();
+      if (file) {
+        addFiles([file]);
+      }
+      return;
+    }
+
+    if (pdfItem) {
+      event.preventDefault();
+      const file = pdfItem.getAsFile();
+      if (file) {
+        addFiles([file]);
+      }
+      return;
+    }
+
+    if (hasText && hasLongText) {
+      event.preventDefault();
+      const textFile = new File([textData], `pasted-text-${Date.now()}.txt`, {
+        type: "text/plain",
+      });
+      addFiles([textFile]);
+    }
+    // Short text — don't prevent default, let browser handle it to maintain undo stack
   };
 
   const handleAttachmentRemove = (index: number) => {
