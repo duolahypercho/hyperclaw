@@ -285,7 +285,7 @@ export function useOpenClaw(autoRefreshMs = 0) {
     return api.cronDisable(id);
   }, []);
 
-  const fetchAgents = useCallback(async () => {
+  const fetchAgents = useCallback(async (): Promise<OpenClawRegistryAgent[]> => {
     const api = getApi();
     const res = await api.getAgentList();
     if (res.success && res.data) {
@@ -298,8 +298,10 @@ export function useOpenClaw(autoRefreshMs = 0) {
         lastActive: (a as any).lastActive,
       }));
       setState((prev) => ({ ...prev, agents: mapped, errors: { ...prev.errors, agents: null } }));
+      return mapped;
     } else {
       setState((prev) => ({ ...prev, errors: { ...prev.errors, agents: res.error ?? "Unknown error" } }));
+      return [];
     }
   }, []);
 

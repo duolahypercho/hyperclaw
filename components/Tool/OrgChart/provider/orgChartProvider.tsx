@@ -273,7 +273,7 @@ async function syncTeamFieldsToIdentity(nodes: OrgNode[], departments: OrgDepart
 }
 
 export function OrgChartProvider({ children }: { children: React.ReactNode }) {
-  const { agents: openClawAgents } = useOpenClawContext();
+  const { agents: openClawAgents, fetchAgents } = useOpenClawContext();
   const [orgData, setOrgData] = useState<OrgChartData | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -294,14 +294,18 @@ export function OrgChartProvider({ children }: { children: React.ReactNode }) {
     setLoading(true);
     setError(null);
     try {
-      const data = await fetchOrgStatus(openClawAgents as BridgeAgent[]);
+      // Re-fetch the agent list so newly created agents are included in the merge.
+      // Use the returned list directly to avoid stale closure over openClawAgents.
+      const freshAgents = await fetchAgents().catch(() => openClawAgents);
+      const agents = (freshAgents?.length ? freshAgents : openClawAgents) as BridgeAgent[];
+      const data = await fetchOrgStatus(agents);
       setOrgData(data);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to load org chart");
     } finally {
       setLoading(false);
     }
-  }, [openClawAgents]);
+  }, [openClawAgents, fetchAgents]);
 
   const initialLoadDone = useRef(false);
   useEffect(() => {
@@ -545,7 +549,7 @@ export function OrgChartProvider({ children }: { children: React.ReactNode }) {
       const avatarUrl = resolveAvatarUrl(identity?.avatar);
       return {
         id: node.id,
-        title: identity?.name || node.name,
+        title: (identity?.name && !identity.name.startsWith("_(") && !identity.name.startsWith("(your")) ? identity.name : node.name,
         subtitle:
           taskCount > 0
             ? `${taskCount} task${taskCount > 1 ? "s" : ""}`
