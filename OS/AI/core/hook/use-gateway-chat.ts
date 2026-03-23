@@ -13,7 +13,21 @@ import { v4 as uuidv4 } from "uuid";
 // Module-level registry: maps active runId → sessionKey.
 // Prevents cross-chat event bleed when multiple useGatewayChat instances
 // are streaming simultaneously and events arrive without sessionKey.
+const RUN_ID_OWNERS_CAP = 100;
 const runIdOwners = new Map<string, string>();
+
+/** Register a runId → sessionKey mapping with LRU eviction. */
+function registerRunId(runId: string, sessionKey: string) {
+  runIdOwners.set(runId, sessionKey);
+  if (runIdOwners.size > RUN_ID_OWNERS_CAP) {
+    const iter = runIdOwners.keys();
+    const toDelete = Math.floor(RUN_ID_OWNERS_CAP * 0.2);
+    for (let i = 0; i < toDelete; i++) {
+      const key = iter.next().value;
+      if (key !== undefined) runIdOwners.delete(key);
+    }
+  }
+}
 
 /** Remove ALL runIdOwners entries belonging to a session (primary + sub-agent runIds). */
 const clearRunIdOwnership = (sessionKey: string) => {
@@ -170,6 +184,18 @@ function normalizeForCompare(s: string): string {
   return s.replace(/\s+/g, " ").trim();
 }
 
+// WeakMap-cached normalizeForCompare — avoids redundant regex on same message objects
+// across dedup passes and history merges.
+const normCache = new WeakMap<GatewayChatMessage, string>();
+function cachedNormalize(msg: GatewayChatMessage): string {
+  let cached = normCache.get(msg);
+  if (cached === undefined) {
+    cached = normalizeForCompare(msg.content);
+    normCache.set(msg, cached);
+  }
+  return cached;
+}
+
 // Helper to deduplicate messages by ID (keeps last occurrence) AND by
 // consecutive content (the server sometimes returns the same assistant message
 // multiple times with different UUIDs).
@@ -191,16 +217,17 @@ function deduplicateMessages(messages: GatewayChatMessage[]): GatewayChatMessage
   let prevRole = "";
   let prevNorm = "";
   for (const msg of idDeduped) {
+    const norm = msg.content.trim() ? cachedNormalize(msg) : "";
     if (
       prevRole === msg.role &&
       prevNorm !== "" &&
       !msg.toolCalls?.length &&
-      prevNorm === normalizeForCompare(msg.content)
+      prevNorm === norm
     ) {
       continue; // skip consecutive duplicate
     }
     prevRole = msg.role;
-    prevNorm = msg.content.trim() ? normalizeForCompare(msg.content) : "";
+    prevNorm = norm;
     result.push(msg);
   }
   return result;
@@ -521,6 +548,19 @@ function normalizeMessage(message: unknown): GatewayChatMessage | null {
   };
 }
 
+// Exported for unit testing only — not part of the public API.
+export const _testHelpers = {
+  extractText,
+  stripProtocolMarkers,
+  normalizeForCompare,
+  normalizeMessage,
+  deduplicateMessages,
+  mergeHistoryIntoMessages,
+  cachedNormalize,
+  registerRunId,
+  runIdOwners,
+};
+
 export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayChatReturn {
   const { sessionKey: initialSessionKey, autoConnect = true } = options;
 
@@ -699,7 +739,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
         const ownerSession = runIdOwners.get(payload.runId);
         if (ownerSession && ownerSession !== sessionKeyRef.current) return;
         if (!ownerSession) {
-          runIdOwners.set(payload.runId, sessionKeyRef.current);
+          registerRunId(payload.runId, sessionKeyRef.current);
         }
       }
       // Adopt the first runId for text message association.
@@ -708,7 +748,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
         const oldRunId = currentRunIdRef.current;
         if (oldRunId) runIdOwners.delete(oldRunId);
         currentRunIdRef.current = payload.runId;
-        runIdOwners.set(payload.runId, sessionKeyRef.current);
+        registerRunId(payload.runId, sessionKeyRef.current);
       }
     } else {
       // No active conversation and no sessionKey — only accept if this is a
@@ -732,7 +772,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       // Late-arriving deltas re-activate the conversation after premature finalization.
       if (currentRunIdRef.current === null && payload.runId) {
         currentRunIdRef.current = payload.runId;
-        runIdOwners.set(payload.runId, sessionKeyRef.current);
+        registerRunId(payload.runId, sessionKeyRef.current);
         setIsLoading(true);
       }
 
@@ -1410,7 +1450,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
     }, 300_000);
 
     currentRunIdRef.current = runId;
-    runIdOwners.set(runId, sessionKeyRef.current);
+    registerRunId(runId, sessionKeyRef.current);
     streamContentRef.current = "";
     receivedEventRef.current = false;
 

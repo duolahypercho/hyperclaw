@@ -28,7 +28,7 @@ import { useAgentIdentity, resolveAvatarUrl, isAvatarText } from "$/hooks/useAge
 import { GatewayChatCustomHeader } from "./gateway-chat/GatewayChatHeader";
 import { EnhancedMessageBubble, shouldShowAvatarLocal } from "./gateway-chat/EnhancedMessageBubble";
 import { GroupedToolActions } from "./gateway-chat/GroupedToolActions";
-import { mergeToolCallsWithResults } from "./gateway-chat/mergeToolCallsWithResults";
+import { createMergeToolCalls } from "./gateway-chat/mergeToolCallsWithResults";
 import { exportChatAsMarkdown } from "./gateway-chat/exportChat";
 import { SlashCommandMenu } from "./gateway-chat/SlashCommandMenu";
 import { SLASH_COMMANDS, type SlashCommand } from "./gateway-chat/slashCommands";
@@ -335,7 +335,9 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
   const hasMessages = messages.length > 0;
 
   // Merge tool calls with their results
-  const mergedMessages = useMemo(() => mergeToolCallsWithResults(messages), [messages]);
+  // Per-instance merge function (avoids cross-widget cache thrashing)
+  const mergeToolCalls = useMemo(() => createMergeToolCalls(), []);
+  const mergedMessages = useMemo(() => mergeToolCalls(messages), [mergeToolCalls, messages]);
 
   // Export chat as markdown file download
   const handleExport = useCallback(() => {

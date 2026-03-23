@@ -1,1 +1,1 @@
-export { mergeToolCallsWithResults, isResultContentError } from "@OS/AI/utils/mergeToolCalls";
+export { mergeToolCallsWithResults, createMergeToolCalls, isResultContentError } from "@OS/AI/utils/mergeToolCalls";

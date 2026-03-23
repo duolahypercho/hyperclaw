@@ -41,7 +41,7 @@ import {
 } from "@/components/ui/accordion";
 import * as Collapsible from "@radix-ui/react-collapsible";
 import createMarkdownComponents from "@OS/AI/components/createMarkdownComponents";
-import { mergeToolCallsWithResults } from "@OS/AI/utils/mergeToolCalls";
+import { createMergeToolCalls } from "@OS/AI/utils/mergeToolCalls";
 import CopanionIcon from "@OS/assets/copanion";
 import {
   useAgentIdentity,
@@ -866,8 +866,9 @@ export function FloatingChatViewer({ agentId, sessionKey: providedSessionKey, ta
     }
   }, [setSessionKey, effectiveAgentId]);
 
-  // Merge tool calls with results
-  const mergedMessages = useMemo(() => mergeToolCallsWithResults(messages), [messages]);
+  // Per-instance merge function (avoids cross-widget cache thrashing)
+  const mergeToolCalls = useMemo(() => createMergeToolCalls(), []);
+  const mergedMessages = useMemo(() => mergeToolCalls(messages), [mergeToolCalls, messages]);
 
   // Agent identity
   const identity = useAgentIdentity(effectiveAgentId);

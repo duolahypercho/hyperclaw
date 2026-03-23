@@ -6,7 +6,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import CopanionIcon from "@OS/assets/copanion";
 import type { GatewayChatMessage } from "@OS/AI/core/hook/use-gateway-chat";
 import { AnimatedThinkingText } from "@OS/AI/components/Chat";
-import { mergeToolCallsWithResults } from "@OS/AI/utils/mergeToolCalls";
+import { createMergeToolCalls } from "@OS/AI/utils/mergeToolCalls";
 import { useUnifiedToolState } from "@OS/AI/components/hooks/useUnifiedToolState";
 import {
   EnhancedMessageBubble,
@@ -48,8 +48,9 @@ export const CompactChatView = memo(({
   const prevLenRef = useRef(0);
   const chainBreakerCacheRef = useRef<Map<string, GatewayChatMessage>>(new Map());
 
-  // Merge tool calls with their results — same as GatewayChatWidget
-  const mergedMessages = useMemo(() => mergeToolCallsWithResults(messages), [messages]);
+  // Per-instance merge function (avoids cross-widget cache thrashing)
+  const mergeToolCalls = useMemo(() => createMergeToolCalls(), []);
+  const mergedMessages = useMemo(() => mergeToolCalls(messages), [mergeToolCalls, messages]);
 
   // Unified tool state — same as GatewayChatWidget
   const { toolStates, toggleToolExpansion } = useUnifiedToolState(messages as any);
