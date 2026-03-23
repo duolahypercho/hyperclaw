@@ -43,6 +43,7 @@ export interface InputContainerHandle {
   focus: () => void;
   getValue: () => string;
   setValue: (val: string) => void;
+  addFiles: (files: FileList | File[]) => Promise<void>;
 }
 
 export interface InputContainerProps {

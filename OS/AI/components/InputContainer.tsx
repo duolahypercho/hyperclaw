@@ -184,6 +184,7 @@ export const InputContainer: React.FC<InputContainerProps> = ({
   const [isRecording, setIsRecording] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const addFilesRef = useRef<(files: FileList | File[]) => Promise<void>>(async () => {});
   const { toast } = useToast();
 
   // Live transcription hook
@@ -239,6 +240,7 @@ export const InputContainer: React.FC<InputContainerProps> = ({
         if (!isControlled) setInputValue(val);
         onInputChange?.(val);
       },
+      addFiles: (files: FileList | File[]) => addFilesRef.current(files),
     };
     return () => { if (inputRef) inputRef.current = null; };
   }, [inputRef, isControlled, onInputChange]);
@@ -548,6 +550,7 @@ export const InputContainer: React.FC<InputContainerProps> = ({
   };
 
   // Generic function to add files (from input, paste, or drag-drop)
+  // Keep ref in sync so the imperative handle always has the latest closure
   const addFiles = async (files: FileList | File[]) => {
     if (onAddFiles) {
       await onAddFiles(files);
@@ -585,6 +588,7 @@ export const InputContainer: React.FC<InputContainerProps> = ({
       }
     }
   };
+  addFilesRef.current = addFiles;
 
   const handlePaste = async (
     event: React.ClipboardEvent<HTMLTextAreaElement>

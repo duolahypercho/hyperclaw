@@ -514,6 +514,9 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
       clearTimeout(dragTimeoutRef.current);
       dragTimeoutRef.current = null;
     }
+    if (e.dataTransfer.files?.length) {
+      inputHandleRef.current?.addFiles(e.dataTransfer.files);
+    }
   }, []);
 
   // Cleanup timeout
