@@ -1,7 +1,20 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 
-/** Interval (ms) between interim transcription chunks while recording. */
+/** Interval (ms) between interim transcription chunks while recording (Whisper only). */
 const INTERIM_INTERVAL_MS = 2500;
+
+type SpeechRecognitionEvent = Event & {
+    results: SpeechRecognitionResultList;
+    resultIndex: number;
+};
+
+/** Returns true when running inside Electron with the Whisper IPC bridge. */
+const hasWhisper = () => !!window.electronAPI?.voiceOverlay?.whisper;
+
+/** Returns true when the browser supports the Web Speech API. */
+const hasSpeechRecognition = () =>
+    typeof window !== 'undefined' &&
+    ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window);
 
 export const useLiveTranscription = () => {
     const [transcript, setTranscript] = useState("");
@@ -10,33 +23,37 @@ export const useLiveTranscription = () => {
     const [isTranscribing, setIsTranscribing] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [audioData, setAudioData] = useState<number[]>([]);
+
+    // Audio analysis refs (shared by both engines)
     const audioContextRef = useRef<AudioContext | null>(null);
     const analyserRef = useRef<AnalyserNode | null>(null);
     const mediaStreamRef = useRef<MediaStream | null>(null);
     const animationFrameRef = useRef<number | null>(null);
+
+    // Whisper-specific refs
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const audioChunksRef = useRef<Blob[]>([]);
-
-    // PCM capture for chunked transcription
     const pcmBufferRef = useRef<Float32Array>(new Float32Array(0));
     const scriptNodeRef = useRef<ScriptProcessorNode | null>(null);
     const interimTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const sampleRateRef = useRef<number>(44100);
 
-    // Stop audio analysis (waveform visualization + mic stream)
+    // Web Speech API ref
+    const recognitionRef = useRef<any>(null);
+
+    // ── Shared: stop audio analysis (waveform + mic stream) ──
+
     const stopAudioAnalysis = useCallback(() => {
         if (animationFrameRef.current) {
             cancelAnimationFrame(animationFrameRef.current);
             animationFrameRef.current = null;
         }
 
-        // Stop interim transcription timer
         if (interimTimerRef.current) {
             clearInterval(interimTimerRef.current);
             interimTimerRef.current = null;
         }
 
-        // Disconnect ScriptProcessorNode
         if (scriptNodeRef.current) {
             try { scriptNodeRef.current.disconnect(); } catch {}
             scriptNodeRef.current = null;
@@ -56,7 +73,44 @@ export const useLiveTranscription = () => {
         setAudioData([]);
     }, []);
 
-    // Resample Float32Array from source sample rate to 16kHz Int16
+    // ── Shared: start waveform analyser from a mic stream ──
+
+    const startWaveformAnalysis = useCallback((stream: MediaStream) => {
+        const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+        audioContextRef.current = audioContext;
+        sampleRateRef.current = audioContext.sampleRate;
+
+        const analyser = audioContext.createAnalyser();
+        analyser.fftSize = 256;
+        analyser.smoothingTimeConstant = 0.8;
+        analyserRef.current = analyser;
+
+        const source = audioContext.createMediaStreamSource(stream);
+        source.connect(analyser);
+
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+        const updateAudioData = () => {
+            if (!analyserRef.current) return;
+            analyserRef.current.getByteFrequencyData(dataArray);
+
+            const bars = 5;
+            const step = Math.floor(dataArray.length / bars);
+            const normalizedData: number[] = [];
+            for (let i = 0; i < bars; i++) {
+                normalizedData.push((dataArray[i * step] || 0) / 255);
+            }
+
+            setAudioData(normalizedData);
+            animationFrameRef.current = requestAnimationFrame(updateAudioData);
+        };
+
+        updateAudioData();
+        return { audioContext, source };
+    }, []);
+
+    // ── Whisper helpers ──
+
     const resampleToInt16 = useCallback((float32Data: Float32Array, sourceSampleRate: number): number[] => {
         const targetSampleRate = 16000;
         let resampled: Float32Array;
@@ -81,120 +135,227 @@ export const useLiveTranscription = () => {
         return int16Array;
     }, []);
 
-    // Send accumulated PCM buffer for interim transcription
     const sendInterimTranscription = useCallback(async () => {
-        const sensevoice = window.electronAPI?.voiceOverlay?.sensevoice;
-        if (!sensevoice) return;
+        const whisper = window.electronAPI?.voiceOverlay?.whisper;
+        if (!whisper) return;
 
         const buffer = pcmBufferRef.current;
-        if (buffer.length < 4000) return; // Too short, skip
+        if (buffer.length < 4000) return;
 
         try {
-            const status = await sensevoice.getStatus();
+            const status = await whisper.getStatus();
             if (!status.ready) {
-                const initResult = await sensevoice.initialize();
+                const initResult = await whisper.initialize();
                 if (!initResult.success) return;
             }
 
             const audioData = resampleToInt16(buffer, sampleRateRef.current);
             if (audioData.length === 0) return;
 
-            const result = await sensevoice.transcribe(audioData);
+            const result = await whisper.transcribe(audioData);
             if (result.success && result.text) {
                 setInterimTranscript(result.text.trim());
             }
         } catch {
-            // Silently ignore interim transcription errors
+            // Silently ignore interim errors
         }
     }, [resampleToInt16]);
 
-    // Start audio analysis for waveform visualization + MediaRecorder for SenseVoice
-    const startAudioAnalysis = useCallback(async () => {
+    const blobToInt16Array = useCallback(async (blob: Blob): Promise<number[]> => {
+        const arrayBuffer = await blob.arrayBuffer();
+        const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            mediaStreamRef.current = stream;
+            const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+            return resampleToInt16(audioBuffer.getChannelData(0), audioBuffer.sampleRate);
+        } finally {
+            await ctx.close();
+        }
+    }, [resampleToInt16]);
 
-            const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-            audioContextRef.current = audioContext;
-            sampleRateRef.current = audioContext.sampleRate;
+    const transcribeWithWhisper = useCallback(async (audioBlob: Blob) => {
+        const whisper = window.electronAPI?.voiceOverlay?.whisper;
+        if (!whisper) {
+            setError('Whisper transcription is not available');
+            setIsTranscribing(false);
+            return;
+        }
 
-            const analyser = audioContext.createAnalyser();
-            analyser.fftSize = 256;
-            analyser.smoothingTimeConstant = 0.8;
-            analyserRef.current = analyser;
-
-            const source = audioContext.createMediaStreamSource(stream);
-            source.connect(analyser);
-
-            // ScriptProcessorNode to capture raw PCM for chunked transcription
-            pcmBufferRef.current = new Float32Array(0);
-            const scriptNode = audioContext.createScriptProcessor(4096, 1, 1);
-            scriptNodeRef.current = scriptNode;
-
-            scriptNode.onaudioprocess = (e) => {
-                const input = e.inputBuffer.getChannelData(0);
-                const prev = pcmBufferRef.current;
-                const next = new Float32Array(prev.length + input.length);
-                next.set(prev);
-                next.set(input, prev.length);
-                pcmBufferRef.current = next;
-            };
-
-            source.connect(scriptNode);
-            // ScriptProcessorNode must connect to destination to fire events,
-            // but route through a silent GainNode to avoid echoing mic to speakers
-            const silentGain = audioContext.createGain();
-            silentGain.gain.value = 0;
-            scriptNode.connect(silentGain);
-            silentGain.connect(audioContext.destination);
-
-            // Start interim transcription interval
-            interimTimerRef.current = setInterval(() => {
-                sendInterimTranscription();
-            }, INTERIM_INTERVAL_MS);
-
-            // Analyze audio data for waveform
-            const dataArray = new Uint8Array(analyser.frequencyBinCount);
-
-            const updateAudioData = () => {
-                if (!analyserRef.current) return;
-
-                analyserRef.current.getByteFrequencyData(dataArray);
-
-                // Normalize and extract relevant frequency bands for visualization
-                const bars = 5;
-                const step = Math.floor(dataArray.length / bars);
-                const normalizedData: number[] = [];
-
-                for (let i = 0; i < bars; i++) {
-                    const index = i * step;
-                    const value = dataArray[index] || 0;
-                    normalizedData.push(value / 255);
+        setIsTranscribing(true);
+        try {
+            const status = await whisper.getStatus();
+            if (!status.ready) {
+                const initResult = await whisper.initialize();
+                if (!initResult.success) {
+                    setError(`Failed to initialize transcription: ${initResult.error || 'Unknown error'}`);
+                    return;
                 }
+            }
 
-                setAudioData(normalizedData);
-                animationFrameRef.current = requestAnimationFrame(updateAudioData);
+            const audioData = await blobToInt16Array(audioBlob);
+            if (audioData.length === 0) {
+                setError('No audio data recorded');
+                return;
+            }
+
+            const result = await whisper.transcribe(audioData);
+            if (result.success && result.text) {
+                setTranscript(result.text.trim());
+                setInterimTranscript("");
+            } else if (!result.success) {
+                setError(result.error || 'Transcription failed');
+            }
+        } catch (err: any) {
+            console.error('Whisper transcription error:', err);
+            setError(`Transcription error: ${err.message || 'Unknown error'}`);
+        } finally {
+            setIsTranscribing(false);
+        }
+    }, [blobToInt16Array]);
+
+    // ── Start: Electron (Whisper) path ──
+
+    const startWhisperListening = useCallback(async () => {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaStreamRef.current = stream;
+
+        const { audioContext, source } = startWaveformAnalysis(stream);
+
+        // PCM capture for interim chunks
+        pcmBufferRef.current = new Float32Array(0);
+        const scriptNode = audioContext.createScriptProcessor(4096, 1, 1);
+        scriptNodeRef.current = scriptNode;
+
+        scriptNode.onaudioprocess = (e) => {
+            const input = e.inputBuffer.getChannelData(0);
+            const prev = pcmBufferRef.current;
+            const next = new Float32Array(prev.length + input.length);
+            next.set(prev);
+            next.set(input, prev.length);
+            pcmBufferRef.current = next;
+        };
+
+        source.connect(scriptNode);
+        const silentGain = audioContext.createGain();
+        silentGain.gain.value = 0;
+        scriptNode.connect(silentGain);
+        silentGain.connect(audioContext.destination);
+
+        interimTimerRef.current = setInterval(sendInterimTranscription, INTERIM_INTERVAL_MS);
+
+        // MediaRecorder for final transcription
+        audioChunksRef.current = [];
+        const recorder = new MediaRecorder(stream, {
+            mimeType: MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+                ? 'audio/webm;codecs=opus'
+                : 'audio/webm',
+        });
+        recorder.ondataavailable = (event) => {
+            if (event.data.size > 0) audioChunksRef.current.push(event.data);
+        };
+        mediaRecorderRef.current = recorder;
+        recorder.start(1000);
+    }, [startWaveformAnalysis, sendInterimTranscription]);
+
+    const stopWhisperListening = useCallback(() => {
+        const recorder = mediaRecorderRef.current;
+        if (recorder && recorder.state !== 'inactive') {
+            recorder.onstop = () => {
+                const audioBlob = new Blob(audioChunksRef.current, { type: recorder.mimeType });
+                audioChunksRef.current = [];
+                mediaRecorderRef.current = null;
+                if (audioBlob.size > 0) transcribeWithWhisper(audioBlob);
             };
+            recorder.stop();
+        } else {
+            mediaRecorderRef.current = null;
+        }
+    }, [transcribeWithWhisper]);
 
-            updateAudioData();
+    // ── Start: Browser (Web Speech API) path ──
 
-            // Start MediaRecorder to capture audio for final SenseVoice transcription
-            audioChunksRef.current = [];
-            const recorder = new MediaRecorder(stream, {
-                mimeType: MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-                    ? 'audio/webm;codecs=opus'
-                    : 'audio/webm',
-            });
+    const startBrowserListening = useCallback(async () => {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaStreamRef.current = stream;
+        startWaveformAnalysis(stream);
 
-            recorder.ondataavailable = (event) => {
-                if (event.data.size > 0) {
-                    audioChunksRef.current.push(event.data);
+        const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+        const recognition = new SpeechRecognition();
+        recognitionRef.current = recognition;
+
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.lang = ''; // auto-detect
+
+        let finalText = '';
+
+        recognition.onresult = (event: SpeechRecognitionEvent) => {
+            let interim = '';
+            for (let i = event.resultIndex; i < event.results.length; i++) {
+                const result = event.results[i];
+                if (result.isFinal) {
+                    finalText += result[0].transcript;
+                    setTranscript(finalText.trim());
+                    setInterimTranscript("");
+                } else {
+                    interim += result[0].transcript;
                 }
-            };
+            }
+            if (interim) {
+                setInterimTranscript(interim.trim());
+            }
+        };
 
-            mediaRecorderRef.current = recorder;
-            recorder.start(1000); // Collect data every second
+        recognition.onerror = (event: any) => {
+            if (event.error === 'no-speech') return; // Normal, not an error
+            console.error('Speech recognition error:', event.error);
+            setError(`Speech recognition error: ${event.error}`);
+        };
 
+        recognition.onend = () => {
+            // Restart if still supposed to be listening (browser stops after silence)
+            if (recognitionRef.current) {
+                try { recognition.start(); } catch {}
+            }
+        };
+
+        recognition.start();
+    }, [startWaveformAnalysis]);
+
+    const stopBrowserListening = useCallback(() => {
+        if (recognitionRef.current) {
+            const recognition = recognitionRef.current;
+            recognitionRef.current = null; // Prevent auto-restart in onend
+            try { recognition.stop(); } catch {}
+        }
+    }, []);
+
+    // ── Public API ──
+
+    const stopListening = useCallback(() => {
+        if (hasWhisper()) {
+            stopWhisperListening();
+        } else {
+            stopBrowserListening();
+        }
+        setIsListening(false);
+        stopAudioAnalysis();
+    }, [stopAudioAnalysis, stopWhisperListening, stopBrowserListening]);
+
+    const startListening = useCallback(async () => {
+        setError(null);
+        setTranscript("");
+        setInterimTranscript("");
+
+        try {
+            if (hasWhisper()) {
+                await startWhisperListening();
+            } else if (hasSpeechRecognition()) {
+                await startBrowserListening();
+            } else {
+                setError('Speech recognition is not supported in this browser.');
+                return;
+            }
+            setIsListening(true);
         } catch (err: any) {
             if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
                 setError('Microphone access denied. Please allow microphone access in your browser settings and reload the page.');
@@ -204,121 +365,21 @@ export const useLiveTranscription = () => {
                 console.warn('Error starting audio analysis:', err);
                 setError(`Failed to access microphone: ${err.message || 'Unknown error'}`);
             }
-            throw err; // Re-throw so startListening knows it failed
-        }
-    }, [sendInterimTranscription]);
-
-    // Convert recorded audio blob to PCM Int16 array for SenseVoice
-    const blobToInt16Array = useCallback(async (blob: Blob): Promise<number[]> => {
-        const arrayBuffer = await blob.arrayBuffer();
-        const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-
-        try {
-            const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-            const float32Data = audioBuffer.getChannelData(0);
-            return resampleToInt16(float32Data, audioBuffer.sampleRate);
-        } finally {
-            await audioContext.close();
-        }
-    }, [resampleToInt16]);
-
-    // Send recorded audio to SenseVoice for transcription
-    const transcribeWithSenseVoice = useCallback(async (audioBlob: Blob) => {
-        const sensevoice = window.electronAPI?.voiceOverlay?.sensevoice;
-        if (!sensevoice) {
-            setError('SenseVoice transcription is not available');
-            setIsTranscribing(false);
-            return;
-        }
-
-        setIsTranscribing(true);
-        try {
-            // Initialize SenseVoice if needed
-            const status = await sensevoice.getStatus();
-            if (!status.ready) {
-                const initResult = await sensevoice.initialize();
-                if (!initResult.success) {
-                    setError(`Failed to initialize transcription: ${initResult.error || 'Unknown error'}`);
-                    return;
-                }
-            }
-
-            // Convert audio to PCM Int16 array
-            const audioData = await blobToInt16Array(audioBlob);
-
-            if (audioData.length === 0) {
-                setError('No audio data recorded');
-                return;
-            }
-
-            // Send to SenseVoice via IPC
-            const result = await sensevoice.transcribe(audioData);
-
-            if (result.success && result.text) {
-                setTranscript(result.text.trim());
-                setInterimTranscript(""); // Clear interim once final is ready
-            } else if (!result.success) {
-                setError(result.error || 'Transcription failed');
-            }
-            // If success but empty text, leave transcript empty (silence)
-        } catch (err: any) {
-            console.error('SenseVoice transcription error:', err);
-            setError(`Transcription error: ${err.message || 'Unknown error'}`);
-        } finally {
-            setIsTranscribing(false);
-        }
-    }, [blobToInt16Array]);
-
-    const stopListening = useCallback(() => {
-        // Stop MediaRecorder and collect audio for transcription
-        const recorder = mediaRecorderRef.current;
-        if (recorder && recorder.state !== 'inactive') {
-            // Use onstop to get the final blob after all data is flushed
-            recorder.onstop = () => {
-                const audioBlob = new Blob(audioChunksRef.current, { type: recorder.mimeType });
-                audioChunksRef.current = [];
-                mediaRecorderRef.current = null;
-
-                // Transcribe the recorded audio
-                if (audioBlob.size > 0) {
-                    transcribeWithSenseVoice(audioBlob);
-                }
-            };
-            recorder.stop();
-        } else {
-            mediaRecorderRef.current = null;
-        }
-
-        setIsListening(false);
-        stopAudioAnalysis();
-    }, [stopAudioAnalysis, transcribeWithSenseVoice]);
-
-    const startListening = useCallback(async () => {
-        setError(null);
-        setTranscript("");
-        setInterimTranscript("");
-
-        try {
-            // Start audio analysis (waveform) and MediaRecorder (for SenseVoice)
-            await startAudioAnalysis();
-            setIsListening(true);
-        } catch (err: any) {
-            // Error already set in startAudioAnalysis
             setIsListening(false);
             stopAudioAnalysis();
         }
-    }, [startAudioAnalysis, stopAudioAnalysis]);
+    }, [startWhisperListening, startBrowserListening, stopAudioAnalysis]);
 
     // Cleanup on unmount
     useEffect(() => {
         return () => {
             if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-                try {
-                    mediaRecorderRef.current.stop();
-                } catch (err) {
-                    // Ignore errors during cleanup
-                }
+                try { mediaRecorderRef.current.stop(); } catch {}
                 mediaRecorderRef.current = null;
+            }
+            if (recognitionRef.current) {
+                try { recognitionRef.current.stop(); } catch {}
+                recognitionRef.current = null;
             }
             if (interimTimerRef.current) {
                 clearInterval(interimTimerRef.current);

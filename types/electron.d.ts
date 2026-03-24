@@ -283,7 +283,7 @@ declare global {
         };
         onWakeWordActivated?: (callback: () => void) => void;
         removeWakeWordActivatedListener?: () => void;
-        sensevoice?: {
+        whisper?: {
           initialize: () => Promise<{ success: boolean; info?: any; error?: string }>;
           transcribe: (audioData: number[]) => Promise<{ success: boolean; text?: string; error?: string }>;
           getStatus: () => Promise<{ ready: boolean; info?: any }>;

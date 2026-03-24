@@ -4,6 +4,27 @@
  * Uses device identity from Electron for signing.
  */
 
+// Heartbeat/silent reply detection — matches OpenClaw's server-chat.ts filtering.
+// Heartbeat runs produce agent events that bypass server-side chat suppression;
+// this client-side filter prevents transient "ghost" messages that disappear on refresh.
+const _SILENT_TOKENS = ["NO_REPLY", "HEARTBEAT_OK"];
+const _SILENT_EXACT_RE = new RegExp(`^\\s*(${_SILENT_TOKENS.join("|")})\\s*$`);
+const _SILENT_TRAILING_RE = new RegExp(`\\s*(${_SILENT_TOKENS.join("|")})\\s*$`);
+/** True when the full text is ONLY a silent token (nothing else worth showing). */
+function _isSilentReplyText(text: string): boolean {
+  return _SILENT_EXACT_RE.test(text);
+}
+/** True when the text is building toward a silent token (streaming prefix). */
+function _isSilentReplyPrefix(text: string): boolean {
+  const trimmed = text.trim().toUpperCase();
+  if (!trimmed) return false;
+  return _SILENT_TOKENS.some((token) => token.startsWith(trimmed));
+}
+/** Strip a trailing silent token, returning the remaining meaningful text. */
+function _stripSilentToken(text: string): string {
+  return text.replace(_SILENT_TRAILING_RE, "").trim();
+}
+
 export function gatewayHttpToWs(httpUrl: string): string {
   return httpUrl.replace(/^http/, "ws");
 }
@@ -436,6 +457,13 @@ export const gatewayConnection = {
           // Periodically prune stale entries (every 50 runs)
           if (this.agentDeltaBuffer.size > 50) this.pruneAgentDeltaBuffer();
 
+          // Suppress heartbeat/silent-reply text that bypassed server-side filtering.
+          // During streaming the text builds up token-by-token; suppress if the
+          // accumulated text is purely a silent token or a prefix leading to one.
+          if (_isSilentReplyText(newBuffer) || _isSilentReplyPrefix(newBuffer)) {
+            return;
+          }
+
           // Send accumulated text (not just delta) so the hook can replace content correctly
           const chatPayload: ChatEventPayload = {
             runId,
@@ -465,12 +493,25 @@ export const gatewayConnection = {
           // Prune stale entries (agents that crashed without lifecycle end)
           this.pruneAgentDeltaBuffer();
 
+          // Suppress heartbeat/silent-reply finals that bypassed server-side filtering.
+          // The heartbeat runner prunes these from the transcript after evaluation,
+          // so showing them creates "ghost" messages that disappear on refresh.
+          const strippedText = bufferedText ? _stripSilentToken(bufferedText) : "";
+          const isSilent = bufferedText ? _isSilentReplyText(bufferedText) : false;
+
+          // If the entire text was a silent token, suppress the final entirely.
+          // If there's meaningful text after stripping the token, use that.
+          if (isSilent) {
+            return;
+          }
+
+          const finalText = strippedText || bufferedText;
           const chatPayload: ChatEventPayload = {
             runId,
             sessionKey,
             state: "final",
-            message: bufferedText
-              ? { role: "assistant", content: [{ type: "text", text: bufferedText }], timestamp: Date.now() }
+            message: finalText
+              ? { role: "assistant", content: [{ type: "text", text: finalText }], timestamp: Date.now() }
               : undefined,
           };
           this.chatEventListeners.forEach((handler) => handler(chatPayload));

@@ -65,7 +65,7 @@
       animation: pulse 1s infinite;
     }
     
-    .status-dot.sensevoice {
+    .status-dot.whisper {
       background: #8b5cf6;
       box-shadow: 0 0 12px #8b5cf6;
     }
@@ -471,7 +471,7 @@
         <div class="header-left">
           <div class="status-dot" id="statusDot"></div>
           <span class="status-text" id="statusText">Voice Input</span>
-          <span class="engine-badge" id="engineBadge">SenseVoice</span>
+          <span class="engine-badge" id="engineBadge">Whisper</span>
         </div>
         <button class="close-btn" id="closeBtn">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -482,7 +482,7 @@
       </div>
       
       <div class="transcript-area">
-        <p class="transcript placeholder" id="transcript">Initializing SenseVoice...</p>
+        <p class="transcript placeholder" id="transcript">Initializing Whisper...</p>
       </div>
       
       <div class="waveform" id="waveform">
@@ -602,7 +602,7 @@
     let isListening = false;
     let transcript = '';
     let interimTranscript = '';
-    let sensevoiceReady = false;
+    let whisperReady = false;
     let mediaRecorder = null;
     let audioChunks = [];
     let audioContext = null;
@@ -641,16 +641,16 @@
       });
     });
     
-    // Initialize SenseVoice
-    async function initSenseVoice() {
+    // Initialize Whisper
+    async function initWhisper() {
       try {
-        transcriptEl.textContent = 'Loading SenseVoice model...';
-        
-        const result = await ipcRenderer.invoke('sensevoice-initialize');
-        
+        transcriptEl.textContent = 'Loading Whisper model...';
+
+        const result = await ipcRenderer.invoke('whisper-initialize');
+
         if (result.success) {
-          sensevoiceReady = true;
-          statusDot.classList.add('sensevoice');
+          whisperReady = true;
+          statusDot.classList.add('whisper');
           transcriptEl.textContent = 'Press the mic to start recording';
           transcriptEl.classList.remove('placeholder');
         } else {
@@ -661,8 +661,8 @@
         transcriptEl.textContent = 'Error: ' + error.message;
       }
     }
-    
-    initSenseVoice();
+
+    initWhisper();
     
     // Close button
     closeBtn.addEventListener('click', () => {
@@ -762,7 +762,7 @@
           normalizedData[i] = audioData[i];
         }
         
-        const result = await ipcRenderer.invoke('sensevoice-transcribe', Array.from(normalizedData));
+        const result = await ipcRenderer.invoke('whisper-transcribe', Array.from(normalizedData));
         
         if (result.success && result.text) {
           transcript = result.text;
@@ -848,7 +848,7 @@
       if (transcript.trim()) {
         transcriptEl.innerHTML = transcript + (isListening ? '<span class="cursor"></span>' : '');
         transcriptEl.classList.remove('placeholder');
-      } else if (sensevoiceReady) {
+      } else if (whisperReady) {
         transcriptEl.textContent = 'Press the mic to start recording';
         transcriptEl.classList.add('placeholder');
       }
@@ -857,13 +857,13 @@
     function updateUI() {
       if (isListening) {
         statusDot.classList.add('listening');
-        statusDot.classList.remove('sensevoice', 'processing');
+        statusDot.classList.remove('whisper', 'processing');
         statusText.textContent = 'Recording...';
         micBtn.classList.add('listening');
         waveformEl.style.display = 'flex';
       } else {
         statusDot.classList.remove('listening', 'processing');
-        if (sensevoiceReady) statusDot.classList.add('sensevoice');
+        if (whisperReady) statusDot.classList.add('whisper');
         statusText.textContent = 'Voice Input';
         micBtn.classList.remove('listening');
         waveformEl.style.display = 'none';

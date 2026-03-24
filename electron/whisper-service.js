@@ -2,7 +2,6 @@
  * Whisper ONNX Transcription Service
  * Manages Python subprocess for local speech-to-text.
  * Uses bundled whisper-tiny ONNX model — no network dependency at runtime.
- * (File kept as sensevoice-service.js to avoid breaking IPC handler references.)
  */
 
 const { spawn } = require("child_process");
@@ -42,7 +41,7 @@ function getPythonDir() {
  */
 function writeWavFile(audioData) {
   const tempDir = os.tmpdir();
-  const tempFile = path.join(tempDir, `sensevoice_${Date.now()}.wav`);
+  const tempFile = path.join(tempDir, `whisper_${Date.now()}.wav`);
 
   // Convert to Float32Array if needed
   let floatData;
@@ -110,7 +109,7 @@ function writeWavFile(audioData) {
 }
 
 /**
- * Initialize the SenseVoice server
+ * Initialize the Whisper server
  */
 function initialize() {
   if (initialized && ready) {
@@ -128,7 +127,7 @@ function initialize() {
     initReject = reject;
     buffer = ""; // Reset buffer
 
-    console.log("[SenseVoice] Starting Python server...");
+    console.log("[Whisper] Starting Python server...");
 
     try {
       serverProcess = spawn(CONFIG.pythonPath, [CONFIG.serverScript], {
@@ -158,13 +157,13 @@ function initialize() {
       serverProcess.stderr.on("data", (data) => {
         const msg = data.toString().trim();
         if (msg) {
-          console.log("[SenseVoice Python]", msg);
+          console.log("[Whisper Python]", msg);
         }
       });
 
       // Handle process exit — reject queued requests so they don't hang
       serverProcess.on("close", (code) => {
-        console.log("[SenseVoice] Server closed with code:", code);
+        console.log("[Whisper] Server closed with code:", code);
         serverProcess = null;
         ready = false;
         initialized = false;
@@ -178,7 +177,7 @@ function initialize() {
       });
 
       serverProcess.on("error", (err) => {
-        console.error("[SenseVoice] Server error:", err);
+        console.error("[Whisper] Server error:", err);
         initPromise = null;
         initResolve = null;
         initReject = null;
@@ -196,7 +195,7 @@ function initialize() {
       // Timeout
       setTimeout(() => {
         if (!ready) {
-          console.error("[SenseVoice] Startup timeout");
+          console.error("[Whisper] Startup timeout");
           initPromise = null;
           initResolve = null;
           initReject = null;
@@ -205,7 +204,7 @@ function initialize() {
       }, CONFIG.startupTimeout);
 
     } catch (error) {
-      console.error("[SenseVoice] Failed to start:", error);
+      console.error("[Whisper] Failed to start:", error);
       initPromise = null;
       initResolve = null;
       initReject = null;
@@ -222,7 +221,7 @@ function initialize() {
 function handleResponse(line) {
   try {
     const response = JSON.parse(line.trim());
-    console.log("[SenseVoice] Response:", JSON.stringify(response).substring(0, 100));
+    console.log("[Whisper] Response:", JSON.stringify(response).substring(0, 100));
 
     // Init response — Python returns { "initialized": true/false }
     if (response.initialized !== undefined && !ready) {
@@ -230,7 +229,7 @@ function handleResponse(line) {
       initialized = true;
 
       if (ready) {
-        console.log("[SenseVoice] Server ready!");
+        console.log("[Whisper] Server ready!");
         if (initResolve) {
           initResolve(true);
           initResolve = null;
@@ -258,7 +257,7 @@ function handleResponse(line) {
     }
 
   } catch (error) {
-    console.error("[SenseVoice] Failed to parse response:", line.substring(0, 100), error);
+    console.error("[Whisper] Failed to parse response:", line.substring(0, 100), error);
   }
 }
 
@@ -302,7 +301,7 @@ async function transcribe(audioData) {
   try {
     // Write audio to WAV file
     tempFile = writeWavFile(audioData);
-    console.log("[SenseVoice] Transcribing file:", tempFile);
+    console.log("[Whisper] Transcribing file:", tempFile);
 
     // Send transcription request
     const result = await sendRequest({
@@ -313,7 +312,7 @@ async function transcribe(audioData) {
     return result;
 
   } catch (error) {
-    console.error("[SenseVoice] Transcription error:", error);
+    console.error("[Whisper] Transcription error:", error);
     return { success: false, error: error.message };
   } finally {
     // Clean up temp file
@@ -352,7 +351,7 @@ function isReady() {
 function stop() {
   if (serverProcess) {
     serverProcess.kill();
-    console.log("[SenseVoice] Server stopped");
+    console.log("[Whisper] Server stopped");
   }
   // Always reset state, even if no process was running
   serverProcess = null;

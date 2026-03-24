@@ -7,12 +7,12 @@ import os from 'os';
 // The full init/transcribe flow requires a real Python subprocess so we focus
 // on the units that had bugs: response parsing, WAV creation, and timeout.
 
-describe('sensevoice-service', () => {
+describe('whisper-service', () => {
   let service;
 
   beforeEach(() => {
     // Use the singleton but reset its state before each test
-    service = require('./sensevoice-service');
+    service = require('./whisper-service');
     service.stop(); // Resets ready/initialized/process state
   });
 

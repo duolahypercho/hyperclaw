@@ -44,7 +44,7 @@ import {
   InputAttachment,
   AttachmentUnion,
 } from "@OS/AI/components/Chat";
-import { useLiveTranscription, VoiceController } from "$/components/Tool/VoiceToText";
+import { useLiveTranscription, VoiceController, VoiceWaveform } from "$/components/Tool/VoiceToText";
 
 /** Circular context window usage indicator — hover for details */
 const ContextWindowIndicator: React.FC<{ used: number; total: number }> = ({ used, total }) => {
@@ -190,6 +190,7 @@ export const InputContainer: React.FC<InputContainerProps> = ({
   // Live transcription hook
   const {
     transcript,
+    interimTranscript,
     isListening,
     error: transcriptionError,
     audioData,
@@ -197,6 +198,8 @@ export const InputContainer: React.FC<InputContainerProps> = ({
     stopListening,
     clearTranscript,
   } = useLiveTranscription();
+  const [isPushToTalk, setIsPushToTalk] = useState(false);
+  const pushToTalkRef = useRef(false);
   const [internalAttachments, setInternalAttachments] = useState<
     InternalAttachment[]
   >([]);
@@ -757,11 +760,79 @@ export const InputContainer: React.FC<InputContainerProps> = ({
 
   // Cleanup: Stop listening when voice mode is disabled
   useEffect(() => {
-    if (!isVoiceMode && isListening) {
+    if (!isVoiceMode && !isPushToTalk && isListening) {
       stopListening();
       clearTranscript();
     }
-  }, [isVoiceMode, isListening, stopListening, clearTranscript]);
+  }, [isVoiceMode, isPushToTalk, isListening, stopListening, clearTranscript]);
+
+  // Push-to-talk: insert transcript at cursor when key released
+  useEffect(() => {
+    if (!isPushToTalk && pushToTalkRef.current && transcript) {
+      // Key was just released and we have a transcript — insert at cursor
+      pushToTalkRef.current = false;
+      const textarea = textareaRef.current;
+      if (textarea) {
+        const start = textarea.selectionStart ?? currentValue.length;
+        const end = textarea.selectionEnd ?? start;
+        const before = currentValue.slice(0, start);
+        const after = currentValue.slice(end);
+        const spaceBefore = before.length > 0 && !before.endsWith(" ") ? " " : "";
+        const spaceAfter = after.length > 0 && !after.startsWith(" ") ? " " : "";
+        const newValue = before + spaceBefore + transcript.trim() + spaceAfter + after;
+        setValue?.(newValue);
+        // Move cursor to end of inserted text
+        const cursorPos = (before + spaceBefore + transcript.trim()).length;
+        requestAnimationFrame(() => {
+          textarea.setSelectionRange(cursorPos, cursorPos);
+        });
+      } else {
+        // Fallback: append
+        const spacer = currentValue.length > 0 && !currentValue.endsWith(" ") ? " " : "";
+        setValue?.(currentValue + spacer + transcript.trim());
+      }
+      clearTranscript();
+    } else if (!isPushToTalk && pushToTalkRef.current) {
+      pushToTalkRef.current = false;
+    }
+  }, [isPushToTalk, transcript, currentValue, setValue, clearTranscript]);
+
+  // Push-to-talk: also handle interim transcript display during recording
+  useEffect(() => {
+    if (isPushToTalk && interimTranscript) {
+      // Show interim text as placeholder hint — don't modify actual value
+    }
+  }, [isPushToTalk, interimTranscript]);
+
+  // Push-to-talk: global Ctrl+Shift+Space hold-to-record
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code === "Space" && e.ctrlKey && e.shiftKey && !e.repeat) {
+        e.preventDefault();
+        if (!pushToTalkRef.current) {
+          pushToTalkRef.current = true;
+          setIsPushToTalk(true);
+          clearTranscript();
+          startListening();
+        }
+      }
+    };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.code === "Space" && pushToTalkRef.current) {
+        e.preventDefault();
+        setIsPushToTalk(false);
+        stopListening();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+    };
+  }, [startListening, stopListening, clearTranscript]);
 
   const handleVoiceModeStart = useCallback(() => {
     setIsVoiceMode(true);
@@ -1187,12 +1258,38 @@ export const InputContainer: React.FC<InputContainerProps> = ({
               minRows={rows}
               maxRows={8}
               placeholder={
-                isUploading
+                isPushToTalk
+                    ? (interimTranscript || "Listening...")
+                    : isUploading
                     ? "Uploading files... Please wait..."
                     : placeholder
               }
               className="w-full resize-none border-none shadow-none bg-transparent focus-visible:outline-none focus-visible:ring-0 focus-visible:ring-offset-0 p-0 rounded-none disabled:cursor-not-allowed customScrollbar2"
             />
+
+            {/* Push-to-talk inline indicator */}
+            <AnimatePresence>
+              {isPushToTalk && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: "auto" }}
+                  exit={{ opacity: 0, height: 0 }}
+                  transition={{ type: "spring", stiffness: 400, damping: 30 }}
+                  className="flex items-center gap-2 px-1 py-1"
+                >
+                  <div className="flex items-center gap-1">
+                    <motion.div
+                      animate={{ scale: [1, 1.2, 1] }}
+                      transition={{ duration: 1.5, repeat: Infinity }}
+                      className="w-2 h-2 rounded-full bg-red-500"
+                    />
+                    <span className="text-xs text-muted-foreground">Recording</span>
+                  </div>
+                  <VoiceWaveform audioData={audioData} isListening={true} barCount={7} minHeight={4} maxHeight={16} />
+                  <span className="text-xs text-muted-foreground/60">Release to insert</span>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
             {/* Controller - Voice or Default */}
             <div className="flex-1 flex flex-row justify-between relative min-h-[32px]">

@@ -43,13 +43,15 @@ export const VoiceWaveform = memo<VoiceWaveformProps>(
           return (
             <motion.div
               key={i}
-              className="w-1 bg-primary/50 rounded-full transition-colors"
+              className="w-1 bg-primary/50 rounded-full"
               animate={{
                 height: `${height}px`,
               }}
               transition={{
-                duration: 0.1,
-                ease: "easeOut",
+                type: "spring",
+                stiffness: 300,
+                damping: 20,
+                mass: 0.5,
               }}
               style={{
                 minHeight: `${minHeight}px`,

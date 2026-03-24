@@ -19,17 +19,17 @@ const http = require("http");
 
 const isDev = process.env.NODE_ENV === "development";
 
-// Lazy-load SenseVoice to avoid startup delays
-let sensevoice = null;
-const getSenseVoice = () => {
-  if (!sensevoice) {
+// Lazy-load Whisper transcription service to avoid startup delays
+let whisperService = null;
+const getWhisper = () => {
+  if (!whisperService) {
     try {
-      sensevoice = require("./sensevoice-service");
+      whisperService = require("./whisper-service");
     } catch (error) {
-      console.error("[Hyperclaw] Failed to load SenseVoice:", error);
+      console.error("[Hyperclaw] Failed to load Whisper:", error);
     }
   }
-  return sensevoice;
+  return whisperService;
 };
 
 // Lazy-load WordsDB
@@ -1743,34 +1743,35 @@ ipcMain.handle("voice-overlay-wake-word-triggered", () => {
   return { success: true };
 });
 
-// SenseVoice IPC handlers
-ipcMain.handle("sensevoice-initialize", async () => {
+// Whisper transcription IPC handlers
+ipcMain.handle("whisper-initialize", async () => {
   try {
-    const sv = getSenseVoice();
+    const sv = getWhisper();
     if (sv) {
       await sv.initialize();
       return { success: true, ready: sv.isReady() };
     }
-    return { success: false, error: "SenseVoice not available" };
+    return { success: false, error: "Whisper not available" };
   } catch (error) {
     return { success: false, error: error.message };
   }
 });
 
-ipcMain.handle("sensevoice-transcribe", async (event, audioData) => {
+ipcMain.handle("whisper-transcribe", async (event, audioData) => {
   try {
-    const sv = getSenseVoice();
-    
-    // If audio data is provided as array, convert to buffer
+    const sv = getWhisper();
+
+    // If audio data is provided as array of Int16 samples, convert to PCM buffer
     let audioBuffer;
     if (Array.isArray(audioData)) {
-      audioBuffer = Buffer.from(audioData);
+      const int16 = new Int16Array(audioData);
+      audioBuffer = Buffer.from(int16.buffer);
     } else if (Buffer.isBuffer(audioData)) {
       audioBuffer = audioData;
     } else {
       return { success: false, error: "Invalid audio data format" };
     }
-    
+
     if (sv && sv.isReady()) {
       const result = await sv.transcribe(audioBuffer);
       if (result.success) {
@@ -1778,7 +1779,7 @@ ipcMain.handle("sensevoice-transcribe", async (event, audioData) => {
       }
       return { success: false, error: result.error };
     }
-    
+
     // If not ready, try to initialize first
     if (sv) {
       await sv.initialize();
@@ -1790,15 +1791,15 @@ ipcMain.handle("sensevoice-transcribe", async (event, audioData) => {
         return { success: false, error: result.error };
       }
     }
-    
-    return { success: false, error: "SenseVoice not initialized" };
+
+    return { success: false, error: "Whisper not initialized" };
   } catch (error) {
     return { success: false, error: error.message };
   }
 });
 
-ipcMain.handle("sensevoice-status", async () => {
-  const sv = getSenseVoice();
+ipcMain.handle("whisper-status", async () => {
+  const sv = getWhisper();
   if (sv) {
     return { ready: sv.isReady() };
   }

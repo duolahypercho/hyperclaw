@@ -211,11 +211,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
     removeWakeWordActivatedListener: () => {
       ipcRenderer.removeAllListeners("voice-overlay-wake-word-activated");
     },
-    // SenseVoice API
-    sensevoice: {
-      initialize: () => ipcRenderer.invoke("sensevoice-initialize"),
-      transcribe: (audioData) => ipcRenderer.invoke("sensevoice-transcribe", audioData),
-      getStatus: () => ipcRenderer.invoke("sensevoice-status"),
+    // Whisper transcription API
+    whisper: {
+      initialize: () => ipcRenderer.invoke("whisper-initialize"),
+      transcribe: (audioData) => ipcRenderer.invoke("whisper-transcribe", audioData),
+      getStatus: () => ipcRenderer.invoke("whisper-status"),
     },
     // Words Database API
     words: {

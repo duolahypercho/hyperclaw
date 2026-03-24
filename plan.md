@@ -9,13 +9,13 @@ Fix 4 issues with the voice overlay: broken transcription, settings UI, waveform
 
 ### Root causes
 1. **ScriptProcessorNode echoes mic to speakers** — `scriptNode.connect(audioContext.destination)` passes audio through. Fix: connect to a silent GainNode instead.
-2. **No error/loading feedback** — if SenseVoice fails to init or transcribe, the user sees nothing. Fix: add `isTranscribing` state + show errors visually.
+2. **No error/loading feedback** — if Whisper fails to init or transcribe, the user sees nothing. Fix: add `isTranscribing` state + show errors visually.
 
 ### Changes
 
 **`components/Tool/VoiceToText/hooks/useLiveTranscription.ts`**
 - Create a `GainNode` with `gain.value = 0`, connect `scriptNode → silentGain → destination` (fires `onaudioprocess` without echoing)
-- Add `isTranscribing` state: `true` after `stopListening()` while awaiting SenseVoice result, `false` when transcript arrives or error
+- Add `isTranscribing` state: `true` after `stopListening()` while awaiting Whisper result, `false` when transcript arrives or error
 - Export `isTranscribing` from the hook
 
 **`pages/voice-overlay/index.tsx`**
@@ -111,3 +111,4 @@ The waveform bars are already coded but depend on `audioData` from the analyser.
 2. Re-add `OpenClawProvider` to `_app.tsx`
 3. Rewrite agent-chat section of `voice-overlay/index.tsx` (two-row layout + inline selectors)
 4. Verify waveform animation works (should be free after step 1)
+ep 1)
