@@ -342,6 +342,25 @@ export function OrgChartProvider({ children }: { children: React.ReactNode }) {
     []
   );
 
+  // Persist the full orgchart state after an optimistic update.
+  // Using write-orgchart (full-state save) instead of update-org-node (single-node patch)
+  // because unlisted nodes (id: "unlisted-{agentId}") only exist in the frontend merge
+  // and update-org-node returns 404 for them.
+  const persistOrgChart = useCallback(() => {
+    setSyncing((c) => c + 1);
+    const done = () => setSyncing((c) => Math.max(0, c - 1));
+    setOrgData((current) => {
+      if (current) {
+        bridgeInvoke("write-orgchart", { orgChartData: current })
+          .catch(() => refresh())
+          .finally(done);
+      } else {
+        done();
+      }
+      return current;
+    });
+  }, [refresh]);
+
   const updateNode = useCallback(
     async (id: string, patch: Record<string, unknown>) => {
       // Optimistic update — apply immediately so UI doesn't block
@@ -349,13 +368,9 @@ export function OrgChartProvider({ children }: { children: React.ReactNode }) {
 
       // Fire remote calls in background with syncing indicator
       const node = orgData?.nodes.find((n) => n.id === id);
-      setSyncing((c) => c + 1);
 
-      const done = () => setSyncing((c) => Math.max(0, c - 1));
-
-      bridgeInvoke("update-org-node", { nodeId: id, patch })
-        .catch(() => refresh())
-        .finally(done);
+      // Persist full orgchart state (handles unlisted nodes that update-org-node can't find)
+      persistOrgChart();
 
       // Sync name/role to IDENTITY.md + name to openclaw.json
       if (node) {
@@ -381,7 +396,7 @@ export function OrgChartProvider({ children }: { children: React.ReactNode }) {
         syncTeamFieldsToIdentity(updatedNodes, orgData?.departments ?? []).catch(() => {});
       }
     },
-    [orgData, applyOptimisticPatch, refresh]
+    [orgData, applyOptimisticPatch, persistOrgChart]
   );
 
   const moveNodeToDepartment = useCallback(
@@ -416,15 +431,8 @@ export function OrgChartProvider({ children }: { children: React.ReactNode }) {
         return { ...prev, nodes, edges };
       });
 
-      // Persist in background
-      setSyncing((c) => c + 1);
-      const done = () => setSyncing((c) => Math.max(0, c - 1));
-      bridgeInvoke("update-org-node", {
-        nodeId,
-        patch: { department: deptId || undefined },
-      })
-        .catch(() => refresh())
-        .finally(done);
+      // Persist full orgchart state (handles unlisted nodes)
+      persistOrgChart();
 
       // Sync allowAgents since department changed
       const updatedNodes = (orgData?.nodes ?? []).map((n) =>
@@ -435,7 +443,7 @@ export function OrgChartProvider({ children }: { children: React.ReactNode }) {
       syncAllowAgentsToConfig(updatedNodes).catch(() => {});
       syncTeamFieldsToIdentity(updatedNodes, orgData?.departments ?? []).catch(() => {});
     },
-    [orgData, refresh]
+    [orgData, persistOrgChart]
   );
 
   const addDepartment = useCallback(
