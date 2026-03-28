@@ -12,6 +12,7 @@ import React, {
 import { Bot, FileText, Plus, RefreshCw, Save, Loader2, Trash2, Sparkles, Brain, UserRound, Users, Wrench, Heart } from "lucide-react";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
 import { useOpenClawContext } from "$/Providers/OpenClawProv";
+import { gatewayConnection } from "$/lib/openclaw-gateway-ws";
 import { AppSchema } from "@OS/Layout/types";
 import type { SidebarSection, SidebarItem } from "@OS/Layout/Sidebar/SidebarSchema";
 import { AgentSidebarSelect } from "../AgentSidebarSelect";
@@ -112,7 +113,7 @@ const FILE_ICONS: Record<string, typeof FileText> = {
 };
 
 export function AgentsProvider({ children }: { children: React.ReactNode }) {
-  const { agents: openClawAgents } = useOpenClawContext();
+  const { agents: openClawAgents, fetchAgents } = useOpenClawContext();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [agentFiles, setAgentFiles] = useState<AgentFileEntry[]>([]);
   const [workspaceLabels, setWorkspaceLabels] = useState<Record<string, string>>({});
@@ -148,8 +149,14 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
     setLoading(true);
     setError(null);
     try {
-      const filesResponse = await fetchListAgentFiles();
-      setAgents(openClawAgents as Agent[]);
+      // Fetch fresh agent list from the server instead of using the stale
+      // context value — critical after add/delete so the UI updates immediately
+      // rather than waiting for the next 30s auto-refresh cycle.
+      const [freshAgents, filesResponse] = await Promise.all([
+        fetchAgents(),
+        fetchListAgentFiles(),
+      ]);
+      setAgents(freshAgents as Agent[]);
       setAgentFiles(filesResponse.files);
       setWorkspaceLabels(filesResponse.workspaceLabels);
     } catch (err: unknown) {
@@ -157,13 +164,21 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setLoading(false);
     }
-  }, [openClawAgents]);
+  }, [fetchAgents]);
 
   const initialLoadDone = useRef(false);
   useEffect(() => {
     if (initialLoadDone.current) return;
     initialLoadDone.current = true;
     refresh();
+  }, [refresh]);
+
+  // Auto-refresh when the connector reports agents changed (add/delete from OpenClaw chat)
+  useEffect(() => {
+    const unsub = gatewayConnection.on("agents.changed", () => {
+      refresh();
+    });
+    return unsub;
   }, [refresh]);
 
   // When options load, default to first agent; fix selection if missing from list

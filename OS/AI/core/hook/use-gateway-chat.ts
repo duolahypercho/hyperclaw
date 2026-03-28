@@ -7,6 +7,7 @@ import {
   getGatewayConnectionState,
   subscribeGatewayConnection,
   gatewayConnection,
+  probeGatewayHealth,
 } from "$/lib/openclaw-gateway-ws";
 import { v4 as uuidv4 } from "uuid";
 
@@ -1222,8 +1223,13 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
         // events will resume on the new WS automatically (same singleton listener).
         // DON'T clear currentRunIdRef or isLoading — let streaming continue.
         // Only fetch history if we were idle (no active stream to resume).
+        // Probe end-to-end health first — "hub WS connected" only means we can
+        // talk to the hub, not that the connector/OpenClaw is reachable. Without
+        // this check, chat.history gets relayed into a dead end and times out.
         if (currentRunIdRef.current === null) {
-          fetchAndSetHistory();
+          probeGatewayHealth().then((probe) => {
+            if (probe.healthy) fetchAndSetHistory();
+          });
         }
       }
 
@@ -1258,7 +1264,9 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       setIsConnected(true);
       if (!previousConnected) {
         previousConnected = true;
-        fetchAndSetHistory();
+        probeGatewayHealth().then((probe) => {
+          if (probe.healthy) fetchAndSetHistory();
+        });
       }
     }
 

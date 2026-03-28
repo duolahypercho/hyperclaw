@@ -13,8 +13,8 @@ import {
   LayoutGrid,
   FileText,
   BarChart3,
+  Database,
   Monitor,
-  Shield,
   Network,
   MessageSquare,
 } from "lucide-react";
@@ -512,6 +512,14 @@ export const VirtualUsage: React.FC = () => (
   />
 );
 
+export const VirtualIntelligence: React.FC = () => (
+  <VirtualToolBase
+    toolName="Intelligence"
+    description="Browse agent-created data tables, CRM pipelines, and live agent status"
+    icon={<Database />}
+  />
+);
+
 export const VirtualOpenClaw: React.FC = () => (
   <VirtualToolBase
     toolName="OpenClaw"
@@ -525,14 +533,6 @@ export const VirtualDevices: React.FC = () => (
     toolName="Devices"
     description="Manage your connected gateway devices"
     icon={<Monitor />}
-  />
-);
-
-export const VirtualApprovals: React.FC = () => (
-  <VirtualToolBase
-    toolName="Approvals"
-    description="Review and approve dangerous operations"
-    icon={<Shield />}
   />
 );
 

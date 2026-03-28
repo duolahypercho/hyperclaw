@@ -1,21 +1,188 @@
 /**
- * Whisper ONNX Transcription Service
+ * Local transcription service
  * Manages Python subprocess for local speech-to-text.
- * Uses bundled whisper-tiny ONNX model — no network dependency at runtime.
+ * Uses a Python faster-whisper server for better accuracy.
  */
 
-const { spawn } = require("child_process");
+const { spawn, execFileSync } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
 const { Buffer } = require("buffer");
+const { app } = require("electron");
+
+function getRuntimeBaseDir() {
+  return __dirname.includes("app.asar")
+    ? __dirname.replace("app.asar", "app.asar.unpacked")
+    : __dirname;
+}
+
+function getBundleTargetId() {
+  return `${process.platform}-${process.arch}`;
+}
+
+function getBundledRuntimeDir() {
+  const devPath = path.join(getRuntimeBaseDir(), "bundled-python", getBundleTargetId());
+  if (fs.existsSync(devPath)) return devPath;
+
+  if (process.resourcesPath) {
+    const packagedPath = path.join(process.resourcesPath, "bundled-python", getBundleTargetId());
+    if (fs.existsSync(packagedPath)) return packagedPath;
+  }
+
+  return null;
+}
+
+function getBundledPythonPath() {
+  const runtimeDir = getBundledRuntimeDir();
+  if (!runtimeDir) return null;
+  const candidate = process.platform === "win32"
+    ? path.join(runtimeDir, "Scripts", "python.exe")
+    : path.join(runtimeDir, "bin", "python3");
+  if (!fs.existsSync(candidate)) return null;
+  // Verify the binary actually runs (venv can break if the base Python moves)
+  try {
+    execFileSync(candidate, ["--version"], { stdio: "ignore", timeout: 5000 });
+    return candidate;
+  } catch {
+    console.warn("[Whisper] Bundled Python exists but is broken, skipping:", candidate);
+    return null;
+  }
+}
+
+function getBundledModelCacheDir() {
+  const runtimeDir = getBundledRuntimeDir();
+  if (!runtimeDir) return null;
+  const candidate = path.join(runtimeDir, "model-cache");
+  return fs.existsSync(candidate) ? candidate : null;
+}
+
+function getBundledRuntimeManifest() {
+  const runtimeDir = getBundledRuntimeDir();
+  if (!runtimeDir) return null;
+  const manifestPath = path.join(runtimeDir, "manifest.json");
+  if (!fs.existsSync(manifestPath)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function getBundledModelPath() {
+  const manifest = getBundledRuntimeManifest();
+  if (!manifest?.modelPath || typeof manifest.modelPath !== "string") return null;
+  return fs.existsSync(manifest.modelPath) ? manifest.modelPath : null;
+}
+
+function ensureDir(target) {
+  fs.mkdirSync(target, { recursive: true });
+}
+
+function getManagedRuntimeDir() {
+  return path.join(app.getPath("userData"), "voice-runtime", getBundleTargetId());
+}
+
+function getManagedPythonPath() {
+  const runtimeDir = getManagedRuntimeDir();
+  const candidate = process.platform === "win32"
+    ? path.join(runtimeDir, "Scripts", "python.exe")
+    : path.join(runtimeDir, "bin", "python3");
+  return fs.existsSync(candidate) ? candidate : null;
+}
+
+function getManagedModelCacheDir() {
+  const cacheDir = path.join(app.getPath("userData"), "whisper-model-cache");
+  ensureDir(cacheDir);
+  return cacheDir;
+}
+
+function getManagedRuntimeManifestPath() {
+  return path.join(getManagedRuntimeDir(), "manifest.json");
+}
+
+function resolveSystemPythonCandidate() {
+  const candidates =
+    process.platform === "win32"
+      ? ["py", "python", "python3"]
+      : ["python3", "python"];
+
+  for (const candidate of candidates) {
+    try {
+      const args = candidate === "py" ? ["-3", "--version"] : ["--version"];
+      execFileSync(candidate, args, { stdio: "ignore" });
+      return candidate;
+    } catch {}
+  }
+
+  throw new Error("No usable Python interpreter found for Whisper");
+}
+
+function runBootstrapCommand(cmd, args) {
+  execFileSync(cmd, args, {
+    cwd: getPythonDir(),
+    stdio: "inherit",
+    env: {
+      ...process.env,
+      PYTHONUNBUFFERED: "1",
+      HYPERCLAW_WHISPER_CACHE_DIR: getManagedModelCacheDir(),
+    },
+  });
+}
+
+function writeManagedRuntimeManifest(pythonPath) {
+  const manifest = {
+    python: pythonPath,
+    requirements: path.join(getPythonDir(), "requirements.txt"),
+    modelCacheDir: getManagedModelCacheDir(),
+    updatedAt: new Date().toISOString(),
+  };
+  fs.writeFileSync(getManagedRuntimeManifestPath(), JSON.stringify(manifest, null, 2));
+}
+
+function ensureManagedRuntime() {
+  const existingPython = getManagedPythonPath();
+  if (existingPython) {
+    return existingPython;
+  }
+
+  const runtimeDir = getManagedRuntimeDir();
+  ensureDir(path.dirname(runtimeDir));
+
+  const basePython = resolveSystemPythonCandidate();
+  console.log("[Whisper] Creating managed Python runtime at:", runtimeDir);
+  const venvArgs =
+    process.platform === "win32"
+      ? ["-3", "-m", "venv", runtimeDir]
+      : ["-m", "venv", runtimeDir];
+
+  runBootstrapCommand(basePython, venvArgs);
+
+  const managedPython = getManagedPythonPath();
+  if (!managedPython) {
+    throw new Error("Managed Whisper runtime was created but python executable was not found");
+  }
+
+  console.log("[Whisper] Installing faster-whisper dependencies into managed runtime...");
+  runBootstrapCommand(managedPython, ["-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"]);
+  runBootstrapCommand(managedPython, ["-m", "pip", "install", "-r", path.join(getPythonDir(), "requirements.txt")]);
+
+  writeManagedRuntimeManifest(managedPython);
+  return managedPython;
+}
+
+function getResolvedPythonPath() {
+  return getBundledPythonPath() || getManagedPythonPath() || ensureManagedRuntime();
+}
+
+function getResolvedModelCacheDir() {
+  return getBundledModelCacheDir() || getManagedModelCacheDir();
+}
 
 // Configuration
 const CONFIG = {
-  pythonPath: process.platform === "win32" ? "python" : "python3",
-  serverScript: path.join(__dirname, "python", "whisper_server.py"),
-  startupTimeout: 30000, // 30 seconds
-  requestTimeout: 15000, // 15 seconds per request
+  startupTimeout: 600000, // allow managed runtime bootstrap + first-run model download
+  requestTimeout: 180000,
 };
 
 // Singleton instance
@@ -33,7 +200,7 @@ let buffer = "";
  * Get the Python packages directory
  */
 function getPythonDir() {
-  return path.join(__dirname, "python");
+  return path.join(getRuntimeBaseDir(), "python");
 }
 
 /**
@@ -46,7 +213,11 @@ function writeWavFile(audioData) {
   // Convert to Float32Array if needed
   let floatData;
   if (Array.isArray(audioData)) {
-    floatData = new Float32Array(audioData);
+    // Renderer sends int16 values (-32768..32767) via resampleToInt16 — normalise to float
+    floatData = new Float32Array(audioData.length);
+    for (let i = 0; i < audioData.length; i++) {
+      floatData[i] = audioData[i] / 32768.0;
+    }
   } else if (audioData instanceof Uint8Array || Buffer.isBuffer(audioData)) {
     // If it's raw PCM bytes, convert to float
     const int16Array = new Int16Array(audioData.length / 2);
@@ -130,13 +301,20 @@ function initialize() {
     console.log("[Whisper] Starting Python server...");
 
     try {
-      serverProcess = spawn(CONFIG.pythonPath, [CONFIG.serverScript], {
+      const pythonPath = getResolvedPythonPath();
+      serverProcess = spawn(pythonPath, [path.join(getPythonDir(), "whisper_server.py")], {
         cwd: getPythonDir(),
         stdio: ["pipe", "pipe", "pipe"],
         env: {
           ...process.env,
           PYTHONPATH: getPythonDir(),
-          PYTHONUNBUFFERED: "1"
+          PYTHONUNBUFFERED: "1",
+          ...(getBundledModelPath()
+            ? { HYPERCLAW_WHISPER_MODEL_PATH: getBundledModelPath() }
+            : {}),
+          ...(getResolvedModelCacheDir()
+            ? { HYPERCLAW_WHISPER_CACHE_DIR: getResolvedModelCacheDir() }
+            : {}),
         },
       });
 
@@ -168,6 +346,13 @@ function initialize() {
         ready = false;
         initialized = false;
         initPromise = null;
+
+        // Reject the init promise if still pending (e.g. Python binary crashed)
+        if (initReject) {
+          initReject(new Error(`Server process exited with code ${code}`));
+          initResolve = null;
+          initReject = null;
+        }
 
         // Reject any pending requests
         while (messageQueue.length > 0) {
@@ -334,7 +519,13 @@ async function getStatus() {
     const result = await sendRequest({ action: "status" });
     return result;
   } catch (error) {
-    return { ready: false, error: error.message };
+    return {
+      ready: false,
+      error: error.message,
+      pythonPath: getBundledPythonPath() || getManagedPythonPath(),
+      modelPath: getBundledModelPath(),
+      cacheDir: getResolvedModelCacheDir(),
+    };
   }
 }
 

@@ -2,7 +2,7 @@ import React, { useRef, useEffect, useState, useCallback } from "react";
 import { NextPage } from "next/types";
 import { AssistantProvider } from "../Providers/AssistantProv";
 import { useOS } from "@OS/Provider/OSProv";
-import PageTransition from "$/components/PageTransition";
+// PageTransition removed — KeepAlive router handles visibility
 import VirtualRouter from "$/components/VirtualRouter";
 import {
   VirtualMusicPlayer,
@@ -16,8 +16,8 @@ import {
   VirtualPixelOffice,
   VirtualDocs,
   VirtualUsage,
+  VirtualIntelligence,
   VirtualOpenClaw,
-  VirtualApprovals,
   VirtualOrgChart,
   VirtualChat,
 } from "$/components/Tool/VirtualToolComponents";
@@ -94,7 +94,7 @@ const MainLayout = ({ children }: any) => {
 { path: "/Tool/PixelOffice", component: VirtualPixelOffice, name: "AI Agent Office" },
     { path: "/Tool/Docs", component: VirtualDocs, name: "Docs" },
     { path: "/Tool/Usage", component: VirtualUsage, name: "Token Usage" },
-    { path: "/Tool/Approvals", component: VirtualApprovals, name: "Approvals" },
+    { path: "/Tool/Intelligence", component: VirtualIntelligence, name: "Intelligence" },
     { path: "/Tool/OrgChart", component: VirtualOrgChart, name: "Org Chart" },
     { path: "/Tool/Chat", component: VirtualChat, name: "Chat" },
     { path: "/Settings", component: VirtualSettings, name: "Settings" },
@@ -124,7 +124,7 @@ const MainLayout = ({ children }: any) => {
           <AssistantProvider>
             <DesktopLayout>
               <VirtualRouter routes={virtualRoutes}>
-                <PageTransition>{children}</PageTransition>
+                {children}
               </VirtualRouter>
             </DesktopLayout>
             <PricingModalWrapper />

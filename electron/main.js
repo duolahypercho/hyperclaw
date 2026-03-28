@@ -50,6 +50,44 @@ let savedInsertText = "";
 
 // Wake word state
 let wakeWordEnabled = false;
+const DEFAULT_VOICE_SETTINGS = {
+  language: "en",
+};
+
+function getVoiceSettingsPath() {
+  return path.join(app.getPath("userData"), "voice-settings.json");
+}
+
+function readVoiceSettings() {
+  try {
+    const raw = fs.readFileSync(getVoiceSettingsPath(), "utf8");
+    const parsed = JSON.parse(raw);
+    return {
+      ...DEFAULT_VOICE_SETTINGS,
+      ...(parsed && typeof parsed === "object" ? parsed : {}),
+    };
+  } catch {
+    return { ...DEFAULT_VOICE_SETTINGS };
+  }
+}
+
+function writeVoiceSettings(nextSettings) {
+  const settings = {
+    ...DEFAULT_VOICE_SETTINGS,
+    ...(nextSettings && typeof nextSettings === "object" ? nextSettings : {}),
+  };
+  const settingsPath = getVoiceSettingsPath();
+  const dir = path.dirname(settingsPath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), "utf8");
+  return settings;
+}
+
+function syncVoiceSettingsToEnv() {
+  const settings = readVoiceSettings();
+  process.env.HYPERCLAW_WHISPER_LANGUAGE = settings.language || DEFAULT_VOICE_SETTINGS.language;
+  return settings;
+}
 
 
 // Log crashes so we can debug "opens then closes" (run from Terminal to see output)
@@ -124,6 +162,24 @@ try {
 } catch (error) {
 }
 
+// Auto-load hub config from ~/.hyperclaw/hub-config.json if not in app-config.json
+if (!appConfig.hub || !appConfig.hub.enabled) {
+  try {
+    const hubConfigPath = path.join(os.homedir(), ".hyperclaw", "hub-config.json");
+    if (fs.existsSync(hubConfigPath)) {
+      const hubCfg = JSON.parse(fs.readFileSync(hubConfigPath, "utf8"));
+      if (hubCfg.enabled && hubCfg.url && hubCfg.deviceId) {
+        appConfig.hub = {
+          enabled: true,
+          url: hubCfg.url,
+          deviceId: hubCfg.deviceId,
+          jwt: hubCfg.jwt || "",
+        };
+      }
+    }
+  } catch (_) {}
+}
+
 const isRemoteMode = appConfig.mode === "remote";
 let remoteUrl = appConfig.remoteUrl;
 const localUrl = appConfig.localUrl;
@@ -144,8 +200,49 @@ function getHubInfo() {
   const hubUrl = appConfig.hub?.url || "";
   const deviceId = appConfig.hub?.deviceId || "";
   const jwt = appConfig.hub?.jwt || "";
-  const enabled = !!(appConfig.hub?.enabled && hubUrl && deviceId);
+  const enabled = !!(appConfig.hub?.enabled && hubUrl);
   return { enabled, hubUrl, deviceId, jwt };
+}
+
+// ─── Dynamic device discovery (mirrors browser's getActiveDeviceId) ──────────
+let _cachedDeviceId = null;
+let _cachedDeviceAt = 0;
+const DEVICE_CACHE_TTL = 30000; // 30s
+
+function discoverActiveDevice(hubUrl, jwt) {
+  if (_cachedDeviceId && Date.now() - _cachedDeviceAt < DEVICE_CACHE_TTL) {
+    return Promise.resolve(_cachedDeviceId);
+  }
+  const fetchModule = hubUrl.startsWith("https") ? https : http;
+  const devicesUrl = new URL("/api/devices", hubUrl);
+
+  return new Promise((resolve) => {
+    const req = fetchModule.request(devicesUrl, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${jwt}`, "Content-Type": "application/json" },
+      timeout: 10000,
+    }, (res) => {
+      let data = "";
+      res.on("data", (chunk) => { data += chunk; });
+      res.on("end", () => {
+        try {
+          const devices = JSON.parse(data);
+          if (!Array.isArray(devices) || devices.length === 0) return resolve(null);
+          const online = devices.filter((d) => d.status === "online");
+          const device = online.length > 0
+            ? online.reduce((a, b) => (a.updatedAt || "") > (b.updatedAt || "") ? a : b)
+            : devices[0];
+          const id = device.id || device._id;
+          _cachedDeviceId = id;
+          _cachedDeviceAt = Date.now();
+          resolve(id);
+        } catch { resolve(null); }
+      });
+    });
+    req.on("error", () => resolve(null));
+    req.on("timeout", () => { req.destroy(); resolve(null); });
+    req.end();
+  });
 }
 
 function hubNotConfiguredError() {
@@ -155,9 +252,13 @@ function hubNotConfiguredError() {
 /**
  * Forward a command to the Hub, which relays it to the Connector via WebSocket.
  * The Connector executes it on the user's machine and returns the result.
+ * Dynamically discovers the active device if the config device is stale.
  */
-function hubCommandFromElectron(body) {
-  const { hubUrl, deviceId, jwt } = getHubInfo();
+async function hubCommandFromElectron(body) {
+  const { hubUrl, jwt } = getHubInfo();
+  // Discover active device dynamically (like the browser does)
+  const deviceId = await discoverActiveDevice(hubUrl, jwt) || appConfig.hub?.deviceId || "";
+  if (!deviceId) return hubNotConfiguredError();
   const url = new URL(`/api/devices/${deviceId}/command`, hubUrl);
   const fetchModule = hubUrl.startsWith("https") ? https : http;
   const payload = JSON.stringify(body);
@@ -175,7 +276,7 @@ function hubCommandFromElectron(body) {
       let data = "";
       res.on("data", (chunk) => { data += chunk; });
       res.on("end", () => {
-        try { resolve(JSON.parse(data)); }
+        try { resolve(unwrapHubResponse(JSON.parse(data))); }
         catch { resolve({ success: false, error: "Invalid response from hub" }); }
       });
     });
@@ -184,6 +285,25 @@ function hubCommandFromElectron(body) {
     req.write(payload);
     req.end();
   });
+}
+
+/**
+ * Unwrap Hub response envelope — mirrors browser's unwrapHubResponse in hub-direct.ts.
+ * Hub returns: {data: <payload>, requestId: "...", status: "ok"|"error"}
+ */
+function unwrapHubResponse(raw) {
+  if (!raw || typeof raw !== "object") return raw;
+  if (raw.status === "error") {
+    const errMsg = raw.data?.error || raw.error || "Command failed";
+    return { success: false, error: errMsg };
+  }
+  if ("success" in raw) return raw;
+  let unwrapped = raw.data ?? raw;
+  if (unwrapped && typeof unwrapped === "object" && !Array.isArray(unwrapped) &&
+      "result" in unwrapped && Object.keys(unwrapped).length === 1) {
+    unwrapped = unwrapped.result;
+  }
+  return unwrapped;
 }
 
 // ─── Window and Tray Functions ──────────────────────────────────────────────
@@ -1304,11 +1424,10 @@ function logBridge(action, err) {
 
 ipcMain.handle("hyperclaw:bridge-invoke", async (event, body) => {
   const { action } = body || {};
-
-  // All bridge calls route through the Hub → Connector
-  if (!getHubInfo().enabled) return hubNotConfiguredError();
-
   logBridge(action);
+
+  // All bridge calls (including intel-*) route through the Hub → Connector
+  if (!getHubInfo().enabled) return hubNotConfiguredError();
   return hubCommandFromElectron(body);
 });
 
@@ -1395,19 +1514,26 @@ function setVoiceOverlayNativeBackdrop(/* enabled */) {
 // Track whether quick chat overlay is currently expanded
 let quickChatOpen = false;
 
-function expandVoiceOverlay() {
+function expandVoiceOverlay(options = {}) {
+  const { focus = true } = options;
   if (!voiceOverlayWindow || voiceOverlayWindow.isDestroyed()) {
     createVoiceOverlay();
   }
   if (!voiceOverlayWindow || voiceOverlayWindow.isDestroyed()) return;
-  voiceOverlayWindow.setFocusable(true);
-  voiceOverlayWindow.show();
-  voiceOverlayWindow.focus();
+  voiceOverlayWindow.setFocusable(focus);
+  if (focus) {
+    voiceOverlayWindow.show();
+    voiceOverlayWindow.focus();
+  } else {
+    // Keep user's current app/input focused while still showing overlay feedback.
+    voiceOverlayWindow.showInactive();
+  }
   setVoiceOverlayNativeBackdrop(true);
 }
 
 function minimizeVoiceOverlay() {
   quickChatOpen = false;
+  voiceOverlayRecording = false;
   if (!voiceOverlayWindow || voiceOverlayWindow.isDestroyed()) return;
   setVoiceOverlayNativeBackdrop(false);
   const { width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().workAreaSize;
@@ -1512,6 +1638,7 @@ let voiceHotkeyActive = false;
 let voiceHotkeyMode = "dictation"; // "dictation" | "agent-chat"
 let uiohookStarted = false;
 let uiohookWorking = false; // true once we receive at least one event
+let voiceOverlayRecording = false;
 
 function registerVoiceHotkey() {
   if (uiohookStarted) return;
@@ -1526,31 +1653,56 @@ function registerVoiceHotkey() {
     console.log(`[Hyperclaw] Quick chat registered: ${chatToggleHotkey}`);
   }
 
-  // Also register Ctrl+Cmd+V for voice overlay toggle (no hold detection, but reliable)
   const voiceToggleHotkey = process.platform === "darwin" ? "Control+Command+V" : "Ctrl+Super+V";
-  const voiceRegistered = globalShortcut.register(voiceToggleHotkey, () => {
-    expandVoiceOverlay();
-    // Start recording immediately
-    setTimeout(() => {
-      if (voiceOverlayWindow && !voiceOverlayWindow.isDestroyed()) {
-        voiceOverlayWindow.webContents.send("voice-push-to-talk", { action: "start", mode: "dictation" });
-      }
-    }, 150);
-  });
-  if (voiceRegistered) {
-    console.log(`[Hyperclaw] Voice toggle registered: ${voiceToggleHotkey}`);
-  }
+  let shouldUseGlobalVoiceFallback = true;
 
-  // Try uiohook for the fancy hold-to-talk on modifier-only combo (Ctrl+Cmd)
+  // Try uiohook for hold-to-talk on the exact voice combo (Ctrl+Cmd+V)
   // Requires Input Monitoring permission on macOS 13+ (Ventura/Sequoia)
   if (process.platform === "darwin") {
     const { systemPreferences } = require("electron");
-    const isTrusted = systemPreferences.isTrustedAccessibilityClient(false);
+    const isTrusted = systemPreferences.isTrustedAccessibilityClient(true);
     if (!isTrusted) {
-      console.log("[Hyperclaw] uiohook skipped (no Accessibility). globalShortcut active.");
-      return;
+      console.log("[Hyperclaw] uiohook skipped (Accessibility/Input Monitoring not granted). globalShortcut active.");
+      shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility").catch(() => {});
+    } else {
+      shouldUseGlobalVoiceFallback = false;
+      console.log("[Hyperclaw] Accessibility permission granted!");
     }
-    console.log("[Hyperclaw] Accessibility permission granted!");
+  }
+
+  if (shouldUseGlobalVoiceFallback) {
+    // Fallback: use globalShortcut as toggle (press to start, press to stop)
+    // since without Accessibility we can't detect key release for hold-to-talk
+    const registered = globalShortcut.register(voiceToggleHotkey, () => {
+      if (voiceOverlayRecording) {
+        // Currently recording → stop
+        voiceOverlayRecording = false;
+        voiceHotkeyActive = false;
+        const mode = voiceHotkeyMode;
+        console.log(`[Hyperclaw] Ctrl+Cmd+V toggle — push-to-talk stopped (${mode})`);
+        if (voiceOverlayWindow && !voiceOverlayWindow.isDestroyed()) {
+          voiceOverlayWindow.webContents.send("voice-push-to-talk", { action: "stop", mode });
+        }
+      } else {
+        // Not recording → start
+        voiceHotkeyMode = "dictation";
+        voiceOverlayRecording = true;
+        voiceHotkeyActive = true;
+        console.log(`[Hyperclaw] Ctrl+Cmd+V toggle — push-to-talk started (${voiceHotkeyMode})`);
+        expandVoiceOverlay({ focus: false });
+        setTimeout(() => {
+          if (voiceOverlayWindow && !voiceOverlayWindow.isDestroyed()) {
+            voiceOverlayWindow.webContents.send("voice-push-to-talk", { action: "start", mode: voiceHotkeyMode, toggle: true });
+          }
+        }, 150);
+      }
+    });
+    if (registered) {
+      console.log(`[Hyperclaw] Voice toggle registered: ${voiceToggleHotkey} (no Accessibility — toggle mode)`);
+    } else {
+      console.log(`[Hyperclaw] Failed to register ${voiceToggleHotkey}`);
+    }
+    return;
   }
 
   try {
@@ -1560,37 +1712,47 @@ function registerVoiceHotkey() {
     let ctrlHeld = false;
     let metaHeld = false; // Cmd on macOS, Win on Windows/Linux
     let shiftHeld = false;
+    let vHeld = false;
 
-    // Short-press vs hold detection
     let holdTimer = null;
-    let hotkeyPending = false; // true = keys pressed, waiting to see if it's a tap or hold
+    let hotkeyPending = false; // true = keys pressed, waiting to see if it's a hold
 
     const CTRL_CODES = [UiohookKey.Ctrl, UiohookKey.CtrlRight];
     const META_CODES = [UiohookKey.Meta, UiohookKey.MetaRight];
     const SHIFT_CODES = [UiohookKey.Shift, UiohookKey.ShiftRight];
+    const VOICE_KEY_CODES = [UiohookKey.V];
+
+    // uiohook mask bits for modifier validation
+    const MASK_CTRL = 0x0002;
+    const MASK_META = 0x0008;
+    const MASK_SHIFT = 0x0001;
 
     uIOhook.on("keydown", (e) => {
       if (!uiohookWorking) {
         uiohookWorking = true;
         console.log("[Hyperclaw] uiohook receiving events — hold-to-talk active");
       }
-      if (CTRL_CODES.includes(e.keycode)) ctrlHeld = true;
-      if (META_CODES.includes(e.keycode)) metaHeld = true;
-      if (SHIFT_CODES.includes(e.keycode)) shiftHeld = true;
 
-      // Both Ctrl + Cmd/Win held → start hold detection
-      if (ctrlHeld && metaHeld && !voiceHotkeyActive && !hotkeyPending) {
+      // Sync tracked state with the event mask to prevent stale modifiers
+      // (missed keyup events during fast typing can leave modifiers "stuck")
+      const mask = e.mask || 0;
+      ctrlHeld = CTRL_CODES.includes(e.keycode) || !!(mask & MASK_CTRL);
+      metaHeld = META_CODES.includes(e.keycode) || !!(mask & MASK_META);
+      shiftHeld = SHIFT_CODES.includes(e.keycode) || !!(mask & MASK_SHIFT);
+      if (VOICE_KEY_CODES.includes(e.keycode)) vHeld = true;
+
+      // Exact hold combo: Ctrl + Cmd/Win + V
+      if (ctrlHeld && metaHeld && vHeld && !voiceHotkeyActive && !hotkeyPending) {
         hotkeyPending = true;
         voiceHotkeyMode = shiftHeld ? "agent-chat" : "dictation";
 
-        // Start timer — if still held after threshold, it's a hold → push-to-talk
         holdTimer = setTimeout(() => {
           holdTimer = null;
-          if (!hotkeyPending) return; // already released (short press)
+          if (!hotkeyPending || !ctrlHeld || !metaHeld || !vHeld) return;
           hotkeyPending = false;
           voiceHotkeyActive = true;
-          console.log(`[Hyperclaw] Ctrl+Cmd/Win held — push-to-talk started (${voiceHotkeyMode})`);
-          expandVoiceOverlay();
+          console.log(`[Hyperclaw] Ctrl+Cmd/Win+V held — push-to-talk started (${voiceHotkeyMode})`);
+          expandVoiceOverlay({ focus: false });
 
           const mode = voiceHotkeyMode;
           setTimeout(() => {
@@ -1603,24 +1765,25 @@ function registerVoiceHotkey() {
     });
 
     uIOhook.on("keyup", (e) => {
-      if (CTRL_CODES.includes(e.keycode)) ctrlHeld = false;
-      if (META_CODES.includes(e.keycode)) metaHeld = false;
-      if (SHIFT_CODES.includes(e.keycode)) shiftHeld = false;
+      // Sync from mask on keyup too — if the mask says a modifier is released,
+      // trust it even if we didn't see the individual keyup event
+      const mask = e.mask || 0;
+      ctrlHeld = CTRL_CODES.includes(e.keycode) ? false : !!(mask & MASK_CTRL);
+      metaHeld = META_CODES.includes(e.keycode) ? false : !!(mask & MASK_META);
+      shiftHeld = SHIFT_CODES.includes(e.keycode) ? false : !!(mask & MASK_SHIFT);
+      if (VOICE_KEY_CODES.includes(e.keycode)) vHeld = false;
 
-      // Released before hold threshold → short press → toggle floating chat
-      if (hotkeyPending && (!ctrlHeld || !metaHeld)) {
+      if (hotkeyPending && (!ctrlHeld || !metaHeld || !vHeld)) {
         hotkeyPending = false;
         if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
-        console.log("[Hyperclaw] Ctrl+Cmd/Win short press — opening quick chat");
-        openQuickChat();
         return;
       }
 
       // Released after hold threshold → stop push-to-talk
-      if (voiceHotkeyActive && (!ctrlHeld || !metaHeld)) {
+      if (voiceHotkeyActive && (!ctrlHeld || !metaHeld || !vHeld)) {
         const mode = voiceHotkeyMode;
         voiceHotkeyActive = false;
-        console.log(`[Hyperclaw] Ctrl+Cmd/Win released — push-to-talk stopped (${mode})`);
+        console.log(`[Hyperclaw] Ctrl+Cmd/Win+V released — push-to-talk stopped (${mode})`);
         if (voiceOverlayWindow && !voiceOverlayWindow.isDestroyed()) {
           voiceOverlayWindow.webContents.send("voice-push-to-talk", { action: "stop", mode });
         }
@@ -1653,6 +1816,10 @@ ipcMain.handle("voice-overlay-minimize", () => {
   }
 });
 
+ipcMain.on("voice-overlay-recording-state", (event, isRecording) => {
+  voiceOverlayRecording = Boolean(isRecording);
+});
+
 ipcMain.handle("get-voice-overlay-visible", () => {
   return voiceOverlayWindow && !voiceOverlayWindow.isDestroyed() && voiceOverlayWindow.isVisible();
 });
@@ -1673,48 +1840,105 @@ ipcMain.handle("voice-overlay-resize", (event, { width, height }) => {
   });
 });
 
-// Insert voice transcript into the previously focused app's input field
-ipcMain.handle("voice-insert-text", async (event, text) => {
-  if (!text) return { success: false, error: "No text" };
+// Type text directly into the focused app (no clipboard) — cross-platform.
+// Uses stdin to pass scripts — avoids all shell quoting/escaping issues.
+let liveTypedLength = 0;
 
-  try {
-    const { clipboard } = require("electron");
+function escapeAS(text) {
+  return text.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
+}
 
-    // Save current clipboard content to restore later
-    const previousClipboard = clipboard.readText();
+// Delete `deleteCount` chars then type `text` into the focused input field
+function liveTypeText(text, deleteCount) {
+  const { execFileSync } = require("child_process");
 
-    // Write transcript to clipboard
-    clipboard.writeText(text);
-
-    // Hide the overlay first so the previous app regains focus
-    hideVoiceOverlay();
-
-    // Small delay to let the previous app regain focus
-    await new Promise((r) => setTimeout(r, 150));
-
-    // Simulate Cmd+V (macOS) or Ctrl+V (Windows/Linux) to paste
-    const modifier = process.platform === "darwin" ? "command" : "control";
-    const robot = require("child_process");
-    if (process.platform === "darwin") {
-      robot.execSync(`osascript -e 'tell application "System Events" to keystroke "v" using command down'`);
-    } else {
-      // On Windows/Linux, use xdotool or powershell
-      try {
-        robot.execSync(process.platform === "win32"
-          ? `powershell -command "$wsh = New-Object -ComObject WScript.Shell; $wsh.SendKeys('^v')"`
-          : `xdotool key ctrl+v`
-        );
-      } catch (e) {
-        console.warn("[Hyperclaw] Failed to simulate paste:", e.message);
-      }
+  if (process.platform === "darwin") {
+    const lines = ['tell application "System Events"'];
+    if (deleteCount > 0) {
+      lines.push(`  repeat ${deleteCount} times`);
+      lines.push(`    key code 51`); // backspace
+      lines.push(`  end repeat`);
+    }
+    if (text) {
+      lines.push(`  keystroke "${escapeAS(text)}"`);
+    }
+    lines.push("end tell");
+    try {
+      execFileSync("osascript", ["-"], { input: lines.join("\n"), timeout: 10000 });
+      return true;
+    } catch (e) {
+      console.warn("[Hyperclaw] liveTypeText (macOS) failed:", e.message);
+      return false;
     }
 
-    // Restore previous clipboard after a short delay
-    setTimeout(() => {
-      clipboard.writeText(previousClipboard);
-    }, 500);
+  } else if (process.platform === "linux") {
+    try {
+      if (deleteCount > 0) {
+        execFileSync("xdotool", ["key", ...Array(deleteCount).fill("BackSpace")], { timeout: 5000 });
+      }
+      if (text) {
+        execFileSync("xdotool", ["type", "--delay", "0", "--", text], { timeout: 10000 });
+      }
+      return true;
+    } catch (e) {
+      console.warn("[Hyperclaw] liveTypeText (Linux) failed:", e.message);
+      return false;
+    }
 
-    return { success: true };
+  } else if (process.platform === "win32") {
+    // PowerShell: SendKeys for backspaces + text
+    const parts = [];
+    if (deleteCount > 0) {
+      parts.push(`{BS ${deleteCount}}`);
+    }
+    if (text) {
+      // Escape SendKeys special chars: + ^ % ~ { } ( ) [ ]
+      parts.push(text.replace(/([+^%~{}()\[\]])/g, '{$1}'));
+    }
+    if (parts.length === 0) return true;
+    const keys = parts.join('');
+    try {
+      execFileSync("powershell", ["-Command", `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('${keys.replace(/'/g, "''")}')`], { timeout: 10000 });
+      return true;
+    } catch (e) {
+      console.warn("[Hyperclaw] liveTypeText (Windows) failed:", e.message);
+      return false;
+    }
+  }
+
+  return false;
+}
+
+// Called on each interim/final transcript while recording
+ipcMain.handle("voice-live-type", async (event, { text, isFinal }) => {
+  try {
+    const newText = (text || "").trim();
+    const prevLen = liveTypedLength;
+
+    if (!newText && !prevLen) return { success: true };
+
+    const ok = liveTypeText(newText, prevLen);
+    liveTypedLength = isFinal ? 0 : newText.length;
+    return { success: ok };
+  } catch (error) {
+    console.error("[Hyperclaw] voice-live-type error:", error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle("voice-live-type-reset", () => {
+  liveTypedLength = 0;
+  return { success: true };
+});
+
+// Insert final text (for non-push-to-talk manual insert)
+ipcMain.handle("voice-insert-text", async (event, text) => {
+  if (!text) return { success: false, error: "No text" };
+  try {
+    minimizeVoiceOverlay();
+    await new Promise((r) => setTimeout(r, 300));
+    const ok = liveTypeText(text, 0);
+    return { success: ok };
   } catch (error) {
     console.error("[Hyperclaw] Insert text error:", error);
     return { success: false, error: error.message };
@@ -1746,6 +1970,7 @@ ipcMain.handle("voice-overlay-wake-word-triggered", () => {
 // Whisper transcription IPC handlers
 ipcMain.handle("whisper-initialize", async () => {
   try {
+    syncVoiceSettingsToEnv();
     const sv = getWhisper();
     if (sv) {
       await sv.initialize();
@@ -1759,6 +1984,7 @@ ipcMain.handle("whisper-initialize", async () => {
 
 ipcMain.handle("whisper-transcribe", async (event, audioData) => {
   try {
+    syncVoiceSettingsToEnv();
     const sv = getWhisper();
 
     // If audio data is provided as array of Int16 samples, convert to PCM buffer
@@ -1799,11 +2025,42 @@ ipcMain.handle("whisper-transcribe", async (event, audioData) => {
 });
 
 ipcMain.handle("whisper-status", async () => {
+  const settings = syncVoiceSettingsToEnv();
   const sv = getWhisper();
   if (sv) {
-    return { ready: sv.isReady() };
+    try {
+      const status = await sv.getStatus();
+      return {
+        ...status,
+        ready: sv.isReady() || !!status?.ready,
+        language: settings.language,
+      };
+    } catch {
+      return { ready: sv.isReady(), language: settings.language };
+    }
   }
-  return { ready: false };
+  return { ready: false, language: settings.language };
+});
+
+ipcMain.handle("voice-settings-get", async () => {
+  const settings = syncVoiceSettingsToEnv();
+  return { success: true, settings };
+});
+
+ipcMain.handle("voice-settings-set", async (event, patch) => {
+  try {
+    const current = readVoiceSettings();
+    const next = writeVoiceSettings({
+      ...current,
+      ...(patch && typeof patch === "object" ? patch : {}),
+    });
+    process.env.HYPERCLAW_WHISPER_LANGUAGE = next.language || DEFAULT_VOICE_SETTINGS.language;
+    const sv = getWhisper();
+    if (sv?.stop) sv.stop();
+    return { success: true, settings: next };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
 });
 
 // Words Database IPC handlers
@@ -1906,8 +2163,7 @@ app.whenReady().then(() => {
   registerVoiceHotkey(); // Register voice input hotkey (Cmd+Shift+Space on macOS, Alt+Space elsewhere)
   registerTextInsertHotkey(); // Register Ctrl+Shift+V for text insertion
 
-  // Launch the persistent mini voice overlay after a short delay (let main window load first)
-  setTimeout(() => createVoiceOverlay(), 2000);
+  // Voice overlay is created on demand (Ctrl+Cmd+V or Alt+Space) — no auto-launch.
 
   if (!isDev && app.isPackaged && isRemoteMode && autoUpdater) {
     setTimeout(

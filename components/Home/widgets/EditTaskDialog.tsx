@@ -22,8 +22,6 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-  SelectGroup,
-  SelectLabel,
 } from "@/components/ui/select";
 import { useTodoList } from "$/components/Tool/TodoList/provider/todolistProvider";
 import { Task } from "$/components/Tool/TodoList/types";
@@ -33,23 +31,6 @@ interface TeamAgent {
   name: string;
   status: string;
   role?: string;
-}
-
-interface ChannelOption {
-  id: string;
-  name: string;
-  type: string;
-  kind: string;
-  parent?: string | null;
-  topic?: string | null;
-}
-
-function channelFileValue(ch: ChannelOption): string {
-  return `${ch.type}:${ch.id}`;
-}
-
-function isChannelFileValue(value: string): boolean {
-  return value.includes(":") && value !== "last";
 }
 
 export interface EditTaskDialogProps {
@@ -70,13 +51,9 @@ export function EditTaskDialog({
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description ?? "");
   const [assignedAgent, setAssignedAgent] = useState("");
-  const [announce, setAnnounce] = useState(false);
-  const [channel, setChannel] = useState<string>("last");
-  const [to, setTo] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [agents, setAgents] = useState<TeamAgent[]>(preloadedAgents ?? []);
-  const [channelOptions, setChannelOptions] = useState<ChannelOption[]>([]);
   const [dataLoading, setDataLoading] = useState(false);
 
   const descRef = useRef<HTMLTextAreaElement>(null);
@@ -96,9 +73,6 @@ export function EditTaskDialog({
   useEffect(() => {
     setTitle(task.title);
     setDescription(task.description ?? "");
-    setAnnounce(false);
-    setChannel("last");
-    setTo("");
     setError(null);
   }, [task._id]);
 
@@ -124,30 +98,17 @@ export function EditTaskDialog({
     let cancelled = false;
 
     const needAgents = !preloadedAgents?.length;
-    const fetches: Promise<unknown>[] = [
-      needAgents ? bridgeInvoke("get-team", {}).catch(() => []) : Promise.resolve(null),
-      bridgeInvoke("list-channels", {}).catch(() => ({ data: [] })),
-    ];
+    if (!needAgents) return;
 
-    if (needAgents) setDataLoading(true);
-
-    Promise.all(fetches).then(([teamRes, channelsRes]) => {
-      if (cancelled) return;
-
-      if (teamRes !== null) {
+    setDataLoading(true);
+    bridgeInvoke("get-team", {})
+      .catch(() => [])
+      .then((teamRes) => {
+        if (cancelled) return;
         const agentList = Array.isArray(teamRes) ? (teamRes as TeamAgent[]) : [];
         setAgents(agentList);
-      }
-
-      const channelsResult = channelsRes as { success?: boolean; data?: ChannelOption[] };
-      const channelList =
-        channelsResult?.success && Array.isArray(channelsResult.data) ? channelsResult.data : [];
-      setChannelOptions(
-        channelList.filter((c) => c && c.kind === "channel") as ChannelOption[]
-      );
-
-      setDataLoading(false);
-    });
+        setDataLoading(false);
+      });
 
     return () => { cancelled = true; };
   }, [open, preloadedAgents]);
@@ -167,21 +128,6 @@ export function EditTaskDialog({
       setError("Title is required");
       return;
     }
-    if (announce && !channel.trim()) {
-      setError("Choose a delivery channel (or use last route).");
-      return;
-    }
-    if (
-      announce &&
-      !isChannelFileValue(channel) &&
-      channel !== "last" &&
-      !to.trim()
-    ) {
-      setError(
-        "Delivery target is required for this channel (e.g. channel:C123… or +1555…)."
-      );
-      return;
-    }
     setSubmitting(true);
     try {
       const agentObj = assignedAgent
@@ -198,31 +144,6 @@ export function EditTaskDialog({
         fields.assignedAgent = newAgentName ?? null;
       if ((newAgentId ?? null) !== (task.assignedAgentId ?? null))
         fields.assignedAgentId = newAgentId ?? null;
-
-      const delivery = announce
-        ? (() => {
-            const ch = channel.trim();
-            const fromFile = isChannelFileValue(ch);
-            if (fromFile) {
-              const [chType, chId] = ch.split(":");
-              return {
-                announce: true,
-                channel: chType?.trim() ?? undefined,
-                to: chId ? `channel:${chId.trim()}` : undefined,
-              };
-            }
-            // "last" = use main session with previous channel — omit channel so backend doesn't require one
-            if (ch === "last") {
-              return { announce: true };
-            }
-            return {
-              announce: true,
-              channel: ch,
-              to: to.trim() || undefined,
-            };
-          })()
-        : undefined;
-      if (delivery) fields.delivery = delivery;
 
       if (Object.keys(fields).length > 0) {
         handleEditTask(task._id, fields);
@@ -249,7 +170,7 @@ export function EditTaskDialog({
             Edit task
           </DialogTitle>
           <DialogDescription className="text-xs text-muted-foreground">
-            Update task details, assignee, and delivery.
+            Update task details and assignee.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="flex flex-col">
@@ -338,137 +259,6 @@ export function EditTaskDialog({
                 rows={4}
               />
             </div>
-            <div className="space-y-2">
-              <Label className="text-xs font-medium">Delivery</Label>
-              <div className="flex flex-col gap-2">
-                <label className="flex items-center gap-2 cursor-pointer text-xs text-muted-foreground hover:text-foreground">
-                  <input
-                    type="checkbox"
-                    checked={announce}
-                    onChange={(e) => setAnnounce(e.target.checked)}
-                    className="rounded border-border"
-                  />
-                  Announce result to a channel
-                </label>
-                {announce && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div className="space-y-1.5">
-                      <Label className="text-[10px] text-muted-foreground">
-                        Channel
-                      </Label>
-                      <Select
-                        value={channel}
-                        onValueChange={(v) => {
-                          setChannel(v);
-                          if (isChannelFileValue(v)) setTo("");
-                        }}
-                        disabled={dataLoading}
-                      >
-                        <SelectTrigger className="h-9 min-w-0 overflow-hidden bg-muted/30 border-border/60">
-                          <span className="block min-w-0 truncate text-left">
-                            <SelectValue
-                              placeholder={
-                                dataLoading
-                                  ? "Loading…"
-                                  : "Choose channel…"
-                              }
-                            />
-                          </span>
-                        </SelectTrigger>
-                        <SelectContent className="z-[102]">
-                          <SelectItem value="last" className="text-sm">
-                            Last route
-                          </SelectItem>
-                          {channelOptions.length > 0 && (
-                            <SelectGroup>
-                              <SelectLabel className="text-[10px] text-muted-foreground">
-                                From HyperClaw
-                              </SelectLabel>
-                              {channelOptions.map((ch) => (
-                                <SelectItem
-                                  key={ch.id}
-                                  value={channelFileValue(ch)}
-                                  className="text-xs"
-                                >
-                                  <span className="flex items-center gap-1.5 min-w-0 overflow-hidden">
-                                    <span className="truncate" title={ch.name}>
-                                      {ch.name}
-                                    </span>
-                                    {ch.topic && (
-                                      <span
-                                        className="text-muted-foreground truncate shrink min-w-0 max-w-[100px]"
-                                        title={ch.topic}
-                                      >
-                                        ({ch.topic})
-                                      </span>
-                                    )}
-                                    <span className="text-muted-foreground capitalize shrink-0">
-                                      · {ch.type}
-                                    </span>
-                                  </span>
-                                </SelectItem>
-                              ))}
-                            </SelectGroup>
-                          )}
-                          <SelectGroup>
-                            <SelectLabel className="text-[10px] text-muted-foreground">
-                              Manual
-                            </SelectLabel>
-                            <SelectItem value="slack" className="text-sm">
-                              Slack
-                            </SelectItem>
-                            <SelectItem value="discord" className="text-sm">
-                              Discord
-                            </SelectItem>
-                            <SelectItem value="telegram" className="text-sm">
-                              Telegram
-                            </SelectItem>
-                            <SelectItem value="whatsapp" className="text-sm">
-                              WhatsApp
-                            </SelectItem>
-                            <SelectItem value="imessage" className="text-sm">
-                              iMessage
-                            </SelectItem>
-                            <SelectItem value="signal" className="text-sm">
-                              Signal
-                            </SelectItem>
-                            <SelectItem value="mattermost" className="text-sm">
-                              Mattermost
-                            </SelectItem>
-                          </SelectGroup>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label
-                        htmlFor="edit-task-to"
-                        className="text-[10px] text-muted-foreground"
-                      >
-                        {isChannelFileValue(channel)
-                          ? "To (from channel)"
-                          : "To (optional for Last route)"}
-                      </Label>
-                      <Input
-                        id="edit-task-to"
-                        placeholder={
-                          isChannelFileValue(channel)
-                            ? "Set automatically"
-                            : channel === "slack"
-                              ? "e.g. channel:C1234567890"
-                              : channel === "telegram"
-                                ? "e.g. -1001234567890:topic:123"
-                                : "e.g. +15551234567"
-                        }
-                        value={to}
-                        onChange={(e) => setTo(e.target.value)}
-                        className="h-9 text-sm font-mono bg-muted/30 border-border/60"
-                        disabled={isChannelFileValue(channel)}
-                      />
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
           </div>
           <DialogFooter className="px-6 py-4 border-t border-border/40 gap-2">
             <Button
@@ -482,15 +272,7 @@ export function EditTaskDialog({
             <Button
               type="submit"
               size="sm"
-              disabled={
-                submitting ||
-                !title.trim() ||
-                (announce && !channel.trim()) ||
-                (announce &&
-                  !isChannelFileValue(channel) &&
-                  channel !== "last" &&
-                  !to.trim())
-              }
+              disabled={submitting || !title.trim()}
               className="gap-2"
             >
               {submitting ? (

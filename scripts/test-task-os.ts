@@ -77,30 +77,89 @@ async function main() {
 
   // ── 4. Claim Task ────────────────────────────────────────────────────
   console.log("\n── claimTask ──");
-  const claim1 = bridge.claimTask({
+
+  const claimWhileInProgress = bridge.claimTask({
     id: taskId,
+    claimant: "agent-A",
+    leaseSeconds: 5,
+  });
+  assert("cannot claim in_progress task", !claimWhileInProgress.success);
+  assert(
+    "in_progress rejection reason",
+    claimWhileInProgress.reason?.includes("status=in_progress") ?? false,
+  );
+
+  const claimable = bridge.upsertTask({
+    externalId: "test-ext-claimable",
+    data: {
+      title: "Claimable Task",
+      description: "Pending task for claimTask tests",
+      agent: "test-agent",
+      status: "pending",
+      data: { kind: "test" },
+    },
+  });
+  const claimableId = claimable.id as string;
+
+  const claim1 = bridge.claimTask({
+    id: claimableId,
     claimant: "agent-A",
     leaseSeconds: 5,
   });
   assert("first claim succeeds", claim1.success);
   assert("lease set", !!(claim1.task?.data as any)?.lease?.claimedBy);
+  assert("claim sets status to in_progress", claim1.task?.status === "in_progress");
 
   const claim2 = bridge.claimTask({
-    id: taskId,
+    id: claimableId,
     claimant: "agent-B",
     leaseSeconds: 5,
   });
-  assert("concurrent claim fails", !claim2.success);
-  assert("reason mentions agent-A", claim2.reason?.includes("agent-A") ?? false);
+  assert("reclaim of in_progress task fails", !claim2.success);
+  assert("reason mentions in_progress status", claim2.reason?.includes("status=in_progress") ?? false);
 
-  // Claim by externalId
-  const claim3 = bridge.claimTask({
-    externalId: "test-ext-001",
-    claimant: "agent-C",
-    leaseSeconds: 0, // immediate expiry
+  const blockedTask = bridge.upsertTask({
+    externalId: "test-ext-blocked",
+    data: {
+      title: "Blocked Task",
+      agent: "test-agent",
+      status: "blocked",
+      data: { kind: "test" },
+    },
   });
-  // Should fail because agent-A's lease is still active
-  assert("claim by externalId while leased fails", !claim3.success);
+  const blockedClaim = bridge.claimTask({
+    id: blockedTask.id as string,
+    claimant: "agent-C",
+    leaseSeconds: 5,
+  });
+  assert("cannot claim blocked task", !blockedClaim.success);
+  assert("blocked rejection reason", blockedClaim.reason?.includes("status=blocked") ?? false);
+
+  const completedTask = bridge.upsertTask({
+    externalId: "test-ext-completed",
+    data: {
+      title: "Completed Task",
+      agent: "test-agent",
+      status: "completed",
+      data: { kind: "test" },
+    },
+  });
+  const completedClaim = bridge.claimTask({
+    id: completedTask.id as string,
+    claimant: "agent-D",
+    leaseSeconds: 5,
+  });
+  assert("cannot claim completed task", !completedClaim.success);
+  assert("completed rejection reason", completedClaim.reason?.includes("status=completed") ?? false);
+
+  // Claim by externalId should also respect non-pending status.
+  const claim3 = bridge.claimTask({
+    externalId: "test-ext-claimable",
+    claimant: "agent-E",
+    leaseSeconds: 0,
+  });
+  assert("claim by externalId while in_progress fails", !claim3.success);
+  assert("externalId rejection reason mentions status", claim3.reason?.includes("status=in_progress") ?? false);
 
   // ── 5. Session Upsert ────────────────────────────────────────────────
   console.log("\n── sessionUpsert ──");

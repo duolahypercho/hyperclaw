@@ -71,7 +71,7 @@ export function DeleteAgentDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="sm:max-w-[400px] max-h-[85vh] gap-0 sm:rounded-xl p-0 overflow-hidden flex flex-col">
+      <DialogContent className="sm:max-w-[400px] max-h-[85vh] gap-0 sm:rounded-xl p-0 overflow-hidden flex flex-col z-[101]" overlayClassName="z-[100]">
         <DialogHeader className="px-6 pt-6 pb-4 space-y-1.5 border-b border-border/40">
           <DialogTitle className="text-base font-semibold flex items-center gap-2 text-destructive">
             <Trash2 className="w-4 h-4" />

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 
 /** Interval (ms) between interim transcription chunks while recording (Whisper only). */
-const INTERIM_INTERVAL_MS = 2500;
+const INTERIM_INTERVAL_MS = 1500;
 
 type SpeechRecognitionEvent = Event & {
     results: SpeechRecognitionResultList;
@@ -15,6 +15,9 @@ const hasWhisper = () => !!window.electronAPI?.voiceOverlay?.whisper;
 const hasSpeechRecognition = () =>
     typeof window !== 'undefined' &&
     ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window);
+
+const getWhisperApi = () => window.electronAPI?.voiceOverlay?.whisper;
+const WHISPER_STARTUP_GRACE_MS = 2500;
 
 export const useLiveTranscription = () => {
     const [transcript, setTranscript] = useState("");
@@ -37,9 +40,102 @@ export const useLiveTranscription = () => {
     const scriptNodeRef = useRef<ScriptProcessorNode | null>(null);
     const interimTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const sampleRateRef = useRef<number>(44100);
+    const whisperInitializedRef = useRef(false);
+    const interimInFlightRef = useRef(false);
+    // Track which engine is active so stop uses the same one as start
+    const activeEngineRef = useRef<'whisper' | 'browser' | null>(null);
 
     // Web Speech API ref
     const recognitionRef = useRef<any>(null);
+    // Used to cancel stale Whisper transcriptions after clearTranscript
+    const cancelledRef = useRef(false);
+    // Accumulated final text for Web Speech API (ref so clearTranscript can reset it)
+    const finalTextRef = useRef('');
+
+    const ensureWhisperReady = useCallback(async () => {
+        const whisper = getWhisperApi();
+        if (!whisper) {
+            throw new Error('Whisper transcription is not available');
+        }
+
+        if (whisperInitializedRef.current) {
+            return whisper;
+        }
+
+        const status = await whisper.getStatus();
+        if (!status.ready) {
+            const initResult = await whisper.initialize();
+            if (!initResult.success) {
+                throw new Error(initResult.error || 'Whisper initialization failed');
+            }
+        }
+
+        whisperInitializedRef.current = true;
+        return whisper;
+    }, []);
+
+    const canUseWhisperNow = useCallback(async () => {
+        const whisper = getWhisperApi();
+        if (!whisper) return false;
+        if (whisperInitializedRef.current) return true;
+
+        try {
+            const status = await whisper.getStatus();
+            if (status?.ready) {
+                whisperInitializedRef.current = true;
+                return true;
+            }
+        } catch {}
+
+        return false;
+    }, []);
+
+    const tryPrepareWhisperForStart = useCallback(async () => {
+        const whisper = getWhisperApi();
+        if (!whisper) return false;
+        if (await canUseWhisperNow()) return true;
+
+        try {
+            const initResult = await Promise.race([
+                whisper.initialize(),
+                new Promise<{ success: false; error: string }>((resolve) =>
+                    setTimeout(() => resolve({ success: false, error: 'Whisper startup timed out' }), WHISPER_STARTUP_GRACE_MS)
+                ),
+            ]);
+            if (initResult?.success) {
+                whisperInitializedRef.current = true;
+                return true;
+            }
+        } catch {}
+
+        return false;
+    }, [canUseWhisperNow]);
+
+    // ── Pre-initialize Whisper when available (avoid cold-start delay) ──
+
+    useEffect(() => {
+        if (!hasWhisper()) return;
+        const whisper = window.electronAPI?.voiceOverlay?.whisper;
+        if (!whisper || whisperInitializedRef.current) return;
+
+        const tryInit = (retries = 2) => {
+            whisper.initialize().then((result: { success: boolean; error?: string }) => {
+                whisperInitializedRef.current = result.success;
+                if (!result.success && retries > 0) {
+                    // Retry after a delay — service may still be starting
+                    setTimeout(() => tryInit(retries - 1), 3000);
+                } else if (!result.success) {
+                    console.warn('[VoiceToText] Whisper pre-init failed after retries:', result.error || 'Unknown error');
+                }
+            }).catch((error: any) => {
+                if (retries > 0) setTimeout(() => tryInit(retries - 1), 3000);
+                else console.warn('[VoiceToText] Whisper pre-init failed after retries:', error?.message || 'Unknown error');
+            });
+        };
+
+        // Delay first attempt slightly to let Electron main process settle
+        setTimeout(() => tryInit(), 1000);
+    }, []);
 
     // ── Shared: stop audio analysis (waveform + mic stream) ──
 
@@ -136,18 +232,16 @@ export const useLiveTranscription = () => {
     }, []);
 
     const sendInterimTranscription = useCallback(async () => {
-        const whisper = window.electronAPI?.voiceOverlay?.whisper;
-        if (!whisper) return;
+        if (cancelledRef.current) return;
+        // Prevent overlapping interim requests (previous one still running)
+        if (interimInFlightRef.current) return;
 
         const buffer = pcmBufferRef.current;
         if (buffer.length < 4000) return;
 
+        interimInFlightRef.current = true;
         try {
-            const status = await whisper.getStatus();
-            if (!status.ready) {
-                const initResult = await whisper.initialize();
-                if (!initResult.success) return;
-            }
+            const whisper = await ensureWhisperReady();
 
             const audioData = resampleToInt16(buffer, sampleRateRef.current);
             if (audioData.length === 0) return;
@@ -158,46 +252,23 @@ export const useLiveTranscription = () => {
             }
         } catch {
             // Silently ignore interim errors
-        }
-    }, [resampleToInt16]);
-
-    const blobToInt16Array = useCallback(async (blob: Blob): Promise<number[]> => {
-        const arrayBuffer = await blob.arrayBuffer();
-        const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
-        try {
-            const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
-            return resampleToInt16(audioBuffer.getChannelData(0), audioBuffer.sampleRate);
         } finally {
-            await ctx.close();
+            interimInFlightRef.current = false;
         }
-    }, [resampleToInt16]);
+    }, [ensureWhisperReady, resampleToInt16]);
 
-    const transcribeWithWhisper = useCallback(async (audioBlob: Blob) => {
-        const whisper = window.electronAPI?.voiceOverlay?.whisper;
-        if (!whisper) {
-            setError('Whisper transcription is not available');
-            setIsTranscribing(false);
-            return;
-        }
-
+    const transcribeWithWhisper = useCallback(async (audioData: number[]) => {
         setIsTranscribing(true);
         try {
-            const status = await whisper.getStatus();
-            if (!status.ready) {
-                const initResult = await whisper.initialize();
-                if (!initResult.success) {
-                    setError(`Failed to initialize transcription: ${initResult.error || 'Unknown error'}`);
-                    return;
-                }
-            }
+            const whisper = await ensureWhisperReady();
 
-            const audioData = await blobToInt16Array(audioBlob);
             if (audioData.length === 0) {
                 setError('No audio data recorded');
                 return;
             }
 
             const result = await whisper.transcribe(audioData);
+            if (cancelledRef.current) return; // Session was cancelled while transcribing
             if (result.success && result.text) {
                 setTranscript(result.text.trim());
                 setInterimTranscript("");
@@ -210,7 +281,7 @@ export const useLiveTranscription = () => {
         } finally {
             setIsTranscribing(false);
         }
-    }, [blobToInt16Array]);
+    }, [ensureWhisperReady]);
 
     // ── Start: Electron (Whisper) path ──
 
@@ -257,19 +328,24 @@ export const useLiveTranscription = () => {
     }, [startWaveformAnalysis, sendInterimTranscription]);
 
     const stopWhisperListening = useCallback(() => {
+        const pcmSnapshot = pcmBufferRef.current;
+        const finalAudioData = resampleToInt16(pcmSnapshot, sampleRateRef.current);
         const recorder = mediaRecorderRef.current;
         if (recorder && recorder.state !== 'inactive') {
-            recorder.onstop = () => {
-                const audioBlob = new Blob(audioChunksRef.current, { type: recorder.mimeType });
-                audioChunksRef.current = [];
-                mediaRecorderRef.current = null;
-                if (audioBlob.size > 0) transcribeWithWhisper(audioBlob);
-            };
+            recorder.onstop = () => {};
             recorder.stop();
+            mediaRecorderRef.current = null;
         } else {
             mediaRecorderRef.current = null;
         }
-    }, [transcribeWithWhisper]);
+        audioChunksRef.current = [];
+        stopAudioAnalysis();
+        if (finalAudioData.length > 0) {
+            void transcribeWithWhisper(finalAudioData);
+        } else {
+            setError('No audio data recorded');
+        }
+    }, [resampleToInt16, stopAudioAnalysis, transcribeWithWhisper]);
 
     // ── Start: Browser (Web Speech API) path ──
 
@@ -286,15 +362,15 @@ export const useLiveTranscription = () => {
         recognition.interimResults = true;
         recognition.lang = ''; // auto-detect
 
-        let finalText = '';
+        finalTextRef.current = '';
 
         recognition.onresult = (event: SpeechRecognitionEvent) => {
             let interim = '';
             for (let i = event.resultIndex; i < event.results.length; i++) {
                 const result = event.results[i];
                 if (result.isFinal) {
-                    finalText += result[0].transcript;
-                    setTranscript(finalText.trim());
+                    finalTextRef.current += result[0].transcript;
+                    setTranscript(finalTextRef.current.trim());
                     setInterimTranscript("");
                 } else {
                     interim += result[0].transcript;
@@ -332,25 +408,52 @@ export const useLiveTranscription = () => {
     // ── Public API ──
 
     const stopListening = useCallback(() => {
-        if (hasWhisper()) {
+        if (activeEngineRef.current === 'whisper') {
             stopWhisperListening();
-        } else {
+        } else if (activeEngineRef.current === 'browser') {
             stopBrowserListening();
+            stopAudioAnalysis();
         }
+        activeEngineRef.current = null;
         setIsListening(false);
-        stopAudioAnalysis();
     }, [stopAudioAnalysis, stopWhisperListening, stopBrowserListening]);
 
     const startListening = useCallback(async () => {
         setError(null);
         setTranscript("");
         setInterimTranscript("");
+        cancelledRef.current = false;
+        finalTextRef.current = '';
 
         try {
             if (hasWhisper()) {
-                await startWhisperListening();
+                console.log('[VoiceToText] Using Whisper engine');
+                try {
+                    await startWhisperListening();
+                    activeEngineRef.current = 'whisper';
+                    void tryPrepareWhisperForStart();
+                } catch (whisperErr: any) {
+                    // Mic hardware errors affect all engines — don't fallback, propagate
+                    if (whisperErr.name === 'NotFoundError' ||
+                        whisperErr.name === 'NotAllowedError' ||
+                        whisperErr.name === 'PermissionDeniedError') {
+                        throw whisperErr;
+                    }
+                    // Whisper-specific failure — fall back to Web Speech API
+                    console.warn('[VoiceToText] Whisper failed, falling back to Web Speech API:', whisperErr);
+                    setError(`Whisper unavailable: ${whisperErr?.message || 'Unknown error'}`);
+                    if (hasSpeechRecognition()) {
+                        await startBrowserListening();
+                        activeEngineRef.current = 'browser';
+                        setError(null);
+                    } else {
+                        throw whisperErr;
+                    }
+                }
             } else if (hasSpeechRecognition()) {
+                console.log('[VoiceToText] Using Web Speech API engine');
                 await startBrowserListening();
+                activeEngineRef.current = 'browser';
             } else {
                 setError('Speech recognition is not supported in this browser.');
                 return;
@@ -362,13 +465,14 @@ export const useLiveTranscription = () => {
             } else if (err.name === 'NotFoundError') {
                 setError('No microphone found. Please connect a microphone and try again.');
             } else {
-                console.warn('Error starting audio analysis:', err);
+                console.warn('[VoiceToText] Error starting audio analysis:', err);
                 setError(`Failed to access microphone: ${err.message || 'Unknown error'}`);
             }
+            activeEngineRef.current = null;
             setIsListening(false);
             stopAudioAnalysis();
         }
-    }, [startWhisperListening, startBrowserListening, stopAudioAnalysis]);
+    }, [tryPrepareWhisperForStart, startWhisperListening, startBrowserListening, stopAudioAnalysis]);
 
     // Cleanup on unmount
     useEffect(() => {
@@ -392,6 +496,8 @@ export const useLiveTranscription = () => {
     const clearTranscript = useCallback(() => {
         setTranscript("");
         setInterimTranscript("");
+        cancelledRef.current = true; // Prevent any in-flight Whisper transcription from writing back
+        finalTextRef.current = '';
     }, []);
 
     return {

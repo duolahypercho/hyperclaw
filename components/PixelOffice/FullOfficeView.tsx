@@ -1,469 +1,295 @@
 "use client";
 
-import React, { useState, useRef, useCallback, useMemo, useEffect } from "react";
-import { OfficeCanvas } from "./office/components/OfficeCanvas";
-import { ToolOverlay } from "./office/components/ToolOverlay";
-import { EditorToolbar } from "./office/editor/EditorToolbar";
-import { EditorState } from "./office/editor/editorState";
-import { EditTool } from "./office/types";
-import { isRotatable, LoadedAssetData, buildDynamicCatalog } from "./office/layout/furnitureCatalog";
-import { loadModernOfficeFurniture } from "./officeAssetLoader";
-import { PULSE_ANIMATION_DURATION_SEC } from "./constants";
-import { useEditorActions } from "./hooks/useEditorActions";
-import { useEditorKeyboard } from "./hooks/useEditorKeyboard";
-import { ZoomControls } from "./ZoomControls";
-import { PixelOfficeToolbar } from "./PixelOfficeToolbar";
+import React, { useState, useCallback, useEffect, useRef } from "react";
+import dynamic from "next/dynamic";
 import { AgentInfoPanel } from "./AgentInfoPanel";
-import { DebugView } from "./DebugView";
-import { useHyperclawOffice } from "./useHyperclawOffice";
-import { loadSoundPreference } from "./HyperclawSettingsModal";
-import { setSoundEnabled } from "./notificationSound";
-import { vscode } from "./vscodeApi";
-import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
-import { getOfficeState, DEFAULT_LAYOUT_STORAGE_KEY, pushLayoutToHistory, getLayoutHistory, HAS_USER_LAYOUT_KEY } from "./officeStateSingleton";
-import { deserializeLayout, createDefaultLayout, serializeLayout, migrateLayoutColors } from "./office/layout/layoutSerializer";
-import { getPresetById, LAYOUT_PRESETS } from "./layoutPresets";
+import { useClaw3DAgents } from "./claw3d/useClaw3DAgents";
+import type { AgentInfo } from "./claw3d/useClaw3DAgents";
+import { usePixelOffice } from "./provider/pixelOfficeProvider";
+import { useOpenClawContext } from "$/Providers/OpenClawProv";
 
-const actionBarBtnStyle: React.CSSProperties = {
-  padding: "4px 10px",
-  fontSize: "22px",
-  background: "var(--pixel-btn-bg)",
-  color: "var(--pixel-text-dim)",
-  border: "2px solid transparent",
-  borderRadius: 0,
-  cursor: "pointer",
-};
-
-const actionBarBtnDisabled: React.CSSProperties = {
-  ...actionBarBtnStyle,
-  opacity: "var(--pixel-btn-disabled-opacity)",
-  cursor: "default",
-};
-
-function EditActionBar({
-  editor,
-  editorState: es,
-  onSaveAsDefault,
-  onResetToDefault,
-  onRestorePrevious,
-}: {
-  editor: ReturnType<typeof useEditorActions>;
-  editorState: EditorState;
-  onSaveAsDefault?: () => void;
-  onResetToDefault?: () => void;
-  onRestorePrevious?: () => void;
-}) {
-  const [showResetConfirm, setShowResetConfirm] = useState(false);
-  const [showResetToDefaultConfirm, setShowResetToDefaultConfirm] = useState(false);
-  const undoDisabled = es.undoStack.length === 0;
-  const redoDisabled = es.redoStack.length === 0;
-
-  return (
-    <div
-      style={{
-        position: "absolute",
-        top: 8,
-        left: "50%",
-        transform: "translateX(-50%)",
-        zIndex: "var(--pixel-controls-z)",
-        display: "flex",
-        gap: 4,
-        alignItems: "center",
-        background: "var(--pixel-bg)",
-        border: "2px solid var(--pixel-border)",
-        borderRadius: 0,
-        padding: "4px 8px",
-        boxShadow: "var(--pixel-shadow)",
-      }}
-    >
-      <button
-        style={undoDisabled ? actionBarBtnDisabled : actionBarBtnStyle}
-        onClick={undoDisabled ? undefined : editor.handleUndo}
-        title="Undo (Ctrl+Z)"
-      >
-        Undo
-      </button>
-      <button
-        style={redoDisabled ? actionBarBtnDisabled : actionBarBtnStyle}
-        onClick={redoDisabled ? undefined : editor.handleRedo}
-        title="Redo (Ctrl+Y)"
-      >
-        Redo
-      </button>
-      <button style={actionBarBtnStyle} onClick={editor.handleSave} title="Save layout">
-        Save
-      </button>
-      {onSaveAsDefault && (
-        <button
-          style={actionBarBtnStyle}
-          onClick={onSaveAsDefault}
-          title="Save current layout as the default (used when no layout is saved)"
-        >
-          Save as default
-        </button>
-      )}
-      {!showResetConfirm ? (
-        <button
-          style={actionBarBtnStyle}
-          onClick={() => setShowResetConfirm(true)}
-          title="Reset to last saved layout"
-        >
-          Reset
-        </button>
-      ) : (
-        <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-          <span style={{ fontSize: "22px", color: "var(--pixel-reset-text)" }}>Reset?</span>
-          <button
-            style={{ ...actionBarBtnStyle, background: "var(--pixel-danger-bg)", color: "#fff" }}
-            onClick={() => {
-              setShowResetConfirm(false);
-              editor.handleReset();
-            }}
-          >
-            Yes
-          </button>
-          <button style={actionBarBtnStyle} onClick={() => setShowResetConfirm(false)}>
-            No
-          </button>
-        </div>
-      )}
-      {onRestorePrevious && (
-        <button
-          style={actionBarBtnStyle}
-          onClick={onRestorePrevious}
-          title="Restore the layout you had before the last change (preset/import)"
-        >
-          Restore previous
-        </button>
-      )}
-      {onResetToDefault && !showResetToDefaultConfirm && (
-        <button
-          style={actionBarBtnStyle}
-          onClick={() => setShowResetToDefaultConfirm(true)}
-          title="Load the default layout (replaces current)"
-        >
-          Reset to default
-        </button>
-      )}
-      {showResetToDefaultConfirm && onResetToDefault && (
-        <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-          <span style={{ fontSize: "22px", color: "var(--pixel-reset-text)" }}>Load default layout?</span>
-          <button
-            style={{ ...actionBarBtnStyle, background: "var(--pixel-danger-bg)", color: "#fff" }}
-            onClick={() => {
-              setShowResetToDefaultConfirm(false);
-              onResetToDefault();
-            }}
-          >
-            Yes
-          </button>
-          <button style={actionBarBtnStyle} onClick={() => setShowResetToDefaultConfirm(false)}>
-            No
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
+// Dynamic import to avoid SSR issues with Three.js
+const Claw3DOffice = dynamic(
+  () => import("./claw3d/Claw3DOffice"),
+  { ssr: false }
+);
 
 export interface FullOfficeViewProps {
   /** When true, hide toolbars/zoom/edit UI for embedding in dashboard widget. */
   embedMode?: boolean;
 }
 
+// --- localStorage-backed settings ---
+
+const LS_PREFIX = "hyperclaw-office-";
+
+function lsGet<T>(key: string, fallback: T): T {
+  if (typeof window === "undefined") return fallback;
+  try {
+    const raw = localStorage.getItem(LS_PREFIX + key);
+    return raw != null ? (JSON.parse(raw) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function lsSet(key: string, value: unknown) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(LS_PREFIX + key, JSON.stringify(value));
+  } catch { /* ignore quota errors */ }
+}
+
 export function FullOfficeView(props: FullOfficeViewProps = {}) {
   const { embedMode = false } = props;
-  const editorState = useMemo(() => new EditorState(), []);
-  const editor = useEditorActions(getOfficeState, editorState);
-
-  React.useEffect(() => {
-    setSoundEnabled(loadSoundPreference());
-  }, []);
-
-  const handleApplyLayout = useCallback((layout: import("./office/types").OfficeLayout) => {
-    const os = getOfficeState();
-    const current = os.getLayout();
-    if (current?.cols != null && current?.rows != null) {
-      pushLayoutToHistory(serializeLayout(current));
-    }
-    os.rebuildFromLayout(layout, undefined, true);
-    vscode.postMessage({ type: "saveLayout", layout });
-    bridgeInvoke("save-app-state", { entries: { [HAS_USER_LAYOUT_KEY]: "1" } }).catch(() => {});
-  }, []);
-
-  const handleSaveAsDefault = useCallback(() => {
-    const layout = getOfficeState().getLayout();
-    bridgeInvoke("save-app-state", {
-      entries: { [DEFAULT_LAYOUT_STORAGE_KEY]: JSON.stringify(layout) },
-    }).catch(() => {});
-  }, []);
-
-  const handleResetToDefault = useCallback(async () => {
-    try {
-      const res = (await bridgeInvoke("get-app-state", { keys: [DEFAULT_LAYOUT_STORAGE_KEY] })) as {
-        success?: boolean; data?: Record<string, string>;
-      };
-      const raw = res?.data?.[DEFAULT_LAYOUT_STORAGE_KEY];
-      if (raw) {
-        const layout = deserializeLayout(raw);
-        if (layout) { handleApplyLayout(layout); return; }
-      }
-    } catch {}
-    const layout = getPresetById("default") || createDefaultLayout();
-    if (layout) handleApplyLayout(layout);
-  }, [handleApplyLayout]);
-
-  const handleRestorePrevious = useCallback(async () => {
-    const history = await getLayoutHistory();
-    const raw = history[0];
-    const layout = raw ? deserializeLayout(raw) : null;
-    if (layout) handleApplyLayout(layout);
-    else if (typeof window !== "undefined") window.alert("No previous layout to restore.");
-  }, [handleApplyLayout]);
-
-  const isEditDirty = useCallback(
-    () => editor.isEditMode && editor.isDirty,
-    [editor.isEditMode, editor.isDirty]
-  );
-
+  const monitorViewEnabled = false;
   const {
-    agents,
-    selectedAgent: _selectedAgent,
-    agentTools,
-    agentStatuses,
-    subagentTools,
-    subagentCharacters,
-    layoutReady,
-    loadedAssets,
-    getAgentByCharacterId,
-  } = useHyperclawOffice(getOfficeState, editor.setLastSavedLayout);
+    officeAgents,
+    officeName,
+    getAgentInfo,
+    deskHoldByAgentId,
+    monitorByAgentId,
+    runCountByAgentId,
+    lastSeenByAgentId,
+  } = useClaw3DAgents();
+  const { refresh } = usePixelOffice();
+  const openClaw = useOpenClawContext();
 
-  const [selectedAgentId, setSelectedAgentId] = useState<number | null>(null);
-  const [isDebugMode, setIsDebugMode] = useState(false);
-  const [modernOfficeAssets, setModernOfficeAssets] = useState<LoadedAssetData | undefined>();
-  const [showTemplatePicker, setShowTemplatePicker] = useState(false);
-  const handleToggleDebugMode = useCallback(() => setIsDebugMode((prev) => !prev), []);
-  const handleSelectAgent = useCallback((id: number) => setSelectedAgentId(id), []);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [editorTickForKeyboard, setEditorTickForKeyboard] = useState(0);
+  // --- Agent interaction state ---
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [monitorAgentId, setMonitorAgentId] = useState<string | null>(null);
 
-  useEffect(() => {
-    getOfficeState().selectedAgentId = selectedAgentId;
-    getOfficeState().cameraFollowId = selectedAgentId;
-  }, [selectedAgentId]);
-
-  useEffect(() => {
-    if (!layoutReady) return;
-    bridgeInvoke("get-app-state", { keys: [HAS_USER_LAYOUT_KEY] })
-      .then((res: any) => {
-        if (!res?.data?.[HAS_USER_LAYOUT_KEY]) {
-          setShowTemplatePicker(true);
-        }
-      })
-      .catch(() => {});
-  }, [layoutReady]);
-
-  // Load modern office furniture sprites and build dynamic catalog so layout furniture (e.g. modern_office_*) resolves.
-  // The engine applies the initial layout before assets load, so getCatalogEntry() skips those items. Once the catalog
-  // is built, we rebuild the layout so layoutToFurnitureInstances runs again and furniture appears.
-  useEffect(() => {
-    const loadAssets = async () => {
-      try {
-        const assets = await loadModernOfficeFurniture('/pixel-office');
-        setModernOfficeAssets(assets);
-        if (buildDynamicCatalog(assets)) {
-          const os = getOfficeState();
-          const layout = os.getLayout();
-          if (layout?.furniture?.length) {
-            os.rebuildFurnitureOnly(layout);
-          }
-        }
-      } catch (err) {
-        console.error('[FullOfficeView] Failed to load modern office furniture:', err);
-      }
-    };
-    loadAssets();
+  // --- Office title (persisted) ---
+  const [officeTitle, setOfficeTitle] = useState(() =>
+    lsGet("officeTitle", "")
+  );
+  const officeTitleLoaded = useRef(false);
+  useEffect(() => { officeTitleLoaded.current = true; }, []);
+  const effectiveTitle = officeTitle || officeName || "Hyperclaw HQ";
+  const handleOfficeTitleChange = useCallback((title: string) => {
+    setOfficeTitle(title);
+    lsSet("officeTitle", title);
   }, []);
 
-  useEditorKeyboard(
-    editor.isEditMode,
-    editorState,
-    editor.handleDeleteSelected,
-    editor.handleRotateSelected,
-    editor.handleToggleState,
-    editor.handleUndo,
-    editor.handleRedo,
-    useCallback(() => setEditorTickForKeyboard((n) => n + 1), []),
-    editor.handleToggleEditMode
+  // --- Voice replies settings (persisted) ---
+  const [voiceRepliesEnabled, setVoiceRepliesEnabled] = useState(() =>
+    lsGet("voiceRepliesEnabled", false)
+  );
+  const [voiceRepliesVoiceId, setVoiceRepliesVoiceId] = useState<string | null>(() =>
+    lsGet("voiceRepliesVoiceId", null)
+  );
+  const [voiceRepliesSpeed, setVoiceRepliesSpeed] = useState(() =>
+    lsGet("voiceRepliesSpeed", 1)
+  );
+  const handleVoiceRepliesToggle = useCallback((enabled: boolean) => {
+    setVoiceRepliesEnabled(enabled);
+    lsSet("voiceRepliesEnabled", enabled);
+  }, []);
+  const handleVoiceRepliesVoiceChange = useCallback((voiceId: string | null) => {
+    setVoiceRepliesVoiceId(voiceId);
+    lsSet("voiceRepliesVoiceId", voiceId);
+  }, []);
+  const handleVoiceRepliesSpeedChange = useCallback((speed: number) => {
+    setVoiceRepliesSpeed(speed);
+    lsSet("voiceRepliesSpeed", speed);
+  }, []);
+  const handleVoiceRepliesPreview = useCallback((_voiceId: string | null, _voiceName: string) => {
+    // Voice preview — could trigger TTS sample playback in future
+  }, []);
+
+  // --- Remote office settings (persisted) ---
+  const [remoteOfficeEnabled, setRemoteOfficeEnabled] = useState(() =>
+    lsGet("remoteOfficeEnabled", false)
+  );
+  const [remoteOfficeSourceKind, setRemoteOfficeSourceKind] = useState<"presence_endpoint" | "openclaw_gateway">(() =>
+    lsGet("remoteOfficeSourceKind", "presence_endpoint")
+  );
+  const [remoteOfficeLabel, setRemoteOfficeLabel] = useState(() =>
+    lsGet("remoteOfficeLabel", "Remote Office")
+  );
+  const [remoteOfficePresenceUrl, setRemoteOfficePresenceUrl] = useState(() =>
+    lsGet("remoteOfficePresenceUrl", "")
+  );
+  const [remoteOfficeGatewayUrl, setRemoteOfficeGatewayUrl] = useState(() =>
+    lsGet("remoteOfficeGatewayUrl", "")
+  );
+  const [remoteOfficeToken, setRemoteOfficeToken] = useState(() =>
+    lsGet("remoteOfficeToken", "")
   );
 
-  const handleCloseAgent = useCallback((_id: number) => {
-    setSelectedAgentId(null);
-    getOfficeState().selectedAgentId = null;
-    getOfficeState().cameraFollowId = null;
+  const handleRemoteOfficeEnabledChange = useCallback((enabled: boolean) => {
+    setRemoteOfficeEnabled(enabled);
+    lsSet("remoteOfficeEnabled", enabled);
   }, []);
-  const handleClick = useCallback((agentId: number | null) => {
+  const handleRemoteOfficeSourceKindChange = useCallback((kind: "presence_endpoint" | "openclaw_gateway") => {
+    setRemoteOfficeSourceKind(kind);
+    lsSet("remoteOfficeSourceKind", kind);
+  }, []);
+  const handleRemoteOfficeLabelChange = useCallback((label: string) => {
+    setRemoteOfficeLabel(label);
+    lsSet("remoteOfficeLabel", label);
+  }, []);
+  const handleRemoteOfficePresenceUrlChange = useCallback((url: string) => {
+    setRemoteOfficePresenceUrl(url);
+    lsSet("remoteOfficePresenceUrl", url);
+  }, []);
+  const handleRemoteOfficeGatewayUrlChange = useCallback((url: string) => {
+    setRemoteOfficeGatewayUrl(url);
+    lsSet("remoteOfficeGatewayUrl", url);
+  }, []);
+  const handleRemoteOfficeTokenChange = useCallback((token: string) => {
+    setRemoteOfficeToken(token);
+    lsSet("remoteOfficeToken", token);
+  }, []);
+
+  const remoteOfficeStatusText = remoteOfficeEnabled
+    ? `Remote office: ${remoteOfficeLabel}`
+    : "Remote office disabled.";
+
+  // --- Desk assignments (persisted) ---
+  const [deskAssignments, setDeskAssignments] = useState<Record<string, string>>(() =>
+    lsGet("deskAssignments", {})
+  );
+  const handleDeskAssignmentChange = useCallback((deskUid: string, agentId: string | null) => {
+    setDeskAssignments((prev) => {
+      const next = { ...prev };
+      if (agentId) {
+        next[deskUid] = agentId;
+      } else {
+        delete next[deskUid];
+      }
+      lsSet("deskAssignments", next);
+      return next;
+    });
+  }, []);
+  const handleDeskAssignmentsReset = useCallback((deskUids: string[]) => {
+    setDeskAssignments((prev) => {
+      const next = { ...prev };
+      for (const uid of deskUids) delete next[uid];
+      lsSet("deskAssignments", next);
+      return next;
+    });
+  }, []);
+
+  // --- Gateway status ---
+  const gatewayStatus = openClaw.gatewayHealthy === true
+    ? "connected"
+    : openClaw.gatewayHealthy === false
+      ? "error"
+      : "disconnected";
+
+  // --- Callbacks ---
+  const handleAgentClick = useCallback((agentId: string) => {
     setSelectedAgentId(agentId);
   }, []);
 
-  const selectedAgentInfo = selectedAgentId != null ? getAgentByCharacterId(selectedAgentId) : null;
-
-  const agentNames = useMemo(() => {
-    const m: Record<number, string> = {};
-    agents.forEach((charId) => {
-      const info = getAgentByCharacterId(charId);
-      m[charId] = info?.name ?? info?.id ?? String(charId);
-    });
-    subagentCharacters.forEach((s) => {
-      m[s.id] = s.label;
-    });
-    return m;
-  }, [agents, subagentCharacters, getAgentByCharacterId]);
-
   const handleCloseAgentInfo = useCallback(() => {
     setSelectedAgentId(null);
-    getOfficeState().selectedAgentId = null;
-    getOfficeState().cameraFollowId = null;
   }, []);
 
-  const officeState = getOfficeState();
-  void editorTickForKeyboard;
+  const handleMonitorSelect = useCallback((agentId: string | null) => {
+    setMonitorAgentId(agentId);
+  }, []);
 
-  const showRotateHint =
-    editor.isEditMode &&
-    (() => {
-      if (editorState.selectedFurnitureUid) {
-        const item = officeState
-          .getLayout()
-          .furniture.find((f) => f.uid === editorState.selectedFurnitureUid);
-        if (item && isRotatable(item.type)) return true;
-      }
-      if (
-        editorState.activeTool === EditTool.FURNITURE_PLACE &&
-        isRotatable(editorState.selectedFurnitureType)
-      ) {
-        return true;
-      }
-      return false;
-    })();
+  const handleAgentEdit = useCallback((agentId: string) => {
+    setSelectedAgentId(agentId);
+  }, []);
 
-  if (!layoutReady) {
-    return (
-      <div
-        style={{
-          width: "100%",
-          height: "100%",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          color: "#fff",
-        }}
-      >
-        Loading office…
-      </div>
-    );
-  }
+  const handleAgentDelete = useCallback((_agentId: string) => {
+    // Agent deletion — would need bridge endpoint (delete-agent)
+    // For now, just refresh the list
+    refresh();
+  }, [refresh]);
+
+  const handleAddAgent = useCallback(() => {
+    // Agent addition — would need bridge endpoint (add-agent)
+    // For now, just refresh the list
+    refresh();
+  }, [refresh]);
+
+  const handlePhoneCallComplete = useCallback((_agentId: string) => {
+    // Phone call completed — agent returns to desk
+  }, []);
+
+  const handleTextMessageComplete = useCallback((_agentId: string) => {
+    // Text message completed — agent returns to desk
+  }, []);
+
+  const handleGithubReviewDismiss = useCallback(() => {
+    // Github review dismissed
+  }, []);
+
+  const handleQaLabDismiss = useCallback(() => {
+    // QA lab dismissed
+  }, []);
+
+  const selectedAgentInfo: AgentInfo | null = selectedAgentId
+    ? getAgentInfo(selectedAgentId)
+    : null;
 
   return (
     <div
-      ref={containerRef}
       className="pixel-office-root"
       style={{ width: "100%", height: "100%", position: "relative", overflow: "hidden" }}
     >
-      {showTemplatePicker && (
-        <div
-          style={{
-            position: "absolute",
-            inset: 0,
-            zIndex: 100,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            background: "rgba(0,0,0,0.7)",
-          }}
-          onClick={(e) => e.target === e.currentTarget && setShowTemplatePicker(false)}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              background: "var(--pixel-bg)",
-              border: "2px solid var(--pixel-border)",
-              borderRadius: 0,
-              padding: "24px",
-              minWidth: 280,
-              boxShadow: "var(--pixel-shadow)",
-            }}
-          >
-            <h2 style={{ fontSize: "24px", color: "var(--pixel-text)", margin: "0 0 16px", textAlign: "center" }}>
-              Choose a template
-            </h2>
-            <p style={{ fontSize: "18px", color: "var(--pixel-text-dim)", margin: "0 0 20px", textAlign: "center" }}>
-              Start from a template. Your layout auto-saves as you edit.
-            </p>
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {LAYOUT_PRESETS.map((p) => (
-                <button
-                  key={p.id}
-                  type="button"
-                  style={{
-                    padding: "12px 16px",
-                    fontSize: "20px",
-                    background: "var(--pixel-btn-bg)",
-                    color: "var(--pixel-text)",
-                    border: "2px solid var(--pixel-border)",
-                    borderRadius: 0,
-                    cursor: "pointer",
-                    textAlign: "left",
-                  }}
-                  onClick={() => {
-                    handleApplyLayout(p.layout);
-                    setShowTemplatePicker(false);
-                  }}
-                >
-                  {p.name}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      <style>{`
-        @keyframes pixel-agents-pulse {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0.3; }
-        }
-        .pixel-agents-pulse { animation: pixel-agents-pulse ${PULSE_ANIMATION_DURATION_SEC}s ease-in-out infinite; }
-      `}</style>
-
-      <OfficeCanvas
-        officeState={officeState}
-        onClick={handleClick}
-        isEditMode={editor.isEditMode}
-        editorState={editorState}
-        onEditorTileAction={editor.handleEditorTileAction}
-        onEditorEraseAction={editor.handleEditorEraseAction}
-        onEditorSelectionChange={editor.handleEditorSelectionChange}
-        onDeleteSelected={editor.handleDeleteSelected}
-        onRotateSelected={editor.handleRotateSelected}
-        onDragMove={editor.handleDragMove}
-        editorTick={editor.editorTick}
-        zoom={editor.zoom}
-        onZoomChange={editor.handleZoomChange}
-        panRef={editor.panRef}
-        onSaveAgentSeats={(seats) => {
-          vscode.postMessage({ type: "saveAgentSeats", seats });
-          if (typeof window !== "undefined" && (window as unknown as { electronAPI?: { hyperClawBridge?: { invoke?: unknown } } }).electronAPI?.hyperClawBridge?.invoke) {
-            bridgeInvoke("write-office-seats", { officeSeats: seats }).catch(() => {});
-          }
-        }}
+      <Claw3DOffice
+        agents={officeAgents}
+        readOnly={embedMode}
+        // Office title
+        officeTitle={effectiveTitle}
+        officeTitleLoaded={officeTitleLoaded.current}
+        onOfficeTitleChange={handleOfficeTitleChange}
+        // Agent interaction callbacks
+        onAgentChatSelect={handleAgentClick}
+        onAgentEdit={!embedMode ? handleAgentEdit : undefined}
+        onAgentDelete={!embedMode ? handleAgentDelete : undefined}
+        onAddAgent={!embedMode ? handleAddAgent : undefined}
+        // Desk hold: working agents stay at their desks
+        deskHoldByAgentId={deskHoldByAgentId}
+        // Desk assignments
+        deskAssignmentByDeskUid={deskAssignments}
+        onDeskAssignmentChange={handleDeskAssignmentChange}
+        onDeskAssignmentsReset={handleDeskAssignmentsReset}
+        // Monitor: desk screen immersive view
+        monitorAgentId={monitorViewEnabled ? monitorAgentId : null}
+        monitorByAgentId={monitorByAgentId}
+        onMonitorSelect={monitorViewEnabled ? handleMonitorSelect : undefined}
+        // Agent analytics
+        runCountByAgentId={runCountByAgentId}
+        lastSeenByAgentId={lastSeenByAgentId}
+        // Gateway status
+        gatewayStatus={gatewayStatus}
+        // Voice replies settings
+        voiceRepliesEnabled={voiceRepliesEnabled}
+        voiceRepliesVoiceId={voiceRepliesVoiceId}
+        voiceRepliesSpeed={voiceRepliesSpeed}
+        voiceRepliesLoaded={true}
+        onVoiceRepliesToggle={handleVoiceRepliesToggle}
+        onVoiceRepliesVoiceChange={handleVoiceRepliesVoiceChange}
+        onVoiceRepliesSpeedChange={handleVoiceRepliesSpeedChange}
+        onVoiceRepliesPreview={handleVoiceRepliesPreview}
+        // Remote office settings
+        remoteOfficeEnabled={remoteOfficeEnabled}
+        remoteOfficeSourceKind={remoteOfficeSourceKind}
+        remoteOfficeLabel={remoteOfficeLabel}
+        remoteOfficePresenceUrl={remoteOfficePresenceUrl}
+        remoteOfficeGatewayUrl={remoteOfficeGatewayUrl}
+        remoteOfficeStatusText={remoteOfficeStatusText}
+        remoteOfficeTokenConfigured={remoteOfficeToken.length > 0}
+        onRemoteOfficeEnabledChange={handleRemoteOfficeEnabledChange}
+        onRemoteOfficeSourceKindChange={handleRemoteOfficeSourceKindChange}
+        onRemoteOfficeLabelChange={handleRemoteOfficeLabelChange}
+        onRemoteOfficePresenceUrlChange={handleRemoteOfficePresenceUrlChange}
+        onRemoteOfficeGatewayUrlChange={handleRemoteOfficeGatewayUrlChange}
+        onRemoteOfficeTokenChange={handleRemoteOfficeTokenChange}
+        // Interaction completion callbacks
+        onPhoneCallComplete={handlePhoneCallComplete}
+        onTextMessageComplete={handleTextMessageComplete}
+        onGithubReviewDismiss={handleGithubReviewDismiss}
+        onQaLabDismiss={handleQaLabDismiss}
       />
 
-      {!embedMode && (
-        <ZoomControls zoom={editor.zoom} onZoomChange={editor.handleZoomChange} />
-      )}
-
-      {selectedAgentId != null && (
+      {selectedAgentId != null && selectedAgentInfo && (
         <AgentInfoPanel
           key={selectedAgentId}
           agent={selectedAgentInfo}
@@ -471,6 +297,7 @@ export function FullOfficeView(props: FullOfficeViewProps = {}) {
         />
       )}
 
+      {/* Vignette overlay */}
       <div
         style={{
           position: "absolute",
@@ -480,108 +307,6 @@ export function FullOfficeView(props: FullOfficeViewProps = {}) {
           zIndex: 40,
         }}
       />
-
-      {!embedMode && (
-        <PixelOfficeToolbar
-          isEditMode={editor.isEditMode}
-          onToggleEditMode={editor.handleToggleEditMode}
-          isDebugMode={isDebugMode}
-          onToggleDebugMode={handleToggleDebugMode}
-          getLayout={() => getOfficeState().getLayout()}
-          onApplyLayout={handleApplyLayout}
-          confirmBeforeReplaceLayout={() =>
-            window.confirm(
-              "Replace your current layout? You can restore it anytime with \"Restore previous\" in the editor toolbar or in Settings."
-            )
-          }
-          onRestorePrevious={handleRestorePrevious}
-          agentCount={agents.length}
-        />
-      )}
-
-      {!embedMode && editor.isEditMode && editor.isDirty && (
-        <EditActionBar
-          editor={editor}
-          editorState={editorState}
-          onSaveAsDefault={handleSaveAsDefault}
-          onResetToDefault={handleResetToDefault}
-          onRestorePrevious={handleRestorePrevious}
-        />
-      )}
-
-      {!embedMode && showRotateHint && (
-        <div
-          style={{
-            position: "absolute",
-            top: 8,
-            left: "50%",
-            transform: editor.isDirty ? "translateX(calc(-50% + 100px))" : "translateX(-50%)",
-            zIndex: 49,
-            background: "var(--pixel-hint-bg)",
-            color: "#fff",
-            fontSize: "20px",
-            padding: "3px 8px",
-            borderRadius: 0,
-            border: "2px solid var(--pixel-accent)",
-            boxShadow: "var(--pixel-shadow)",
-            pointerEvents: "none",
-            whiteSpace: "nowrap",
-          }}
-        >
-          Press <b>R</b> to rotate
-        </div>
-      )}
-
-      {!embedMode && editor.isEditMode &&
-        (() => {
-          const selUid = editorState.selectedFurnitureUid;
-          const selColor = selUid
-            ? officeState.getLayout().furniture.find((f) => f.uid === selUid)?.color ?? null
-            : null;
-          return (
-            <EditorToolbar
-              activeTool={editorState.activeTool}
-              selectedTileType={editorState.selectedTileType}
-              selectedFurnitureType={editorState.selectedFurnitureType}
-              selectedFurnitureUid={selUid}
-              selectedFurnitureColor={selColor}
-              floorColor={editorState.floorColor}
-              wallColor={editorState.wallColor}
-              onToolChange={editor.handleToolChange}
-              onTileTypeChange={editor.handleTileTypeChange}
-              onFloorColorChange={editor.handleFloorColorChange}
-              onWallColorChange={editor.handleWallColorChange}
-              onSelectedFurnitureColorChange={editor.handleSelectedFurnitureColorChange}
-              onFurnitureTypeChange={editor.handleFurnitureTypeChange}
-              showRotateButton={showRotateHint}
-              onRotateSelected={editor.handleRotateSelected}
-              loadedAssets={modernOfficeAssets}
-            />
-          );
-        })()}
-
-      <ToolOverlay
-        officeState={officeState}
-        agents={agents}
-        agentTools={agentTools}
-        subagentCharacters={subagentCharacters}
-        agentNames={agentNames}
-        containerRef={containerRef}
-        zoom={editor.zoom}
-        panRef={editor.panRef}
-        onCloseAgent={handleCloseAgent}
-      />
-
-      {!embedMode && isDebugMode && (
-        <DebugView
-          agents={agents}
-          selectedAgent={selectedAgentId}
-          agentTools={agentTools}
-          agentStatuses={agentStatuses}
-          subagentTools={subagentTools}
-          onSelectAgent={handleSelectAgent}
-        />
-      )}
     </div>
   );
 }

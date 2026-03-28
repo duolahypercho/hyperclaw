@@ -12,6 +12,7 @@ import {
   Lock,
   Plus,
   MessageCircle,
+  Megaphone,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -40,6 +41,7 @@ interface DashboardHeaderProps {
   isEditMode: boolean;
   onToggleEditMode: () => void;
   onAddChatWidget?: () => void;
+  onAddAnnounceWidget?: () => void;
 }
 
 export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
@@ -50,6 +52,7 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
   isEditMode,
   onToggleEditMode,
   onAddChatWidget,
+  onAddAnnounceWidget,
 }) => {
   const [open, setOpen] = useState(false);
 
@@ -81,6 +84,15 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
             {/* Customize Settings or Cancel Button */}
             {isEditMode && (
               <>
+                <Button
+                  variant="outline"
+                  className="gap-2 text-xs h-fit"
+                  onClick={onResetLayout}
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  <span className="font-medium">Reset</span>
+                </Button>
+
                 <Dialog open={open} onOpenChange={setOpen}>
                   <DialogTrigger asChild>
                     <Button variant="outline" className="gap-2 text-xs h-fit">
@@ -212,6 +224,33 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
                           >
                             <Plus className="w-4 h-4" />
                             Add New Chat Widget
+                          </Button>
+                        </div>
+
+                        <Separator />
+
+                        <div className="flex items-center gap-2">
+                          <Megaphone className="w-4 h-4 text-primary" />
+                          <Label className="text-base font-semibold">
+                            Add Announce Channel
+                          </Label>
+                        </div>
+
+                        <div className="space-y-3">
+                          <p className="text-xs text-muted-foreground">
+                            Add an announce channel to monitor cron job results. Each channel tracks its own set of cron jobs with persistent history.
+                          </p>
+
+                          <Button
+                            variant="outline"
+                            onClick={() => {
+                              onAddAnnounceWidget?.();
+                              setOpen(false);
+                            }}
+                            className="w-full justify-start gap-2"
+                          >
+                            <Plus className="w-4 h-4" />
+                            Add New Announce Channel
                           </Button>
                         </div>
                       </div>

@@ -32,7 +32,7 @@ const DEFAULT_AGENTS = [{ id: "main", name: "main", status: "active" }];
 // Mini pill stays transparent glass. Expanded panels use the real theme.
 const GLASS_MINI = "border border-solid border-white/[0.10] bg-black/[0.35] shadow-[0_4px_16px_rgba(0,0,0,0.2)] transition-all duration-200";
 // Expanded: solid theme background with shadow
-const PANEL_BASE = "border border-border bg-card text-card-foreground shadow-xl transition-all duration-200";
+const PANEL_BASE = "border border-primary/20 bg-card text-card-foreground shadow-xl transition-all duration-200";
 
 // Quick action chip heuristics
 function generateChips(lastContent: string): Array<{ label: string; text: string }> {
@@ -187,15 +187,14 @@ export default function VoiceOverlayPage() {
   const [overlayState, setOverlayState] = useState<OverlayState>("mini");
   const [mode, setMode] = useState<OverlayMode>("dictation");
   const [isPushToTalk, setIsPushToTalk] = useState(false);
+  const [isToggleMode, setIsToggleMode] = useState(false);
   const [showInserted, setShowInserted] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
-  const [activeNotification, setActiveNotification] = useState<NotificationPayload | null>(null);
   const notificationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { agents: rawAgents, models: rawModels } = useOpenClawContext();
   const contextAgents = rawAgents.length > 0 ? rawAgents : DEFAULT_AGENTS;
-  const contextModels = rawModels;
 
   const [selectedAgent, setSelectedAgent] = useState(() => {
     try { return localStorage.getItem(LS_AGENT) || "main"; } catch { return "main"; }
@@ -279,6 +278,10 @@ export default function VoiceOverlayPage() {
   const [typedText, setTypedText] = useState("");
   const [attachments, setAttachments] = useState<File[]>([]);
   const [screenshotDataUrl, setScreenshotDataUrl] = useState<string | null>(null);
+  const [pendingAutoInsert, setPendingAutoInsert] = useState(false);
+  const pushToTalkStartRef = useRef<Promise<void> | null>(null);
+  const pushToTalkStopPendingRef = useRef(false);
+  const modeRef = useRef<OverlayMode>("dictation");
   const inputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -287,6 +290,10 @@ export default function VoiceOverlayPage() {
     error: transcriptionError, audioData,
     startListening, stopListening, clearTranscript,
   } = useLiveTranscription();
+
+  useEffect(() => {
+    modeRef.current = mode;
+  }, [mode]);
 
   // ─── Gateway Chat (direct connection, no IPC relay) ─────────────────
   const [chatSessionKey, setChatSessionKey] = useState(`agent:${selectedAgent}:main`);
@@ -307,7 +314,11 @@ export default function VoiceOverlayPage() {
     loadChatHistory,
     clearChat,
     setSessionKey: setGatewaySessionKey,
-  } = useGatewayChat({ sessionKey: chatSessionKey, autoConnect: true });
+  } = useGatewayChat({ sessionKey: chatSessionKey, autoConnect: mode === "agent-chat" });
+
+  useEffect(() => {
+    window.electronAPI?.voiceOverlay?.setRecordingState?.(isListening);
+  }, [isListening]);
 
   // Load history when overlay expands in chat mode (skip for fresh sessions that have no history)
   const prevOverlayStateRef = useRef(overlayState);
@@ -351,7 +362,6 @@ export default function VoiceOverlayPage() {
       // Only show notifications when overlay is in mini state
       if (overlayState !== "mini") return;
 
-      setActiveNotification(payload);
       setOverlayState("notification");
       window.electronAPI?.voiceOverlay?.expand?.();
 
@@ -363,7 +373,6 @@ export default function VoiceOverlayPage() {
       // Auto-minimize after 8 seconds
       if (notificationTimerRef.current) clearTimeout(notificationTimerRef.current);
       notificationTimerRef.current = setTimeout(() => {
-        setActiveNotification(null);
         setOverlayState("mini");
         window.electronAPI?.voiceOverlay?.minimize?.();
         notificationTimerRef.current = null;
@@ -424,7 +433,6 @@ export default function VoiceOverlayPage() {
 
   const isMini = overlayState === "mini";
   const isHidden = overlayState === "hidden";
-  const isNotification = overlayState === "notification";
   const displayText = isListening ? (interimTranscript || "") : transcript;
   const isChat = mode === "agent-chat";
 
@@ -468,8 +476,7 @@ export default function VoiceOverlayPage() {
   const hideOverlayPill = useCallback(() => { setOverlayState("hidden"); }, []);
 
   const minimizeOverlayFn = useCallback(() => {
-    setOverlayState("mini"); setShowInserted(false); setTypedText(""); setAttachments([]); clearTranscript();
-    setActiveNotification(null);
+    setOverlayState("mini"); setShowInserted(false); setTypedText(""); setAttachments([]); setPendingAutoInsert(false); clearTranscript();
     if (notificationTimerRef.current) { clearTimeout(notificationTimerRef.current); notificationTimerRef.current = null; }
     tts.cancel();
     window.electronAPI?.voiceOverlay?.minimize?.();
@@ -531,37 +538,94 @@ export default function VoiceOverlayPage() {
   }, [isChat, typedText, transcript, clearTranscript, gatewaySendMessage]);
 
   const insertText = useCallback(() => {
-    const text = transcript.trim(); if (!text) return;
-    window.electronAPI?.voiceOverlay?.insertText?.(text);
-    setShowInserted(true);
-    setTimeout(() => { setShowInserted(false); minimizeOverlayFn(); }, 800);
+    const text = transcript.trim(); if (!text) { console.log("[VoiceOverlay] insertText: no text"); return; }
+    console.log("[VoiceOverlay] insertText: inserting", text.length, "chars");
+    setPendingAutoInsert(false);
+    // Immediately minimize and insert — no intermediate transcript display
+    minimizeOverlayFn();
+    window.electronAPI?.voiceOverlay?.insertText?.(text).then((r: any) => {
+      console.log("[VoiceOverlay] insertText IPC result:", r);
+    }).catch((e: any) => {
+      console.warn("[VoiceOverlay] insertText IPC error:", e);
+    });
   }, [transcript, minimizeOverlayFn]);
-
-  const handleAttachClick = useCallback(() => fileInputRef.current?.click(), []);
-  const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files?.length) setAttachments(prev => [...prev, ...Array.from(e.target.files!)]);
-    if (fileInputRef.current) fileInputRef.current.value = "";
-  }, []);
-  const removeAttachment = useCallback((i: number) => setAttachments(prev => prev.filter((_, idx) => idx !== i)), []);
 
   // ─── Push-to-Talk ───────────────────────────────────────────────────
   useEffect(() => {
     const api = window.electronAPI?.voiceOverlay;
     if (!api?.onPushToTalk) return;
-    api.onPushToTalk((action, pttMode) => {
-      if (action === "start") { setOverlayState("expanded"); setMode(pttMode || "dictation"); setIsPushToTalk(true); clearTranscript(); startListening(); }
-      else { setIsPushToTalk(false); stopListening(); }
+    api.onPushToTalk((action: string, pttMode: string, isToggle?: boolean) => {
+      const resolvedMode = (pttMode || modeRef.current) as OverlayMode;
+      if (isToggle) setIsToggleMode(true);
+      if (action === "start") {
+        if (pushToTalkStartRef.current) return;
+        pushToTalkStopPendingRef.current = false;
+        setPendingAutoInsert(false);
+        setOverlayState("expanded");
+        setMode(resolvedMode);
+        setIsPushToTalk(true);
+        clearTranscript();
+        window.electronAPI?.voiceOverlay?.liveTypeReset?.();
+        pushToTalkStartRef.current = (async () => {
+          try {
+            await startListening();
+          } finally {
+            pushToTalkStartRef.current = null;
+            if (pushToTalkStopPendingRef.current) {
+              pushToTalkStopPendingRef.current = false;
+              setPendingAutoInsert(resolvedMode === "dictation");
+              setIsPushToTalk(false);
+              stopListening();
+            }
+          }
+        })();
+      } else {
+        if (pushToTalkStartRef.current && !isListening) {
+          pushToTalkStopPendingRef.current = true;
+          return;
+        }
+        pushToTalkStopPendingRef.current = false;
+        setPendingAutoInsert(resolvedMode === "dictation");
+        setIsPushToTalk(false);
+        stopListening();
+      }
     });
     return () => { api.removePushToTalkListener?.(); };
-  }, [startListening, stopListening, clearTranscript]);
+  }, [startListening, stopListening, clearTranscript, isListening]);
 
-  const prevPTT = useRef(false);
+  // Live-type: stream interim transcript directly into focused app while recording
+  const lastLiveTextRef = useRef("");
   useEffect(() => {
-    if (prevPTT.current && !isPushToTalk && !isListening && transcript.trim() && mode === "dictation") {
-      const t = setTimeout(insertText, 200); return () => clearTimeout(t);
+    if (!isPushToTalk || mode !== "dictation") return;
+    const api = window.electronAPI?.voiceOverlay;
+    if (!api?.liveType) return;
+
+    const currentText = (interimTranscript || transcript || "").trim();
+    if (currentText === lastLiveTextRef.current) return;
+    lastLiveTextRef.current = currentText;
+
+    if (currentText) {
+      api.liveType(currentText, false);
     }
-    prevPTT.current = isPushToTalk;
-  }, [isPushToTalk, isListening, transcript, insertText, mode]);
+  }, [isPushToTalk, mode, transcript, interimTranscript]);
+
+  // Final insert: when transcription finishes, send final text and minimize
+  useEffect(() => {
+    if (pendingAutoInsert && !isPushToTalk && !isListening && !isTranscribing && transcript.trim() && mode === "dictation") {
+      setPendingAutoInsert(false);
+      const api = window.electronAPI?.voiceOverlay;
+      if (api?.liveType) {
+        api.liveType(transcript.trim(), true);
+      }
+      lastLiveTextRef.current = "";
+      minimizeOverlayFn();
+    }
+    if (pendingAutoInsert && !isPushToTalk && !isListening && !isTranscribing && transcriptionError) {
+      setPendingAutoInsert(false);
+      lastLiveTextRef.current = "";
+      setTimeout(() => minimizeOverlayFn(), 1500);
+    }
+  }, [pendingAutoInsert, isPushToTalk, isListening, isTranscribing, transcript, transcriptionError, mode, minimizeOverlayFn]);
 
   // ─── Quick Chat (Option+Space) ────────────────────────────────────
   useEffect(() => {
@@ -628,9 +692,7 @@ export default function VoiceOverlayPage() {
   const bars = audioData.length >= 7 ? audioData.slice(0, 7) : [...audioData, ...Array(Math.max(0, 7 - audioData.length)).fill(0)];
   const hasTranscript = !!transcript.trim();
   const hasDisplayText = !!displayText.trim();
-  const hasTypedText = !!typedText.trim();
   const agentName = contextAgents.find(a => a.id === selectedAgent || a.name === selectedAgent)?.name || selectedAgent;
-  const hasMessages = messages.length > 0;
 
   // Agent identity for avatars (same as GatewayChatWidget) — must be before conditional returns
   const agentIdentity = useAgentIdentity(selectedAgent);
@@ -726,99 +788,6 @@ export default function VoiceOverlayPage() {
     setGatewaySessionKey(newKey);
   }, [setGatewaySessionKey]);
 
-  // ─── Notification Toast ─────────────────────────────────────────────
-  if (isNotification && activeNotification) {
-    const durationSec = activeNotification.duration ? Math.round(activeNotification.duration / 1000) : null;
-    const dismissNotification = () => {
-      if (notificationTimerRef.current) { clearTimeout(notificationTimerRef.current); notificationTimerRef.current = null; }
-      setActiveNotification(null);
-      setOverlayState("mini");
-      window.electronAPI?.voiceOverlay?.minimize?.();
-    };
-    const openChat = () => {
-      if (notificationTimerRef.current) { clearTimeout(notificationTimerRef.current); notificationTimerRef.current = null; }
-      setActiveNotification(null);
-      setOverlayState("expanded");
-      setMode("agent-chat");
-      // Try to select the agent from the notification
-      if (activeNotification.agentId) {
-        setSelectedAgent(activeNotification.agentId);
-      }
-      loadChatHistory();
-    };
-    return (
-      <div ref={contentRef} className="select-none w-[420px]">
-        <motion.div
-          initial={{ opacity: 0, y: -8 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -8 }}
-          transition={{ duration: 0.2 }}
-          className={`rounded-2xl ${PANEL_BASE}`}
-        >
-          <div className="flex items-start gap-3 p-3">
-            {/* Bell icon with pulse */}
-            <div className="relative flex-shrink-0 mt-0.5">
-              <motion.div
-                className="absolute inset-0 rounded-full bg-violet-500/20"
-                animate={{ scale: [1, 1.6], opacity: [0.4, 0] }}
-                transition={{ repeat: Infinity, duration: 2, ease: "easeOut" }}
-              />
-              <div className="relative w-8 h-8 rounded-full bg-violet-500/20 border border-violet-400/20 flex items-center justify-center">
-                <Bell className="w-4 h-4 text-violet-300" />
-              </div>
-            </div>
-
-            {/* Content */}
-            <div className="flex-1 min-w-0">
-              <p className="text-[13px] text-white/90 font-medium leading-tight">
-                {activeNotification.summary || "Agent task completed"}
-              </p>
-              <div className="flex items-center gap-2 mt-1">
-                {activeNotification.agentId && (
-                  <span className="text-[11px] text-white/40">{activeNotification.agentId}</span>
-                )}
-                {durationSec !== null && (
-                  <span className="text-[11px] text-white/30">
-                    {durationSec >= 60 ? `${Math.floor(durationSec / 60)}m ${durationSec % 60}s` : `${durationSec}s`}
-                  </span>
-                )}
-              </div>
-            </div>
-
-            {/* Actions */}
-            <div className="flex items-center gap-1 flex-shrink-0">
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                onClick={openChat}
-                className="h-7 px-2.5 rounded-lg text-[11px] font-medium bg-violet-500/20 text-violet-200/90 border border-violet-400/15 hover:bg-violet-500/30 transition-colors"
-              >
-                View
-              </motion.button>
-              <motion.button
-                whileTap={{ scale: 0.88 }}
-                onClick={dismissNotification}
-                className="w-6 h-6 rounded-full flex items-center justify-center bg-white/[0.05] hover:bg-white/[0.10] transition-colors"
-              >
-                <X className="w-2.5 h-2.5 text-white/25" />
-              </motion.button>
-            </div>
-          </div>
-
-          {/* Progress bar showing auto-dismiss countdown */}
-          <div className="px-3 pb-2">
-            <motion.div
-              className="h-[2px] rounded-full bg-violet-500/30"
-              initial={{ width: "100%" }}
-              animate={{ width: "0%" }}
-              transition={{ duration: 8, ease: "linear" }}
-            />
-          </div>
-        </motion.div>
-      </div>
-    );
-  }
-
   // ─── Hidden ─────────────────────────────────────────────────────────
   if (isHidden) {
     return <div ref={contentRef} className="w-px h-px" />;
@@ -861,10 +830,10 @@ export default function VoiceOverlayPage() {
           className={`rounded-full ${dictActive ? PANEL_BASE : GLASS_MINI}`}>
 
           <AnimatePresence>
-            {hasDisplayText && !showInserted && (
+            {hasDisplayText && !showInserted && !isPushToTalk && (
               <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }}
                 exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.12 }} className="overflow-hidden">
-                <p className="px-4 pt-3 pb-1 text-[13px] text-white/90 leading-relaxed">
+                <p className="px-4 pt-3 pb-1 text-[13px] text-foreground leading-relaxed">
                   {displayText}
                   {isListening && <motion.span animate={{ opacity: [1, 0, 1] }} transition={{ repeat: Infinity, duration: 0.8 }} className="inline-block w-0.5 h-[13px] ml-0.5 align-text-bottom bg-violet-400" />}
                 </p>
@@ -875,7 +844,7 @@ export default function VoiceOverlayPage() {
           <AnimatePresence>
             {isTranscribing && !hasTranscript && (
               <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.12 }} className="overflow-hidden">
-                <motion.p animate={{ opacity: [0.4, 1, 0.4] }} transition={{ repeat: Infinity, duration: 1.2 }} className="px-4 pt-2.5 pb-1 text-xs text-white/40">Transcribing...</motion.p>
+                <motion.p animate={{ opacity: [0.4, 1, 0.4] }} transition={{ repeat: Infinity, duration: 1.2 }} className="px-4 pt-2.5 pb-1 text-xs text-muted-foreground">Transcribing...</motion.p>
               </motion.div>
             )}
           </AnimatePresence>
@@ -916,16 +885,20 @@ export default function VoiceOverlayPage() {
                 {isListening ? (
                   <motion.div key="w" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex items-center gap-[3px] px-0.5">
                     {bars.map((v, i) => <motion.div key={i} className="w-[3px] rounded-full bg-violet-500" style={{ opacity: 0.45 + v * 0.55 }} animate={{ height: Math.max(3, v * 24) }} transition={{ duration: 0.05 }} />)}
-                    <span className="text-[10px] text-white/20 ml-1.5 whitespace-nowrap">{isPushToTalk ? "Release to insert" : "Listening"}</span>
+                    <span className="text-[10px] text-muted-foreground/50 ml-1.5 whitespace-nowrap">{isPushToTalk ? (isToggleMode ? "Press Ctrl+Cmd+V to stop" : "Release to transcribe") : "Listening"}</span>
                   </motion.div>
-                ) : hasTranscript ? (
-                  <motion.div key="a" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex items-center gap-1.5 text-[10px] text-white/20">
-                    <kbd className="px-1 py-0.5 rounded bg-white/[0.08] border border-white/[0.06] text-[9px]">{typeof navigator !== "undefined" && navigator.platform?.includes("Mac") ? "\u2318\u23CE" : "Ctrl+\u23CE"}</kbd>
+                ) : hasTranscript && !pendingAutoInsert ? (
+                  <motion.div key="a" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex items-center gap-1.5 text-[10px] text-muted-foreground/50">
+                    <kbd className="px-1 py-0.5 rounded bg-muted border border-border text-[9px]">{typeof navigator !== "undefined" && navigator.platform?.includes("Mac") ? "\u2318\u23CE" : "Ctrl+\u23CE"}</kbd>
                     <span>insert</span>
                   </motion.div>
+                ) : pendingAutoInsert || isTranscribing ? (
+                  <motion.span key="t" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="text-[11px] text-muted-foreground/50">
+                    Transcribing...
+                  </motion.span>
                 ) : (
-                  <motion.span key="i" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="text-[11px] text-white/15">
-                    Hold Ctrl+{typeof navigator !== "undefined" && navigator.platform?.includes("Mac") ? "Cmd" : "Win"} or tap mic
+                  <motion.span key="i" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="text-[11px] text-muted-foreground/40">
+                    Hold Ctrl+{typeof navigator !== "undefined" && navigator.platform?.includes("Mac") ? "Cmd" : "Win"}+V to talk
                   </motion.span>
                 )}
               </AnimatePresence>
@@ -933,9 +906,9 @@ export default function VoiceOverlayPage() {
 
             <div className="flex items-center gap-1 shrink-0">
               <AnimatePresence>
-                {hasTranscript && !isListening && !showInserted && (
+                {hasTranscript && !isListening && !showInserted && !pendingAutoInsert && (
                   <motion.button initial={{ scale: 0, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0, opacity: 0 }}
-                    onClick={insertText} className="h-6 px-2 rounded-full flex items-center gap-1 text-[10px] font-medium whitespace-nowrap bg-violet-500/20 text-violet-200/90 border border-violet-400/15 hover:bg-violet-500/30 transition-colors">
+                    onClick={insertText} className="h-6 px-2 rounded-full flex items-center gap-1 text-[10px] font-medium whitespace-nowrap bg-violet-500/20 text-violet-600 dark:text-violet-200/90 border border-violet-400/15 hover:bg-violet-500/30 transition-colors">
                     <Type className="w-2.5 h-2.5" /> Insert
                   </motion.button>
                 )}
@@ -948,8 +921,8 @@ export default function VoiceOverlayPage() {
                 </motion.button>
               )}
               <motion.button whileTap={{ scale: 0.88 }} transition={{ duration: 0.08 }}
-                onClick={hideOverlay} className="w-6 h-6 rounded-full flex items-center justify-center bg-white/[0.05] hover:bg-white/[0.10]">
-                <X className="w-2.5 h-2.5 text-white/25" />
+                onClick={hideOverlay} className="w-6 h-6 rounded-full flex items-center justify-center bg-muted hover:bg-muted/80">
+                <X className="w-2.5 h-2.5 text-muted-foreground/50" />
               </motion.button>
             </div>
           </div>

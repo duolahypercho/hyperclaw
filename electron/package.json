@@ -5,16 +5,17 @@
   "author": "Hypercho",
   "main": "main.js",
   "scripts": {
-    "electron:build:win:local": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false APPLE_ID= APPLE_APP_SPECIFIC_PASSWORD= APPLE_TEAM_ID= electron-builder --win",
-    "electron:build:win:remote": "node scripts/set-config.js remote && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=true electron-builder --win",
-    "electron:build:win:portable": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false APPLE_ID= APPLE_APP_SPECIFIC_PASSWORD= APPLE_TEAM_ID= electron-builder --win --config.win.target=portable",
-    "electron:build:mac:local": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false APPLE_ID= APPLE_APP_SPECIFIC_PASSWORD= APPLE_TEAM_ID= electron-builder --mac --config.mac.target=zip",
-    "electron:build:mac:remote": "node scripts/set-config.js remote && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=true electron-builder --mac --config.mac.target=zip --config.mac.hardenedRuntime=true --config.mac.gatekeeperAssess=false --config.mac.identity=18F65824DF8FEF47D0F84D1EE05DC98D91E3F8EB --config.mac.entitlements=./entitlements.plist --config.mac.entitlementsInherit=./entitlements.plist --x64 --arm64",
-    "electron:build:mac:remote:dmg": "node scripts/set-config.js remote && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=true electron-builder --mac --config.mac.target=dmg --config.mac.hardenedRuntime=true --config.mac.gatekeeperAssess=false --config.mac.identity=18F65824DF8FEF47D0F84D1EE05DC98D91E3F8EB --config.mac.entitlements=./entitlements.plist --config.mac.entitlementsInherit=./entitlements.plist --x64 --arm64",
-    "electron:build:mac:dmg": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=true electron-builder --mac --config.mac.target=dmg --config.mac.hardenedRuntime=true --config.mac.gatekeeperAssess=false --config.mac.identity=18F65824DF8FEF47D0F84D1EE05DC98D91E3F8EB --config.mac.entitlements=./entitlements.plist --config.mac.entitlementsInherit=./entitlements.plist",
-    "electron:build:mac:zip": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false APPLE_ID= APPLE_APP_SPECIFIC_PASSWORD= APPLE_TEAM_ID= electron-builder --mac --config.mac.target=zip",
-    "electron:build:linux:remote": "node scripts/set-config.js remote && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=true electron-builder --linux",
-    "electron:build:linux:local": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false APPLE_ID= APPLE_APP_SPECIFIC_PASSWORD= APPLE_TEAM_ID= electron-builder --linux"
+    "electron:bundle:voice-runtime": "node scripts/bundle-voice-runtime.js",
+    "electron:build:win:local": "node scripts/set-config.js local && node scripts/bundle-voice-runtime.js && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false APPLE_ID= APPLE_APP_SPECIFIC_PASSWORD= APPLE_TEAM_ID= electron-builder --win",
+    "electron:build:win:remote": "node scripts/set-config.js remote && node scripts/bundle-voice-runtime.js && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=true electron-builder --win",
+    "electron:build:win:portable": "node scripts/set-config.js local && node scripts/bundle-voice-runtime.js && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false APPLE_ID= APPLE_APP_SPECIFIC_PASSWORD= APPLE_TEAM_ID= electron-builder --win --config.win.target=portable",
+    "electron:build:mac:local": "node scripts/set-config.js local && npx cross-env SKIP_VOICE_RUNTIME_BUNDLE=1 CSC_IDENTITY_AUTO_DISCOVERY=false APPLE_ID= APPLE_APP_SPECIFIC_PASSWORD= APPLE_TEAM_ID= electron-builder --mac --config.mac.target=zip",
+    "electron:build:mac:remote": "node scripts/set-config.js remote && node scripts/bundle-voice-runtime.js && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=true electron-builder --mac --config.mac.target=zip --config.mac.hardenedRuntime=true --config.mac.gatekeeperAssess=false --config.mac.identity=18F65824DF8FEF47D0F84D1EE05DC98D91E3F8EB --config.mac.entitlements=./entitlements.plist --config.mac.entitlementsInherit=./entitlements.plist --x64 --arm64",
+    "electron:build:mac:remote:dmg": "node scripts/set-config.js remote && node scripts/bundle-voice-runtime.js && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=true electron-builder --mac --config.mac.target=dmg --config.mac.hardenedRuntime=true --config.mac.gatekeeperAssess=false --config.mac.identity=18F65824DF8FEF47D0F84D1EE05DC98D91E3F8EB --config.mac.entitlements=./entitlements.plist --config.mac.entitlementsInherit=./entitlements.plist --x64 --arm64",
+    "electron:build:mac:dmg": "node scripts/set-config.js local && node scripts/bundle-voice-runtime.js && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=true electron-builder --mac --config.mac.target=dmg --config.mac.hardenedRuntime=true --config.mac.gatekeeperAssess=false --config.mac.identity=18F65824DF8FEF47D0F84D1EE05DC98D91E3F8EB --config.mac.entitlements=./entitlements.plist --config.mac.entitlementsInherit=./entitlements.plist",
+    "electron:build:mac:zip": "node scripts/set-config.js local && node scripts/bundle-voice-runtime.js && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false APPLE_ID= APPLE_APP_SPECIFIC_PASSWORD= APPLE_TEAM_ID= electron-builder --mac --config.mac.target=zip",
+    "electron:build:linux:remote": "node scripts/set-config.js remote && node scripts/bundle-voice-runtime.js && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=true electron-builder --linux",
+    "electron:build:linux:local": "node scripts/set-config.js local && node scripts/bundle-voice-runtime.js && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false APPLE_ID= APPLE_APP_SPECIFIC_PASSWORD= APPLE_TEAM_ID= electron-builder --linux"
   },
   "dependencies": {
     "electron-updater": "^6.1.7",
@@ -32,7 +33,8 @@
     "productName": "Hyperclaw",
     "asar": true,
     "asarUnpack": [
-      "node_modules/uiohook-napi/**"
+      "node_modules/uiohook-napi/**",
+      "python/**/*"
     ],
     "directories": {
       "output": "dist-electron"
@@ -40,6 +42,9 @@
     "files": [
       "main.js",
       "preload.js",
+      "whisper-service.js",
+      "python/**/*",
+      "wordsdb.js",
       "app-config.json",
       "../public/**/*"
     ],
@@ -82,6 +87,13 @@
       "uninstallDisplayName": "Hyperclaw"
     },
     "extraResources": [
+      {
+        "from": "bundled-python",
+        "to": "bundled-python",
+        "filter": [
+          "**/*"
+        ]
+      },
       {
         "from": "../.next",
         "to": ".next",

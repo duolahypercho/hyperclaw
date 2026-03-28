@@ -1,6 +1,5 @@
 import "../styles/main.css";
 import "../styles/nProgress.css";
-import "../components/PixelOffice/pixel-office-scoped.css";
 import {
   InterimProvider,
   ServiceProvider,
@@ -37,13 +36,14 @@ function MyApp({ Component, pageProps, router }: any) {
       <main className={GeistSans.className} suppressHydrationWarning style={{ background: "transparent" }}>
         <SessionProvider session={pageProps.session} refetchInterval={15 * 60} refetchOnWindowFocus={false}>
           <ThemeProvider attribute="class" enableSystem disableTransitionOnChange>
-            <OpenClawProvider>
               <TooltipProvider>
                 <UserProvider>
+                <OpenClawProvider>
                   <Component {...pageProps} />
+                </OpenClawProvider>
                 </UserProvider>
+                <Toaster />
               </TooltipProvider>
-            </OpenClawProvider>
           </ThemeProvider>
         </SessionProvider>
       </main>
@@ -60,19 +60,18 @@ function MyApp({ Component, pageProps, router }: any) {
         refetchOnWindowFocus={false}
       >
         <ThemeProvider attribute="class" enableSystem disableTransitionOnChange>
+          <UserProvider>
           <OpenClawProvider>
           <OSProvider>
             <GuidanceProvider>
               <TooltipProvider>
-                <UserProvider>
                   <ServiceProvider>
                     <InterimProvider>
                       {/* 1. Render layout and content first - ensures SEO tags are at the top */}
                       {getLayout(<Component {...pageProps} />)}
                     </InterimProvider>
                   </ServiceProvider>
-                </UserProvider>
-                <Analytics />
+                {process.env.NODE_ENV === "production" && <Analytics />}
                 <Toaster />
                 <GatewayStatusBanner />
                 <UpdateNotification />
@@ -80,6 +79,7 @@ function MyApp({ Component, pageProps, router }: any) {
             </GuidanceProvider>
           </OSProvider>
           </OpenClawProvider>
+          </UserProvider>
         </ThemeProvider>
       </SessionProvider>
     </main>

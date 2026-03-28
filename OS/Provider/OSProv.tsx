@@ -19,7 +19,7 @@ import {
   LayoutGrid,
   FileText,
   BarChart3,
-  Shield,
+  Database,
   Network,
   MessageSquare,
 } from "lucide-react";
@@ -225,7 +225,7 @@ const STATIC_TOOL_ROUTES = [
   "/Tool/Memory",
   "/Tool/PixelOffice",
   "/Tool/Docs",
-  "/Tool/Approvals",
+  "/Tool/Intelligence",
   "/Tool/OrgChart",
   "/Settings",
 ];
@@ -503,15 +503,15 @@ export const OSProvider: React.FC<OSProviderProps> = ({ children }) => {
         href: "/Tool/Usage",
       },
       {
-        id: "approvals",
-        name: "Approvals",
-        description: "Review and approve dangerous operations",
-        icon: <Shield className="w-3.5 h-3.5" />,
+        id: "intelligence",
+        name: "Intelligence",
+        description: "Browse agent-created data tables, CRM pipelines, and live agent status",
+        icon: <Database className="w-3.5 h-3.5" />,
         onClick: () => {
-          if (activeTool?.id === "approvals") return;
-          createToolClickHandler("/Tool/Approvals", "approvals")();
+          if (activeTool?.id === "intelligence") return;
+          createToolClickHandler("/Tool/Intelligence", "intelligence")();
         },
-        href: "/Tool/Approvals",
+        href: "/Tool/Intelligence",
       },
       {
         id: "settings",

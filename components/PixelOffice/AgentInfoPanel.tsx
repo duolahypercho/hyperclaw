@@ -2,7 +2,7 @@
 
 import React from "react";
 import { formatDistanceToNow } from "date-fns";
-import type { AgentInfo } from "./useHyperclawOffice";
+import type { AgentInfo } from "./claw3d/useClaw3DAgents";
 
 const panelStyle: React.CSSProperties = {
   position: "absolute",

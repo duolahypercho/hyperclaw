@@ -24,7 +24,22 @@ function generateTaskId(): string {
 }
 
 type TodoData = { tasks: Record<string, unknown>[]; lists: unknown[]; activeTaskId: string | null };
-type ChannelData = { channels: Record<string, unknown>[] };
+// ── SQL blocklist for intel_execute (guarded write) ──────────────────────────
+const INTEL_SQL_BLOCKLIST = [
+  /\bDROP\s+TABLE\b/i,
+  /\bDROP\s+INDEX\b/i,
+  /\bDROP\s+VIEW\b/i,
+  /\bDROP\s+TRIGGER\b/i,
+  /\bATTACH\s+DATABASE\b/i,
+  /\bDETACH\s+DATABASE\b/i,
+  /\bPRAGMA\s+writable_schema\b/i,
+  /\bVACUUM\s+INTO\b/i,
+  /\bCREATE\s+TRIGGER\b/i,
+  /\bload_extension\b/i,
+];
+
+const INTEL_DDL_PATTERN = /\b(CREATE\s+TABLE|ALTER\s+TABLE|CREATE\s+INDEX)\b/i;
+const MAX_BACKUP_COUNT = 5;
 
 interface TaskRow { id: string; list_id: string; data: string; created_at: number; updated_at: number }
 interface TaskListRow { id: string; data: string; created_at: number; updated_at: number }
@@ -35,7 +50,6 @@ export class HyperClawBridge {
   private todoPath: string;
   private eventsPath: string;
   private commandsPath: string;
-  private channelsPath: string;
   private sessionsDir: string;
   private _db: any = null;
   private _dbFailed = false;
@@ -46,7 +60,6 @@ export class HyperClawBridge {
     this.todoPath = path.join(this.dataDir, "todo.json");
     this.eventsPath = path.join(this.dataDir, "events.jsonl");
     this.commandsPath = path.join(this.dataDir, "commands.jsonl");
-    this.channelsPath = path.join(this.dataDir, "channels.json");
     this.sessionsDir = path.join(this.dataDir, "sessions");
   }
 
@@ -647,6 +660,15 @@ export class HyperClawBridge {
       const data = ((task.data as Record<string, unknown>) || {}) as Record<string, unknown>;
       const lease = data.lease as { claimedBy?: string; expiresAtMs?: number } | undefined;
       const now = Date.now();
+      const status = String(task.status || "pending");
+
+      if (status !== "pending") {
+        return {
+          success: false,
+          reason: `Task not claimable while status=${status}`,
+          task,
+        };
+      }
 
       if (lease && lease.expiresAtMs && lease.expiresAtMs > now) {
         return {
@@ -658,6 +680,7 @@ export class HyperClawBridge {
 
       data.lease = { claimedBy: params.claimant, expiresAtMs: now + params.leaseSeconds * 1000 };
       task.data = data;
+      task.status = "in_progress";
       task.updatedAt = new Date().toISOString();
       const updated = this.taskToRow(task);
       db.prepare("UPDATE tasks SET data = ?, updated_at = ? WHERE id = ?").run(updated.data, now, row.id);
@@ -681,6 +704,14 @@ export class HyperClawBridge {
     const data = ((task.data as Record<string, unknown>) || {}) as Record<string, unknown>;
     const lease = data.lease as { claimedBy?: string; expiresAtMs?: number } | undefined;
     const now = Date.now();
+    const status = String(task.status || "pending");
+    if (status !== "pending") {
+      return {
+        success: false,
+        reason: `Task not claimable while status=${status}`,
+        task,
+      };
+    }
     if (lease && lease.expiresAtMs && lease.expiresAtMs > now) {
       return {
         success: false,
@@ -690,6 +721,7 @@ export class HyperClawBridge {
     }
     data.lease = { claimedBy: params.claimant, expiresAtMs: now + params.leaseSeconds * 1000 };
     task.data = data;
+    task.status = "in_progress";
     task.updatedAt = new Date().toISOString();
     this.writeTodoData(todo);
     return { success: true, task };
@@ -792,6 +824,410 @@ export class HyperClawBridge {
     return rows.map((r) => ({ ...this.rowToTask(r), linked_at: r.linked_at }));
   }
 
+  // ── Intel DB (separate intel.db) ──────────────────────────────────────────
+
+  private _intelDb: any = null;
+  private _intelDbFailed = false;
+  private _fts5Available = false;
+
+  getIntelDb(): any {
+    if (this._intelDb) return this._intelDb;
+    if (this._intelDbFailed || !BetterSqlite3) {
+      this._intelDbFailed = true;
+      return null;
+    }
+    try {
+      const dbPath = path.join(this.dataDir, "intel.db");
+      this.ensureDir();
+      this._intelDb = new BetterSqlite3(dbPath);
+      this._intelDb.pragma("journal_mode = WAL");
+      this._intelDb.pragma("busy_timeout = 5000");
+      this._intelDb.pragma("foreign_keys = ON");
+
+      // Seeded schema — only contacts + research as starting tables;
+      // agents can CREATE TABLE for anything else they need.
+      this._intelDb.exec(`
+        CREATE TABLE IF NOT EXISTS contacts (
+          id          TEXT PRIMARY KEY,
+          name        TEXT NOT NULL,
+          role        TEXT,
+          company     TEXT,
+          channel     TEXT,
+          handle      TEXT,
+          status      TEXT DEFAULT 'lead',
+          notes       TEXT,
+          created_by  TEXT,
+          created_at  INTEGER NOT NULL,
+          updated_at  INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_contacts_status ON contacts(status);
+
+        CREATE TABLE IF NOT EXISTS research (
+          id          INTEGER PRIMARY KEY AUTOINCREMENT,
+          topic       TEXT NOT NULL,
+          finding     TEXT NOT NULL,
+          evidence    TEXT,
+          source      TEXT,
+          source_url  TEXT,
+          confidence  TEXT DEFAULT 'medium',
+          created_by  TEXT,
+          created_at  INTEGER NOT NULL,
+          updated_at  INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_topic ON research(topic);
+        CREATE INDEX IF NOT EXISTS idx_research_agent ON research(created_by);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_research_dedup ON research(topic, finding);
+      `);
+
+      // Try to set up FTS5 (graceful degradation)
+      try {
+        this._intelDb.exec(`
+          CREATE VIRTUAL TABLE IF NOT EXISTS research_fts USING fts5(
+            finding, content=research, content_rowid=id
+          );
+          CREATE TRIGGER IF NOT EXISTS research_ai AFTER INSERT ON research BEGIN
+            INSERT INTO research_fts(rowid, finding) VALUES (new.id, new.finding);
+          END;
+          CREATE TRIGGER IF NOT EXISTS research_ad AFTER DELETE ON research BEGIN
+            INSERT INTO research_fts(research_fts, rowid, finding) VALUES('delete', old.id, old.finding);
+          END;
+          CREATE TRIGGER IF NOT EXISTS research_au AFTER UPDATE ON research BEGIN
+            INSERT INTO research_fts(research_fts, rowid, finding) VALUES('delete', old.id, old.finding);
+            INSERT INTO research_fts(rowid, finding) VALUES (new.id, new.finding);
+          END;
+        `);
+        this._fts5Available = true;
+      } catch {
+        // FTS5 not available — exact dedup only
+        this._fts5Available = false;
+      }
+
+      return this._intelDb;
+    } catch {
+      this._intelDbFailed = true;
+      return null;
+    }
+  }
+
+  // ── Intel: Schema introspection ────────────────────────────────────────────
+
+  intelSchema(): Record<string, unknown> {
+    const db = this.getIntelDb();
+    if (!db) return { error: "Intel DB not available" };
+
+    const tables = db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '%_fts%' ORDER BY name"
+    ).all() as { name: string }[];
+
+    const result: Record<string, unknown> = {};
+    for (const { name } of tables) {
+      const columns = db.prepare(`PRAGMA table_info("${name}")`).all() as {
+        name: string; type: string; notnull: number; dflt_value: string | null; pk: number;
+      }[];
+      const count = (db.prepare(`SELECT count(*) as c FROM "${name}"`).get() as { c: number }).c;
+
+      // Freshness stats
+      let freshness: Record<string, unknown> | null = null;
+      const hasUpdatedAt = columns.some((c) => c.name === "updated_at");
+      const hasCreatedAt = columns.some((c) => c.name === "created_at");
+      const timeCol = hasUpdatedAt ? "updated_at" : hasCreatedAt ? "created_at" : null;
+      if (timeCol && count > 0) {
+        const stats = db.prepare(
+          `SELECT MIN("${timeCol}") as oldest, MAX("${timeCol}") as newest FROM "${name}"`
+        ).get() as { oldest: number; newest: number };
+        freshness = { oldest: stats.oldest, newest: stats.newest, column: timeCol };
+      }
+
+      // Indexes
+      const indexes = db.prepare(`PRAGMA index_list("${name}")`).all() as { name: string; unique: number }[];
+
+      result[name] = {
+        columns: columns.map((c) => ({
+          name: c.name, type: c.type, notnull: !!c.notnull, default: c.dflt_value, pk: !!c.pk,
+        })),
+        row_count: count,
+        freshness,
+        indexes: indexes.map((i) => ({ name: i.name, unique: !!i.unique })),
+      };
+    }
+    return { tables: result, fts5_available: this._fts5Available };
+  }
+
+  // ── Intel: Read-only query (stmt.reader enforcement) ───────────────────────
+
+  intelQuery(sql: string): Record<string, unknown> {
+    const db = this.getIntelDb();
+    if (!db) return { error: "Intel DB not available" };
+
+    try {
+      // Auto-inject LIMIT if not present
+      const hasLimit = /\bLIMIT\b/i.test(sql);
+      const execSql = hasLimit ? sql : `${sql.replace(/;?\s*$/, "")} LIMIT 1000`;
+
+      const stmt = db.prepare(execSql);
+      if (!stmt.reader) {
+        return { error: "Blocked: only read-only queries allowed" };
+      }
+
+      const rows = stmt.all();
+      const result: Record<string, unknown> = { rows, count: rows.length };
+
+      // Check if we hit the auto-limit
+      if (!hasLimit && rows.length >= 1000) {
+        const countStmt = db.prepare(`SELECT count(*) as total FROM (${sql.replace(/;?\s*$/, "")})`);
+        if (countStmt.reader) {
+          const { total } = countStmt.get() as { total: number };
+          result.total_count = total;
+          result.truncated = true;
+          result.warning = `Results truncated to 1000 rows (total: ${total}). Use LIMIT/OFFSET for pagination.`;
+        }
+      }
+      return result;
+    } catch (err: any) {
+      return { error: `SQL error: ${err.message}` };
+    }
+  }
+
+  // ── Intel: Guarded write (DDL + complex writes) ────────────────────────────
+
+  intelExecute(sql: string, agentId?: string): Record<string, unknown> {
+    const db = this.getIntelDb();
+    if (!db) return { error: "Intel DB not available" };
+
+    // Check blocklist
+    for (const pattern of INTEL_SQL_BLOCKLIST) {
+      if (pattern.test(sql)) {
+        return { error: `Blocked: ${sql.match(pattern)?.[0]} not allowed` };
+      }
+    }
+
+    // Check DELETE without WHERE
+    if (/\bDELETE\s+FROM\b/i.test(sql) && !/\bWHERE\b/i.test(sql)) {
+      return { error: "Blocked: DELETE requires WHERE clause" };
+    }
+
+    try {
+      const isDDL = INTEL_DDL_PATTERN.test(sql);
+
+      // Auto-backup before DDL
+      if (isDDL) {
+        this.intelBackup();
+      }
+
+      const stmt = db.prepare(sql);
+      if (stmt.reader) {
+        // It's actually a read — just run it
+        return { rows: stmt.all(), count: stmt.all().length };
+      }
+
+      const result = stmt.run();
+      return { changes: result.changes, lastInsertRowid: Number(result.lastInsertRowid), ddl: isDDL };
+    } catch (err: any) {
+      return { error: `SQL error: ${err.message}` };
+    }
+  }
+
+  // ── Intel: Parameterized insert ────────────────────────────────────────────
+
+  intelInsert(
+    table: string,
+    data: Record<string, unknown>,
+    agentId?: string
+  ): Record<string, unknown> {
+    const db = this.getIntelDb();
+    if (!db) return { error: "Intel DB not available" };
+
+    // Validate table exists
+    const tableInfo = db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name = ?"
+    ).get(table);
+    if (!tableInfo) return { error: `Table '${table}' does not exist` };
+
+    // Validate columns
+    const columns = db.prepare(`PRAGMA table_info("${table}")`).all() as { name: string }[];
+    const validCols = new Set(columns.map((c) => c.name));
+    for (const key of Object.keys(data)) {
+      if (!validCols.has(key)) {
+        return { error: `Column '${key}' not found in ${table}` };
+      }
+    }
+
+    // Auto-inject created_by if available
+    if (agentId && validCols.has("created_by") && !data.created_by) {
+      data.created_by = agentId;
+    }
+    // Auto-inject timestamps
+    const now = Date.now();
+    if (validCols.has("created_at") && !data.created_at) data.created_at = now;
+    if (validCols.has("updated_at") && !data.updated_at) data.updated_at = now;
+
+    // FTS5 fuzzy dedup check for research table
+    if (table === "research" && this._fts5Available && data.finding) {
+      try {
+        const matches = db.prepare(
+          `SELECT r.id, r.finding, r.topic FROM research r
+           JOIN research_fts f ON f.rowid = r.id
+           WHERE research_fts MATCH ? LIMIT 3`
+        ).all(String(data.finding).replace(/['"]/g, ""));
+        if (matches.length > 0) {
+          // Check if any match is very similar (same topic + company)
+          const exact = (matches as any[]).find(
+            (m) => m.topic === data.topic
+          );
+          if (exact) {
+            return {
+              warning: "Similar finding already exists",
+              similar_to: exact,
+              inserted: false,
+            };
+          }
+        }
+      } catch {
+        // FTS match failed — proceed with insert
+      }
+    }
+
+    try {
+      const cols = Object.keys(data);
+      const placeholders = cols.map(() => "?").join(", ");
+      const values = cols.map((c) => data[c]);
+      const stmt = db.prepare(
+        `INSERT INTO "${table}" (${cols.map((c) => `"${c}"`).join(", ")}) VALUES (${placeholders})`
+      );
+      const result = stmt.run(...values);
+      return {
+        inserted: true,
+        id: result.lastInsertRowid ? Number(result.lastInsertRowid) : data.id,
+        changes: result.changes,
+      };
+    } catch (err: any) {
+      if (err.message.includes("UNIQUE constraint")) {
+        return { error: `Duplicate: ${err.message}` };
+      }
+      if (err.message.includes("FOREIGN KEY constraint")) {
+        return { error: `Foreign key constraint failed: ${err.message}` };
+      }
+      return { error: `Insert error: ${err.message}` };
+    }
+  }
+
+  // ── Intel: Parameterized update ────────────────────────────────────────────
+
+  intelUpdate(
+    table: string,
+    data: Record<string, unknown>,
+    where: Record<string, unknown>
+  ): Record<string, unknown> {
+    const db = this.getIntelDb();
+    if (!db) return { error: "Intel DB not available" };
+
+    // Validate table
+    const tableInfo = db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name = ?"
+    ).get(table);
+    if (!tableInfo) return { error: `Table '${table}' does not exist` };
+
+    // Validate columns
+    const columns = db.prepare(`PRAGMA table_info("${table}")`).all() as { name: string }[];
+    const validCols = new Set(columns.map((c) => c.name));
+    for (const key of [...Object.keys(data), ...Object.keys(where)]) {
+      if (!validCols.has(key)) {
+        return { error: `Column '${key}' not found in ${table}` };
+      }
+    }
+
+    // Auto-inject updated_at
+    if (validCols.has("updated_at") && !data.updated_at) data.updated_at = Date.now();
+
+    try {
+      const setCols = Object.keys(data);
+      const whereCols = Object.keys(where);
+      const setClause = setCols.map((c) => `"${c}" = ?`).join(", ");
+      const whereClause = whereCols.map((c) => `"${c}" = ?`).join(" AND ");
+      const values = [...setCols.map((c) => data[c]), ...whereCols.map((c) => where[c])];
+
+      const result = db.prepare(
+        `UPDATE "${table}" SET ${setClause} WHERE ${whereClause}`
+      ).run(...values);
+      return { updated: true, changes: result.changes };
+    } catch (err: any) {
+      return { error: `Update error: ${err.message}` };
+    }
+  }
+
+  // ── Intel: Parameterized delete ────────────────────────────────────────────
+
+  intelDelete(
+    table: string,
+    where: Record<string, unknown>
+  ): Record<string, unknown> {
+    const db = this.getIntelDb();
+    if (!db) return { error: "Intel DB not available" };
+
+    if (!where || Object.keys(where).length === 0) {
+      return { error: "Delete requires a where clause" };
+    }
+
+    // Validate table
+    const tableInfo = db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name = ?"
+    ).get(table);
+    if (!tableInfo) return { error: `Table '${table}' does not exist` };
+
+    // Validate columns
+    const columns = db.prepare(`PRAGMA table_info("${table}")`).all() as { name: string }[];
+    const validCols = new Set(columns.map((c) => c.name));
+    for (const key of Object.keys(where)) {
+      if (!validCols.has(key)) {
+        return { error: `Column '${key}' not found in ${table}` };
+      }
+    }
+
+    try {
+      const whereCols = Object.keys(where);
+      const whereClause = whereCols.map((c) => `"${c}" = ?`).join(" AND ");
+      const values = whereCols.map((c) => where[c]);
+
+      const result = db.prepare(`DELETE FROM "${table}" WHERE ${whereClause}`).run(...values);
+      if (result.changes === 0) {
+        return { deleted: false, changes: 0, warning: "No rows matched the condition" };
+      }
+      return { deleted: true, changes: result.changes };
+    } catch (err: any) {
+      return { error: `Delete error: ${err.message}` };
+    }
+  }
+
+  // ── Intel: Agent status update ─────────────────────────────────────────────
+
+  // ── Intel: Auto-backup (rotate last N) ─────────────────────────────────────
+
+  private intelBackup(): void {
+    try {
+      const dbPath = path.join(this.dataDir, "intel.db");
+      if (!fs.existsSync(dbPath)) return;
+
+      const backupDir = path.join(this.dataDir, "intel_backups");
+      if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
+
+      const timestamp = Date.now();
+      const backupPath = path.join(backupDir, `intel_${timestamp}.db`);
+      fs.copyFileSync(dbPath, backupPath);
+
+      // Rotate: keep only last N backups
+      const backups = fs.readdirSync(backupDir)
+        .filter((f) => f.startsWith("intel_") && f.endsWith(".db"))
+        .sort()
+        .reverse();
+
+      for (const old of backups.slice(MAX_BACKUP_COUNT)) {
+        fs.unlinkSync(path.join(backupDir, old));
+      }
+    } catch {
+      // Backup failed — log but don't block
+    }
+  }
+
   // ── Events ───────────────────────────────────────────────────────────────
 
   emitEvent(type: string, data: Record<string, unknown>): void {
@@ -818,58 +1254,6 @@ export class HyperClawBridge {
     } catch {
       return [];
     }
-  }
-
-  // ── Channel Management ─────────────────────────────────────────────────
-
-  private readChannelData(): ChannelData {
-    try {
-      if (!fs.existsSync(this.channelsPath)) return { channels: [] };
-      const raw = JSON.parse(fs.readFileSync(this.channelsPath, "utf-8"));
-      return { channels: Array.isArray(raw.channels) ? raw.channels : [] };
-    } catch {
-      return { channels: [] };
-    }
-  }
-
-  private writeChannelData(data: ChannelData): void {
-    this.ensureDir();
-    fs.writeFileSync(this.channelsPath, JSON.stringify(data, null, 2), "utf-8");
-  }
-
-  addChannel(channel: { id: string; name: string; type: string; kind: string }): Record<string, unknown> {
-    const data = this.readChannelData();
-    const now = new Date().toISOString();
-    const newChannel = { ...channel, createdAt: now };
-    const exists = data.channels.find((c: Record<string, unknown>) => c.id === channel.id);
-    if (exists) return { ...exists, error: "Channel already exists" };
-    data.channels.push(newChannel);
-    this.writeChannelData(data);
-    return newChannel;
-  }
-
-  getChannels(): Record<string, unknown>[] { return this.readChannelData().channels; }
-
-  getChannel(id: string): Record<string, unknown> | undefined {
-    return this.readChannelData().channels.find((c) => c.id === id) as Record<string, unknown> | undefined;
-  }
-
-  updateChannel(id: string, patch: Record<string, unknown>): Record<string, unknown> | undefined {
-    const data = this.readChannelData();
-    const idx = data.channels.findIndex((c) => c.id === id);
-    if (idx === -1) return undefined;
-    Object.assign(data.channels[idx], patch);
-    this.writeChannelData(data);
-    return data.channels[idx];
-  }
-
-  deleteChannel(id: string): boolean {
-    const data = this.readChannelData();
-    const initialLength = data.channels.length;
-    data.channels = data.channels.filter((c) => c.id !== id);
-    if (data.channels.length === initialLength) return false;
-    this.writeChannelData(data);
-    return true;
   }
 
   // ── Sessions + Transcript Storage ───────────────────────────────────────

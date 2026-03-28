@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from "react";
+import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { Dashboard, Widget } from "./Dashboard";
 import { DashboardHeader } from "./DashboardHeader";
 import {
@@ -12,17 +12,20 @@ import {
   UsageWidget,
   GatewayChatWidget,
   StatusWidget,
+  ChannelDashboardWidget,
 } from "$/components/Home/widgets";
-import { useOS } from "@OS/Provider/OSProv";
+import { useOS, useFloatingChatOS } from "@OS/Provider/OSProv";
 import { cn } from "@/lib/utils";
 import { dashboardState } from "$/lib/dashboard-state";
 import { useOpenClawContext } from "$/Providers/OpenClawProv";
+import { OPEN_AGENT_CHAT_EVENT } from "$/components/Home/widgets/StatusWidget";
 
 // Component registry for dynamic-only widget types (not in the template array).
 // This lets dynamically-added instances resolve their component without being
 // a default template widget that shows up in the toggle list.
 const DYNAMIC_WIDGET_COMPONENTS: Record<string, React.FC<any>> = {
   "gateway-chat": GatewayChatWidget,
+  "channel-dashboard": ChannelDashboardWidget,
 };
 
 // Default layout for dynamically-created chat widgets
@@ -32,9 +35,53 @@ const CHAT_WIDGET_DEFAULTS = {
   config: { agentId: undefined, sessionKey: undefined },
 };
 
+// Default layout for dynamically-created announce channel widgets
+const ANNOUNCE_WIDGET_DEFAULTS = {
+  type: "channel-dashboard" as const,
+  defaultValue: { w: 12, h: 6, minW: 8, minH: 4, x: 0, y: 0 },
+  config: { selectedCronIds: [], soundEnabled: false },
+};
+
+type StoredWidget = {
+  id: string;
+  type: string;
+  title: string;
+  defaultValue?: {
+    w: number;
+    h: number;
+    minW: number;
+    minH: number;
+    x: number;
+    y: number;
+  };
+  config?: Record<string, unknown>;
+  isResizable?: boolean;
+};
+
+function safeParseJson<T>(value: string | null | undefined, fallback: T): T {
+  if (!value) return fallback;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return fallback;
+  }
+}
+
 export default function Home() {
   const { toolAbstracts } = useOS();
   const { dashboardReady } = useOpenClawContext();
+  const { openChat } = useFloatingChatOS();
+
+  // Listen for "Open in Chat" events from announce/status widgets
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const agentId = (e as CustomEvent).detail?.agentId;
+      const sessionKey = (e as CustomEvent).detail?.sessionKey;
+      if (agentId) openChat(agentId, sessionKey);
+    };
+    window.addEventListener(OPEN_AGENT_CHAT_EVENT, handler);
+    return () => window.removeEventListener(OPEN_AGENT_CHAT_EVENT, handler);
+  }, [openChat]);
 
   // Find tool definitions from OSProv
   const todoTool = toolAbstracts.find((t) => t.id === "todo-list");
@@ -143,23 +190,20 @@ export default function Home() {
 
   // State for forcing Dashboard reset
   const [resetKey, setResetKey] = useState(0);
+  const [channelWidgetConfigsJson, setChannelWidgetConfigsJson] = useState(
+    () => dashboardState.get("dashboard-widget-configs") || "{}"
+  );
+  const editSnapshotRef = useRef<{
+    layout: string | null;
+    visibleWidgets: string | null;
+    widgetInstances: string | null;
+    widgetConfigs: string | null;
+  } | null>(null);
 
-  // Minimal type for stored widget data (without component function)
-  type StoredWidget = {
-    id: string;
-    type: string;
-    title: string;
-    defaultValue?: {
-      w: number;
-      h: number;
-      minW: number;
-      minH: number;
-      x: number;
-      y: number;
-    };
-    config?: Record<string, unknown>;
-    isResizable?: boolean;
-  };
+  const widgetConfigs = useMemo(
+    () => safeParseJson<Record<string, Record<string, unknown>>>(channelWidgetConfigsJson, {}),
+    [channelWidgetConfigsJson]
+  );
 
   // State for dynamically added widget instances
   const [storedWidgetInstances, setStoredWidgetInstances] = useState<StoredWidget[]>(() => {
@@ -197,8 +241,7 @@ export default function Home() {
       } catch {}
     }
 
-    // No resetKey increment needed — gating on hydratedOnce below ensures
-    // Dashboard only mounts after state is synced with the hydrated cache.
+    setChannelWidgetConfigsJson(dashboardState.get("dashboard-widget-configs") || "{}");
   }, [dashboardReady, hydratedOnce]);
 
   // Save widget instances to SQLite whenever they change — but only AFTER hydration.
@@ -218,11 +261,11 @@ export default function Home() {
   }, [storedWidgetInstances, hydratedOnce]);
 
   // Helper to get widget component from type — checks templates first, then dynamic registry
-  const getWidgetComponent = (type: string) => {
+  const getWidgetComponent = useCallback((type: string) => {
     const w = widgets.find(w => w.type === type);
     if (w) return w.component;
     return DYNAMIC_WIDGET_COMPONENTS[type] ?? null;
-  };
+  }, [widgets]);
 
   // Get all widgets (templates + instances with resolved components)
   const allWidgets = useMemo(() => {
@@ -254,7 +297,7 @@ export default function Home() {
       .filter(Boolean);
 
     return [...templateWidgets, ...(additionalInstances as typeof widgets)];
-  }, [widgets, storedWidgetInstances]);
+  }, [getWidgetComponent, widgets, storedWidgetInstances]);
 
   // Handler for adding a new widget instance
   const handleAddWidget = (newWidget: typeof widgets[0]) => {
@@ -276,8 +319,8 @@ export default function Home() {
     const isInstance = !widgets.find(w => w.id === widgetId);
     if (isInstance) {
       setStoredWidgetInstances(prev => prev.filter(w => w.id !== widgetId));
-      setVisibleWidgets(prev => prev.filter(id => id !== widgetId));
     }
+    setVisibleWidgets(prev => prev.filter(id => id !== widgetId));
   };
 
   // Persist visible widgets to SQLite whenever they change — gated on hydration.
@@ -296,29 +339,6 @@ export default function Home() {
     visibleWidgetsBaselineRef.current = json;
     dashboardState.set("dashboard-visible-widgets", json);
   }, [visibleWidgets, hydratedOnce]);
-
-  // Listen for edit mode toggle from Sidebar
-  useEffect(() => {
-    const handleEditModeToggle = () => {
-      setIsEditMode((prev) => {
-        const next = !prev;
-        setShowHeader(next);
-        return next;
-      });
-    };
-
-    window.addEventListener(
-      "dashboard-edit-mode-toggle",
-      handleEditModeToggle as EventListener
-    );
-
-    return () => {
-      window.removeEventListener(
-        "dashboard-edit-mode-toggle",
-        handleEditModeToggle as EventListener
-      );
-    };
-  }, []);
 
   // Listen for layout-applied event (from navbar LayoutSwitcher)
   useEffect(() => {
@@ -365,6 +385,7 @@ export default function Home() {
           widgetInstancesBaselineRef.current = savedInstances;
         } catch {}
       }
+      setChannelWidgetConfigsJson(dashboardState.get("dashboard-widget-configs") || "{}");
       setResetKey((k) => k + 1);
     };
 
@@ -392,13 +413,159 @@ export default function Home() {
     setResetKey((prev) => prev + 1);
   };
 
-  const handleToggleEditMode = () => {
-    setIsEditMode((prev) => {
-      const next = !prev;
-      setShowHeader(next);
-      return next;
+  const handleWidgetConfigUpdate = useCallback((widgetId: string, config: Record<string, unknown>) => {
+    if (!widgetId.startsWith("channel-dashboard-")) return;
+    setChannelWidgetConfigsJson((prev) => {
+      const parsed = safeParseJson<Record<string, Record<string, unknown>>>(prev, {});
+      return JSON.stringify({
+        ...parsed,
+        [widgetId]: {
+          ...parsed[widgetId],
+          ...config,
+        },
+      });
     });
-  };
+  }, []);
+
+  const getWidgetDisplayTitle = useCallback((widget: { id: string; type: string; title: string }) => {
+    if (widget.type !== "channel-dashboard") return widget.title;
+    const customTitle = widgetConfigs[widget.id]?.customTitle;
+    return typeof customTitle === "string" && customTitle.trim() ? customTitle : widget.title;
+  }, [widgetConfigs]);
+
+  const beginEditMode = useCallback(() => {
+    editSnapshotRef.current = {
+      layout: dashboardState.get("dashboard-layout"),
+      visibleWidgets: dashboardState.get("dashboard-visible-widgets"),
+      widgetInstances: dashboardState.get("dashboard-widget-instances"),
+      widgetConfigs: dashboardState.get("dashboard-widget-configs"),
+    };
+    setIsEditMode(true);
+    setShowHeader(true);
+  }, []);
+
+  const saveEditMode = useCallback(() => {
+    editSnapshotRef.current = null;
+    setIsEditMode(false);
+    setShowHeader(false);
+  }, []);
+
+  const cancelEditMode = useCallback(() => {
+    const snapshot = editSnapshotRef.current;
+    const defaultVisibleWidgets = widgets.map((w) => w.id);
+    const restoredVisibleWidgets = snapshot?.visibleWidgets
+      ? (() => {
+          try {
+            return JSON.parse(snapshot.visibleWidgets);
+          } catch {
+            return defaultVisibleWidgets;
+          }
+        })()
+      : defaultVisibleWidgets;
+    const restoredWidgetInstances = snapshot?.widgetInstances
+      ? (() => {
+          try {
+            const parsed = JSON.parse(snapshot.widgetInstances);
+            return Array.isArray(parsed) ? parsed : [];
+          } catch {
+            return [];
+          }
+        })()
+      : [];
+
+    if (snapshot?.layout) {
+      dashboardState.set("dashboard-layout", snapshot.layout);
+    } else {
+      dashboardState.remove("dashboard-layout");
+    }
+
+    if (snapshot?.visibleWidgets) {
+      dashboardState.set("dashboard-visible-widgets", snapshot.visibleWidgets);
+      visibleWidgetsBaselineRef.current = snapshot.visibleWidgets;
+    } else {
+      dashboardState.remove("dashboard-visible-widgets");
+      visibleWidgetsBaselineRef.current = JSON.stringify(defaultVisibleWidgets);
+    }
+
+    if (snapshot?.widgetInstances) {
+      dashboardState.set("dashboard-widget-instances", snapshot.widgetInstances);
+      widgetInstancesBaselineRef.current = snapshot.widgetInstances;
+    } else {
+      dashboardState.remove("dashboard-widget-instances");
+      widgetInstancesBaselineRef.current = JSON.stringify([]);
+    }
+
+    if (snapshot?.widgetConfigs) {
+      dashboardState.set("dashboard-widget-configs", snapshot.widgetConfigs);
+      setChannelWidgetConfigsJson(snapshot.widgetConfigs);
+    } else {
+      dashboardState.remove("dashboard-widget-configs");
+      setChannelWidgetConfigsJson("{}");
+    }
+
+    setVisibleWidgets(restoredVisibleWidgets);
+    setStoredWidgetInstances(restoredWidgetInstances);
+    editSnapshotRef.current = null;
+    setIsEditMode(false);
+    setShowHeader(false);
+    setResetKey((prev) => prev + 1);
+  }, [widgets]);
+
+  const handleToggleEditMode = useCallback(() => {
+    if (isEditMode) {
+      saveEditMode();
+      return;
+    }
+    beginEditMode();
+  }, [beginEditMode, isEditMode, saveEditMode]);
+
+  const handleEditModeAction = useCallback((action?: string) => {
+    if (action === "cancel") {
+      cancelEditMode();
+      return;
+    }
+    if (action === "save") {
+      saveEditMode();
+      return;
+    }
+    if (action === "enter") {
+      if (!isEditMode) beginEditMode();
+      return;
+    }
+
+    if (isEditMode) {
+      cancelEditMode();
+      return;
+    }
+
+    beginEditMode();
+  }, [beginEditMode, cancelEditMode, isEditMode, saveEditMode]);
+
+  useEffect(() => {
+    if (!isEditMode) {
+      editSnapshotRef.current = null;
+    }
+  }, [isEditMode]);
+
+  // Listen for edit mode toggle from Sidebar
+  useEffect(() => {
+    const handleEditModeToggle = (e: Event) => {
+      const action = (e as CustomEvent<{ action?: string }>).detail?.action;
+      handleEditModeAction(action);
+    };
+
+    window.addEventListener(
+      "dashboard-edit-mode-toggle",
+      handleEditModeToggle as EventListener
+    );
+
+    return () => {
+      window.removeEventListener(
+        "dashboard-edit-mode-toggle",
+        handleEditModeToggle as EventListener
+      );
+    };
+  }, [handleEditModeAction]);
 
   // Don't render until BOTH hydration is complete AND state is synced.
   // useState initializers run before hydration, so they get stale defaults.
@@ -421,7 +588,7 @@ export default function Home() {
           availableWidgets={allWidgets.map((w) => ({
             id: w.id,
             type: w.type as any,
-            title: w.title,
+            title: getWidgetDisplayTitle(w),
           }))}
           isEditMode={isEditMode}
           onToggleEditMode={handleToggleEditMode}
@@ -435,6 +602,18 @@ export default function Home() {
               component: GatewayChatWidget,
               defaultValue: CHAT_WIDGET_DEFAULTS.defaultValue,
               config: {},
+            });
+          }}
+          onAddAnnounceWidget={() => {
+            const newId = `channel-dashboard-${Date.now()}`;
+            handleAddWidget({
+              id: newId,
+              type: ANNOUNCE_WIDGET_DEFAULTS.type,
+              title: `Announce ${Date.now().toString().slice(-4)}`,
+              icon: null,
+              component: ChannelDashboardWidget,
+              defaultValue: ANNOUNCE_WIDGET_DEFAULTS.defaultValue,
+              config: ANNOUNCE_WIDGET_DEFAULTS.config,
             });
           }}
         />
@@ -454,6 +633,7 @@ export default function Home() {
           isEditMode={isEditMode}
           onAddWidget={handleAddWidget}
           onRemoveWidget={handleRemoveWidget}
+          onUpdateWidgetConfig={handleWidgetConfigUpdate}
         />
       </div>
     </div>

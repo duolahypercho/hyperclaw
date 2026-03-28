@@ -263,7 +263,10 @@ declare global {
         getGlassConfig: () => Promise<{ useNativeWindowBlur?: boolean }>;
         resize: (width: number, height: number) => Promise<void>;
         setClickThrough: (ignore: boolean) => Promise<void>;
+        setRecordingState?: (isRecording: boolean) => void;
         insertText: (text: string) => Promise<{ success: boolean; error?: string }>;
+        liveType?: (text: string, isFinal: boolean) => Promise<void>;
+        liveTypeReset?: () => Promise<void>;
         onPushToTalk: (callback: (action: "start" | "stop", mode: "dictation" | "agent-chat") => void) => void;
         removePushToTalkListener: () => void;
         onQuickChat: (callback: (data: { screenshot?: string | null }) => void) => void;
@@ -286,7 +289,11 @@ declare global {
         whisper?: {
           initialize: () => Promise<{ success: boolean; info?: any; error?: string }>;
           transcribe: (audioData: number[]) => Promise<{ success: boolean; text?: string; error?: string }>;
-          getStatus: () => Promise<{ ready: boolean; info?: any }>;
+          getStatus: () => Promise<{ ready: boolean; info?: any; language?: string }>;
+        };
+        settings?: {
+          get: () => Promise<{ success: boolean; settings?: { language?: string }; error?: string }>;
+          set: (patch: { language?: string }) => Promise<{ success: boolean; settings?: { language?: string }; error?: string }>;
         };
       };
     };

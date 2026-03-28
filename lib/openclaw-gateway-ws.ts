@@ -123,6 +123,7 @@ export const gatewayConnection = {
   _connectionGeneration: 0,
   listeners: new Set<() => void>(),
   pendingRequests: new Map<string, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>(),
+  pendingRequestTimeouts: new Map<string, ReturnType<typeof setTimeout>>(),
   deviceIdentity: null as { deviceId: string; publicKeyPem: string } | null,
   // Chat event handlers
   chatEventListeners: new Set<(payload: ChatEventPayload) => void>(),
@@ -207,12 +208,14 @@ export const gatewayConnection = {
       }
       // Default 30s, allow override for large responses (e.g. sessions.usage)
       const timeout = timeoutMs ?? 30000;
-      setTimeout(() => {
+      const timer = setTimeout(() => {
         if (this.pendingRequests.has(id)) {
           this.pendingRequests.delete(id);
+          this.pendingRequestTimeouts.delete(id);
           reject(new Error(`Request ${method} timed out`));
         }
       }, timeout);
+      this.pendingRequestTimeouts.set(id, timer);
     });
   },
 
@@ -238,6 +241,11 @@ export const gatewayConnection = {
       const pending = this.pendingRequests.get(id);
       if (pending) {
         this.pendingRequests.delete(id);
+        const timer = this.pendingRequestTimeouts.get(id);
+        if (timer) {
+          clearTimeout(timer);
+          this.pendingRequestTimeouts.delete(id);
+        }
         if (msg.ok) {
           pending.resolve(msg.payload);
         } else {
@@ -615,11 +623,18 @@ export const gatewayConnection = {
       // Also emit to generic event handlers below
     }
 
-    // Emit to generic event handlers
+    // Emit to generic event handlers (each handler is isolated via try/catch
+    // to prevent one handler's exception from breaking dispatch to others)
     if (msg.type === "event" && typeof event === "string") {
       const handlers = this.eventHandlers.get(event);
       if (handlers) {
-        handlers.forEach((handler) => handler(msg));
+        handlers.forEach((handler) => {
+          try {
+            handler(msg);
+          } catch (err) {
+            console.error(`[Gateway WS] Event handler error for "${event}":`, err);
+          }
+        });
       }
     }
   },
@@ -650,6 +665,31 @@ export const gatewayConnection = {
     return () => this.eventHandlers.get(event)?.delete(callback);
   },
 
+  /** Subscribe to ALL session events (broad — receives session.message for every session) */
+  subscribeAllSessionEvents(): Promise<unknown> {
+    return this.request("sessions.subscribe", {});
+  },
+
+  /** Unsubscribe from all session events */
+  unsubscribeAllSessionEvents(): Promise<unknown> {
+    return this.request("sessions.unsubscribe", {});
+  },
+
+  /** Subscribe to session messages for a specific session key */
+  subscribeSessionMessages(key: string): Promise<unknown> {
+    return this.request("sessions.messages.subscribe", { key });
+  },
+
+  /** Unsubscribe from session messages for a specific session key */
+  unsubscribeSessionMessages(key: string): Promise<unknown> {
+    return this.request("sessions.messages.unsubscribe", { key });
+  },
+
+  /** List all sessions (unfiltered — for session discovery) */
+  listAllSessions(limit: number = 200): Promise<{ sessions?: Array<{ key: string; label?: string; status?: string; startedAt?: string; endedAt?: string; kind?: string }> }> {
+    return this.request("sessions.list", { limit });
+  },
+
   /** Send a chat message */
   sendChatMessage(params: { sessionKey: string; message: string; deliver?: boolean; idempotencyKey?: string; attachments?: unknown[] }): Promise<unknown> {
     return this.request("chat.send", {
@@ -674,8 +714,31 @@ export const gatewayConnection = {
   },
 
   /** Get chat history */
+  _chatHistoryInflight: new Map<string, Promise<{ messages?: unknown[] }>>(),
+  _chatHistoryCache: new Map<string, { data: { messages?: unknown[] }; ts: number }>(),
+  _chatHistoryCacheTTL: 1500,
   getChatHistory(sessionKey: string, limit: number = 200): Promise<{ messages?: unknown[] }> {
-    return this.request("chat.history", { sessionKey, limit });
+    const cacheKey = `${sessionKey}::${limit}`;
+    const cached = this._chatHistoryCache.get(cacheKey);
+    if (cached && Date.now() - cached.ts < this._chatHistoryCacheTTL) {
+      return Promise.resolve(cached.data);
+    }
+
+    const inflight = this._chatHistoryInflight.get(cacheKey);
+    if (inflight) {
+      return inflight;
+    }
+
+    const req = this.request<{ messages?: unknown[] }>("chat.history", { sessionKey, limit })
+      .then((result) => {
+        this._chatHistoryCache.set(cacheKey, { data: result, ts: Date.now() });
+        return result;
+      })
+      .finally(() => {
+        this._chatHistoryInflight.delete(cacheKey);
+      });
+    this._chatHistoryInflight.set(cacheKey, req);
+    return req;
   },
 
   /** List available models */

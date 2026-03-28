@@ -29,3 +29,7 @@ export {
   default as StatusWidget,
   StatusCustomHeader,
 } from "./StatusWidget";
+export {
+  default as ChannelDashboardWidget,
+  ChannelDashboardCustomHeader,
+} from "./ChannelDashboardWidget";

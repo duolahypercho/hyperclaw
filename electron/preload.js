@@ -134,6 +134,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
     setClickThrough: (ignore) => ipcRenderer.invoke("voice-overlay-set-clickthrough", ignore),
     isVisible: () => ipcRenderer.invoke("get-voice-overlay-visible"),
     getGlassConfig: () => ipcRenderer.invoke("voice-overlay-glass-config"),
+    setRecordingState: (isRecording) => ipcRenderer.send("voice-overlay-recording-state", isRecording),
     // Listen for minimize events from main process
     onMinimize: (callback) => {
       if (typeof callback !== "function") return;
@@ -151,9 +152,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
       ipcRenderer.on("voice-push-to-talk", (event, data) => {
         // Normalize: support both old string format and new object format
         if (typeof data === "string") {
-          callback(data, "dictation");
+          callback(data, "dictation", false);
         } else {
-          callback(data.action, data.mode);
+          callback(data.action, data.mode, !!data.toggle);
         }
       });
     },
@@ -211,11 +212,18 @@ contextBridge.exposeInMainWorld("electronAPI", {
     removeWakeWordActivatedListener: () => {
       ipcRenderer.removeAllListeners("voice-overlay-wake-word-activated");
     },
+    // Live-type into focused app (no clipboard)
+    liveType: (text, isFinal) => ipcRenderer.invoke("voice-live-type", { text, isFinal }),
+    liveTypeReset: () => ipcRenderer.invoke("voice-live-type-reset"),
     // Whisper transcription API
     whisper: {
       initialize: () => ipcRenderer.invoke("whisper-initialize"),
       transcribe: (audioData) => ipcRenderer.invoke("whisper-transcribe", audioData),
       getStatus: () => ipcRenderer.invoke("whisper-status"),
+    },
+    settings: {
+      get: () => ipcRenderer.invoke("voice-settings-get"),
+      set: (patch) => ipcRenderer.invoke("voice-settings-set", patch),
     },
     // Words Database API
     words: {

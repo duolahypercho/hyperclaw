@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Responsive, WidthProvider, Layout } from "react-grid-layout";
 import { motion } from "framer-motion";
+import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CustomProps } from "$/components/Home/widgets/types/widgets";
 import { dashboardState } from "$/lib/dashboard-state";
@@ -24,7 +25,7 @@ const loadWidgetConfigs = (): Record<string, Record<string, unknown>> => {
 
 // Helper to save widget configs to dashboardState (SQLite)
 const saveWidgetConfigs = (configs: Record<string, Record<string, unknown>>): void => {
-  dashboardState.set(WIDGET_CONFIGS_KEY, JSON.stringify(configs));
+  dashboardState.set(WIDGET_CONFIGS_KEY, JSON.stringify(configs), { flush: true });
 };
 
 // Widget types
@@ -43,7 +44,8 @@ export type WidgetType =
   | "pixel-office"
   | "usage"
   | "gateway-chat"
-  | "agent-status";
+  | "agent-status"
+  | "channel-dashboard";
 
 export interface Widget {
   id: string;
@@ -112,28 +114,41 @@ const GridItem = React.memo<{
   isEditMode: boolean;
   onMaximize: (id: string) => void;
   onConfigChange: (id: string, config: Record<string, unknown>) => void;
+  onRemove?: (id: string) => void;
 }>(
-  ({ widget, isEditMode, onMaximize, onConfigChange }) => {
+  ({ widget, isEditMode, onMaximize, onConfigChange, onRemove }) => {
     const boundMaximize = useCallback(() => onMaximize(widget.id), [onMaximize, widget.id]);
     const boundConfigChange = useCallback(
       (config: Record<string, unknown>) => onConfigChange(widget.id, config),
       [onConfigChange, widget.id]
     );
     return (
-      <WidgetWrapper
-        widget={widget}
-        isMaximized={false}
-        onMaximize={boundMaximize}
-        isEditMode={isEditMode}
-        onConfigChange={boundConfigChange}
-      />
+      <div className="relative h-full w-full">
+        {isEditMode && onRemove && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onRemove(widget.id); }}
+            className="absolute -top-1.5 -right-1.5 z-50 w-5 h-5 rounded-full bg-red-500 hover:bg-red-600 text-white flex items-center justify-center shadow-md transition-colors"
+            title="Remove widget"
+          >
+            <X className="w-3 h-3" />
+          </button>
+        )}
+        <WidgetWrapper
+          widget={widget}
+          isMaximized={false}
+          onMaximize={boundMaximize}
+          isEditMode={isEditMode}
+          onConfigChange={boundConfigChange}
+        />
+      </div>
     );
   },
   (prev, next) =>
     prev.widget === next.widget &&
     prev.isEditMode === next.isEditMode &&
     prev.onMaximize === next.onMaximize &&
-    prev.onConfigChange === next.onConfigChange
+    prev.onConfigChange === next.onConfigChange &&
+    prev.onRemove === next.onRemove
 );
 GridItem.displayName = "GridItem";
 
@@ -291,21 +306,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
     };
   };
 
-  // Save configs whenever they change — skip the very first value to avoid
-  // overwriting persisted (but not-yet-hydrated) data with an empty object.
-  // This mirrors the baseline-ref pattern used in Home/index.tsx for other keys.
-  const widgetConfigsBaselineRef = useRef<string | null>(null);
-  useEffect(() => {
-    const json = JSON.stringify(widgetConfigs);
-    if (widgetConfigsBaselineRef.current === null) {
-      widgetConfigsBaselineRef.current = json;
-      return; // don't save the initial value — it may be empty pre-hydration
-    }
-    if (json === widgetConfigsBaselineRef.current) return;
-    widgetConfigsBaselineRef.current = json;
-    saveWidgetConfigs(widgetConfigs);
-  }, [widgetConfigs]);
-
   // Add a new widget instance with a unique ID
   const addWidgetInstance = useCallback((widgetTemplate: Widget, customConfig?: Record<string, unknown>) => {
     const timestamp = Date.now();
@@ -324,10 +324,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
     // Store the config
     if (customConfig) {
-      setWidgetConfigs(prev => ({
-        ...prev,
-        [newId]: customConfig,
-      }));
+      setWidgetConfigs(prev => {
+        const next = {
+          ...prev,
+          [newId]: customConfig,
+        };
+        saveWidgetConfigs(next);
+        return next;
+      });
     }
 
     return newId;
@@ -342,10 +346,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
         const changed = Object.keys(config).some(k => existing[k] !== config[k]);
         if (!changed) return prev; // same reference = no re-render
       }
-      return {
+      const next = {
         ...prev,
         [widgetId]: { ...existing, ...config },
       };
+      saveWidgetConfigs(next);
+      return next;
     });
     if (onUpdateWidgetConfig) {
       onUpdateWidgetConfig(widgetId, config);
@@ -356,6 +362,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const removeWidgetInstance = useCallback((widgetId: string) => {
     setWidgetConfigs(prev => {
       const { [widgetId]: _, ...rest } = prev;
+      saveWidgetConfigs(rest);
       return rest;
     });
     if (onRemoveWidget) {
@@ -375,6 +382,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
   const stableOnConfigChange = useCallback((widgetId: string, config: Record<string, unknown>) => {
     updateWidgetConfigRef.current(widgetId, config);
+  }, []);
+
+  const removeWidgetRef = useRef(removeWidgetInstance);
+  removeWidgetRef.current = removeWidgetInstance;
+
+  const stableOnRemove = useCallback((widgetId: string) => {
+    removeWidgetRef.current(widgetId);
   }, []);
 
   // Disable global text selection while dragging/resizing grid items
@@ -584,6 +598,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
               isEditMode={isEditMode}
               onMaximize={stableOnMaximize}
               onConfigChange={stableOnConfigChange}
+              onRemove={stableOnRemove}
             />
           </div>
         ))}

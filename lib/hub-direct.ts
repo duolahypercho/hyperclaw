@@ -9,6 +9,23 @@ import { getCachedToken } from "./auth-token-cache";
 const HUB_API_URL =
   process.env.NEXT_PUBLIC_HUB_API_URL || "https://hub.hypercho.com";
 
+function getHubUrl(path: string): string {
+  return `${HUB_API_URL}${path}`;
+}
+
+function buildHubHeaders(
+  token: string,
+  headers?: HeadersInit,
+  includeJsonContentType = true
+): Headers {
+  const merged = new Headers(headers);
+  merged.set("Authorization", `Bearer ${token}`);
+  if (includeJsonContentType && !merged.has("Content-Type")) {
+    merged.set("Content-Type", "application/json");
+  }
+  return merged;
+}
+
 /**
  * Returns the cached JWT. Never calls getSession() to avoid flooding
  * /api/auth/session — the token is populated by UserProvider from the
@@ -36,7 +53,7 @@ export async function getActiveDeviceId(
   if (!jwt) return null;
 
   try {
-    const res = await fetch(`${HUB_API_URL}/api/devices`, {
+    const res = await fetch(getHubUrl("/api/devices"), {
       headers: {
         Authorization: `Bearer ${jwt}`,
         "Content-Type": "application/json",
@@ -192,7 +209,23 @@ async function ensureGatewayConnected(): Promise<boolean> {
 export async function hubCommand(
   body: Record<string, unknown>
 ): Promise<unknown> {
-  // Try gateway WebSocket first (it's already connected in hub mode)
+  // Try local connector bridge first (direct HTTP, no Hub relay needed)
+  try {
+    const localRes = await fetch("http://127.0.0.1:18790/bridge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (localRes.ok) {
+      const data = await localRes.json();
+      return data;
+    }
+  } catch {
+    // Local bridge not available, try gateway WS
+  }
+
+  // Try gateway WebSocket (routes through Hub relay)
   try {
     const { gatewayConnection } = await import("$/lib/openclaw-gateway-ws");
 
@@ -212,7 +245,7 @@ export async function hubCommand(
     // Gateway not available, fall back to REST
   }
 
-  // Fallback: REST API
+  // Fallback: Hub REST API
   const token = await getUserToken();
   if (!token) {
     return { success: false, error: "Not authenticated" };
@@ -227,17 +260,11 @@ export async function hubCommand(
     };
   }
 
-  const res = await fetch(
-    `${HUB_API_URL}/api/devices/${deviceId}/command`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-    }
-  );
+  const res = await fetch(getHubUrl(`/api/devices/${deviceId}/command`), {
+    method: "POST",
+    headers: buildHubHeaders(token),
+    body: JSON.stringify(body),
+  });
 
   const text = await res.text();
   let parsed: unknown;
@@ -256,13 +283,12 @@ export async function hubFetch(
   options: RequestInit = {}
 ): Promise<Response> {
   const token = await getUserToken();
-  return fetch(`${HUB_API_URL}${path}`, {
+  const method = (options.method || "GET").toUpperCase();
+
+  return fetch(getHubUrl(path), {
     ...options,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-      ...(options.headers as Record<string, string>),
-    },
+    method,
+    headers: buildHubHeaders(token, options.headers, method !== "GET"),
   });
 }
 

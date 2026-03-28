@@ -20,6 +20,13 @@ const cache: Record<string, string> = {};
 let hydrated = false;
 /** true when hydrate() actually got data from the backend */
 let hydratedWithData = false;
+let pendingEntries: Record<string, string> = {};
+let flushTimer: ReturnType<typeof setTimeout> | null = null;
+let flushInFlight: Promise<boolean> | null = null;
+
+type PersistOptions = {
+  flush?: boolean;
+};
 
 /** Keys whose changes should notify the LayoutSwitcher for auto-save. */
 const LAYOUT_KEYS = new Set([
@@ -61,7 +68,7 @@ async function persistToBackend(entries: Record<string, string>): Promise<boolea
         error?: string;
       };
       if (res?.success) {
-        console.log("[dashboard-state] saved", keys.join(", "));
+        // saved successfully
         return true;
       }
       console.warn("[dashboard-state] save-app-state returned:", res?.error || "no success flag", "keys:", keys);
@@ -73,33 +80,79 @@ async function persistToBackend(entries: Record<string, string>): Promise<boolea
   return false;
 }
 
+function schedulePersist(entries: Record<string, string>, options: PersistOptions = {}) {
+  pendingEntries = { ...pendingEntries, ...entries };
+  if (options.flush) {
+    if (flushTimer) {
+      clearTimeout(flushTimer);
+      flushTimer = null;
+    }
+    void flushPendingEntries();
+    return;
+  }
+  if (flushTimer) clearTimeout(flushTimer);
+  flushTimer = setTimeout(() => {
+    flushTimer = null;
+    void flushPendingEntries();
+  }, 400);
+}
+
+async function flushPendingEntries(): Promise<boolean> {
+  if (flushInFlight) return flushInFlight;
+  const entries = pendingEntries;
+  if (Object.keys(entries).length === 0) return true;
+  pendingEntries = {};
+  flushInFlight = persistToBackend(entries).then((success) => {
+    if (!success) {
+      pendingEntries = { ...entries, ...pendingEntries };
+    } else if (Object.keys(pendingEntries).length > 0 && !flushTimer) {
+      flushTimer = setTimeout(() => {
+        flushTimer = null;
+        void flushPendingEntries();
+      }, 0);
+    }
+    return success;
+  }).finally(() => {
+    flushInFlight = null;
+  });
+  return flushInFlight;
+}
+
 export const dashboardState = {
   get(key: string): string | null {
     return cache[key] ?? null;
   },
 
-  set(key: string, value: string) {
+  set(key: string, value: string, options: PersistOptions = {}) {
     cache[key] = value;
     backupToLocal(key, value);
-    persistToBackend({ [key]: value });
+    schedulePersist({ [key]: value }, options);
     notifyIfLayoutKey(key);
   },
 
   /** Batch-set multiple keys in one SQLite transaction */
-  setMany(entries: Record<string, string>) {
+  setMany(entries: Record<string, string>, options: PersistOptions = {}) {
     Object.assign(cache, entries);
     for (const [k, v] of Object.entries(entries)) backupToLocal(k, v);
-    persistToBackend(entries);
+    schedulePersist(entries, options);
     for (const key of Object.keys(entries)) {
       notifyIfLayoutKey(key);
     }
   },
 
-  remove(key: string) {
+  remove(key: string, options: PersistOptions = {}) {
     delete cache[key];
     try { localStorage.removeItem(`ds:${key}`); } catch {}
-    persistToBackend({ [key]: "" });
+    schedulePersist({ [key]: "" }, options);
     notifyIfLayoutKey(key);
+  },
+
+  flush(): Promise<boolean> {
+    if (flushTimer) {
+      clearTimeout(flushTimer);
+      flushTimer = null;
+    }
+    return flushPendingEntries();
   },
 
   isHydrated() {
@@ -132,7 +185,7 @@ export const dashboardState = {
           }
         }
         if (count > 0) hydratedWithData = true;
-        console.log("[dashboard-state] hydrated", count, "keys from backend");
+        // hydrated from backend
       } else {
         console.warn("[dashboard-state] hydrate backend returned:", res?.error || "empty/no success");
       }

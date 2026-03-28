@@ -3,18 +3,21 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { WifiOff, RefreshCw } from "lucide-react";
+import { useSession } from "next-auth/react";
 import { useOpenClawContext } from "$/Providers/OpenClawProv";
 
 /**
  * Persistent, non-closable banner shown when the OpenClaw gateway is unreachable.
  * Auto-hides when the connection is restored.
+ * Hidden when the user is not logged in (OpenClaw won't be running anyway).
  */
 export function GatewayStatusBanner() {
+  const { data: session } = useSession();
   const { gatewayHealthy, fetchGatewayHealth } = useOpenClawContext();
   const [reconnecting, setReconnecting] = useState(false);
 
-  // Only show when explicitly unhealthy (not during initial null/loading state)
-  const show = gatewayHealthy === false;
+  // Only show when logged in and explicitly unhealthy (not during initial null/loading state)
+  const show = !!session && gatewayHealthy === false;
 
   const handleReconnect = async () => {
     setReconnecting(true);

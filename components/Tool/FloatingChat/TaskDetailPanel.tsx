@@ -143,7 +143,7 @@ export interface TaskDetailPanelTask {
   starred?: boolean;
 }
 
-export function TaskDetailPanel({ task, onStatusChange }: { task: TaskDetailPanelTask; onStatusChange?: (taskId: string, newStatus: KanbanStatus) => void }) {
+export function TaskDetailPanel({ task, onStatusChange }: { task: TaskDetailPanelTask; onStatusChange?: (taskId: string, newStatus: KanbanStatus) => void | Promise<any> }) {
   const [sessionKey, setSessionKey] = useState<string | null>(null);
   const [transcriptOpen, setTranscriptOpen] = useState(false);
   const [taskLogs, setTaskLogs] = useState<TaskLog[]>([]);
@@ -180,8 +180,12 @@ export function TaskDetailPanel({ task, onStatusChange }: { task: TaskDetailPane
     setLocalStatus(newStatus);
     setStatusOpen(false);
     try {
-      await updateTodoTaskAPI({ id: task._id, status: newStatus });
-      onStatusChange?.(task._id, newStatus);
+      if (onStatusChange) {
+        // Delegate to parent (e.g. TodoList provider) which handles API + local state
+        await onStatusChange(task._id, newStatus);
+      } else {
+        await updateTodoTaskAPI({ id: task._id, status: newStatus });
+      }
     } catch (e) {
       console.error("[TaskDetailPanel] status update failed:", e);
       setLocalStatus(task.status); // revert on error

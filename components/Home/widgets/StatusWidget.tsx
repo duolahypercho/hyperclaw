@@ -42,9 +42,9 @@ import { useFloatingChatOS } from "@OS/Provider/OSProv";
 // StatusWidget dispatches this; GatewayChatWidget listens.
 export const OPEN_AGENT_CHAT_EVENT = "open-agent-chat";
 
-export function dispatchOpenAgentChat(agentId: string) {
+export function dispatchOpenAgentChat(agentId: string, sessionKey?: string) {
   window.dispatchEvent(
-    new CustomEvent(OPEN_AGENT_CHAT_EVENT, { detail: { agentId } })
+    new CustomEvent(OPEN_AGENT_CHAT_EVENT, { detail: { agentId, sessionKey } })
   );
 }
 

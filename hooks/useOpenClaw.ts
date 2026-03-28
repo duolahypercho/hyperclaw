@@ -512,12 +512,22 @@ export function useOpenClaw(autoRefreshMs = 0) {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
 
+    let attempts = 0;
     const tryConnect = async () => {
       if (cancelled) return;
       if (getGatewayConnectionState().connected) return;
 
       const token = await getUserToken();
-      if (!token || cancelled) return;
+      if (cancelled) return;
+      if (!token) {
+        // Token not cached yet (UserProvider hasn't set it). Retry with
+        // increasing backoff up to ~10s, covering the typical session load time.
+        attempts++;
+        if (!cancelled && attempts < 10) {
+          timer = setTimeout(tryConnect, Math.min(1000 * attempts, 5000));
+        }
+        return;
+      }
 
       try {
         const config = await getGatewayConfig();

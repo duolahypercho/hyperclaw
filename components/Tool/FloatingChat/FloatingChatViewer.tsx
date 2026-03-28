@@ -2,7 +2,7 @@
 
 import React, { useState, useCallback, useEffect, useRef, memo, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, ChevronDown, ChevronRight, Check, RefreshCw, Reply, Paperclip } from "lucide-react";
+import { X, ChevronDown, Check, RefreshCw, Reply, Paperclip } from "lucide-react";
 import { X as XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -39,7 +39,6 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
-import * as Collapsible from "@radix-ui/react-collapsible";
 import createMarkdownComponents from "@OS/AI/components/createMarkdownComponents";
 import { createMergeToolCalls } from "@OS/AI/utils/mergeToolCalls";
 import CopanionIcon from "@OS/assets/copanion";
@@ -53,9 +52,12 @@ import { PanelRight, Zap } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { FloatingChatTaskContext } from "@OS/Provider/OSProv";
 import { TaskDetailPanel } from "./TaskDetailPanel";
+import { useTodoList } from "$/components/Tool/TodoList/provider/todolistProvider";
 import { useUnifiedToolState } from "@OS/AI/components/hooks/useUnifiedToolState";
 import { GenericToolMessage } from "@OS/AI/components/GenericToolMessage";
 import { UnifiedToolState } from "@OS/AI/components/ToolRegistry";
+import { GroupedToolActions } from "$/components/Home/widgets/gateway-chat/GroupedToolActions";
+import { shouldShowAvatarLocal as shouldShowAvatarShared } from "$/components/Home/widgets/gateway-chat/EnhancedMessageBubble";
 
 // Module-level guard: tracks which task IDs have already had auto-send fired.
 // Survives component unmount/remount (e.g. toggling the floating chat) so we
@@ -76,268 +78,12 @@ const memoizedMarkdownComponents = {
 };
 
 function shouldShowAvatarLocal(messages: GatewayChatMessage[], index: number): boolean {
-  if (index === 0) return true;
-  const prevMsg = messages[index - 1];
-  const currMsg = messages[index];
-  if (!prevMsg || !currMsg) return true;
-  return prevMsg.role !== currMsg.role;
+  return shouldShowAvatarShared(messages, index);
 }
 
 
-// ── Compact ToolCallFallback ──────────────────────────────────────────
-const ToolCallFallback: React.FC<{
-  toolName: string;
-  toolArgs: string;
-  result?: string;
-  isError?: boolean;
-}> = memo(({ toolName, toolArgs, result, isError }) => {
-  const [expanded, setExpanded] = useState(false);
-
-  const argsSummary = useMemo(() => {
-    try {
-      const parsed = JSON.parse(toolArgs);
-      if (typeof parsed === "object" && parsed !== null) {
-        const entries = Object.entries(parsed);
-        if (entries.length === 0) return "";
-        const [, val] = entries[0];
-        const str = typeof val === "string" ? val : JSON.stringify(val);
-        return str.length > 60 ? str.slice(0, 60) + "..." : str;
-      }
-    } catch {}
-    return toolArgs.length > 60 ? toolArgs.slice(0, 60) + "..." : toolArgs;
-  }, [toolArgs]);
-
-  const hasResult = result !== undefined && result !== "";
-  const statusIcon = hasResult
-    ? isError
-      ? <XIcon className="w-3 h-3 text-red-500" />
-      : <Check className="w-3 h-3 text-green-600" />
-    : (
-      <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: "linear" }}>
-        <RefreshCw className="w-3 h-3 text-primary" />
-      </motion.div>
-    );
-
-  return (
-    <motion.div
-      className={cn(
-        "py-1 px-2.5 relative w-full max-w-full transition-all duration-300 select-text rounded-lg border text-xs",
-        isError ? "border-red-500/40 bg-red-500/5" : "border-border/50 bg-muted/40",
-        "hover:border-primary/50"
-      )}
-      style={{ borderTopLeftRadius: 0, borderBottomLeftRadius: "10px", borderTopRightRadius: "10px", borderBottomRightRadius: "10px" }}
-    >
-      <div className="flex items-center gap-1.5 cursor-pointer" onClick={() => setExpanded((v) => !v)}>
-        {statusIcon}
-        <span className="font-medium text-muted-foreground">
-          {toolName}
-          {hasResult ? (isError ? " failed" : " completed") : " executing..."}
-        </span>
-        {argsSummary && (
-          <span className="text-[10px] text-muted-foreground/60 truncate max-w-[140px]">
-            {argsSummary}
-          </span>
-        )}
-        <motion.div animate={{ rotate: expanded ? 90 : 0 }} transition={{ duration: 0.2 }}>
-          <ChevronRight className="w-3 h-3 text-muted-foreground" />
-        </motion.div>
-      </div>
-      <AnimatePresence>
-        {expanded && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.25, ease: "easeInOut" }}
-            className="overflow-hidden"
-          >
-            <div className="mt-1.5 space-y-1.5">
-              {toolArgs && toolArgs !== "{}" && (
-                <div className="p-1.5 bg-primary/5 rounded text-[11px] font-mono border border-border/30 overflow-hidden">
-                  <div className="text-muted-foreground mb-0.5">Arguments:</div>
-                  <pre className="whitespace-pre-wrap break-all max-h-[120px] overflow-y-auto">{toolArgs}</pre>
-                </div>
-              )}
-              {hasResult && (
-                <div className={cn(
-                  "p-1.5 rounded text-[11px] border overflow-hidden",
-                  isError ? "bg-red-500/10 border-red-500/40" : "bg-muted/50 border-border/50"
-                )}>
-                  <div className="text-muted-foreground mb-0.5">Result:</div>
-                  <pre className="whitespace-pre-wrap break-all max-h-[150px] overflow-y-auto">{result}</pre>
-                </div>
-              )}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </motion.div>
-  );
-}, (prev, next) =>
-  prev.toolName === next.toolName &&
-  prev.toolArgs === next.toolArgs &&
-  prev.result === next.result &&
-  prev.isError === next.isError
-);
-
-// ── Grouped Tool Actions ──────────────────────────────────────────────
-const GroupedToolActions: React.FC<{
-  toolMessages: GatewayChatMessage[];
-  toolStates?: Map<string, UnifiedToolState>;
-  toggleToolExpansion?: (messageId: string) => void;
-  showAvatar: boolean;
-  assistantAvatar?: { src?: string; fallback: string; alt?: string };
-}> = ({ toolMessages, toolStates, toggleToolExpansion, showAvatar, assistantAvatar }) => {
-  const getToolCallId = (msg: GatewayChatMessage) => {
-    const tc = msg.toolCalls?.[0];
-    return tc?.id || tc?.function?.name || msg.id || "";
-  };
-
-  const isToolCompleted = (msg: GatewayChatMessage) => {
-    const state = toolStates?.get(getToolCallId(msg));
-    return state?.status === "completed" || state?.status === "rejected" || state?.status === "expired";
-  };
-
-  const hasExecutingTools = toolMessages.some((m) => !isToolCompleted(m));
-
-  const [groupOpen, setGroupOpen] = useState(true);
-  const userOpenedRef = useRef(false);
-
-  const allDone = !hasExecutingTools;
-  const anyToolExpanded = toolMessages.some((m) => {
-    const state = toolStates?.get(getToolCallId(m));
-    return state?.isExpanded;
-  });
-
-  useEffect(() => {
-    if (allDone && !anyToolExpanded && !userOpenedRef.current) {
-      setGroupOpen(false);
-    }
-  }, [allDone, anyToolExpanded]);
-
-  const handleOpenChange = useCallback((open: boolean) => {
-    if (open) userOpenedRef.current = true;
-    setGroupOpen(open);
-  }, []);
-
-  const toggleCallbacksRef = useRef<Map<string, () => void>>(new Map());
-  const getToggleCallback = useCallback((msgId: string) => {
-    let cb = toggleCallbacksRef.current.get(msgId);
-    if (!cb) {
-      cb = () => toggleToolExpansion?.(msgId);
-      toggleCallbacksRef.current.set(msgId, cb);
-    }
-    return cb;
-  }, [toggleToolExpansion]);
-
-  const executingCount = toolMessages.length - toolMessages.filter((m) => isToolCompleted(m)).length;
-
-  return (
-    <Collapsible.Root open={groupOpen} onOpenChange={handleOpenChange}>
-      <div className="flex gap-2 justify-start">
-        <div className="w-6 h-6 flex-shrink-0">
-          {showAvatar ? (
-            <Avatar className="w-6 h-6">
-              {assistantAvatar?.src ? (
-                <AvatarImage src={assistantAvatar.src} alt={assistantAvatar.alt} />
-              ) : null}
-              <AvatarFallback className="bg-primary/10 text-primary text-[8px]">
-                {assistantAvatar?.fallback
-                  ? <span>{assistantAvatar.fallback}</span>
-                  : <CopanionIcon className="w-3 h-3" />}
-              </AvatarFallback>
-            </Avatar>
-          ) : (
-            <div className="w-6 h-6 flex-shrink-0" />
-          )}
-        </div>
-
-        <div className="relative flex flex-col max-w-full min-w-0 justify-start items-start">
-          <Collapsible.Trigger asChild>
-            <button
-              type="button"
-              className={cn(
-                "py-1 px-2.5 relative w-fit transition-all duration-300 select-none rounded-lg border text-xs",
-                hasExecutingTools
-                  ? "border-primary/40 text-foreground/80"
-                  : "border-border/50 text-muted-foreground hover:text-foreground/80 hover:border-primary/50"
-              )}
-              style={{
-                borderTopRightRadius: "10px",
-                borderBottomRightRadius: "10px",
-                borderTopLeftRadius: "0px",
-                borderBottomLeftRadius: "10px",
-              }}
-            >
-              <div className="flex items-center gap-1.5">
-                {hasExecutingTools && (
-                  <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: "linear" }}>
-                    <RefreshCw className="w-3 h-3 text-primary" />
-                  </motion.div>
-                )}
-                <span className="font-medium">
-                  {toolMessages.length} action{toolMessages.length === 1 ? "" : "s"}
-                </span>
-                {executingCount > 0 && (
-                  <span className="text-[10px] text-primary">
-                    {executingCount} running
-                  </span>
-                )}
-                <motion.div
-                  animate={{ rotate: groupOpen ? 90 : 0 }}
-                  transition={{ duration: 0.2 }}
-                >
-                  <ChevronRight className="w-3 h-3" />
-                </motion.div>
-              </div>
-            </button>
-          </Collapsible.Trigger>
-
-          <Collapsible.Content>
-            <div className="overflow-x-auto overflow-y-hidden">
-              <div className="mt-1.5 space-y-1.5">
-                {toolMessages.map((toolMsg, msgIdx) => {
-                  const tcId = getToolCallId(toolMsg);
-                  const state = toolStates?.get(tcId);
-
-                  if (state && toggleToolExpansion) {
-                    return (
-                      <GenericToolMessage
-                        key={tcId || msgIdx}
-                        toolState={state}
-                        message={toolMsg as any}
-                        onToggleExpand={getToggleCallback(tcId)}
-                        assistantAvatar={undefined}
-                        botPic={undefined}
-                        showAvatar={false}
-                      />
-                    );
-                  }
-
-                  const tc = toolMsg.toolCalls?.[0];
-                  const toolName = tc?.function?.name || tc?.name || "action";
-                  const toolArgs = tc?.function?.arguments || tc?.arguments || "";
-                  const mergedResult = (tc as any)?.result as string | undefined;
-                  const mergedIsError = (tc as any)?.isError as boolean | undefined;
-
-                  return (
-                    <ToolCallFallback
-                      key={tcId || `tool-fallback-${msgIdx}`}
-                      toolName={toolName}
-                      toolArgs={toolArgs}
-                      result={mergedResult}
-                      isError={mergedIsError}
-                    />
-                  );
-                })}
-              </div>
-            </div>
-          </Collapsible.Content>
-        </div>
-      </div>
-    </Collapsible.Root>
-  );
-};
+// GroupedToolActions and shouldShowAvatarLocal imported from shared modules
+// (same as CompactChatView — single source of truth for tool rendering)
 
 // ── Message Bubble ────────────────────────────────────────────────────
 const MessageBubble = memo(
@@ -390,9 +136,6 @@ const MessageBubble = memo(
       } else {
         const tc = (message as any).toolCalls?.[0];
         const toolName = tc?.function?.name || tc?.name || "action";
-        const toolArgs = tc?.function?.arguments || tc?.arguments || "";
-        const mergedResult = (tc as any)?.result as string | undefined;
-        const mergedIsError = (tc as any)?.isError as boolean | undefined;
         toolCallElement = (
           <div className="flex gap-2 justify-start min-w-0 max-w-full">
             <div className="w-6 h-6 flex-shrink-0">
@@ -406,13 +149,8 @@ const MessageBubble = memo(
                 </Avatar>
               ) : <div className="w-6 h-6" />}
             </div>
-            <div className="relative flex flex-col min-w-0 overflow-hidden flex-1">
-              <ToolCallFallback
-                toolName={toolName}
-                toolArgs={toolArgs}
-                result={mergedResult}
-                isError={mergedIsError}
-              />
+            <div className="py-1 px-2.5 rounded-lg border border-border/50 text-xs text-muted-foreground">
+              {toolName}
             </div>
           </div>
         );
@@ -701,6 +439,7 @@ interface FloatingChatViewerProps {
 export function FloatingChatViewer({ agentId, sessionKey: providedSessionKey, taskContext, onClose, onNewMessage }: FloatingChatViewerProps) {
   const { agents } = useOpenClawContext();
   const { userInfo } = useUser();
+  const { handleStatusChange: todoStatusChange } = useTodoList();
 
   // Detail panel toggle — open by default when task context is present
   const [showDetail, setShowDetail] = useState(!!taskContext);
@@ -1472,7 +1211,7 @@ export function FloatingChatViewer({ agentId, sessionKey: providedSessionKey, ta
               transition={{ duration: 0.2, delay: 0.08, ease: "easeOut" }}
               className="w-[260px] h-full"
             >
-              <TaskDetailPanel task={taskContext} />
+              <TaskDetailPanel task={taskContext} onStatusChange={(taskId, newStatus) => todoStatusChange(taskId, newStatus)} />
             </motion.div>
           </motion.div>
         )}

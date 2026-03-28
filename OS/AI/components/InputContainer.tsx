@@ -192,6 +192,7 @@ export const InputContainer: React.FC<InputContainerProps> = ({
     transcript,
     interimTranscript,
     isListening,
+    isTranscribing,
     error: transcriptionError,
     audioData,
     startListening,
@@ -200,6 +201,10 @@ export const InputContainer: React.FC<InputContainerProps> = ({
   } = useLiveTranscription();
   const [isPushToTalk, setIsPushToTalk] = useState(false);
   const pushToTalkRef = useRef(false);
+  // When true, the transcript→input sync effect is suppressed until new
+  // speech arrives (transcript or interimTranscript actually changes).
+  const userEditedInputRef = useRef(false);
+  const lastSyncedTranscriptRef = useRef("");
   const [internalAttachments, setInternalAttachments] = useState<
     InternalAttachment[]
   >([]);
@@ -735,12 +740,31 @@ export const InputContainer: React.FC<InputContainerProps> = ({
     setPdfPreviewContent(null);
   };
 
-  // Sync transcript to input value when in voice mode
+  // Sync transcript + interim to input value while voice capture is active and
+  // after stop while Whisper is still finalizing the transcript.
   useEffect(() => {
-    if (isVoiceMode && transcript) {
-      setValue?.(transcript);
+    if (!isVoiceMode && !isListening && !isTranscribing && !transcript && !interimTranscript) {
+      return;
     }
-  }, [transcript, isVoiceMode, setValue]);
+    const display = interimTranscript
+      ? (transcript ? transcript + " " + interimTranscript : interimTranscript)
+      : transcript;
+
+    // If the display text hasn't changed since last sync, skip — this avoids
+    // overwriting the user's manual edits when the effect re-runs due to
+    // other dependency changes (e.g. setValue reference).
+    if (display === lastSyncedTranscriptRef.current) return;
+    lastSyncedTranscriptRef.current = display;
+
+    // New speech text arrived — sync it to the input
+    if (display) {
+      userEditedInputRef.current = false;
+      setValue?.(display);
+    } else if (userEditedInputRef.current) {
+      // Transcript was cleared but user already edited — don't overwrite
+      return;
+    }
+  }, [transcript, interimTranscript, isVoiceMode, isListening, isTranscribing, setValue]);
 
   // Show transcription errors
   useEffect(() => {
@@ -762,9 +786,8 @@ export const InputContainer: React.FC<InputContainerProps> = ({
   useEffect(() => {
     if (!isVoiceMode && !isPushToTalk && isListening) {
       stopListening();
-      clearTranscript();
     }
-  }, [isVoiceMode, isPushToTalk, isListening, stopListening, clearTranscript]);
+  }, [isVoiceMode, isPushToTalk, isListening, stopListening]);
 
   // Push-to-talk: insert transcript at cursor when key released
   useEffect(() => {
@@ -797,13 +820,6 @@ export const InputContainer: React.FC<InputContainerProps> = ({
     }
   }, [isPushToTalk, transcript, currentValue, setValue, clearTranscript]);
 
-  // Push-to-talk: also handle interim transcript display during recording
-  useEffect(() => {
-    if (isPushToTalk && interimTranscript) {
-      // Show interim text as placeholder hint — don't modify actual value
-    }
-  }, [isPushToTalk, interimTranscript]);
-
   // Push-to-talk: global Ctrl+Shift+Space hold-to-record
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -835,20 +851,28 @@ export const InputContainer: React.FC<InputContainerProps> = ({
   }, [startListening, stopListening, clearTranscript]);
 
   const handleVoiceModeStart = useCallback(() => {
+    clearTranscript();
+    setValue?.("");
+    userEditedInputRef.current = false;
+    lastSyncedTranscriptRef.current = "";
     setIsVoiceMode(true);
     startListening();
-  }, [startListening]);
+  }, [startListening, clearTranscript, setValue]);
 
   const handleVoiceModeStop = useCallback(() => {
+    // Cancel any in-flight transcription so the final Whisper result
+    // doesn't overwrite the user's edits to the input field.
+    clearTranscript();
     stopListening();
     setIsVoiceMode(false);
-    clearTranscript();
   }, [stopListening, clearTranscript]);
 
   const handleVoiceModeSend = useCallback(async () => {
-    const transcriptToSend = transcript || currentValue;
+    // Prefer finalized transcript; fall back to whatever is in the input
+    // (which may include interim text we synced earlier)
+    const transcriptToSend = (transcript || currentValue).trim();
 
-    if (!transcriptToSend.trim()) {
+    if (!transcriptToSend) {
       toast({
         title: "No transcript",
         description: "Please speak something before sending",
@@ -862,25 +886,14 @@ export const InputContainer: React.FC<InputContainerProps> = ({
       stopListening();
     }
 
-    // Set the transcript as the input value
-    setValue?.(transcriptToSend);
-
-    // Send the message
-    const baseMessage = transcriptToSend.trim();
-    const messageToSend = `${baseMessage}`;
-
     try {
-      // Clear transcript and reset voice mode
+      // Clear everything before sending to prevent stale state
       clearTranscript();
       setIsVoiceMode(false);
       setIsRecording(false);
-      
-      await onSendMessage(messageToSend, []);
+      setValue?.("");
 
-      // Clear input if not controlled
-      if (!isControlled) {
-        setInputValue("");
-      }
+      await onSendMessage(transcriptToSend, []);
     } catch (error) {
       console.error("Error sending voice message:", error);
       toast({
@@ -897,7 +910,6 @@ export const InputContainer: React.FC<InputContainerProps> = ({
     setValue,
     onSendMessage,
     clearTranscript,
-    isControlled,
     setInputValue,
     toast,
   ]);
@@ -994,15 +1006,24 @@ export const InputContainer: React.FC<InputContainerProps> = ({
   // Voice controller UI
   const renderVoiceController = useCallback(() => {
     return (
-      <VoiceController
-        isListening={isListening}
-        transcript={transcript}
-        currentValue={currentValue}
-        audioData={audioData}
-        onStart={handleVoiceModeStart}
-        onStop={handleVoiceModeStop}
-        onSend={handleVoiceModeSend}
-      />
+      <motion.div
+        key="voice-controller"
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: 10 }}
+        transition={{ duration: 0.2 }}
+        className="w-full"
+      >
+        <VoiceController
+          isListening={isListening}
+          transcript={transcript}
+          currentValue={currentValue}
+          audioData={audioData}
+          onStart={handleVoiceModeStart}
+          onStop={handleVoiceModeStop}
+          onSend={handleVoiceModeSend}
+        />
+      </motion.div>
     );
   }, [
     isListening,
@@ -1018,6 +1039,7 @@ export const InputContainer: React.FC<InputContainerProps> = ({
   const renderDefaultController = useCallback(() => {
     return (
       <motion.div
+        key="default-controller"
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
         exit={{ opacity: 0, y: 10 }}
@@ -1247,7 +1269,20 @@ export const InputContainer: React.FC<InputContainerProps> = ({
             <TextareaAutosize
               ref={textareaRef}
               value={currentValue}
-              onChange={(e) => setValue?.(e.target.value)}
+              onChange={(e) => {
+                const newVal = e.target.value;
+                setValue?.(newVal);
+                if (isVoiceMode) {
+                  // User deleted text while in voice mode — exit voice mode
+                  if (newVal.length < currentValue.length) {
+                    stopListening();
+                    setIsVoiceMode(false);
+                    clearTranscript();
+                  } else {
+                    userEditedInputRef.current = true;
+                  }
+                }
+              }}
               onKeyDown={handleKeyDown}
               onCompositionStart={() => setIsComposing(true)}
               onCompositionEnd={() => setIsComposing(false)}
@@ -1294,15 +1329,10 @@ export const InputContainer: React.FC<InputContainerProps> = ({
             {/* Controller - Voice or Default */}
             <div className="flex-1 flex flex-row justify-between relative min-h-[32px]">
               <AnimatePresence mode="wait">
-                {isVoiceMode ? (
-                  <React.Fragment key="voice-controller">
-                    {renderVoiceController()}
-                  </React.Fragment>
-                ) : (
-                  <React.Fragment key="default-controller">
-                    {renderDefaultController()}
-                  </React.Fragment>
-                )}
+                {isVoiceMode
+                  ? renderVoiceController()
+                  : renderDefaultController()
+                }
               </AnimatePresence>
             </div>
           </div>

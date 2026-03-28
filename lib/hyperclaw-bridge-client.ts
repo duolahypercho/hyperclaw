@@ -8,6 +8,12 @@ import { hubCommand } from "$/lib/hub-direct";
 export type BridgeBody = Record<string, unknown>;
 
 export async function bridgeInvoke(action: string, body: BridgeBody = {}): Promise<unknown> {
+  if (
+    typeof window !== "undefined" &&
+    window.electronAPI?.hyperClawBridge?.invoke
+  ) {
+    return window.electronAPI.hyperClawBridge.invoke(action, body);
+  }
   return hubCommand({ action, ...body });
 }
 

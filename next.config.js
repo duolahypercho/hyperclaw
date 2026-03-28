@@ -6,11 +6,16 @@ function buildCSP() {
     "connect-src 'self'",
     "https://api.hypercho.com",
     "https://hub.hypercho.com",
+    "https://cdn.jsdelivr.net",
     "wss://hub.hypercho.com",
+    "https://raw.githack.com",
+    "https://*.ingest.us.sentry.io",
   ];
 
   if (isDev) {
     connectParts.push("http://127.0.0.1:9979", "http://localhost:9979");
+    // Local connector bridge
+    connectParts.push("http://127.0.0.1:18790", "http://localhost:18790");
     // Local OpenClaw gateway WebSocket ports
     const ports = (process.env.NEXT_PUBLIC_OPENCLAW_GATEWAY_PORTS || "18789")
       .split(",")
@@ -23,11 +28,12 @@ function buildCSP() {
 
   const directives = [
     "default-src 'self'",
-    "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
-    "style-src 'self' 'unsafe-inline'",
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://va.vercel-scripts.com",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "img-src 'self' data: https: blob:",
-    "font-src 'self' data:",
+    "font-src 'self' data: https://fonts.gstatic.com",
     connectParts.join(" "),
+    "worker-src 'self' blob:",
     "frame-ancestors 'none'",
     "base-uri 'self'",
     "form-action 'self'",
@@ -97,12 +103,6 @@ const nextConfig = {
       ...config.resolve.alias,
       buffer: path.join(__dirname, "node_modules/buffer/index.js"),
     };
-
-    // Keep better-sqlite3 as external on server — it's a native addon that can't be bundled
-    if (isServer) {
-      config.externals = config.externals || [];
-      config.externals.push("better-sqlite3");
-    }
 
     return config;
   },

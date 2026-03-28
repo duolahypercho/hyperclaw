@@ -57,6 +57,29 @@ interface ListAgentItem {
 
 
 
+/** Shallow-compare two OfficeData objects to skip no-op setState. */
+function officeDataEqual(a: OfficeData, b: OfficeData): boolean {
+  if (a.error !== b.error) return false;
+  if (a.agents.length !== b.agents.length) return false;
+  for (let i = 0; i < a.agents.length; i++) {
+    if (a.agents[i].id !== b.agents[i].id || a.agents[i].name !== b.agents[i].name) return false;
+  }
+  for (const id of Object.keys(b.statuses)) {
+    if (a.statuses[id] !== b.statuses[id]) return false;
+    if (a.currentTasks[id] !== b.currentTasks[id]) return false;
+    const aJobs = a.currentWorkingJobsByAgent[id] ?? [];
+    const bJobs = b.currentWorkingJobsByAgent[id] ?? [];
+    if (aJobs.length !== bJobs.length) return false;
+    const aPrev = a.previousTasksByAgent[id] ?? [];
+    const bPrev = b.previousTasksByAgent[id] ?? [];
+    if (aPrev.length !== bPrev.length) return false;
+    const aNext = a.nextComingCronsByAgent[id] ?? [];
+    const bNext = b.nextComingCronsByAgent[id] ?? [];
+    if (aNext.length !== bNext.length) return false;
+  }
+  return true;
+}
+
 /** Single batched state to avoid 5+ setState calls per fetch → fewer re-renders. */
 interface OfficeData {
   agents: AgentConfig[];
@@ -186,13 +209,15 @@ export function PixelOfficeProvider({ children }: { children: React.ReactNode })
           : employees.filter((e) => e && typeof e === "object" && e.id).map((e) => ({ id: e.id, name: e.name ?? e.id, status: (e as BridgeEmployeeStatus).status }));
       lastTeamSourceRef.current = { teamForBuild };
       const built = buildAgentsFromTeam(teamForBuild);
-      setOfficeData(mergeEmployeeStatus(built, employees, hasDataError));
+      const next = mergeEmployeeStatus(built, employees, hasDataError);
+      setOfficeData((prev) => officeDataEqual(prev, next) ? prev : next);
     } catch (e) {
       lastTeamSourceRef.current = null;
-      setOfficeData({
+      const next = {
         ...EMPTY_OFFICE_DATA,
         error: e instanceof Error ? e.message : "Network error",
-      });
+      };
+      setOfficeData((prev) => officeDataEqual(prev, next) ? prev : next);
     } finally {
       setLoading(false);
     }
@@ -209,7 +234,8 @@ export function PixelOfficeProvider({ children }: { children: React.ReactNode })
       const employees = Array.isArray(data?.employees) ? data.employees : [];
       const hasDataError = !!(data && typeof data === "object" && (data as { error?: string }).error);
       const built = buildAgentsFromTeam(teamSource);
-      setOfficeData(mergeEmployeeStatus(built, employees, hasDataError));
+      const next = mergeEmployeeStatus(built, employees, hasDataError);
+      setOfficeData((prev) => officeDataEqual(prev, next) ? prev : next);
     } catch {
       // Keep last data on status-only failure; next full refresh will recover
     }
@@ -220,9 +246,17 @@ export function PixelOfficeProvider({ children }: { children: React.ReactNode })
     await runFullRefresh();
   }, [runFullRefresh]);
 
+  // Initial load only — don't re-show loading screen when runFullRefresh identity changes
+  const hasLoadedOnce = useRef(false);
   useEffect(() => {
-    setLoading(true);
-    runFullRefresh();
+    if (!hasLoadedOnce.current) {
+      hasLoadedOnce.current = true;
+      setLoading(true);
+      runFullRefresh();
+    } else {
+      // openClawAgents changed — do a silent refresh (no loading screen)
+      runFullRefresh();
+    }
   }, [runFullRefresh]);
 
   useEffect(() => {

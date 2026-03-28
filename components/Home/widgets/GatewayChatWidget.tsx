@@ -201,7 +201,6 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
         loadChatHistory(),
         gatewayConnection.isConnected()
           ? gatewayConnection.listSessions(currentAgentId, 20).then(r => {
-              console.log("[GatewayChat] Initial sessions loaded:", r.sessions?.length ?? 0);
               setSessions(r.sessions || []);
             }).catch((err) => {
               console.warn("[GatewayChat] Initial session list fetch failed:", err);

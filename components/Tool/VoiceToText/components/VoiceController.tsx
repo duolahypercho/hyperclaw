@@ -1,7 +1,6 @@
 "use client";
 
 import React, { memo, useCallback } from "react";
-import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Mic, Square, Send } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -32,11 +31,7 @@ export const VoiceController = memo<VoiceControllerProps>(
     const hasContent = (transcript || currentValue)?.trim().length > 0;
 
     return (
-      <motion.div
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        exit={{ opacity: 0, y: 10 }}
-        transition={{ duration: 0.2 }}
+      <div
         className={cn(
           "flex flex-row items-center justify-end w-full gap-3",
           className
@@ -77,7 +72,7 @@ export const VoiceController = memo<VoiceControllerProps>(
         >
           <Send className="w-4 h-4" />
         </Button>
-      </motion.div>
+      </div>
     );
   }
 );
