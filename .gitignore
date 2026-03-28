@@ -49,7 +49,7 @@ electron/*.AppImage
 electron/*.deb
 electron/*.rpm
 
-# plugin tarball (generated at build time for Vercel)
+# plugin tarball (auto-built by prebuild script)
 public/hyperclaw-plugin.tgz
 
 .gstack/

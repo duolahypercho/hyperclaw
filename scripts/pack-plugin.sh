@@ -6,8 +6,9 @@
 #   ./scripts/pack-plugin.sh --tar-only   # pack tarball only (skip connector sync)
 #
 # What it does:
-#   1. Creates public/hyperclaw-plugin.tgz from extensions/hyperclaw/
-#   2. Copies source files to ../hyperclaw-connector/internal/plugin/embed/
+#   1. Auto-versions the plugin using major.minor from package.json + git commit count as patch
+#   2. Creates public/hyperclaw-plugin.tgz from extensions/hyperclaw/
+#   3. Copies source files to ../hyperclaw-connector/internal/plugin/embed/
 #      so the connector binary embeds the latest plugin on next build.
 #
 # After running this:
@@ -28,8 +29,18 @@ if [ ! -f "$PLUGIN_DIR/package.json" ]; then
   exit 1
 fi
 
-# Read version from package.json
-VERSION=$(node -e "console.log(require('$PLUGIN_DIR/package.json').version)")
+# Auto-version: take major.minor from package.json, use git commit count as patch
+BASE_VERSION=$(node -e "const v = require('$PLUGIN_DIR/package.json').version.split('.'); console.log(v[0]+'.'+v[1])")
+COMMIT_COUNT=$(git -C "$REPO_ROOT" rev-list --count HEAD -- extensions/hyperclaw/ 2>/dev/null || echo "0")
+VERSION="${BASE_VERSION}.${COMMIT_COUNT}"
+
+# Write version into package.json (in-place for the tarball)
+node -e "
+  const fs = require('fs');
+  const pkg = JSON.parse(fs.readFileSync('$PLUGIN_DIR/package.json', 'utf8'));
+  pkg.version = '$VERSION';
+  fs.writeFileSync('$PLUGIN_DIR/package.json', JSON.stringify(pkg, null, 2) + '\n');
+"
 echo "Packing plugin v$VERSION..."
 
 # 1. Build tarball (exclude node_modules, .installed marker)

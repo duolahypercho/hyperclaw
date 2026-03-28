@@ -705,7 +705,7 @@ export default function Home() {
               exit={{ opacity: 0, scale: 0.9, y: 20 }}
               transition={{ type: "spring", stiffness: 400, damping: 30 }}
               className="max-w-md w-full mx-4 rounded-2xl border border-border/50 bg-background/95 backdrop-blur-xl shadow-2xl p-6 space-y-5"
-              onClick={(e) => e.stopPropagation()}
+              onClick={(e: React.MouseEvent<HTMLDivElement>) => e.stopPropagation()}
             >
               <div className="space-y-1">
                 <h2 className="text-lg font-semibold">Welcome to your Dashboard</h2>
