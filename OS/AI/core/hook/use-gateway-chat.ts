@@ -465,9 +465,13 @@ function normalizeMessage(message: unknown): GatewayChatMessage | null {
       }
     }
   } else if (typeof msg.content === "string") {
-    // Handle legacy string content
-    content = msg.content;
-    contentBlocks.push({ type: "text", text: msg.content });
+    // Handle legacy string content — only if contentBlocks didn't already
+    // provide text (otherwise the same text gets pushed twice, doubling
+    // the rendered output when EnhancedMessageBubble iterates contentBlocks).
+    if (!content) {
+      content = msg.content;
+      contentBlocks.push({ type: "text", text: msg.content });
+    }
   }
 
   // Handle top-level toolCalls / tool_calls on assistant messages.

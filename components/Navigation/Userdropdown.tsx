@@ -10,7 +10,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { User, Settings, LogOut, Sparkles, CreditCard, RefreshCw } from "lucide-react";
+import { User, Settings, LogOut, Sparkles, CreditCard, RefreshCw, Wrench } from "lucide-react";
 import { useRouter } from "next/router";
 import { getMediaUrl } from "$/utils";
 import { cn } from "@/lib/utils";
@@ -19,6 +19,7 @@ import { usePricingModal } from "$/Providers/PricingModalProv";
 import { getBillingPortalUrl } from "$/services/user";
 import { useToast } from "@/components/ui/use-toast";
 import { Badge } from "@/components/ui/badge";
+import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
 import {
   Tooltip,
   TooltipContent,
@@ -30,6 +31,7 @@ const Userdropdown = () => {
   const { userInfo, membership, logout } = useUser();
   const { gatewayHealthy, gatewayHealthError, refreshAll } = useOpenClawContext();
   const [reconnecting, setReconnecting] = useState(false);
+  const [fixingOpenClaw, setFixingOpenClaw] = useState(false);
   const router = useRouter();
   const { openModal } = usePricingModal();
   const [isLoadingBilling, setIsLoadingBilling] = useState(false);
@@ -210,6 +212,30 @@ const Userdropdown = () => {
             <span>Upgrade Plan</span>
           </DropdownMenuItem>
         )}
+        <DropdownMenuItem
+          onClick={async (e) => {
+            e.preventDefault();
+            setFixingOpenClaw(true);
+            try {
+              await bridgeInvoke("openclaw-doctor-fix");
+              toast({ title: "Fix OpenClaw", description: "Doctor fix completed successfully." });
+              refreshAll();
+            } catch (err: any) {
+              toast({
+                title: "Fix OpenClaw failed",
+                description: err?.message || "Could not run openclaw doctor --fix.",
+                variant: "destructive",
+              });
+            } finally {
+              setFixingOpenClaw(false);
+            }
+          }}
+          disabled={fixingOpenClaw}
+          className="cursor-pointer"
+        >
+          <Wrench className={cn("mr-2 h-4 w-4", fixingOpenClaw && "animate-spin")} />
+          <span>{fixingOpenClaw ? "Fixing..." : "Fix OpenClaw"}</span>
+        </DropdownMenuItem>
         {gatewayHealthy === false && (
           <>
             <DropdownMenuSeparator />

@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { GripVertical, Maximize2, Settings, MousePointerClick, ArrowRight } from "lucide-react";
 import { Dashboard, Widget } from "./Dashboard";
 import { DashboardHeader } from "./DashboardHeader";
 import {
@@ -13,6 +15,7 @@ import {
   GatewayChatWidget,
   StatusWidget,
   ChannelDashboardWidget,
+  IntelligenceWidget,
 } from "$/components/Home/widgets";
 import { useOS, useFloatingChatOS } from "@OS/Provider/OSProv";
 import { cn } from "@/lib/utils";
@@ -27,6 +30,8 @@ const DYNAMIC_WIDGET_COMPONENTS: Record<string, React.FC<any>> = {
   "gateway-chat": GatewayChatWidget,
   "channel-dashboard": ChannelDashboardWidget,
 };
+
+const ONBOARDING_KEY = "dashboard-onboarding-done";
 
 // Default layout for dynamically-created chat widgets
 const CHAT_WIDGET_DEFAULTS = {
@@ -90,6 +95,7 @@ export default function Home() {
   const docsTool = toolAbstracts.find((t) => t.id === "docs");
   const pixelOfficeTool = toolAbstracts.find((t) => t.id === "pixel-office");
   const usageTool = toolAbstracts.find((t) => t.id === "usage");
+  const intelTool = toolAbstracts.find((t) => t.id === "intelligence");
 
   // Memoize widget components to maintain provider state
   // NOTE: gateway-chat is NOT here — it's dynamic-only (created via "Add Chat Widget")
@@ -101,7 +107,7 @@ export default function Home() {
         title: "Clock",
         icon: null,
         component: ClockWidget,
-        defaultValue: { w: 7, h: 3, minW: 5, minH: 3, x: 7, y: 3 },
+        defaultValue: { w: 7, h: 3, minW: 5, minH: 3, x: 7, y: 14 },
       },
       {
         id: pomodoroTool?.id || "pomodoro",
@@ -109,7 +115,7 @@ export default function Home() {
         title: pomodoroTool?.name || "Pomodoro Timer",
         icon: pomodoroTool?.icon || null,
         component: PomodoroWidget,
-        defaultValue: { w: 7, h: 4, minW: 5, minH: 4, x: 0, y: 3 },
+        defaultValue: { w: 7, h: 4, minW: 5, minH: 4, x: 0, y: 32 },
       },
       {
         id: "logs",
@@ -117,7 +123,7 @@ export default function Home() {
         title: "Logs",
         icon: null,
         component: LogsWidget,
-        defaultValue: { w: 8, h: 5, minW: 6, minH: 4, x: 14, y: 6 },
+        defaultValue: { w: 8, h: 12, minW: 6, minH: 4, x: 16, y: 17 },
       },
       {
         id: "kanban",
@@ -125,7 +131,7 @@ export default function Home() {
         title: "Kanban Board",
         icon: todoTool?.icon || null,
         component: KanbanWidget,
-        defaultValue: { w: 12, h: 5, minW: 8, minH: 4, x: 0, y: 11 },
+        defaultValue: { w: 18, h: 10, minW: 8, minH: 4, x: 0, y: 0 },
       },
       {
         id: "crons",
@@ -133,7 +139,7 @@ export default function Home() {
         title: "Cron Jobs",
         icon: cronsTool?.icon || null,
         component: CronsWidget,
-        defaultValue: { w: 8, h: 4, minW: 6, minH: 3, x: 14, y: 11 },
+        defaultValue: { w: 6, h: 4, minW: 6, minH: 3, x: 18, y: 0 },
       },
       {
         id: "docs",
@@ -141,7 +147,7 @@ export default function Home() {
         title: "Docs",
         icon: docsTool?.icon || null,
         component: DocsWidget,
-        defaultValue: { w: 6, h: 4, minW: 4, minH: 3, x: 0, y: 15 },
+        defaultValue: { w: 6, h: 4, minW: 4, minH: 3, x: 0, y: 32 },
       },
       {
         id: pixelOfficeTool?.id || "pixel-office",
@@ -149,7 +155,7 @@ export default function Home() {
         title: pixelOfficeTool?.name || "AI Agent Office",
         icon: pixelOfficeTool?.icon || null,
         component: PixelOfficeWidget,
-        defaultValue: { w: 6, h: 4, minW: 4, minH: 3, x: 6, y: 15 },
+        defaultValue: { w: 6, h: 4, minW: 4, minH: 3, x: 18, y: 0 },
       },
       {
         id: usageTool?.id || "usage",
@@ -157,7 +163,7 @@ export default function Home() {
         title: usageTool?.name || "Token Usage",
         icon: usageTool?.icon || null,
         component: UsageWidget,
-        defaultValue: { w: 8, h: 3, minW: 6, minH: 3, x: 12, y: 15 },
+        defaultValue: { w: 24, h: 3, minW: 6, minH: 3, x: 0, y: 17 },
       },
       {
         id: "agent-status",
@@ -165,10 +171,18 @@ export default function Home() {
         title: "Agent Status",
         icon: null,
         component: StatusWidget,
-        defaultValue: { w: 6, h: 4, minW: 4, minH: 3, x: 14, y: 0 },
+        defaultValue: { w: 6, h: 6, minW: 4, minH: 3, x: 18, y: 4 },
+      },
+      {
+        id: intelTool?.id || "intelligence",
+        type: "intelligence",
+        title: intelTool?.name || "Intelligence",
+        icon: intelTool?.icon || null,
+        component: IntelligenceWidget,
+        defaultValue: { w: 6, h: 4, minW: 4, minH: 3, x: 6, y: 32 },
       },
     ],
-    [todoTool, pomodoroTool, cronsTool, docsTool, pixelOfficeTool, usageTool]
+    [todoTool, pomodoroTool, cronsTool, docsTool, pixelOfficeTool, usageTool, intelTool]
   );
 
   // State for visible widgets (reads from in-memory cache, hydrated from SQLite)
@@ -181,8 +195,16 @@ export default function Home() {
         console.error("Failed to parse visible widgets:", e);
       }
     }
-    return widgets.map((w) => w.id); // All visible by default
+    // Default: core widgets + 3 chats + 3 announce channels
+    return [
+      "kanban", "pixel-office", "usage", "agent-status",
+      "gateway-chat-1", "gateway-chat-2", "gateway-chat-3",
+      "channel-dashboard-1", "channel-dashboard-2", "channel-dashboard-3",
+    ];
   });
+
+  // Onboarding: show welcome overlay on first visit
+  const [showOnboarding, setShowOnboarding] = useState(false);
 
   // State for edit mode
   const [isEditMode, setIsEditMode] = useState(false);
@@ -205,6 +227,16 @@ export default function Home() {
     [channelWidgetConfigsJson]
   );
 
+  // Default dynamic widget instances for fresh installs (3 chats + 3 announce channels)
+  const DEFAULT_WIDGET_INSTANCES: StoredWidget[] = [
+    { id: "gateway-chat-1", type: "gateway-chat", title: "Chat 1", defaultValue: { w: 8, h: 12, minW: 6, minH: 4, x: 0, y: 20 }, config: {} },
+    { id: "gateway-chat-2", type: "gateway-chat", title: "Chat 2", defaultValue: { w: 8, h: 12, minW: 6, minH: 4, x: 8, y: 20 }, config: {} },
+    { id: "gateway-chat-3", type: "gateway-chat", title: "Chat 3", defaultValue: { w: 8, h: 12, minW: 6, minH: 4, x: 16, y: 20 }, config: {} },
+    { id: "channel-dashboard-1", type: "channel-dashboard", title: "Announce 1", defaultValue: { w: 8, h: 7, minW: 8, minH: 4, x: 0, y: 10 }, config: { selectedCronIds: [], soundEnabled: false } },
+    { id: "channel-dashboard-2", type: "channel-dashboard", title: "Announce 2", defaultValue: { w: 8, h: 7, minW: 8, minH: 4, x: 8, y: 10 }, config: { selectedCronIds: [], soundEnabled: false } },
+    { id: "channel-dashboard-3", type: "channel-dashboard", title: "Announce 3", defaultValue: { w: 8, h: 7, minW: 8, minH: 4, x: 16, y: 10 }, config: { selectedCronIds: [], soundEnabled: false } },
+  ];
+
   // State for dynamically added widget instances
   const [storedWidgetInstances, setStoredWidgetInstances] = useState<StoredWidget[]>(() => {
     if (typeof window === "undefined") return [];
@@ -213,10 +245,10 @@ export default function Home() {
       try {
         return JSON.parse(saved);
       } catch {
-        return [];
+        return DEFAULT_WIDGET_INSTANCES;
       }
     }
-    return [];
+    return DEFAULT_WIDGET_INSTANCES;
   });
 
   // Re-read persisted state once dashboardState is hydrated.
@@ -226,6 +258,8 @@ export default function Home() {
   useEffect(() => {
     if (!dashboardReady || hydratedOnce) return;
     setHydratedOnce(true);
+
+    console.log("[Home] Dashboard hydrated (data:", dashboardState.isHydratedWithData() + ")");
 
     const savedVisible = dashboardState.get("dashboard-visible-widgets");
     if (savedVisible) {
@@ -242,6 +276,13 @@ export default function Home() {
     }
 
     setChannelWidgetConfigsJson(dashboardState.get("dashboard-widget-configs") || "{}");
+
+    // Show onboarding if user hasn't seen it yet
+    try {
+      if (!localStorage.getItem(ONBOARDING_KEY)) {
+        setShowOnboarding(true);
+      }
+    } catch {}
   }, [dashboardReady, hydratedOnce]);
 
   // Save widget instances to SQLite whenever they change — but only AFTER hydration.
@@ -444,6 +485,17 @@ export default function Home() {
     setShowHeader(true);
   }, []);
 
+  const dismissOnboarding = useCallback(() => {
+    setShowOnboarding(false);
+    try { localStorage.setItem(ONBOARDING_KEY, "1"); } catch {}
+  }, []);
+
+  const dismissOnboardingAndEdit = useCallback(() => {
+    setShowOnboarding(false);
+    try { localStorage.setItem(ONBOARDING_KEY, "1"); } catch {}
+    beginEditMode();
+  }, [beginEditMode]);
+
   const saveEditMode = useCallback(() => {
     editSnapshotRef.current = null;
     setIsEditMode(false);
@@ -636,6 +688,85 @@ export default function Home() {
           onUpdateWidgetConfig={handleWidgetConfigUpdate}
         />
       </div>
+
+      {/* First-time onboarding overlay */}
+      <AnimatePresence>
+        {showOnboarding && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm"
+            onClick={dismissOnboarding}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              transition={{ type: "spring", stiffness: 400, damping: 30 }}
+              className="max-w-md w-full mx-4 rounded-2xl border border-border/50 bg-background/95 backdrop-blur-xl shadow-2xl p-6 space-y-5"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="space-y-1">
+                <h2 className="text-lg font-semibold">Welcome to your Dashboard</h2>
+                <p className="text-sm text-muted-foreground">
+                  Your command center is fully customizable. Here&apos;s how:
+                </p>
+              </div>
+
+              <div className="space-y-3">
+                <div className="flex items-start gap-3 p-3 rounded-lg bg-primary/5 border border-primary/10">
+                  <GripVertical className="w-5 h-5 text-primary mt-0.5 shrink-0" />
+                  <div>
+                    <p className="text-sm font-medium">Drag to rearrange</p>
+                    <p className="text-xs text-muted-foreground">Grab any widget and move it where you want</p>
+                  </div>
+                </div>
+
+                <div className="flex items-start gap-3 p-3 rounded-lg bg-primary/5 border border-primary/10">
+                  <Maximize2 className="w-5 h-5 text-primary mt-0.5 shrink-0" />
+                  <div>
+                    <p className="text-sm font-medium">Resize from corners</p>
+                    <p className="text-xs text-muted-foreground">Drag the bottom-right corner to make widgets bigger or smaller</p>
+                  </div>
+                </div>
+
+                <div className="flex items-start gap-3 p-3 rounded-lg bg-primary/5 border border-primary/10">
+                  <Settings className="w-5 h-5 text-primary mt-0.5 shrink-0" />
+                  <div>
+                    <p className="text-sm font-medium">Show or hide widgets</p>
+                    <p className="text-xs text-muted-foreground">Use Edit Layout to toggle widgets, add chats, or reset the layout</p>
+                  </div>
+                </div>
+
+                <div className="flex items-start gap-3 p-3 rounded-lg bg-primary/5 border border-primary/10">
+                  <MousePointerClick className="w-5 h-5 text-primary mt-0.5 shrink-0" />
+                  <div>
+                    <p className="text-sm font-medium">Auto-saved</p>
+                    <p className="text-xs text-muted-foreground">Every change you make is saved automatically</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex gap-3 pt-1">
+                <button
+                  onClick={dismissOnboarding}
+                  className="flex-1 px-4 py-2.5 rounded-lg text-sm font-medium border border-border/50 hover:bg-muted/50 transition-colors"
+                >
+                  Skip
+                </button>
+                <button
+                  onClick={dismissOnboardingAndEdit}
+                  className="flex-1 px-4 py-2.5 rounded-lg text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors flex items-center justify-center gap-2"
+                >
+                  Customize Now
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

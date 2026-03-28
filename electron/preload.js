@@ -220,6 +220,17 @@ contextBridge.exposeInMainWorld("electronAPI", {
       initialize: () => ipcRenderer.invoke("whisper-initialize"),
       transcribe: (audioData) => ipcRenderer.invoke("whisper-transcribe", audioData),
       getStatus: () => ipcRenderer.invoke("whisper-status"),
+      // On-demand runtime management
+      runtimeStatus: () => ipcRenderer.invoke("whisper-runtime-status"),
+      runtimeInstall: () => ipcRenderer.invoke("whisper-runtime-install"),
+      runtimeRemove: () => ipcRenderer.invoke("whisper-runtime-remove"),
+      onInstallProgress: (callback) => {
+        if (typeof callback !== "function") return;
+        ipcRenderer.on("whisper-install-progress", (event, data) => callback(data));
+      },
+      removeInstallProgressListener: () => {
+        ipcRenderer.removeAllListeners("whisper-install-progress");
+      },
     },
     settings: {
       get: () => ipcRenderer.invoke("voice-settings-get"),

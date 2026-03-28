@@ -1033,62 +1033,35 @@ const ChannelDashboardContent = memo((props: ChannelDashboardContentProps) => {
       }
 
       if (state === "final") {
-        // Extract the final summary: text after the last tool call boundary.
-        // The accumulated delta text includes all assistant output; the portion
-        // after the last tool call is the final summary/report.
-        const fullText = deltaAccumRef.current.get(runId || "") || "";
-        const boundary = deltaToolBoundaryRef.current.get(runId || "") || 0;
-        const lastSegment = boundary > 0 && boundary < fullText.length
-          ? fullText.slice(boundary).trim()
-          : fullText.trim();
-        const finalMessage = lastSegment || "Completed";
-
-        // Clean up tracking refs
+        // Clean up delta tracking refs — we no longer reconstruct messages
+        // from streaming deltas as the connector DB is the source of truth.
         if (runId) {
           deltaAccumRef.current.delete(runId);
           deltaToolBoundaryRef.current.delete(runId);
         }
 
+        // Mark the entry as completed with a placeholder; the DB fetch below
+        // will replace it with the real announce message.
         finalizeEntry(sessionKey, {
           runId,
           cronId,
           source,
           eventType: "completed",
-          message: finalMessage,
+          message: "Completed",
           metadata: runId ? { runId } : undefined,
           status: "completed",
         });
-        // Re-fetch from connector DB — merge with in-memory entries to avoid
-        // overwriting good messages with empty DB entries.
+
+        // Fetch the authoritative announce message from the connector DB.
         const cronIds = Array.from(selectedCronIds);
         const fetchedAt = Date.now();
         setTimeout(() => {
           loadPersistedAnnounces(cronIds).then((entries) => {
-            if (clearedAtRef.current > fetchedAt) return; // user cleared after this fetch started
+            if (clearedAtRef.current > fetchedAt) return;
             if (entries.length > 0) {
               const cutoff = clearedAtRef.current;
               const filtered = cutoff ? entries.filter((e) => e.timestamp >= cutoff) : entries;
-              // Merge in-memory messages with DB entries. Prefer the shorter,
-              // more focused in-memory message when the DB holds the full
-              // accumulated stream buffer (which concatenates every assistant
-              // chunk and is much noisier than the last individual message).
-              const inMemoryByRunId = new Map<string, EventEntry>();
-              bufferRef.current.forEach((e) => { if (e.runId) inMemoryByRunId.set(e.runId, e); });
-              const merged = filtered.map((dbEntry) => {
-                if (!dbEntry.runId) return dbEntry;
-                const mem = inMemoryByRunId.get(dbEntry.runId);
-                if (!mem?.message.trim()) return dbEntry;
-                if (!dbEntry.message.trim()) {
-                  return { ...dbEntry, message: mem.message };
-                }
-                // If in-memory message is meaningful and shorter than the DB blob,
-                // the DB likely holds the full accumulated stream — prefer in-memory.
-                if (isMeaningfulFinalMessage(mem.message) && mem.message.length < dbEntry.message.length) {
-                  return { ...dbEntry, message: mem.message };
-                }
-                return dbEntry;
-              });
-              bufferRef.current = merged;
+              bufferRef.current = filtered;
               scheduleRender();
             }
           });

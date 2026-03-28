@@ -12,8 +12,10 @@ Notes:
 import json
 import os
 import sys
+import wave
 from pathlib import Path
 
+import numpy as np
 
 try:
     from faster_whisper import WhisperModel
@@ -75,13 +77,20 @@ class FasterWhisperServer:
             print(f"Failed to load faster-whisper model: {exc}", file=sys.stderr)
             return False
 
+    def _load_wav_as_numpy(self, audio_path: str) -> np.ndarray:
+        """Read a 16kHz mono 16-bit WAV file into a float32 numpy array."""
+        with wave.open(audio_path, "rb") as wf:
+            frames = wf.readframes(wf.getnframes())
+            return np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+
     def transcribe(self, audio_path: str) -> dict:
         if not self.initialized or self.model is None:
             return {"success": False, "error": "Model not initialized"}
 
         try:
+            audio = self._load_wav_as_numpy(audio_path)
             segments, info = self.model.transcribe(
-                audio_path,
+                audio,
                 beam_size=5,
                 best_of=5,
                 vad_filter=True,

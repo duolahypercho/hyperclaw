@@ -52,6 +52,7 @@ let savedInsertText = "";
 let wakeWordEnabled = false;
 const DEFAULT_VOICE_SETTINGS = {
   language: "en",
+  localWhisper: false,
 };
 
 function getVoiceSettingsPath() {
@@ -2058,6 +2059,78 @@ ipcMain.handle("voice-settings-set", async (event, patch) => {
     const sv = getWhisper();
     if (sv?.stop) sv.stop();
     return { success: true, settings: next };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// Local Whisper runtime setup (on-demand download)
+let whisperSetupInProgress = false;
+
+ipcMain.handle("whisper-runtime-status", async () => {
+  try {
+    const settings = readVoiceSettings();
+    const sv = getWhisper();
+    const hasBundled = sv ? !!require("./whisper-service").getBundledPythonPath?.() : false;
+    const hasManaged = sv ? !!require("./whisper-service").getManagedPythonPath?.() : false;
+    return {
+      success: true,
+      enabled: !!settings.localWhisper,
+      installed: hasBundled || hasManaged,
+      installing: whisperSetupInProgress,
+    };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle("whisper-runtime-install", async (event) => {
+  if (whisperSetupInProgress) {
+    return { success: false, error: "Installation already in progress" };
+  }
+  whisperSetupInProgress = true;
+  try {
+    const sv = getWhisper();
+    if (!sv) {
+      throw new Error("Whisper service module not available");
+    }
+    // Send progress updates to renderer
+    const sendProgress = (step, detail) => {
+      if (event.sender && !event.sender.isDestroyed()) {
+        event.sender.send("whisper-install-progress", { step, detail });
+      }
+    };
+    sendProgress("python", "Setting up Python runtime...");
+    // ensureManagedRuntime creates venv + installs deps
+    sv.getResolvedPythonPath?.();
+    sendProgress("model", "Downloading Whisper model...");
+    // Initialize to trigger model download
+    await sv.initialize();
+    // Mark as enabled
+    const current = readVoiceSettings();
+    writeVoiceSettings({ ...current, localWhisper: true });
+    sendProgress("done", "Local Whisper is ready!");
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  } finally {
+    whisperSetupInProgress = false;
+  }
+});
+
+ipcMain.handle("whisper-runtime-remove", async () => {
+  try {
+    const sv = getWhisper();
+    if (sv?.stop) sv.stop();
+    // Remove managed runtime
+    const runtimeDir = path.join(app.getPath("userData"), "voice-runtime");
+    const modelCacheDir = path.join(app.getPath("userData"), "whisper-model-cache");
+    if (fs.existsSync(runtimeDir)) fs.rmSync(runtimeDir, { recursive: true, force: true });
+    if (fs.existsSync(modelCacheDir)) fs.rmSync(modelCacheDir, { recursive: true, force: true });
+    // Update settings
+    const current = readVoiceSettings();
+    writeVoiceSettings({ ...current, localWhisper: false });
+    return { success: true };
   } catch (error) {
     return { success: false, error: error.message };
   }

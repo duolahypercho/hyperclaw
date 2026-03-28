@@ -167,6 +167,26 @@ function ensureManagedRuntime() {
   runBootstrapCommand(managedPython, ["-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"]);
   runBootstrapCommand(managedPython, ["-m", "pip", "install", "-r", path.join(getPythonDir(), "requirements.txt")]);
 
+  // Patch faster_whisper/audio.py to remove av import, then uninstall av.
+  // We read WAV files with stdlib wave module so av (PyAV/FFmpeg) is not needed.
+  try {
+    const libDir = path.join(runtimeDir, "lib");
+    const pyDirs = fs.readdirSync(libDir).filter((d) => d.startsWith("python"));
+    for (const pyDir of pyDirs) {
+      const audioPy = path.join(libDir, pyDir, "site-packages", "faster_whisper", "audio.py");
+      if (fs.existsSync(audioPy)) {
+        let src = fs.readFileSync(audioPy, "utf8");
+        src = src.replace(/^import av$/m, "# import av  # removed — av not bundled");
+        fs.writeFileSync(audioPy, src);
+        console.log("[Whisper] Patched faster_whisper/audio.py to remove av import");
+      }
+    }
+    runBootstrapCommand(managedPython, ["-m", "pip", "uninstall", "-y", "av"]);
+    console.log("[Whisper] Removed av (PyAV) — not needed for WAV input");
+  } catch (err) {
+    console.warn("[Whisper] Failed to remove av:", err.message);
+  }
+
   writeManagedRuntimeManifest(managedPython);
   return managedPython;
 }
@@ -569,6 +589,9 @@ module.exports = {
   stop,
   restart,
   getPythonDir,
+  getBundledPythonPath,
+  getManagedPythonPath,
+  getResolvedPythonPath,
   // Exported for testing
   _writeWavFile: writeWavFile,
   _handleResponse: handleResponse,

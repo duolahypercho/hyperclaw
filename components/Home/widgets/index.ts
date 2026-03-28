@@ -33,3 +33,7 @@ export {
   default as ChannelDashboardWidget,
   ChannelDashboardCustomHeader,
 } from "./ChannelDashboardWidget";
+export {
+  default as IntelligenceWidget,
+  IntelligenceCustomHeader,
+} from "./IntelligenceWidget";

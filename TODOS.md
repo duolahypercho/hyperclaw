@@ -47,9 +47,20 @@
 
 ## Onboarding & OpenClaw Install
 
-### TODO: Pre-implementation spike — npm --prefix + OpenClaw config creation
-- **What:** Validate that `npm install openclaw@latest --prefix ~/.hyperclaw/openclaw/` works on macOS, Linux, and WSL2 with OpenClaw's full dependency tree. Also check if `openclaw` supports non-interactive config creation (e.g., `--no-interactive` flag or direct config.yaml generation).
-- **Why:** The zero-terminal onboarding plan (CEO plan 2026-03-28) depends on both of these working. If npm --prefix fails with native modules, switch to tarball vendor approach. If non-interactive config doesn't exist, write config.yaml from a template.
+### TODO: Extract shared runtime utils from whisper-service.js
+- **What:** Extract `getRuntimeBaseDir()`, `getBundleTargetId()`, `getBundledRuntimeDir()`, `getBundledRuntimeManifest()`, and platform detection into `electron/runtime-utils.js`. Both whisper-service.js and the new openclaw-install-service.js need these.
+- **Why:** DRY — two consumers need the same asar handling, platform detection, and manifest patterns.
+- **Pros:** Clean foundation for the install service. Reduces duplication from day one.
+- **Cons:** Touches whisper-service.js imports (low risk, mechanical refactor).
+- **Context:** Identified during eng review. The functions are at whisper-service.js:14-76.
+- **Effort:** S (human) → S (CC: ~10 min)
+- **Priority:** P1 — do before onboarding implementation
+- **Depends on:** Nothing
+- **Added:** 2026-03-28
+
+### TODO: Pre-implementation spike — npm install + OpenClaw config creation
+- **What:** Validate that `~/.hyperclaw/node/bin/npm install -g openclaw@latest` works on macOS, Linux, and WSL2 using the bundled Node.js binary (global install within the bundled Node's prefix). Also check if `openclaw` supports non-interactive config creation (e.g., `--no-interactive` flag or direct config.yaml generation).
+- **Why:** The zero-terminal onboarding plan (CEO plan 2026-03-28) depends on both of these working. If npm global install fails with native modules, switch to tarball vendor approach. If non-interactive config doesn't exist, write config.yaml from a template.
 - **Pros:** De-risks the two biggest unknowns before engineering starts.
 - **Cons:** None — pure risk reduction.
 - **Context:** See CEO plan Key Decisions #6 and #7. Spike should produce a decision document.

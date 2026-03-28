@@ -3,13 +3,16 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 /** Interval (ms) between interim transcription chunks while recording (Whisper only). */
 const INTERIM_INTERVAL_MS = 1500;
 
+/** Cached flag — true when user has enabled local Whisper in voice settings. */
+let whisperEnabledCache = false;
+
 type SpeechRecognitionEvent = Event & {
     results: SpeechRecognitionResultList;
     resultIndex: number;
 };
 
-/** Returns true when running inside Electron with the Whisper IPC bridge. */
-const hasWhisper = () => !!window.electronAPI?.voiceOverlay?.whisper;
+/** Returns true when running inside Electron with the Whisper IPC bridge AND local whisper is enabled. */
+const hasWhisper = () => !!window.electronAPI?.voiceOverlay?.whisper && whisperEnabledCache;
 
 /** Returns true when the browser supports the Web Speech API. */
 const hasSpeechRecognition = () =>
@@ -111,30 +114,35 @@ export const useLiveTranscription = () => {
         return false;
     }, [canUseWhisperNow]);
 
-    // ── Pre-initialize Whisper when available (avoid cold-start delay) ──
+    // ── Pre-initialize Whisper when available and enabled ──
 
     useEffect(() => {
-        if (!hasWhisper()) return;
         const whisper = window.electronAPI?.voiceOverlay?.whisper;
-        if (!whisper || whisperInitializedRef.current) return;
+        if (!whisper) return;
 
-        const tryInit = (retries = 2) => {
-            whisper.initialize().then((result: { success: boolean; error?: string }) => {
-                whisperInitializedRef.current = result.success;
-                if (!result.success && retries > 0) {
-                    // Retry after a delay — service may still be starting
-                    setTimeout(() => tryInit(retries - 1), 3000);
-                } else if (!result.success) {
-                    console.warn('[VoiceToText] Whisper pre-init failed after retries:', result.error || 'Unknown error');
-                }
-            }).catch((error: any) => {
-                if (retries > 0) setTimeout(() => tryInit(retries - 1), 3000);
-                else console.warn('[VoiceToText] Whisper pre-init failed after retries:', error?.message || 'Unknown error');
-            });
-        };
+        // Check if local whisper is enabled before attempting init
+        whisper.runtimeStatus?.().then((status: any) => {
+            whisperEnabledCache = !!(status?.enabled && status?.installed);
+            if (!whisperEnabledCache || whisperInitializedRef.current) return;
 
-        // Delay first attempt slightly to let Electron main process settle
-        setTimeout(() => tryInit(), 1000);
+            const tryInit = (retries = 2) => {
+                whisper.initialize().then((result: { success: boolean; error?: string }) => {
+                    whisperInitializedRef.current = result.success;
+                    if (!result.success && retries > 0) {
+                        setTimeout(() => tryInit(retries - 1), 3000);
+                    } else if (!result.success) {
+                        console.warn('[VoiceToText] Whisper pre-init failed after retries:', result.error || 'Unknown error');
+                    }
+                }).catch((error: any) => {
+                    if (retries > 0) setTimeout(() => tryInit(retries - 1), 3000);
+                    else console.warn('[VoiceToText] Whisper pre-init failed after retries:', error?.message || 'Unknown error');
+                });
+            };
+
+            setTimeout(() => tryInit(), 1000);
+        }).catch(() => {
+            whisperEnabledCache = false;
+        });
     }, []);
 
     // ── Shared: stop audio analysis (waveform + mic stream) ──

@@ -1,6 +1,6 @@
 {
   "name": "hyperclaw",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "scripts": {
     "dev": "next dev -p 1000",
@@ -18,7 +18,8 @@
     "electron:build:linux:remote": "cd electron && npm run electron:build:linux:remote",
     "electron:build:linux:local": "cd electron && npm run electron:build:linux:local",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "plugin:pack": "bash scripts/pack-plugin.sh"
   },
   "dependencies": {
     "@ag-ui/client": "^0.0.37",

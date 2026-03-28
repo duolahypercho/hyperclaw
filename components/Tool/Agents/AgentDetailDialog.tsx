@@ -109,6 +109,7 @@ export function AgentDetailDialog({
           className="sm:max-w-2xl h-[85vh] min-h-[400px] gap-0 sm:rounded-xl p-0 overflow-hidden flex flex-col [-webkit-font-smoothing:subpixel-antialiased]"
           showCloseButton={false}
           onOpenAutoFocus={(e) => e.preventDefault()}
+          onPointerDownOutside={(e) => { if (deleteOpen) e.preventDefault(); }}
         >
           {/* Header */}
           <DialogHeader className="shrink-0 px-6 pt-5 pb-3 border-b border-border/40">

@@ -62,7 +62,7 @@ export const GatewayChatCustomHeader: React.FC<GatewayChatHeaderProps> = ({
       ? agents.find(a => a.id === configAgentId)
       : agents[0];
 
-  const { loading: agentsLoading } = useOpenClawContext();
+  const { loading: agentsLoading, fetchAgents } = useOpenClawContext();
   const agent = selectedAgent || { id: "main", name: "General Assistant", status: "active" };
   // Use currentAgentId directly for identity lookup — agents array may not be loaded yet,
   // which would cause agent.id to fall back to "main" and fetch the wrong identity.
@@ -196,6 +196,7 @@ export const GatewayChatCustomHeader: React.FC<GatewayChatHeaderProps> = ({
         onOpenChange={setAgentDetailOpen}
         agentId={currentAgentId || agent.id}
         agentName={agent.name}
+        onDeleted={() => fetchAgents()}
       />
     </CardHeader>
   );

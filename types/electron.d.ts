@@ -290,10 +290,15 @@ declare global {
           initialize: () => Promise<{ success: boolean; info?: any; error?: string }>;
           transcribe: (audioData: number[]) => Promise<{ success: boolean; text?: string; error?: string }>;
           getStatus: () => Promise<{ ready: boolean; info?: any; language?: string }>;
+          runtimeStatus: () => Promise<{ success: boolean; enabled: boolean; installed: boolean; installing: boolean }>;
+          runtimeInstall: () => Promise<{ success: boolean; error?: string }>;
+          runtimeRemove: () => Promise<{ success: boolean; error?: string }>;
+          onInstallProgress: (callback: (data: { step: string; detail: string }) => void) => void;
+          removeInstallProgressListener: () => void;
         };
         settings?: {
-          get: () => Promise<{ success: boolean; settings?: { language?: string }; error?: string }>;
-          set: (patch: { language?: string }) => Promise<{ success: boolean; settings?: { language?: string }; error?: string }>;
+          get: () => Promise<{ success: boolean; settings?: { language?: string; localWhisper?: boolean }; error?: string }>;
+          set: (patch: { language?: string; localWhisper?: boolean }) => Promise<{ success: boolean; settings?: { language?: string; localWhisper?: boolean }; error?: string }>;
         };
       };
     };

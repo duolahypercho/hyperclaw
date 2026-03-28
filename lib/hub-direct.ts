@@ -219,6 +219,7 @@ export async function hubCommand(
     });
     if (localRes.ok) {
       const data = await localRes.json();
+
       return data;
     }
   } catch {
@@ -231,6 +232,7 @@ export async function hubCommand(
 
     // Already connected — use WS immediately
     if (gatewayConnection.connected && gatewayConnection.hubMode) {
+
       const res = await gatewayConnection.request("bridge", body);
       return unwrapHubResponse(res);
     }
@@ -238,6 +240,7 @@ export async function hubCommand(
     // Not connected — wait for pending connection or initiate one
     const ready = await ensureGatewayConnected();
     if (ready && gatewayConnection.connected && gatewayConnection.hubMode) {
+
       const res = await gatewayConnection.request("bridge", body);
       return unwrapHubResponse(res);
     }
@@ -246,6 +249,7 @@ export async function hubCommand(
   }
 
   // Fallback: Hub REST API
+
   const token = await getUserToken();
   if (!token) {
     return { success: false, error: "Not authenticated" };

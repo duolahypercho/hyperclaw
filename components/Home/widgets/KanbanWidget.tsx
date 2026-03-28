@@ -1333,7 +1333,7 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
   const { isFocusModeActive } = useFocusMode();
   const { tasks, handleStatusChange, handleSelectTask, handleDeleteTask } =
     useTodoList();
-  const { agents: openClawAgents } = useOpenClawContext();
+  const { agents: openClawAgents, fetchAgents } = useOpenClawContext();
   const { openChat } = useFloatingChatOS();
 
   const [addTaskOpen, setAddTaskOpen] = useState(false);
@@ -1415,28 +1415,26 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
   }, []);
 
   // Fetch org chart data (teams, departments, agents hierarchy)
-  useEffect(() => {
-    let cancelled = false;
-    const fetchOrg = async () => {
-      try {
-        const res = (await bridgeInvoke("get-org-status", {})) as OrgChartData & { success?: boolean };
-        if (cancelled) return;
-        if (res && (res as { success?: boolean }).success !== false) {
-          const data: OrgChartData = {
-            nodes: res.nodes ?? [],
-            edges: res.edges ?? [],
-            tasks: res.tasks ?? [],
-            departments: res.departments ?? [],
-          };
-          setOrgData(data);
-        }
-      } catch { /* ignore */ }
-      if (!cancelled) setOrgLoading(false);
-    };
-    fetchOrg();
-    const interval = setInterval(fetchOrg, 30_000);
-    return () => { cancelled = true; clearInterval(interval); };
+  const refreshOrgChart = useCallback(async () => {
+    try {
+      const res = (await bridgeInvoke("get-org-status", {})) as OrgChartData & { success?: boolean };
+      if (res && (res as { success?: boolean }).success !== false) {
+        setOrgData({
+          nodes: res.nodes ?? [],
+          edges: res.edges ?? [],
+          tasks: res.tasks ?? [],
+          departments: res.departments ?? [],
+        });
+      }
+    } catch { /* ignore */ }
+    setOrgLoading(false);
   }, []);
+
+  useEffect(() => {
+    refreshOrgChart();
+    const interval = setInterval(refreshOrgChart, 30_000);
+    return () => clearInterval(interval);
+  }, [refreshOrgChart]);
 
   // Re-fetch org data when gateway (re)connects — handles race where widget
   // mounts before the hub WebSocket is established on a remote machine.
@@ -1927,6 +1925,7 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
                   editingAgentId
                 }
                 workspaceFolder={agents.find((a) => a.id === editingAgentId)?.workspaceFolder}
+                onDeleted={() => { setEditingAgentId(null); fetchAgents(); refreshOrgChart(); }}
               />
             )}
 

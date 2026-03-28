@@ -104,6 +104,7 @@ const DesktopLayout = ({ children }: any) => {
   if (!dashboardReady) return null;
 
   return (
+    <TodoListProvider>
     <div
       id="layout"
       className="w-full h-screen flex flex-col relative overflow-hidden"
@@ -118,25 +119,18 @@ const DesktopLayout = ({ children }: any) => {
           <Navbar />
         </div>
         <div className="flex-1 flex flex-row overflow-hidden">
-          {isDashboard ? (
-            <TodoListProvider>
-              <MemoizedChildren
-                isCopanionOpen={showState}
-                navbarHeight={navbarHeight}
-              >
-                <div data-guidance="center-display" className="w-full h-full">
-                  {children}
-                </div>
-              </MemoizedChildren>
-            </TodoListProvider>
-          ) : (
-            <MemoizedChildren
-              isCopanionOpen={showState}
-              navbarHeight={navbarHeight}
-            >
-              {children}
-            </MemoizedChildren>
-          )}
+          <MemoizedChildren
+            isCopanionOpen={showState}
+            navbarHeight={navbarHeight}
+          >
+            {isDashboard ? (
+              <div data-guidance="center-display" className="w-full h-full">
+                {children}
+              </div>
+            ) : (
+              children
+            )}
+          </MemoizedChildren>
         </div>
       </div>
 
@@ -147,10 +141,11 @@ const DesktopLayout = ({ children }: any) => {
         <DocsAppLayout />
         <FloatingChatAppLayout />
       </div>
-      
+
       {/* Guidance/Onboarding System */}
       <Guidance config={onboardingConfig} autoStart={true} checkCompletion={true} />
     </div>
+    </TodoListProvider>
   );
 };
 

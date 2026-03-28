@@ -45,7 +45,8 @@ export type WidgetType =
   | "usage"
   | "gateway-chat"
   | "agent-status"
-  | "channel-dashboard";
+  | "channel-dashboard"
+  | "intelligence";
 
 export interface Widget {
   id: string;

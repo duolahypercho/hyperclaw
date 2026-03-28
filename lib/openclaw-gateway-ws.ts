@@ -388,7 +388,14 @@ export const gatewayConnection = {
               }
               if (!owner) this._deltaSourceOwner.set(payload.runId, "chat");
               const existing = this.agentDeltaBuffer.get(payload.runId) || "";
-              let newBuffer = existing + deltaText;
+              // If incoming text already starts with the buffer, it's accumulated
+              // (common when hub relays connector chat events) — replace, don't append.
+              let newBuffer: string;
+              if (existing && deltaText.startsWith(existing)) {
+                newBuffer = deltaText;
+              } else {
+                newBuffer = existing + deltaText;
+              }
               if (newBuffer.length > 524_288) newBuffer = newBuffer.slice(-524_288);
               this.agentDeltaBuffer.set(payload.runId, newBuffer);
               this._agentDeltaTimestamps?.set(payload.runId, Date.now());
@@ -455,9 +462,16 @@ export const gatewayConnection = {
             return;
           }
           if (!owner) this._deltaSourceOwner.set(runId, "agent");
-          // Get existing buffered text for this run and accumulate
+          // Get existing buffered text for this run and accumulate.
+          // If incoming text already starts with the buffer, it's pre-accumulated
+          // (hub relay may forward accumulated content) — replace, don't append.
           const existingBuffer = this.agentDeltaBuffer.get(runId) || "";
-          let newBuffer = existingBuffer + assistantText;
+          let newBuffer: string;
+          if (existingBuffer && assistantText.startsWith(existingBuffer)) {
+            newBuffer = assistantText;
+          } else {
+            newBuffer = existingBuffer + assistantText;
+          }
           // Cap individual buffer at 512KB to prevent OOM
           if (newBuffer.length > 524_288) newBuffer = newBuffer.slice(-524_288);
           this.agentDeltaBuffer.set(runId, newBuffer);
