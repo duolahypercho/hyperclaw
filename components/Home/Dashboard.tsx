@@ -33,8 +33,6 @@ export type WidgetType =
   | "music"
   | "chat"
   | "todo"
-  | "pomodoro"
-  | "clock"
   | "x"
   | "idea-validator"
   | "logs"

@@ -10,7 +10,6 @@ import React, {
 } from "react";
 import { LuListTodo } from "react-icons/lu";
 import {
-  Citrus,
   ListTodo,
   Coffee,
   Settings,
@@ -46,7 +45,6 @@ export interface OSSettings {
   theme: "light" | "dark" | "system";
   wallpaper: string;
   musicPlayer: boolean;
-  pomodoro: boolean;
   todoList: boolean;
   crons: boolean;
   copanion: boolean;
@@ -137,7 +135,6 @@ interface CopanionChatContextType extends BaseWidgetContextType {
 type MusicPlayerContextType = BaseWidgetContextType;
 type TodoListContextType = BaseWidgetContextType;
 type CronsContextType = BaseWidgetContextType;
-type PomodoroContextType = BaseWidgetContextType;
 type StatisticsContextType = BaseWidgetContextType;
 
 export interface FloatingDocInstance {
@@ -186,9 +183,6 @@ const MusicPlayerContext = createContext<MusicPlayerContextType | undefined>(
   undefined
 );
 const TodoListContext = createContext<TodoListContextType | undefined>(
-  undefined
-);
-const PomodoroContext = createContext<PomodoroContextType | undefined>(
   undefined
 );
 const CronsContext = createContext<CronsContextType | undefined>(undefined);
@@ -279,7 +273,6 @@ export const OSProvider: React.FC<OSProviderProps> = ({ children }) => {
     crons: false,
     copanion: true,
     menu: false,
-    pomodoro: false,
     statistics: false,
   };
 
@@ -389,12 +382,6 @@ export const OSProvider: React.FC<OSProviderProps> = ({ children }) => {
         name: "My Tasks",
         description: "Manage your tasks and stay productive",
         icon: <LuListTodo className="w-3.5 h-3.5" />,
-      },
-      {
-        id: "pomodoro",
-        name: "Pomodoro",
-        description: "Manage your pomodoro timer",
-        icon: <Citrus className="w-3.5 h-3.5" />,
       },
       {
         id: "docs",
@@ -530,22 +517,7 @@ export const OSProvider: React.FC<OSProviderProps> = ({ children }) => {
 
   // Memoize dock tools separately
   const memoizedDockTools = useMemo(
-    () => [
-      {
-        id: "pomodoro",
-        name: "Pomodoro",
-        description: "Manage your pomodoro timer",
-        icon: (
-          <Citrus
-            className={cn("w-8 h-8", osSettings.pomodoro && "fill-white")}
-          />
-        ),
-        onClick: () => {
-          updateOSSettings({ pomodoro: !osSettings.pomodoro });
-        },
-        active: osSettings.pomodoro,
-      },
-    ],
+    () => [],
     [osSettings, atRoot, Router, updateOSSettings]
   );
 
@@ -727,14 +699,6 @@ export const OSProvider: React.FC<OSProviderProps> = ({ children }) => {
     [memoizedOsSettings.todoList, isMounted]
   );
 
-  const pomodoroValue: PomodoroContextType = useMemo(
-    () => ({
-      showState: memoizedOsSettings.pomodoro,
-      isMounted,
-    }),
-    [memoizedOsSettings.pomodoro, isMounted]
-  );
-
   const menuValue: MenuContextType = useMemo(
     () => ({
       showState: memoizedOsSettings.menu,
@@ -793,21 +757,19 @@ export const OSProvider: React.FC<OSProviderProps> = ({ children }) => {
     <OSContext.Provider value={value}>
       <MusicPlayerContext.Provider value={musicPlayerValue}>
         <TodoListContext.Provider value={todoListValue}>
-          <PomodoroContext.Provider value={pomodoroValue}>
-            <DocsFloatingContext.Provider value={docsFloatingValue}>
-              <FloatingChatContext.Provider value={floatingChatValue}>
-                <MenuContext.Provider value={menuValue}>
-                    <CronsContext.Provider value={cronsValue}>
-                    <CopanionChatContext.Provider value={CopanionChatValue}>
-                      <StatisticsContext.Provider value={statisticsValue}>
-                        <NotificationProvider>{children}</NotificationProvider>
-                      </StatisticsContext.Provider>
-                    </CopanionChatContext.Provider>
-                    </CronsContext.Provider>
-                </MenuContext.Provider>
-              </FloatingChatContext.Provider>
-            </DocsFloatingContext.Provider>
-          </PomodoroContext.Provider>
+          <DocsFloatingContext.Provider value={docsFloatingValue}>
+            <FloatingChatContext.Provider value={floatingChatValue}>
+              <MenuContext.Provider value={menuValue}>
+                  <CronsContext.Provider value={cronsValue}>
+                  <CopanionChatContext.Provider value={CopanionChatValue}>
+                    <StatisticsContext.Provider value={statisticsValue}>
+                      <NotificationProvider>{children}</NotificationProvider>
+                    </StatisticsContext.Provider>
+                  </CopanionChatContext.Provider>
+                  </CronsContext.Provider>
+              </MenuContext.Provider>
+            </FloatingChatContext.Provider>
+          </DocsFloatingContext.Provider>
         </TodoListContext.Provider>
       </MusicPlayerContext.Provider>
     </OSContext.Provider>
@@ -859,14 +821,6 @@ export const useCronsOS = () => {
   const context = useContext(CronsContext);
   if (!context) {
     throw new Error("useCronsOS must be used within an OSProvider");
-  }
-  return context;
-};
-
-export const usePomodoroOS = () => {
-  const context = useContext(PomodoroContext);
-  if (!context) {
-    throw new Error("usePomodoroOS must be used within an OSProvider");
   }
   return context;
 };

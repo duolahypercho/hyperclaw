@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useUser } from "$/Providers/UserProv";
 import { useOpenClawContext } from "$/Providers/OpenClawProv";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -19,7 +19,7 @@ import { usePricingModal } from "$/Providers/PricingModalProv";
 import { getBillingPortalUrl } from "$/services/user";
 import { useToast } from "@/components/ui/use-toast";
 import { Badge } from "@/components/ui/badge";
-import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
+import { useDoctorTerminal } from "$/components/Tool/DoctorTerminal/DoctorTerminalContext";
 import {
   Tooltip,
   TooltipContent,
@@ -31,11 +31,21 @@ const Userdropdown = () => {
   const { userInfo, membership, logout } = useUser();
   const { gatewayHealthy, gatewayHealthError, refreshAll } = useOpenClawContext();
   const [reconnecting, setReconnecting] = useState(false);
-  const [fixingOpenClaw, setFixingOpenClaw] = useState(false);
+  const { runDoctorFix, isRunning: fixingOpenClaw } = useDoctorTerminal();
   const router = useRouter();
   const { openModal } = usePricingModal();
   const [isLoadingBilling, setIsLoadingBilling] = useState(false);
   const { toast } = useToast();
+
+  // Listen for doctor fix completion to refresh gateway status
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.success) refreshAll();
+    };
+    window.addEventListener("openclaw-doctor-done", handler);
+    return () => window.removeEventListener("openclaw-doctor-done", handler);
+  }, [refreshAll]);
 
   // Check if user has an active paid membership
   const hasActiveMembership = membership && !membership.isFreePlan;
@@ -213,22 +223,9 @@ const Userdropdown = () => {
           </DropdownMenuItem>
         )}
         <DropdownMenuItem
-          onClick={async (e) => {
+          onClick={(e) => {
             e.preventDefault();
-            setFixingOpenClaw(true);
-            try {
-              await bridgeInvoke("openclaw-doctor-fix");
-              toast({ title: "Fix OpenClaw", description: "Doctor fix completed successfully." });
-              refreshAll();
-            } catch (err: any) {
-              toast({
-                title: "Fix OpenClaw failed",
-                description: err?.message || "Could not run openclaw doctor --fix.",
-                variant: "destructive",
-              });
-            } finally {
-              setFixingOpenClaw(false);
-            }
+            runDoctorFix();
           }}
           disabled={fixingOpenClaw}
           className="cursor-pointer"

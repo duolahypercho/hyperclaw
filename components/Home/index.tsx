@@ -4,8 +4,6 @@ import { GripVertical, Maximize2, Settings, MousePointerClick, ArrowRight } from
 import { Dashboard, Widget } from "./Dashboard";
 import { DashboardHeader } from "./DashboardHeader";
 import {
-  PomodoroWidget,
-  ClockWidget,
   LogsWidget,
   KanbanWidget,
   CronsWidget,
@@ -90,7 +88,6 @@ export default function Home() {
 
   // Find tool definitions from OSProv
   const todoTool = toolAbstracts.find((t) => t.id === "todo-list");
-  const pomodoroTool = toolAbstracts.find((t) => t.id === "pomodoro");
   const cronsTool = toolAbstracts.find((t) => t.id === "crons");
   const docsTool = toolAbstracts.find((t) => t.id === "docs");
   const pixelOfficeTool = toolAbstracts.find((t) => t.id === "pixel-office");
@@ -101,22 +98,6 @@ export default function Home() {
   // NOTE: gateway-chat is NOT here — it's dynamic-only (created via "Add Chat Widget")
   const widgets: Widget[] = useMemo(
     () => [
-      {
-        id: "clock",
-        type: "clock",
-        title: "Clock",
-        icon: null,
-        component: ClockWidget,
-        defaultValue: { w: 7, h: 3, minW: 5, minH: 3, x: 7, y: 14 },
-      },
-      {
-        id: pomodoroTool?.id || "pomodoro",
-        type: "pomodoro",
-        title: pomodoroTool?.name || "Pomodoro Timer",
-        icon: pomodoroTool?.icon || null,
-        component: PomodoroWidget,
-        defaultValue: { w: 7, h: 4, minW: 5, minH: 4, x: 0, y: 32 },
-      },
       {
         id: "logs",
         type: "logs",
@@ -182,7 +163,7 @@ export default function Home() {
         defaultValue: { w: 6, h: 4, minW: 4, minH: 3, x: 6, y: 32 },
       },
     ],
-    [todoTool, pomodoroTool, cronsTool, docsTool, pixelOfficeTool, usageTool, intelTool]
+    [todoTool, cronsTool, docsTool, pixelOfficeTool, usageTool, intelTool]
   );
 
   // State for visible widgets (reads from in-memory cache, hydrated from SQLite)

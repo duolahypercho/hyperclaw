@@ -34,15 +34,6 @@ export const onboardingConfig: GuidanceConfig = {
       offset: { x: -10, y: 0 },
     },
     {
-      id: "navbar-clock",
-      target: "[data-guidance='navbar-clock']",
-      title: "Clock Widget",
-      description:
-        "Keep track of time with the built-in clock widget. Always visible in your navbar.",
-      position: "bottom",
-      offset: { x: 0, y: -10 },
-    },
-    {
       id: "navbar-user",
       target: "[data-guidance='navbar-user']",
       title: "Your Profile",

@@ -1,5 +1,10 @@
 import { useState, useEffect } from "react";
-import { FOCUS_MODE_EVENTS } from "../PomodoroWidget";
+
+const FOCUS_MODE_EVENTS = {
+  FOCUS_STARTED: "focusModeStarted",
+  FOCUS_PAUSED: "focusModePaused",
+  FOCUS_ENDED: "focusModeEnded",
+};
 
 interface FocusModeState {
   isFocusModeActive: boolean;

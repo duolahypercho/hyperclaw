@@ -1,7 +1,6 @@
 import React, { useEffect, memo, useRef, useState, useCallback } from "react";
 import { useOS, useCopanionChatOS } from "@OS/Provider/OSProv";
 import { useOpenClawContext } from "$/Providers/OpenClawProv";
-import Pomodoro from "$/components/Tool/Pomodoro/pomodoroAppLayout";
 import DocsAppLayout from "$/components/Tool/Docs/DocsAppLayout";
 import FloatingChatAppLayout from "$/components/Tool/FloatingChat/FloatingChatAppLayout";
 import Navbar from "$/components/navbar";
@@ -9,11 +8,9 @@ import { useRouter } from "next/router";
 import { TodoListProvider } from "$/components/Tool/TodoList/provider/todolistProvider";
 import { Guidance } from "$/components/Guidance";
 import { onboardingConfig } from "$/components/Guidance/configs/onboarding";
-import CopanionChat from "$/components/Tool/Copanion";
+import { DoctorTerminalProvider } from "$/components/Tool/DoctorTerminal/DoctorTerminalContext";
+import DoctorTerminalPanel from "$/components/Tool/DoctorTerminal/DoctorTerminalPanel";
 
-// Hyperclaw width constant
-const COPANION_WIDTH = 400;
-const SIDEBAR_WIDTH = 300;
 
 // Memoized wrapper to prevent re-renders - following your existing pattern
 const MemoizedChildren = memo(
@@ -105,6 +102,7 @@ const DesktopLayout = ({ children }: any) => {
 
   return (
     <TodoListProvider>
+    <DoctorTerminalProvider>
     <div
       id="layout"
       className="w-full h-screen flex flex-col relative overflow-hidden"
@@ -137,14 +135,15 @@ const DesktopLayout = ({ children }: any) => {
       {/* Fixed elements - hidden in fullscreen mode */}
       <div className="relative z-10">
         {/* Floating components */}
-        <Pomodoro />
         <DocsAppLayout />
         <FloatingChatAppLayout />
+        <DoctorTerminalPanel />
       </div>
 
       {/* Guidance/Onboarding System */}
       <Guidance config={onboardingConfig} autoStart={true} checkCompletion={true} />
     </div>
+    </DoctorTerminalProvider>
     </TodoListProvider>
   );
 };

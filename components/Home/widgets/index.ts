@@ -1,8 +1,3 @@
-export {
-  default as PomodoroWidget,
-  PomodoroCustomHeader,
-} from "./PomodoroWidget";
-export { default as ClockWidget, ClockCustomHeader } from "./ClockWidget";
 export { default as LogsWidget, LogsCustomHeader } from "./LogsWidget";
 export {
   default as KanbanWidget,
