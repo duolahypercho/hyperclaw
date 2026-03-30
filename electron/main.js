@@ -1743,7 +1743,10 @@ function registerVoiceHotkey() {
       if (VOICE_KEY_CODES.includes(e.keycode)) vHeld = true;
 
       // Exact hold combo: Ctrl + Cmd/Win + V
-      if (ctrlHeld && metaHeld && vHeld && !voiceHotkeyActive && !hotkeyPending) {
+      // Double-check: the V keydown event must also report ctrl+meta as active,
+      // guarding against stale modifier flags from missed keyup events.
+      if (ctrlHeld && metaHeld && vHeld && !voiceHotkeyActive && !hotkeyPending
+          && VOICE_KEY_CODES.includes(e.keycode) && e.ctrlKey && e.metaKey) {
         hotkeyPending = true;
         voiceHotkeyMode = shiftHeld ? "agent-chat" : "dictation";
 
