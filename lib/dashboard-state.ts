@@ -14,6 +14,7 @@ const ALL_KEYS = [
   "dashboard-default-visible-widgets",
   "dashboard-default-widget-configs",
   "dashboard-default-widget-instances",
+  "hyperclaw-ceo-id",
 ];
 
 const cache: Record<string, string> = {};

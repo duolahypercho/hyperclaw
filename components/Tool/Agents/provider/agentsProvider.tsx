@@ -9,8 +9,9 @@ import React, {
   useMemo,
   useRef,
 } from "react";
-import { Bot, FileText, Plus, RefreshCw, Save, Loader2, Trash2, Sparkles, Brain, UserRound, Users, Wrench, Heart } from "lucide-react";
+import { Bot, FileText, Plus, RefreshCw, Save, Loader2, Trash2, Sparkles, Brain, UserRound, Users, Wrench, Heart, Crown } from "lucide-react";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
+import { dashboardState } from "$/lib/dashboard-state";
 import { useOpenClawContext } from "$/Providers/OpenClawProv";
 import { gatewayConnection } from "$/lib/openclaw-gateway-ws";
 import { AppSchema } from "@OS/Layout/types";
@@ -55,6 +56,8 @@ interface AgentsContextValue {
   setContent: (value: string | null) => void;
   refresh: () => Promise<void>;
   saveDoc: () => Promise<boolean>;
+  /** The agent ID marked as the HyperClaw orchestrator (CEO), or null if none */
+  ceoAgentId: string | null;
 }
 
 const AgentsContext = createContext<AgentsContextValue | undefined>(undefined);
@@ -129,6 +132,13 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
   const [addAgentDialogOpen, setAddAgentDialogOpen] = useState(false);
   const [deleteAgentDialogOpen, setDeleteAgentDialogOpen] = useState(false);
   const selectedPathRef = useRef<string | null>(null);
+  const [ceoAgentId, setCeoAgentId] = useState<string | null>(null);
+
+  // Load CEO agent ID from dashboard state
+  useEffect(() => {
+    const id = dashboardState.get("hyperclaw-ceo-id");
+    setCeoAgentId(id || null);
+  }, [loading]);
 
   // Files belonging to the selected agent: match by workspace folder from getTeam()
   const filteredAgentFiles = useMemo(() => {
@@ -276,10 +286,11 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
       onClick: () => setSelectedFile(file),
     }));
 
+    const isCeoAgent = ceoAgentId != null && selectedAgentId === ceoAgentId;
     sections.push({
       id: `agent-files-${selectedAgentId}`,
       type: "default",
-      title: "Files",
+      title: isCeoAgent ? "Files  \u{1F451}" : "Files",
       items: fileItems,
     });
 
@@ -305,6 +316,7 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
     loading,
     agents.length,
     agentFiles.length,
+    ceoAgentId,
   ]);
 
   const hasUnsavedChanges =
@@ -414,6 +426,7 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
       setContent,
       refresh,
       saveDoc,
+      ceoAgentId,
     }),
     [
       agents,
@@ -432,6 +445,7 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
       setContent,
       refresh,
       saveDoc,
+      ceoAgentId,
     ]
   );
 
