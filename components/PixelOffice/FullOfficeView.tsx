@@ -7,6 +7,7 @@ import { useClaw3DAgents } from "./claw3d/useClaw3DAgents";
 import type { AgentInfo } from "./claw3d/useClaw3DAgents";
 import { usePixelOffice } from "./provider/pixelOfficeProvider";
 import { useOpenClawContext } from "$/Providers/OpenClawProv";
+import { ErrorBoundary } from "$/components/ErrorBoundary";
 
 // Dynamic import to avoid SSR issues with Three.js
 const Claw3DOffice = dynamic(
@@ -227,11 +228,20 @@ export function FullOfficeView(props: FullOfficeViewProps = {}) {
     ? getAgentInfo(selectedAgentId)
     : null;
 
+  const officeFallback = (
+    <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "0.5rem", color: "var(--muted-foreground, #888)" }}>
+      <span style={{ fontSize: "1.5rem" }}>🏢</span>
+      <span style={{ fontSize: "0.8rem" }}>3D office unavailable</span>
+      <span style={{ fontSize: "0.7rem", opacity: 0.7 }}>WebGL context could not be created</span>
+    </div>
+  );
+
   return (
     <div
       className="pixel-office-root"
       style={{ width: "100%", height: "100%", position: "relative", overflow: "hidden" }}
     >
+      <ErrorBoundary fallback={officeFallback}>
       <Claw3DOffice
         agents={officeAgents}
         readOnly={embedMode}
@@ -288,6 +298,7 @@ export function FullOfficeView(props: FullOfficeViewProps = {}) {
         onGithubReviewDismiss={handleGithubReviewDismiss}
         onQaLabDismiss={handleQaLabDismiss}
       />
+      </ErrorBoundary>
 
       {selectedAgentId != null && selectedAgentInfo && (
         <AgentInfoPanel
