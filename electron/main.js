@@ -933,6 +933,218 @@ ipcMain.handle("window-is-maximized", (event) => {
 
 // Clear persisted auth (cookies + storage) for app origins so logout is effective in Electron.
 // Fixes "auto login" after logout in dist-electron and packaged app.
+// ─── Runtime Detection Handlers ───────────────────────────────────────────
+ipcMain.handle("runtimes:detect-local", async () => {
+  const { execSync } = require("child_process");
+  const fs = require("fs");
+  const path = require("path");
+  const results = {};
+
+  const home = process.env.HOME || "";
+  // Extend PATH to include common user binary locations that Electron may miss
+  const extraPaths = [
+    path.join(home, ".local", "bin"),
+    path.join(home, "bin"),
+    path.join(home, ".npm-global", "bin"),
+    path.join(home, ".cargo", "bin"),
+    "/usr/local/bin",
+    "/opt/homebrew/bin",
+  ].join(":");
+  const shellEnv = { ...process.env, PATH: `${extraPaths}:${process.env.PATH || ""}` };
+
+  const runtimes = [
+    {
+      id: "openclaw",
+      commands: ["openclaw"],
+      ports: [18789],
+      paths: [
+        path.join(home, ".hyperclaw", "node", "bin", "openclaw"),
+        path.join(home, ".openclaw", "openclaw"),
+        "/usr/local/bin/openclaw",
+      ],
+    },
+    {
+      id: "claude",
+      commands: ["claude"],
+      ports: [],
+      paths: [
+        path.join(home, ".claude", "local", "claude"),
+        path.join(home, ".npm-global", "bin", "claude"),
+        "/usr/local/bin/claude",
+      ],
+    },
+    {
+      id: "codex",
+      commands: ["codex"],
+      ports: [],
+      paths: [
+        path.join(home, ".npm-global", "bin", "codex"),
+        "/usr/local/bin/codex",
+      ],
+    },
+    {
+      id: "hermes",
+      commands: ["hermes-agent", "hermes"],
+      ports: [],
+      paths: [
+        path.join(home, ".local", "bin", "hermes"),
+        path.join(home, ".local", "bin", "hermes-agent"),
+        path.join(home, ".hermes", "bin", "hermes-agent"),
+        path.join(home, ".hermes", "bin", "hermes"),
+        "/usr/local/bin/hermes-agent",
+        "/usr/local/bin/hermes",
+      ],
+    },
+  ];
+
+  for (const rt of runtimes) {
+    let found = false;
+    let version = null;
+    let running = false;
+    let foundCmd = null;
+
+    // Check if binary exists via PATH
+    for (const cmd of rt.commands) {
+      try {
+        const whichResult = execSync(`which ${cmd} 2>/dev/null`, { encoding: "utf-8", timeout: 3000, env: shellEnv }).trim();
+        if (whichResult) {
+          found = true;
+          foundCmd = cmd;
+          break;
+        }
+      } catch { /* not found */ }
+    }
+
+    // Check common install paths if not found in PATH
+    if (!found && rt.paths) {
+      for (const p of rt.paths) {
+        if (fs.existsSync(p)) {
+          found = true;
+          foundCmd = p;
+          break;
+        }
+      }
+    }
+
+    // Try to get version from the found command
+    if (found && foundCmd) {
+      try {
+        version = execSync(`"${foundCmd}" --version 2>/dev/null`, { encoding: "utf-8", timeout: 3000, env: shellEnv }).trim().slice(0, 50);
+      } catch { /* no version flag */ }
+    }
+
+    // Check if running via port (for runtimes with known ports)
+    for (const port of rt.ports) {
+      try {
+        const net = require("net");
+        running = await new Promise((resolve) => {
+          const sock = new net.Socket();
+          sock.setTimeout(1000);
+          sock.on("connect", () => { sock.destroy(); resolve(true); });
+          sock.on("error", () => resolve(false));
+          sock.on("timeout", () => { sock.destroy(); resolve(false); });
+          sock.connect(port, "127.0.0.1");
+        });
+        if (running) break;
+      } catch { /* ignore */ }
+    }
+
+    // Check if running via process list (for runtimes without known ports)
+    if (!running && found) {
+      try {
+        const cmd = rt.commands[0];
+        const ps = execSync(`pgrep -f "${cmd}" 2>/dev/null`, { encoding: "utf-8", timeout: 3000, env: shellEnv }).trim();
+        if (ps) running = true;
+      } catch { /* not running */ }
+    }
+
+    results[rt.id] = { installed: found, version, running };
+  }
+
+  console.log("[runtimes] detect-local:", JSON.stringify(results));
+  return results;
+});
+
+// ─── Permission Handlers ──────────────────────────────────────────────────
+ipcMain.handle("check-accessibility", () => {
+  if (process.platform === "darwin") {
+    const { systemPreferences } = require("electron");
+    // isTrustedAccessibilityClient(false) caches its result within the process,
+    // so it misses when the user toggles the permission in System Settings.
+    // Use AppleScript as a live probe — System Events requires Accessibility.
+    try {
+      const { execSync } = require("child_process");
+      execSync(
+        'osascript -e "tell application \\"System Events\\" to return 1" 2>/dev/null',
+        { encoding: "utf-8", timeout: 2000 }
+      );
+      console.log("[permissions] check-accessibility: true");
+      return true;
+    } catch {
+      console.log("[permissions] check-accessibility: false");
+      return false;
+    }
+  }
+  return true;
+});
+
+ipcMain.handle("request-accessibility", () => {
+  if (process.platform === "darwin") {
+    const { systemPreferences } = require("electron");
+    const result = systemPreferences.isTrustedAccessibilityClient(true);
+    console.log("[permissions] request-accessibility:", result);
+    return result;
+  }
+  return true;
+});
+
+ipcMain.handle("check-microphone", async () => {
+  if (process.platform === "darwin") {
+    const { systemPreferences } = require("electron");
+    const result = systemPreferences.getMediaAccessStatus("microphone") === "granted";
+    console.log("[permissions] check-microphone:", result);
+    return result;
+  }
+  return true;
+});
+
+ipcMain.handle("request-microphone", async () => {
+  if (process.platform === "darwin") {
+    const { systemPreferences } = require("electron");
+    const result = await systemPreferences.askForMediaAccess("microphone");
+    console.log("[permissions] request-microphone:", result);
+    return result;
+  }
+  return true;
+});
+
+ipcMain.handle("check-screen", () => {
+  if (process.platform === "darwin") {
+    const { systemPreferences } = require("electron");
+    const result = systemPreferences.getMediaAccessStatus("screen") === "granted";
+    console.log("[permissions] check-screen:", result);
+    return result;
+  }
+  return true;
+});
+
+ipcMain.handle("request-screen", async () => {
+  if (process.platform === "darwin") {
+    const { desktopCapturer, shell, systemPreferences } = require("electron");
+    // Attempt a capture so macOS registers the app in the Screen Recording list.
+    // Without this, HyperClaw won't appear in System Settings for the user to toggle.
+    try {
+      await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 1, height: 1 } });
+    } catch { /* expected to fail if not yet granted */ }
+    // Now open System Settings to the Screen Recording pane
+    shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture");
+    const result = systemPreferences.getMediaAccessStatus("screen") === "granted";
+    console.log("[permissions] request-screen:", result);
+    return result;
+  }
+  return true;
+});
+
 ipcMain.handle("clear-auth-session", async () => {
   try {
     const ses = session.defaultSession;
@@ -1449,13 +1661,14 @@ if (process.platform === "darwin") {
 // ─── Voice Overlay Window ──────────────────────────────────────────────────────────
 
 let voiceOverlayWindow = null;
+let voiceOverlayReady = null; // Promise that resolves when renderer React mounts and registers IPC listeners
+let voiceOverlayReadyResolve = null;
 const MINI_SIZE = 44;
 const BOTTOM_GAP = 16; // gap from bottom of screen
 
 function createVoiceOverlay() {
   if (voiceOverlayWindow && !voiceOverlayWindow.isDestroyed()) {
-    voiceOverlayWindow.show();
-    return;
+    return voiceOverlayReady || Promise.resolve();
   }
 
   const { width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().workAreaSize;
@@ -1482,6 +1695,12 @@ function createVoiceOverlay() {
     },
   });
 
+  voiceOverlayReady = new Promise((resolve) => {
+    voiceOverlayReadyResolve = resolve;
+    // Safety fallback: resolve after 8s even if renderer never signals (e.g. page error)
+    setTimeout(() => { resolve(); voiceOverlayReadyResolve = null; }, 8000);
+  });
+
   const overlayUrl = isRemoteMode
     ? `${appConfig.remoteUrl}/voice-overlay`
     : `${appConfig.localUrl}/voice-overlay`;
@@ -1497,8 +1716,21 @@ function createVoiceOverlay() {
 
   voiceOverlayWindow.on("closed", () => {
     voiceOverlayWindow = null;
+    voiceOverlayReady = null;
+    voiceOverlayReadyResolve = null;
   });
+
+  return voiceOverlayReady;
 }
+
+// Renderer signals it has mounted and registered all IPC listeners
+ipcMain.handle("voice-overlay-renderer-ready", () => {
+  console.log("[Hyperclaw] Voice overlay renderer ready (React mounted)");
+  if (voiceOverlayReadyResolve) {
+    voiceOverlayReadyResolve();
+    voiceOverlayReadyResolve = null;
+  }
+});
 
 /** Windows 11+ build ≥ 22000 — acrylic backdrop behind transparent windows. */
 function isWindows11OrLater() {
@@ -1515,10 +1747,12 @@ function setVoiceOverlayNativeBackdrop(/* enabled */) {
 // Track whether quick chat overlay is currently expanded
 let quickChatOpen = false;
 
-function expandVoiceOverlay(options = {}) {
+async function expandVoiceOverlay(options = {}) {
   const { focus = true } = options;
   if (!voiceOverlayWindow || voiceOverlayWindow.isDestroyed()) {
-    createVoiceOverlay();
+    await createVoiceOverlay();
+  } else if (voiceOverlayReady) {
+    await voiceOverlayReady;
   }
   if (!voiceOverlayWindow || voiceOverlayWindow.isDestroyed()) return;
   voiceOverlayWindow.setFocusable(focus);
@@ -1596,6 +1830,15 @@ ipcMain.handle("capture-screenshot", async () => {
   return result;
 });
 
+// Check if screen recording permission is granted (used by renderer to decide capture method)
+ipcMain.handle("has-screen-permission", () => {
+  if (process.platform === "darwin") {
+    const { systemPreferences } = require("electron");
+    return systemPreferences.getMediaAccessStatus("screen") === "granted";
+  }
+  return true;
+});
+
 // Open voice overlay in agent-chat mode with an auto-attached screenshot
 function openQuickChat() {
   // Toggle off if already open
@@ -1612,40 +1855,284 @@ function openQuickChat() {
     voiceOverlayWindow.hide();
   }
 
-  // Wait for macOS to finish hiding the window, then capture
+  // Check if we have screen recording permission — if so, capture from main process.
+  // Otherwise, just open the overlay and let the renderer use getDisplayMedia picker.
   const delay = (ms) => new Promise((r) => setTimeout(r, ms));
-  delay(200).then(() => captureScreenshot()).then((result) => {
-    // Show overlay and send quick-chat event
-    expandVoiceOverlay();
-    if (voiceOverlayWindow && !voiceOverlayWindow.isDestroyed()) {
-      voiceOverlayWindow.webContents.send("voice-quick-chat", { screenshot: null });
-      if (result.dataUrl) {
-        voiceOverlayWindow.webContents.send("voice-quick-chat-screenshot", result.dataUrl);
+  const hasPermission = process.platform === "darwin"
+    ? require("electron").systemPreferences.getMediaAccessStatus("screen") === "granted"
+    : true;
+
+  if (hasPermission) {
+    delay(200).then(() => captureScreenshot()).then(async (result) => {
+      await expandVoiceOverlay();
+      if (voiceOverlayWindow && !voiceOverlayWindow.isDestroyed()) {
+        voiceOverlayWindow.webContents.send("voice-quick-chat", { screenshot: null });
+        if (result.dataUrl) {
+          voiceOverlayWindow.webContents.send("voice-quick-chat-screenshot", result.dataUrl);
+        }
       }
-    }
-  }).catch(() => {
-    // Still show overlay even if capture fails
-    expandVoiceOverlay();
-    if (voiceOverlayWindow && !voiceOverlayWindow.isDestroyed()) {
-      voiceOverlayWindow.webContents.send("voice-quick-chat", { screenshot: null });
-    }
-  });
+    }).catch(async () => {
+      await expandVoiceOverlay();
+      if (voiceOverlayWindow && !voiceOverlayWindow.isDestroyed()) {
+        voiceOverlayWindow.webContents.send("voice-quick-chat", { screenshot: null });
+      }
+    });
+  } else {
+    // No permission — open overlay immediately, renderer will use getDisplayMedia picker
+    expandVoiceOverlay().then(() => {
+      if (voiceOverlayWindow && !voiceOverlayWindow.isDestroyed()) {
+        voiceOverlayWindow.webContents.send("voice-quick-chat", { screenshot: null });
+      }
+    });
+  }
 }
 
 // Ctrl+Cmd/Win hotkey — short press toggles quick chat, hold activates push-to-talk
 // Shift modifier: Ctrl+Shift+Cmd = agent-chat mode (instead of dictation)
-const HOLD_THRESHOLD_MS = 300; // ms — hold longer than this = voice recording
 let voiceHotkeyActive = false;
 let voiceHotkeyMode = "dictation"; // "dictation" | "agent-chat"
-let uiohookStarted = false;
-let uiohookWorking = false; // true once we receive at least one event
+let voicePTTStartPromise = null; // resolves after overlay is ready AND start IPC is sent
 let voiceOverlayRecording = false;
 
+// Modifier-only hold-to-talk: Cmd+Option (like Whispr).
+// Compiled Swift helper polls CGEventSourceKeyState at 50ms intervals.
+// No Accessibility permission needed (CGEventSourceKeyState reads hardware state directly).
+function registerModifierOnlyVoiceHotkey() {
+  const { spawn, execFileSync } = require("child_process");
+  const voiceLogFile = path.join(app.getPath("userData"), "voice-debug.log");
+  const vlog = (msg) => {
+    const line = `[${new Date().toISOString()}] ${msg}\n`;
+    console.log(`[Voice] ${msg}`);
+    try { fs.appendFileSync(voiceLogFile, line); } catch {}
+  };
+
+  // Swift helper: polls Cmd+Option via CGEventSourceKeyState (no Accessibility needed)
+  // macOS keycodes: LCmd=0x37, RCmd=0x36, LOpt=0x3A, ROpt=0x3D
+  const swiftCode = [
+    'import CoreGraphics',
+    'import Foundation',
+    'setbuf(stdout, nil)',
+    'var wasHeld = false',
+    'while true {',
+    '  let cmd = CGEventSource.keyState(.combinedSessionState, key: 0x37) || CGEventSource.keyState(.combinedSessionState, key: 0x36)',
+    '  let opt = CGEventSource.keyState(.combinedSessionState, key: 0x3A) || CGEventSource.keyState(.combinedSessionState, key: 0x3D)',
+    '  let held = cmd && opt',
+    '  if held && !wasHeld { wasHeld = true; print("PRESSED") }',
+    '  else if !held && wasHeld { wasHeld = false; print("RELEASED") }',
+    '  Thread.sleep(forTimeInterval: 0.05)',
+    '}',
+  ].join('\n');
+
+  const swiftFile = path.join(app.getPath("userData"), "modifier-monitor.swift");
+  const compiledBinary = path.join(app.getPath("userData"), "modifier-monitor");
+
+  // Compile the Swift helper once (recompile only if source changed)
+  let needsCompile = true;
+  try {
+    if (fs.existsSync(compiledBinary)) {
+      const existingSource = fs.existsSync(swiftFile) ? fs.readFileSync(swiftFile, "utf8") : "";
+      if (existingSource === swiftCode) needsCompile = false;
+    }
+  } catch {}
+
+  if (needsCompile) {
+    fs.writeFileSync(swiftFile, swiftCode);
+    vlog("Compiling Swift modifier monitor...");
+    try {
+      execFileSync("swiftc", ["-o", compiledBinary, swiftFile], { timeout: 60000 });
+      fs.chmodSync(compiledBinary, 0o755);
+      vlog("Swift modifier monitor compiled successfully");
+    } catch (err) {
+      vlog(`Failed to compile Swift monitor: ${err.message}`);
+      vlog("Falling back to Cmd+Alt+D globalShortcut");
+      registerVoiceHotkeyFallback("CommandOrControl+Alt+D");
+      return;
+    }
+  } else {
+    vlog("Using cached compiled modifier monitor");
+  }
+
+  let monitorProcess = null;
+  let failCount = 0;
+
+  function startMonitor() {
+    vlog("Starting compiled modifier monitor...");
+    monitorProcess = spawn(compiledBinary, [], { stdio: ["ignore", "pipe", "pipe"] });
+
+    let buffer = "";
+    monitorProcess.stdout.on("data", (chunk) => {
+      buffer += chunk.toString();
+      const lines = buffer.split("\n");
+      buffer = lines.pop();
+      for (const line of lines) {
+        const t = line.trim();
+        if (t === "PRESSED") onPressed();
+        else if (t === "RELEASED") onReleased();
+      }
+    });
+
+    monitorProcess.stderr.on("data", (chunk) => {
+      vlog(`Swift monitor: ${chunk.toString().trim()}`);
+    });
+
+    monitorProcess.on("exit", (code) => {
+      vlog(`Swift monitor exited (code ${code})`);
+      monitorProcess = null;
+      failCount++;
+      if (failCount >= 3) {
+        vlog("Swift monitor failed 3 times — falling back to Cmd+Alt+D globalShortcut");
+        registerVoiceHotkeyFallback("CommandOrControl+Alt+D");
+        return;
+      }
+      if (!app.isQuitting) setTimeout(startMonitor, 2000);
+    });
+  }
+
+  function onPressed() {
+    if (voiceOverlayRecording) return;
+    failCount = 0; // reset on successful event
+    voiceHotkeyMode = "dictation";
+    voiceOverlayRecording = true;
+    voiceHotkeyActive = true;
+    vlog("Cmd+Option PRESSED — push-to-talk STARTED");
+
+    voicePTTStartPromise = expandVoiceOverlay({ focus: false }).then(() => {
+      vlog("overlay ready — sending start IPC");
+      if (voiceOverlayWindow && !voiceOverlayWindow.isDestroyed()) {
+        voiceOverlayWindow.webContents.send("voice-push-to-talk", { action: "start", mode: voiceHotkeyMode });
+      }
+    });
+  }
+
+  function onReleased() {
+    if (!voiceOverlayRecording) return;
+    voiceOverlayRecording = false;
+    voiceHotkeyActive = false;
+    vlog("Cmd+Option RELEASED — push-to-talk STOPPED");
+    const sendStop = () => {
+      if (voiceOverlayWindow && !voiceOverlayWindow.isDestroyed()) {
+        voiceOverlayWindow.webContents.send("voice-push-to-talk", { action: "stop", mode: voiceHotkeyMode });
+      }
+      voicePTTStartPromise = null;
+    };
+    if (voicePTTStartPromise) voicePTTStartPromise.then(sendStop); else sendStop();
+  }
+
+  app.on("before-quit", () => {
+    app.isQuitting = true;
+    if (monitorProcess) { monitorProcess.kill(); monitorProcess = null; }
+  });
+
+  startMonitor();
+}
+
+// Fallback hold-to-talk: globalShortcut + CGEventSourceKeyState polling via JXA.
+function registerVoiceHotkeyFallback(voiceToggleHotkey) {
+  const { execFile } = require("child_process");
+  const voiceLogFile = path.join(app.getPath("userData"), "voice-debug.log");
+  const vlog = (msg) => {
+    const line = `[${new Date().toISOString()}] ${msg}\n`;
+    console.log(`[Voice] ${msg}`);
+    try { fs.appendFileSync(voiceLogFile, line); } catch {}
+  };
+  vlog(`registerVoiceHotkeyFallback called for ${voiceToggleHotkey}`);
+  let releaseWatcher = null;
+
+  function waitForKeyRelease() {
+    return new Promise((resolve) => {
+      // globalShortcut consumes the V key event, so CGEventSourceKeyState always
+      // sees V as released. Instead, watch Cmd+Option — when either is released, stop.
+      // macOS keycodes: LCmd=55, RCmd=54, LOpt=58, ROpt=61
+      // Uses HID state (1) for raw hardware reads.
+      const script = `
+ObjC.import('CoreGraphics');
+delay(0.1);
+var i = 0;
+while (i < 600) {
+  var cmd = $.CGEventSourceKeyState(1, 55) || $.CGEventSourceKeyState(1, 54);
+  var opt = $.CGEventSourceKeyState(1, 58) || $.CGEventSourceKeyState(1, 61);
+  if (!cmd || !opt) break;
+  delay(0.05);
+  i++;
+}
+JSON.stringify({iterations:i});`;
+      vlog("JXA key-release watcher spawned");
+      releaseWatcher = execFile("osascript", ["-l", "JavaScript", "-e", script], { timeout: 35000 }, (err, stdout) => {
+        releaseWatcher = null;
+        vlog(`JXA watcher exited — stdout: ${(stdout||"").trim()}, err: ${err?.message || "none"}`);
+        resolve();
+      });
+    });
+  }
+
+  let recordingStartTime = 0;
+
+  const registered = globalShortcut.register(voiceToggleHotkey, () => {
+    vlog(`globalShortcut fired | recording=${voiceOverlayRecording} | elapsed=${Date.now() - recordingStartTime}ms`);
+
+    if (voiceOverlayRecording) {
+      if (Date.now() - recordingStartTime < 1000) {
+        vlog("  → ignored (grace period)");
+        return;
+      }
+      voiceOverlayRecording = false;
+      voiceHotkeyActive = false;
+      if (releaseWatcher) { releaseWatcher.kill(); releaseWatcher = null; }
+      const mode = voiceHotkeyMode;
+      vlog(`toggle stop (${mode})`);
+      const sendStop = () => {
+        if (voiceOverlayWindow && !voiceOverlayWindow.isDestroyed()) {
+          voiceOverlayWindow.webContents.send("voice-push-to-talk", { action: "stop", mode });
+        }
+        voicePTTStartPromise = null;
+      };
+      if (voicePTTStartPromise) voicePTTStartPromise.then(sendStop); else sendStop();
+      return;
+    }
+
+    recordingStartTime = Date.now();
+    voiceHotkeyMode = "dictation";
+    voiceOverlayRecording = true;
+    voiceHotkeyActive = true;
+    vlog("push-to-talk STARTED");
+
+    voicePTTStartPromise = expandVoiceOverlay({ focus: false }).then(() => {
+      vlog("overlay ready — sending start IPC");
+      if (voiceOverlayWindow && !voiceOverlayWindow.isDestroyed()) {
+        voiceOverlayWindow.webContents.send("voice-push-to-talk", { action: "start", mode: voiceHotkeyMode });
+      }
+    });
+
+    waitForKeyRelease().then(() => {
+      vlog(`key release detected | recording=${voiceOverlayRecording}`);
+      if (!voiceOverlayRecording) return;
+      voiceOverlayRecording = false;
+      voiceHotkeyActive = false;
+      const mode = voiceHotkeyMode;
+      vlog(`push-to-talk STOPPED (${mode})`);
+      const sendStop = () => {
+        if (voiceOverlayWindow && !voiceOverlayWindow.isDestroyed()) {
+          voiceOverlayWindow.webContents.send("voice-push-to-talk", { action: "stop", mode });
+        }
+        voicePTTStartPromise = null;
+      };
+      if (voicePTTStartPromise) voicePTTStartPromise.then(sendStop); else sendStop();
+    });
+  });
+
+  if (registered) {
+    vlog(`Voice hold-to-talk registered: ${voiceToggleHotkey}`);
+  } else {
+    vlog(`FAILED to register ${voiceToggleHotkey}`);
+  }
+}
+
 function registerVoiceHotkey() {
-  if (uiohookStarted) return;
+  const _vlogFile = path.join(app.getPath("userData"), "voice-debug.log");
+  const _vlog = (m) => { try { fs.appendFileSync(_vlogFile, `[${new Date().toISOString()}] ${m}\n`); } catch {} };
+  _vlog(`registerVoiceHotkey called, platform=${process.platform}`);
 
   // Register globalShortcut for quick chat (Option+Space)
-  // Note: Ctrl+Cmd+Space is reserved by macOS for Emoji picker
   const chatToggleHotkey = process.platform === "darwin" ? "Alt+Space" : "Alt+Space";
   const registered = globalShortcut.register(chatToggleHotkey, () => {
     openQuickChat();
@@ -1654,153 +2141,10 @@ function registerVoiceHotkey() {
     console.log(`[Hyperclaw] Quick chat registered: ${chatToggleHotkey}`);
   }
 
-  const voiceToggleHotkey = process.platform === "darwin" ? "Control+Command+V" : "Ctrl+Super+V";
-  let shouldUseGlobalVoiceFallback = true;
-
-  // Try uiohook for hold-to-talk on the exact voice combo (Ctrl+Cmd+V)
-  // Requires Input Monitoring permission on macOS 13+ (Ventura/Sequoia)
   if (process.platform === "darwin") {
-    const { systemPreferences } = require("electron");
-    const isTrusted = systemPreferences.isTrustedAccessibilityClient(true);
-    if (!isTrusted) {
-      console.log("[Hyperclaw] uiohook skipped (Accessibility/Input Monitoring not granted). globalShortcut active.");
-      shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility").catch(() => {});
-    } else {
-      shouldUseGlobalVoiceFallback = false;
-      console.log("[Hyperclaw] Accessibility permission granted!");
-    }
-  }
-
-  if (shouldUseGlobalVoiceFallback) {
-    // Fallback: use globalShortcut as toggle (press to start, press to stop)
-    // since without Accessibility we can't detect key release for hold-to-talk
-    const registered = globalShortcut.register(voiceToggleHotkey, () => {
-      if (voiceOverlayRecording) {
-        // Currently recording → stop
-        voiceOverlayRecording = false;
-        voiceHotkeyActive = false;
-        const mode = voiceHotkeyMode;
-        console.log(`[Hyperclaw] Ctrl+Cmd+V toggle — push-to-talk stopped (${mode})`);
-        if (voiceOverlayWindow && !voiceOverlayWindow.isDestroyed()) {
-          voiceOverlayWindow.webContents.send("voice-push-to-talk", { action: "stop", mode });
-        }
-      } else {
-        // Not recording → start
-        voiceHotkeyMode = "dictation";
-        voiceOverlayRecording = true;
-        voiceHotkeyActive = true;
-        console.log(`[Hyperclaw] Ctrl+Cmd+V toggle — push-to-talk started (${voiceHotkeyMode})`);
-        expandVoiceOverlay({ focus: false });
-        setTimeout(() => {
-          if (voiceOverlayWindow && !voiceOverlayWindow.isDestroyed()) {
-            voiceOverlayWindow.webContents.send("voice-push-to-talk", { action: "start", mode: voiceHotkeyMode, toggle: true });
-          }
-        }, 150);
-      }
-    });
-    if (registered) {
-      console.log(`[Hyperclaw] Voice toggle registered: ${voiceToggleHotkey} (no Accessibility — toggle mode)`);
-    } else {
-      console.log(`[Hyperclaw] Failed to register ${voiceToggleHotkey}`);
-    }
-    return;
-  }
-
-  try {
-    const { uIOhook, UiohookKey } = require("uiohook-napi");
-
-    // Track which modifier keys are currently held
-    let ctrlHeld = false;
-    let metaHeld = false; // Cmd on macOS, Win on Windows/Linux
-    let shiftHeld = false;
-    let vHeld = false;
-
-    let holdTimer = null;
-    let hotkeyPending = false; // true = keys pressed, waiting to see if it's a hold
-
-    const CTRL_CODES = [UiohookKey.Ctrl, UiohookKey.CtrlRight];
-    const META_CODES = [UiohookKey.Meta, UiohookKey.MetaRight];
-    const SHIFT_CODES = [UiohookKey.Shift, UiohookKey.ShiftRight];
-    const VOICE_KEY_CODES = [UiohookKey.V];
-
-    // uiohook mask bits for modifier validation
-    const MASK_CTRL = 0x0002;
-    const MASK_META = 0x0008;
-    const MASK_SHIFT = 0x0001;
-
-    uIOhook.on("keydown", (e) => {
-      if (!uiohookWorking) {
-        uiohookWorking = true;
-        console.log("[Hyperclaw] uiohook receiving events — hold-to-talk active");
-      }
-
-      // Sync tracked state with the event mask to prevent stale modifiers
-      // (missed keyup events during fast typing can leave modifiers "stuck")
-      const mask = e.mask || 0;
-      ctrlHeld = CTRL_CODES.includes(e.keycode) || !!(mask & MASK_CTRL);
-      metaHeld = META_CODES.includes(e.keycode) || !!(mask & MASK_META);
-      shiftHeld = SHIFT_CODES.includes(e.keycode) || !!(mask & MASK_SHIFT);
-      if (VOICE_KEY_CODES.includes(e.keycode)) vHeld = true;
-
-      // Exact hold combo: Ctrl + Cmd/Win + V
-      // Double-check: the V keydown event must also report ctrl+meta as active,
-      // guarding against stale modifier flags from missed keyup events.
-      if (ctrlHeld && metaHeld && vHeld && !voiceHotkeyActive && !hotkeyPending
-          && VOICE_KEY_CODES.includes(e.keycode) && e.ctrlKey && e.metaKey) {
-        hotkeyPending = true;
-        voiceHotkeyMode = shiftHeld ? "agent-chat" : "dictation";
-
-        holdTimer = setTimeout(() => {
-          holdTimer = null;
-          if (!hotkeyPending || !ctrlHeld || !metaHeld || !vHeld) return;
-          hotkeyPending = false;
-          voiceHotkeyActive = true;
-          console.log(`[Hyperclaw] Ctrl+Cmd/Win+V held — push-to-talk started (${voiceHotkeyMode})`);
-          expandVoiceOverlay({ focus: false });
-
-          const mode = voiceHotkeyMode;
-          setTimeout(() => {
-            if (voiceOverlayWindow && !voiceOverlayWindow.isDestroyed()) {
-              voiceOverlayWindow.webContents.send("voice-push-to-talk", { action: "start", mode });
-            }
-          }, 150);
-        }, HOLD_THRESHOLD_MS);
-      }
-    });
-
-    uIOhook.on("keyup", (e) => {
-      // Sync from mask on keyup too — if the mask says a modifier is released,
-      // trust it even if we didn't see the individual keyup event
-      const mask = e.mask || 0;
-      ctrlHeld = CTRL_CODES.includes(e.keycode) ? false : !!(mask & MASK_CTRL);
-      metaHeld = META_CODES.includes(e.keycode) ? false : !!(mask & MASK_META);
-      shiftHeld = SHIFT_CODES.includes(e.keycode) ? false : !!(mask & MASK_SHIFT);
-      if (VOICE_KEY_CODES.includes(e.keycode)) vHeld = false;
-
-      if (hotkeyPending && (!ctrlHeld || !metaHeld || !vHeld)) {
-        hotkeyPending = false;
-        if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
-        return;
-      }
-
-      // Released after hold threshold → stop push-to-talk
-      if (voiceHotkeyActive && (!ctrlHeld || !metaHeld || !vHeld)) {
-        const mode = voiceHotkeyMode;
-        voiceHotkeyActive = false;
-        console.log(`[Hyperclaw] Ctrl+Cmd/Win+V released — push-to-talk stopped (${mode})`);
-        if (voiceOverlayWindow && !voiceOverlayWindow.isDestroyed()) {
-          voiceOverlayWindow.webContents.send("voice-push-to-talk", { action: "stop", mode });
-        }
-      }
-    });
-
-    uIOhook.start();
-    uiohookStarted = true;
-    console.log("[Hyperclaw] uiohook started (Ctrl+Cmd hold-to-talk). Waiting for first event to confirm...");
-
-  } catch (error) {
-    console.error("[Hyperclaw] uiohook failed:", error.message);
-    console.log("[Hyperclaw] Using globalShortcut only (no hold-to-talk).");
+    registerModifierOnlyVoiceHotkey();
+  } else {
+    registerVoiceHotkeyFallback("Ctrl+Alt+D");
   }
 }
 
@@ -1822,6 +2166,7 @@ ipcMain.handle("voice-overlay-minimize", () => {
 
 ipcMain.on("voice-overlay-recording-state", (event, isRecording) => {
   voiceOverlayRecording = Boolean(isRecording);
+  if (!isRecording) voiceHotkeyActive = false;
 });
 
 ipcMain.handle("get-voice-overlay-visible", () => {
@@ -2226,20 +2571,27 @@ app.whenReady().then(() => {
     return false;
   });
 
-  // macOS: request system-level microphone access early so the OS prompt appears on first use
-  if (process.platform === "darwin") {
-    const { systemPreferences } = require("electron");
-    if (systemPreferences.getMediaAccessStatus("microphone") !== "granted") {
-      systemPreferences.askForMediaAccess("microphone").catch(console.error);
-    }
-  }
+  // Enable getDisplayMedia() with native macOS screen picker.
+  // This lets the renderer capture a screen/window via the system picker
+  // WITHOUT needing the app-level Screen Recording permission (no restart required).
+  session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
+    callback({ video: true });
+  }, { useSystemPicker: true });
+
+  // Permissions are now handled in the onboarding wizard (GuidedStepPermissions)
 
   createTray();
-  createWindow();
-  registerVoiceHotkey(); // Register voice input hotkey (Cmd+Shift+Space on macOS, Alt+Space elsewhere)
+  try {
+    createWindow();
+  } catch (e) {
+    try { fs.appendFileSync(path.join(app.getPath("userData"), "voice-debug.log"), `[${new Date().toISOString()}] createWindow error: ${e.message}\n`); } catch {}
+  }
+  try { fs.appendFileSync(path.join(app.getPath("userData"), "voice-debug.log"), `[${new Date().toISOString()}] About to call registerVoiceHotkey\n`); } catch {}
+  registerVoiceHotkey(); // Register voice input hotkey
   registerTextInsertHotkey(); // Register Ctrl+Shift+V for text insertion
 
-  // Voice overlay is created on demand (Ctrl+Cmd+V or Alt+Space) — no auto-launch.
+  // Pre-create voice overlay so it's IPC-ready on first Ctrl+Cmd+V press
+  createVoiceOverlay();
 
   if (!isDev && app.isPackaged && isRemoteMode && autoUpdater) {
     setTimeout(

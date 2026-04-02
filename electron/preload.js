@@ -27,6 +27,21 @@ contextBridge.exposeInMainWorld("electronAPI", {
   clearAuthSession: () => ipcRenderer.invoke("clear-auth-session"),
 
 
+  // Runtime detection
+  runtimes: {
+    detectLocal: () => ipcRenderer.invoke("runtimes:detect-local"),
+  },
+
+  // Permissions
+  permissions: {
+    checkAccessibility: () => ipcRenderer.invoke("check-accessibility"),
+    requestAccessibility: () => ipcRenderer.invoke("request-accessibility"),
+    checkMicrophone: () => ipcRenderer.invoke("check-microphone"),
+    requestMicrophone: () => ipcRenderer.invoke("request-microphone"),
+    checkScreen: () => ipcRenderer.invoke("check-screen"),
+    requestScreen: () => ipcRenderer.invoke("request-screen"),
+  },
+
   // Notifications
   showNotification: (title, body) =>
     ipcRenderer.invoke("show-notification", { title, body }),
@@ -127,6 +142,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   // Voice Overlay - persistent floating voice input
   voiceOverlay: {
+    signalReady: () => ipcRenderer.invoke("voice-overlay-renderer-ready"),
     hide: () => ipcRenderer.invoke("hide-voice-overlay"),
     expand: () => ipcRenderer.invoke("voice-overlay-expand"),
     minimize: () => ipcRenderer.invoke("voice-overlay-minimize"),
@@ -146,15 +162,15 @@ contextBridge.exposeInMainWorld("electronAPI", {
     // Insert text into the previously focused app's input field (clipboard + paste)
     insertText: (text) => ipcRenderer.invoke("voice-insert-text", text),
     // Push-to-talk events from main process (hold shortcut = start, release = stop)
-    // Payload: { action: "start"|"stop", mode: "dictation"|"agent-chat" }
+    // Payload: { action: "start"|"stop", mode: "dictation"|"agent-chat", autoStopOnSilence?: boolean }
     onPushToTalk: (callback) => {
       if (typeof callback !== "function") return;
       ipcRenderer.on("voice-push-to-talk", (event, data) => {
         // Normalize: support both old string format and new object format
         if (typeof data === "string") {
-          callback(data, "dictation", false);
+          callback(data, "dictation", false, false);
         } else {
-          callback(data.action, data.mode, !!data.toggle);
+          callback(data.action, data.mode, !!data.toggle, !!data.autoStopOnSilence);
         }
       });
     },
@@ -182,6 +198,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
       ipcRenderer.on("voice-quick-chat-screenshot-error", (event, error) => callback(error));
     },
     captureScreen: () => ipcRenderer.invoke("capture-screenshot"),
+    hasScreenPermission: () => ipcRenderer.invoke("has-screen-permission"),
     // Listen for voice transcript results
     onTranscript: (callback) => {
       if (typeof callback !== "function") return;

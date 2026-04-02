@@ -22,9 +22,11 @@ interface PairingInfo {
 
 interface DeviceSetupProps {
   onComplete: () => void;
+  /** When true, skip the full-screen wrapper (used when embedded in GuidedSetup) */
+  embedded?: boolean;
 }
 
-export default function DeviceSetup({ onComplete }: DeviceSetupProps) {
+export default function DeviceSetup({ onComplete, embedded }: DeviceSetupProps) {
   const { logout } = useUser();
   const [step, setStep] = useState<"setup" | "waiting">("setup");
   const [error, setError] = useState<string | null>(null);
@@ -230,7 +232,7 @@ export default function DeviceSetup({ onComplete }: DeviceSetupProps) {
   const seconds = secondsLeft % 60;
 
   return (
-    <div className="min-h-screen bg-background flex items-center justify-center p-6">
+    <div className={embedded ? "w-full max-w-lg mx-auto" : "min-h-screen bg-background flex items-center justify-center p-6"}>
       <div className="w-full max-w-lg">
         <AnimatePresence mode="wait">
           {step === "setup" && (

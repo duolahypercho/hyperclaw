@@ -10,7 +10,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { User, Settings, LogOut, Sparkles, CreditCard, RefreshCw, Wrench } from "lucide-react";
+import { User, Settings, LogOut, Sparkles, CreditCard, RefreshCw, Wrench, Loader2, RotateCcw } from "lucide-react";
 import { useRouter } from "next/router";
 import { getMediaUrl } from "$/utils";
 import { cn } from "@/lib/utils";
@@ -31,11 +31,30 @@ const Userdropdown = () => {
   const { userInfo, membership, logout } = useUser();
   const { gatewayHealthy, gatewayHealthError, refreshAll } = useOpenClawContext();
   const [reconnecting, setReconnecting] = useState(false);
+  const [restartingGateway, setRestartingGateway] = useState(false);
   const { runDoctorFix, isRunning: fixingOpenClaw } = useDoctorTerminal();
   const router = useRouter();
   const { openModal } = usePricingModal();
   const [isLoadingBilling, setIsLoadingBilling] = useState(false);
   const { toast } = useToast();
+
+  const handleGatewayRestart = async () => {
+    setRestartingGateway(true);
+    try {
+      const { bridgeInvoke } = await import("$/lib/hyperclaw-bridge-client");
+      const result = await bridgeInvoke("gateway-restart") as Record<string, any>;
+      if (result?.success === false) {
+        toast({ title: "Gateway restart failed", description: result.error || "Unknown error", variant: "destructive" });
+      } else {
+        toast({ title: "Gateway restarted", description: "OpenClaw gateway has been restarted." });
+        refreshAll();
+      }
+    } catch (err: any) {
+      toast({ title: "Gateway restart failed", description: err?.message || "Could not reach connector.", variant: "destructive" });
+    } finally {
+      setRestartingGateway(false);
+    }
+  };
 
   // Listen for doctor fix completion to refresh gateway status
   useEffect(() => {
@@ -230,8 +249,27 @@ const Userdropdown = () => {
           disabled={fixingOpenClaw}
           className="cursor-pointer"
         >
-          <Wrench className={cn("mr-2 h-4 w-4", fixingOpenClaw && "animate-spin")} />
+          {fixingOpenClaw ? (
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+          ) : (
+            <Wrench className="mr-2 h-4 w-4" />
+          )}
           <span>{fixingOpenClaw ? "Fixing..." : "Fix OpenClaw"}</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          onClick={(e) => {
+            e.preventDefault();
+            handleGatewayRestart();
+          }}
+          disabled={restartingGateway}
+          className="cursor-pointer"
+        >
+          {restartingGateway ? (
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+          ) : (
+            <RotateCcw className="mr-2 h-4 w-4" />
+          )}
+          <span>{restartingGateway ? "Restarting..." : "Restart Gateway"}</span>
         </DropdownMenuItem>
         {gatewayHealthy === false && (
           <>

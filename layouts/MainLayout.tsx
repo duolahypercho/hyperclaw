@@ -32,7 +32,10 @@ import { PricingModalProvider, usePricingModal } from "$/Providers/PricingModalP
 import PricingModal from "$/components/Navigation/PricingModal";
 import { useDevices } from "$/hooks/useDevices";
 import DeviceSetup from "$/components/Onboarding/DeviceSetup";
-import WhisperSetup from "$/components/Onboarding/WhisperSetup";
+import GuidedSetup from "$/components/Onboarding/GuidedSetup";
+import { dashboardState } from "$/lib/dashboard-state";
+
+const TOTAL_GUIDED_STEPS = 6;
 
 const MainLayout = ({ children }: any) => {
   const { mobileScreen, tabletScreen } = useInterim();
@@ -40,22 +43,18 @@ const MainLayout = ({ children }: any) => {
   const { status } = useUser();
   const hasBeenAuthenticatedRef = useRef(false);
   const [setupSkipped, setSetupSkipped] = useState(false);
-  const [whisperSetupDone, setWhisperSetupDone] = useState(() => {
+  const [guidedSetupComplete, setGuidedSetupComplete] = useState(() => {
     if (typeof window === "undefined") return true;
-    return !!localStorage.getItem("hyperclaw-whisper-setup-done");
+    const state = dashboardState.get("guided-setup-state");
+    if (state) {
+      try {
+        const parsed = JSON.parse(state);
+        return parsed.completedSteps?.length >= TOTAL_GUIDED_STEPS || !!parsed.skippedAt;
+      } catch { /* fall through */ }
+    }
+    // Check if user has saved layouts (existing user, not first-time)
+    return !!dashboardState.get("dashboard-layout");
   });
-  const isElectron = typeof window !== "undefined" && !!window.electronAPI;
-
-  // If whisper runtime is already installed, skip the setup screen
-  useEffect(() => {
-    if (!isElectron || whisperSetupDone) return;
-    window.electronAPI?.voiceOverlay?.whisper?.runtimeStatus?.().then((res: any) => {
-      if (res?.installed) {
-        localStorage.setItem("hyperclaw-whisper-setup-done", "1");
-        setWhisperSetupDone(true);
-      }
-    });
-  }, [isElectron, whisperSetupDone]);
 
   // Check devices from hub — only fetch once authenticated so the JWT is
   // available. Without this gate, a premature 401 silently empties the
@@ -82,18 +81,17 @@ const MainLayout = ({ children }: any) => {
   const showAppWithLayout =
     status === "authenticated" || (hasBeenAuthenticatedRef.current && status === "loading");
 
-  // Show onboarding if: authenticated + no devices + not skipped
-  const showOnboarding = showAppWithLayout && needsSetup && !devicesLoading && !setupSkipped;
+  const showGuidedOnboarding = !guidedSetupComplete;
+
+  const handleGuidedSetupComplete = useCallback(() => {
+    setGuidedSetupComplete(true);
+    refetchDevices();
+  }, [refetchDevices]);
 
   const handleSetupComplete = useCallback(() => {
     setSetupSkipped(true);
     refetchDevices();
   }, [refetchDevices]);
-
-  const handleWhisperSetupComplete = useCallback(() => {
-    localStorage.setItem("hyperclaw-whisper-setup-done", "1");
-    setWhisperSetupDone(true);
-  }, []);
 
   // Define virtual routes for instant navigation
   const virtualRoutes = [
@@ -135,14 +133,9 @@ const MainLayout = ({ children }: any) => {
     return <>{children}</>;
   }
 
-  // Show onboarding for browser users with no devices
-  if (showOnboarding) {
-    return <DeviceSetup onComplete={handleSetupComplete} />;
-  }
-
-  // Show whisper setup for Electron users who haven't configured voice yet
-  if (isElectron && !whisperSetupDone) {
-    return <WhisperSetup onComplete={handleWhisperSetupComplete} />;
+  // Show guided onboarding for first-time users
+  if (showGuidedOnboarding) {
+    return <GuidedSetup onComplete={handleGuidedSetupComplete} />;
   }
 
   return (

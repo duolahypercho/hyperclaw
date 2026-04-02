@@ -249,12 +249,24 @@ declare global {
       removeUpdateStatusListener: () => void;
       setProgressBar: (progress: number) => Promise<void>;
       clearAuthSession: () => Promise<{ ok: boolean; error?: string }>;
+      runtimes: {
+        detectLocal: () => Promise<Record<string, { installed: boolean; version: string | null; running: boolean }>>;
+      };
+      permissions: {
+        checkAccessibility: () => Promise<boolean>;
+        requestAccessibility: () => Promise<boolean>;
+        checkMicrophone: () => Promise<boolean>;
+        requestMicrophone: () => Promise<boolean>;
+        checkScreen: () => Promise<boolean>;
+        requestScreen: () => Promise<boolean>;
+      };
       openClaw: OpenClawAPI;
       hyperClawBridge: HyperClawBridgeAPI;
       noteFS: any;
       memoryFS: MemoryAPI;
       // Voice Overlay - global voice input (Alt+Space)
       voiceOverlay?: {
+        signalReady?: () => Promise<void>;
         hide: () => Promise<void>;
         expand: () => Promise<void>;
         minimize: () => Promise<void>;
@@ -275,6 +287,7 @@ declare global {
         onQuickChatScreenshotError?: (callback: (error: string) => void) => void;
         removeQuickChatScreenshotListener: () => void;
         captureScreen?: () => Promise<{ dataUrl?: string; error?: string }>;
+        hasScreenPermission?: () => Promise<boolean>;
         onMinimize: (callback: () => void) => void;
         removeMinimizeListener: () => void;
         onTranscript: (callback: (data: { text: string; agentId?: string; sessionKey?: string }) => void) => void;

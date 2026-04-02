@@ -162,13 +162,14 @@ export const gatewayConnection = {
 
   /** Schedule delayed clearing of the turn-level text source lock.
    *  Late-arriving events from the suppressed path can arrive after lifecycle
-   *  "end" / chat.final — the 5s delay ensures they're still blocked. */
+   *  "end" / chat.final — the 2s delay ensures they're still blocked while
+   *  keeping the window short enough that new turns aren't suppressed. */
   _scheduleTextSourceClear() {
     if (this._activeTextSourceTimer) clearTimeout(this._activeTextSourceTimer);
     this._activeTextSourceTimer = setTimeout(() => {
       this._activeTextSource = null;
       this._activeTextSourceTimer = null;
-    }, 5000);
+    }, 2000);
   },
 
   setState(connected: boolean, error: string | null) {
@@ -706,6 +707,16 @@ export const gatewayConnection = {
 
   /** Send a chat message */
   sendChatMessage(params: { sessionKey: string; message: string; deliver?: boolean; idempotencyKey?: string; attachments?: unknown[] }): Promise<unknown> {
+    // Reset turn-level locks so the new turn's events aren't suppressed
+    // by the previous turn's source claim (the 5s delay holdover).
+    this._activeTextSource = null;
+    if (this._activeTextSourceTimer) {
+      clearTimeout(this._activeTextSourceTimer);
+      this._activeTextSourceTimer = null;
+    }
+    this._deltaSourceOwner?.clear();
+    this._committedSegments?.clear();
+
     return this.request("chat.send", {
       sessionKey: params.sessionKey,
       message: params.message,
@@ -1138,16 +1149,26 @@ export function disconnectGatewayWs(): void {
  * The hub WS being connected only means the dashboard can talk to the cloud —
  * this probe verifies OpenClaw is actually running and reachable on the device.
  */
-export async function probeGatewayHealth(timeoutMs = 5000): Promise<{ healthy: boolean; error?: string }> {
+export async function probeGatewayHealth(timeoutMs = 12000): Promise<{ healthy: boolean; error?: string }> {
   if (!gatewayConnection.connected) {
     return { healthy: false, error: "WebSocket not connected" };
   }
-  try {
-    await gatewayConnection.request("models.list", {}, timeoutMs);
-    return { healthy: true };
-  } catch (e) {
-    return { healthy: false, error: e instanceof Error ? e.message : "Gateway not reachable" };
+  // Retry once on timeout — the relay chain (dashboard → hub → connector → device)
+  // can be slow under load, causing false-negative health readings that make the
+  // status banner flap. A single retry eliminates most transient timeouts.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      await gatewayConnection.request("models.list", {}, timeoutMs);
+      return { healthy: true };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Gateway not reachable";
+      if (attempt === 0 && msg.includes("timed out")) {
+        continue; // retry once on timeout
+      }
+      return { healthy: false, error: msg };
+    }
   }
+  return { healthy: false, error: "Gateway not reachable (timed out)" };
 }
 
 export function getGatewayConnectionState(): GatewayConnectionState {

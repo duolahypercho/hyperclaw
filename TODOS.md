@@ -90,3 +90,27 @@
 - **Priority:** P2 — fast follow after onboarding Phase 1
 - **Depends on:** Onboarding Phase 1 must ship first.
 - **Added:** 2026-03-28
+
+## Guided Mission Control
+
+### TODO: Playwright E2E test for guided onboarding flow
+- **What:** Add Playwright E2E test covering the 4-step guided wizard (first-time, returning, demo fallback, live mode, error states)
+- **Why:** No automated tests exist. The wizard has many states that manual testing will miss on regressions.
+- **Pros:** Catches regressions in the most user-visible flow. Foundation for broader E2E coverage.
+- **Cons:** Needs Playwright setup (not currently in the project).
+- **Context:** The guided onboarding replaces the old 10-widget default dashboard. Test should verify: Step 1 shows for first-time users, device connection advances to Step 2, agent detection advances to Step 3, streaming works, demo fallback triggers when no agent connected, returning users see welcome-back bar, keyboard shortcuts work.
+- **Effort:** M (human) → S (CC: ~15 min)
+- **Priority:** P2 — fast follow after guided onboarding ships
+- **Depends on:** Guided onboarding must ship first.
+- **Added:** 2026-03-30
+
+### TODO: A/B test feature flag for guided onboarding
+- **What:** Add a feature flag to show guided onboarding vs old dashboard for a control group
+- **Why:** Need data on whether the guided flow actually improves retention vs current experience.
+- **Pros:** Evidence-based product decision. Can revert instantly if guided flow hurts metrics.
+- **Cons:** Needs user volume to be meaningful. Adds conditional complexity.
+- **Context:** The guided onboarding is a bet that progressive disclosure beats widget soup. An A/B flag validates this. Store flag in dashboardState, randomize on first visit, persist choice.
+- **Effort:** S (human) → S (CC: ~10 min)
+- **Priority:** P2
+- **Depends on:** Guided onboarding must ship first. Needs some user volume.
+- **Added:** 2026-03-30

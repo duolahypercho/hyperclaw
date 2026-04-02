@@ -4,7 +4,12 @@ import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { WifiOff, RefreshCw } from "lucide-react";
 import { useSession } from "next-auth/react";
+import { useRouter } from "next/router";
 import { useOpenClawContext } from "$/Providers/OpenClawProv";
+
+/** Routes where the gateway banner should be hidden */
+const HIDDEN_ROUTES = ["/auth/", "/onboarding", "/landing", "/reset"];
+
 
 /**
  * Persistent, non-closable banner shown when the OpenClaw gateway is unreachable.
@@ -14,10 +19,27 @@ import { useOpenClawContext } from "$/Providers/OpenClawProv";
 export function GatewayStatusBanner() {
   const { data: session } = useSession();
   const { gatewayHealthy, fetchGatewayHealth } = useOpenClawContext();
+  const router = useRouter();
   const [reconnecting, setReconnecting] = useState(false);
 
-  // Only show when logged in and explicitly unhealthy (not during initial null/loading state)
-  const show = !!session && gatewayHealthy === false;
+  // Hide on auth pages, onboarding, landing, and reset password
+  const isHiddenRoute = HIDDEN_ROUTES.some((r) => router.pathname.startsWith(r));
+
+  // Hide during guided onboarding (rendered as overlay, not a route)
+  const isOnboarding = typeof window !== "undefined" && (() => {
+    try {
+      const state = localStorage.getItem("hyperclaw-dashboard-state");
+      if (!state) return true; // no state = first time = onboarding
+      const parsed = JSON.parse(state);
+      const guided = parsed["guided-setup-state"];
+      if (!guided) return true;
+      const g = JSON.parse(guided);
+      return !(g.completedSteps?.length >= 2 || g.skippedAt);
+    } catch { return false; }
+  })();
+
+  // Only show when logged in, gateway is down, and not on a hidden page/onboarding
+  const show = !!session && gatewayHealthy === false && !isHiddenRoute && !isOnboarding;
 
   const handleReconnect = async () => {
     setReconnecting(true);

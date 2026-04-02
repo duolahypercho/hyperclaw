@@ -176,11 +176,9 @@ export default function Home() {
         console.error("Failed to parse visible widgets:", e);
       }
     }
-    // Default: core widgets + 3 chats + 3 announce channels
+    // Default: focused 3-widget layout for new users (guided onboarding)
     return [
-      "kanban", "pixel-office", "usage", "agent-status",
-      "gateway-chat-1", "gateway-chat-2", "gateway-chat-3",
-      "channel-dashboard-1", "channel-dashboard-2", "channel-dashboard-3",
+      "agent-status", "gateway-chat-1", "logs",
     ];
   });
 
@@ -208,14 +206,9 @@ export default function Home() {
     [channelWidgetConfigsJson]
   );
 
-  // Default dynamic widget instances for fresh installs (3 chats + 3 announce channels)
+  // Default dynamic widget instances for fresh installs (1 chat after guided onboarding)
   const DEFAULT_WIDGET_INSTANCES: StoredWidget[] = [
-    { id: "gateway-chat-1", type: "gateway-chat", title: "Chat 1", defaultValue: { w: 8, h: 12, minW: 6, minH: 4, x: 0, y: 20 }, config: {} },
-    { id: "gateway-chat-2", type: "gateway-chat", title: "Chat 2", defaultValue: { w: 8, h: 12, minW: 6, minH: 4, x: 8, y: 20 }, config: {} },
-    { id: "gateway-chat-3", type: "gateway-chat", title: "Chat 3", defaultValue: { w: 8, h: 12, minW: 6, minH: 4, x: 16, y: 20 }, config: {} },
-    { id: "channel-dashboard-1", type: "channel-dashboard", title: "Announce 1", defaultValue: { w: 8, h: 7, minW: 8, minH: 4, x: 0, y: 10 }, config: { selectedCronIds: [], soundEnabled: false } },
-    { id: "channel-dashboard-2", type: "channel-dashboard", title: "Announce 2", defaultValue: { w: 8, h: 7, minW: 8, minH: 4, x: 8, y: 10 }, config: { selectedCronIds: [], soundEnabled: false } },
-    { id: "channel-dashboard-3", type: "channel-dashboard", title: "Announce 3", defaultValue: { w: 8, h: 7, minW: 8, minH: 4, x: 16, y: 10 }, config: { selectedCronIds: [], soundEnabled: false } },
+    { id: "gateway-chat-1", type: "gateway-chat", title: "Chat", defaultValue: { w: 16, h: 12, minW: 6, minH: 4, x: 0, y: 4 }, config: {} },
   ];
 
   // State for dynamically added widget instances
@@ -378,6 +371,8 @@ export default function Home() {
           setStoredWidgetInstances([]);
         }
       }
+      // Sync widget configs so header titles and handleWidgetConfigUpdate have correct data
+      setChannelWidgetConfigsJson(dashboardState.get("dashboard-widget-configs") || "{}");
       // Force dashboard remount so it picks up the new grid layout + configs
       setResetKey((k) => k + 1);
     };

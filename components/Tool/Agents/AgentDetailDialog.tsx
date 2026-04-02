@@ -283,6 +283,8 @@ function InfoTab({
     );
   }
 
+  console.log(ed.displayAvatarSrc);
+
   return (
     <div className="space-y-5">
       {/* ── Avatar ─────────────────────────────── */}

@@ -179,8 +179,13 @@ export const useLiveTranscription = () => {
 
     // ── Shared: start waveform analyser from a mic stream ──
 
-    const startWaveformAnalysis = useCallback((stream: MediaStream) => {
+    const startWaveformAnalysis = useCallback(async (stream: MediaStream) => {
         const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+        // Chromium suspends AudioContext without a user gesture — force it running
+        // so ScriptProcessorNode.onaudioprocess fires in the overlay window.
+        if (audioContext.state === 'suspended') {
+            await audioContext.resume();
+        }
         audioContextRef.current = audioContext;
         sampleRateRef.current = audioContext.sampleRate;
 
@@ -297,7 +302,7 @@ export const useLiveTranscription = () => {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         mediaStreamRef.current = stream;
 
-        const { audioContext, source } = startWaveformAnalysis(stream);
+        const { audioContext, source } = await startWaveformAnalysis(stream);
 
         // PCM capture for interim chunks
         pcmBufferRef.current = new Float32Array(0);
@@ -360,7 +365,7 @@ export const useLiveTranscription = () => {
     const startBrowserListening = useCallback(async () => {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         mediaStreamRef.current = stream;
-        startWaveformAnalysis(stream);
+        await startWaveformAnalysis(stream);
 
         const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
         const recognition = new SpeechRecognition();
@@ -508,6 +513,17 @@ export const useLiveTranscription = () => {
         finalTextRef.current = '';
     }, []);
 
+    /** Read current audio level directly from the AnalyserNode (not throttled by rAF). */
+    const getAudioLevel = useCallback((): number => {
+        const analyser = analyserRef.current;
+        if (!analyser) return 0;
+        const buf = new Uint8Array(analyser.frequencyBinCount);
+        analyser.getByteFrequencyData(buf);
+        let max = 0;
+        for (let i = 0; i < buf.length; i++) { if (buf[i] > max) max = buf[i]; }
+        return max / 255;
+    }, []);
+
     return {
         transcript,
         interimTranscript,
@@ -515,6 +531,7 @@ export const useLiveTranscription = () => {
         isTranscribing,
         error,
         audioData,
+        getAudioLevel,
         startListening,
         stopListening,
         clearTranscript

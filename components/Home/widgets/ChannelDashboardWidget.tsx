@@ -663,6 +663,7 @@ const ChannelDashboardContent = memo((props: ChannelDashboardContentProps) => {
   const [selectedCronIds, setSelectedCronIds] = useState<Set<string>>(() => new Set(config.selectedCronIds || []));
   const [connected, setConnected] = useState(() => getGatewayConnectionState().connected);
   const [unreadCount, setUnreadCount] = useState(0);
+  const userChangedCronsRef = useRef(false);
 
   const bufferRef = useRef<EventEntry[]>([]);
   const clearedAtRef = useRef<number>(0);
@@ -712,7 +713,7 @@ const ChannelDashboardContent = memo((props: ChannelDashboardContentProps) => {
           lastStatus: job.state?.lastStatus || job.state?.lastRunStatus,
         }));
         setAllCrons(mapped);
-        // Prune selectedCronIds that no longer exist
+        // Prune selectedCronIds that no longer exist on this device
         const validIds = new Set(mapped.map((c) => c.id));
         setSelectedCronIds((prev) => {
           const pruned = new Set([...prev].filter((id) => validIds.has(id)));
@@ -727,8 +728,10 @@ const ChannelDashboardContent = memo((props: ChannelDashboardContentProps) => {
     loadCrons();
   }, [loadCrons]);
 
-  // Persist selected cron IDs
+  // Persist selected cron IDs — only after user interaction, not on initial mount
+  // (mount-time writes with partial config can clobber customTitle when loading cross-device layouts)
   useEffect(() => {
+    if (!userChangedCronsRef.current) return;
     onConfigChange?.({ selectedCronIds: Array.from(selectedCronIds) });
   }, [onConfigChange, selectedCronIds]);
 
@@ -1190,6 +1193,7 @@ const ChannelDashboardContent = memo((props: ChannelDashboardContentProps) => {
   }, []);
 
   const handleToggleCron = useCallback((cronId: string) => {
+    userChangedCronsRef.current = true;
     setSelectedCronIds((prev) => {
       const next = new Set(prev);
       if (next.has(cronId)) {
@@ -1294,7 +1298,7 @@ const ChannelDashboardContent = memo((props: ChannelDashboardContentProps) => {
               initial={{ y: 20, opacity: 0 }}
               animate={{ y: 0, opacity: 1 }}
               exit={{ y: 20, opacity: 0 }}
-              className="absolute bottom-2 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full bg-blue-500/90 text-white text-[10px] flex items-center gap-1 shadow-lg"
+              className="absolute bottom-2 inset-x-0 mx-auto w-fit px-3 py-1 rounded-full bg-blue-500/90 text-white text-[10px] flex items-center gap-1 shadow-lg z-10"
               onClick={scrollToBottom}
             >
               <ArrowDown className="w-3 h-3" />

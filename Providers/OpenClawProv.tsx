@@ -71,6 +71,27 @@ export function OpenClawProvider({ children }: { children: ReactNode }) {
       const layouts = await fetchSavedLayouts();
       if (!cancelled && layouts) {
         setSavedLayouts(layouts);
+
+        // 3. Cross-device auto-restore: if local SQLite had no widget configs,
+        //    apply the active (or most recent) saved layout so the user sees
+        //    their saved widget state (cron selections, custom names, etc.).
+        if (!dashboardState.get("dashboard-widget-configs") && layouts.length > 0) {
+          const activeId = dashboardState.get("dashboard-active-layout-id");
+          // Try active layout first; fall back to most recently created layout
+          const targetLayout = activeId
+            ? layouts.find((l) => l.id === activeId)
+            : [...layouts].sort((a, b) => b.createdAt - a.createdAt)[0];
+          if (targetLayout?.widgetConfigs) {
+            const entries: Record<string, string> = {
+              "dashboard-widget-configs": targetLayout.widgetConfigs,
+              "dashboard-active-layout-id": targetLayout.id,
+            };
+            if (targetLayout.layout) entries["dashboard-layout"] = targetLayout.layout;
+            if (targetLayout.visibleWidgets) entries["dashboard-visible-widgets"] = JSON.stringify(targetLayout.visibleWidgets);
+            if (targetLayout.widgetInstances) entries["dashboard-widget-instances"] = targetLayout.widgetInstances;
+            dashboardState.setMany(entries, { flush: true });
+          }
+        }
       }
 
       if (!cancelled) setDashboardReady(true);
@@ -89,10 +110,29 @@ export function OpenClawProvider({ children }: { children: ReactNode }) {
       if (!connected) return;
       retried = true;
 
-      // Retry saved layouts
+      // Retry saved layouts + cross-device auto-restore
       fetchSavedLayouts().then((layouts) => {
         if (layouts && layouts.length > 0) {
           setSavedLayouts(layouts);
+
+          // Cross-device: apply active/most-recent layout if local state is empty
+          if (!dashboardState.get("dashboard-widget-configs")) {
+            const activeId = dashboardState.get("dashboard-active-layout-id");
+            const targetLayout = activeId
+              ? layouts.find((l) => l.id === activeId)
+              : [...layouts].sort((a, b) => b.createdAt - a.createdAt)[0];
+            if (targetLayout?.widgetConfigs) {
+              const entries: Record<string, string> = {
+                "dashboard-widget-configs": targetLayout.widgetConfigs,
+                "dashboard-active-layout-id": targetLayout.id,
+              };
+              if (targetLayout.layout) entries["dashboard-layout"] = targetLayout.layout;
+              if (targetLayout.visibleWidgets) entries["dashboard-visible-widgets"] = JSON.stringify(targetLayout.visibleWidgets);
+              if (targetLayout.widgetInstances) entries["dashboard-widget-instances"] = targetLayout.widgetInstances;
+              dashboardState.setMany(entries, { flush: true });
+              window.dispatchEvent(new CustomEvent("dashboard-state-rehydrated"));
+            }
+          }
         }
       });
 

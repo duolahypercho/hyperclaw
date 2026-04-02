@@ -275,13 +275,24 @@ export const CEO_TEMPLATE_FILES: Record<string, string> = {
 /**
  * Deploy all CEO template files to an agent's workspace.
  * @param workspacePrefix — the workspace folder name (e.g., "workspace-hyperclaw" or "hyperclaw")
+ * @param agentName — the agent's display name (replaces "HyperClaw" in IDENTITY.md)
  */
-export async function deployCEOTemplates(workspacePrefix: string): Promise<{ success: boolean; error?: string }> {
+export async function deployCEOTemplates(
+  workspacePrefix: string,
+  agentName?: string
+): Promise<{ success: boolean; error?: string }> {
   const errors: string[] = [];
 
-  for (const [filename, content] of Object.entries(CEO_TEMPLATE_FILES)) {
-    // The relativePath format matches what write-openclaw-doc expects:
-    // "workspace-<id>/<filename>" or "<id>/<filename>"
+  for (const [filename, rawContent] of Object.entries(CEO_TEMPLATE_FILES)) {
+    // Replace the default name in IDENTITY.md with the actual agent name
+    let content = rawContent;
+    if (filename === "IDENTITY.md" && agentName) {
+      content = content.replace(
+        "- **Name:** HyperClaw",
+        `- **Name:** ${agentName}`
+      );
+    }
+
     const relativePath = `${workspacePrefix}/${filename}`;
     try {
       const result = (await bridgeInvoke("write-openclaw-doc", {

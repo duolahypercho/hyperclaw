@@ -279,6 +279,7 @@ export default function VoiceOverlayPage() {
   const [attachments, setAttachments] = useState<File[]>([]);
   const [screenshotDataUrl, setScreenshotDataUrl] = useState<string | null>(null);
   const [pendingAutoInsert, setPendingAutoInsert] = useState(false);
+  const [autoStopSilence, setAutoStopSilence] = useState(false);
   const pushToTalkStartRef = useRef<Promise<void> | null>(null);
   const pushToTalkStopPendingRef = useRef(false);
   const modeRef = useRef<OverlayMode>("dictation");
@@ -287,13 +288,28 @@ export default function VoiceOverlayPage() {
 
   const {
     transcript, interimTranscript, isListening, isTranscribing,
-    error: transcriptionError, audioData,
+    error: transcriptionError, audioData, getAudioLevel,
     startListening, stopListening, clearTranscript,
   } = useLiveTranscription();
+
+  // Stable refs so the push-to-talk IPC listener closure always sees fresh values
+  const getAudioLevelRef = useRef(getAudioLevel);
+  useEffect(() => { getAudioLevelRef.current = getAudioLevel; }, [getAudioLevel]);
+  const startListeningRef = useRef(startListening);
+  const stopListeningRef = useRef(stopListening);
+  const clearTranscriptRef = useRef(clearTranscript);
+  useEffect(() => { startListeningRef.current = startListening; }, [startListening]);
+  useEffect(() => { stopListeningRef.current = stopListening; }, [stopListening]);
+  useEffect(() => { clearTranscriptRef.current = clearTranscript; }, [clearTranscript]);
 
   useEffect(() => {
     modeRef.current = mode;
   }, [mode]);
+
+  // Signal main process that renderer is mounted and IPC listeners are registered
+  useEffect(() => {
+    window.electronAPI?.voiceOverlay?.signalReady?.();
+  }, []);
 
   // ─── Gateway Chat (direct connection, no IPC relay) ─────────────────
   const [chatSessionKey, setChatSessionKey] = useState(`agent:${selectedAgent}:main`);
@@ -551,81 +567,120 @@ export default function VoiceOverlayPage() {
   }, [transcript, minimizeOverlayFn]);
 
   // ─── Push-to-Talk ───────────────────────────────────────────────────
+  // Registered ONCE (empty deps) — uses refs so the closure always sees fresh values.
+  // This prevents the listener from being torn down on re-render, which caused
+  // the "stop" IPC to be silently dropped.
   useEffect(() => {
     const api = window.electronAPI?.voiceOverlay;
     if (!api?.onPushToTalk) return;
-    api.onPushToTalk((action: string, pttMode: string, isToggle?: boolean) => {
+    api.onPushToTalk((action: string, pttMode: string, isToggle?: boolean, silenceStop?: boolean) => {
       const resolvedMode = (pttMode || modeRef.current) as OverlayMode;
       if (isToggle) setIsToggleMode(true);
       if (action === "start") {
         if (pushToTalkStartRef.current) return;
         pushToTalkStopPendingRef.current = false;
         setPendingAutoInsert(false);
+        setAutoStopSilence(!!silenceStop);
         setOverlayState("expanded");
         setMode(resolvedMode);
         setIsPushToTalk(true);
-        clearTranscript();
-        window.electronAPI?.voiceOverlay?.liveTypeReset?.();
+        clearTranscriptRef.current();
         pushToTalkStartRef.current = (async () => {
           try {
-            await startListening();
+            await startListeningRef.current();
           } finally {
             pushToTalkStartRef.current = null;
             if (pushToTalkStopPendingRef.current) {
               pushToTalkStopPendingRef.current = false;
+              // Give mic at least 300ms to capture audio before stopping
+              await new Promise(r => setTimeout(r, 300));
               setPendingAutoInsert(resolvedMode === "dictation");
               setIsPushToTalk(false);
-              stopListening();
+              stopListeningRef.current();
             }
           }
         })();
       } else {
-        if (pushToTalkStartRef.current && !isListening) {
+        // Stop — if start is still initializing mic, queue the stop
+        if (pushToTalkStartRef.current && !isListeningRef.current) {
           pushToTalkStopPendingRef.current = true;
           return;
         }
         pushToTalkStopPendingRef.current = false;
         setPendingAutoInsert(resolvedMode === "dictation");
         setIsPushToTalk(false);
-        stopListening();
+        stopListeningRef.current();
       }
     });
     return () => { api.removePushToTalkListener?.(); };
-  }, [startListening, stopListening, clearTranscript, isListening]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Live-type: stream interim transcript directly into focused app while recording
+  // ─── Silence detection: auto-stop recording after speech → silence ──
+  // Uses setInterval (not rAF-driven audioData) because Chromium throttles
+  // requestAnimationFrame in unfocused windows, making audioData stale.
+  const autoStopSilenceRef = useRef(false);
+  useEffect(() => { autoStopSilenceRef.current = autoStopSilence; }, [autoStopSilence]);
+
+  useEffect(() => {
+    if (!autoStopSilence || !isPushToTalk || !isListening) return;
+
+    const SILENCE_THRESHOLD = 0.04;
+    const SILENCE_DURATION_MS = 1500;
+    let silenceStart: number | null = null;
+    let speechDetected = false;
+
+    const interval = setInterval(() => {
+      if (!autoStopSilenceRef.current) { clearInterval(interval); return; }
+
+      // Read analyser directly — not throttled by rAF like audioData state
+      const maxLevel = getAudioLevelRef.current();
+
+      if (maxLevel > SILENCE_THRESHOLD) {
+        speechDetected = true;
+        silenceStart = null;
+      } else if (speechDetected) {
+        if (!silenceStart) {
+          silenceStart = Date.now();
+        } else if (Date.now() - silenceStart >= SILENCE_DURATION_MS) {
+          clearInterval(interval);
+          console.log("[VoiceOverlay] Silence detected — auto-stopping");
+          setAutoStopSilence(false);
+          setPendingAutoInsert(mode === "dictation");
+          setIsPushToTalk(false);
+          stopListeningRef.current();
+          window.electronAPI?.voiceOverlay?.setRecordingState?.(false);
+        }
+      }
+    }, 100);
+
+    return () => clearInterval(interval);
+  }, [autoStopSilence, isPushToTalk, isListening, mode]); // intentionally exclude audioData — read from closure in interval
+
+  // No interim live-typing during push-to-talk — just record silently.
+  // Final insert: when transcription finishes after release, insert text once and minimize.
   const lastLiveTextRef = useRef("");
   useEffect(() => {
-    if (!isPushToTalk || mode !== "dictation") return;
-    const api = window.electronAPI?.voiceOverlay;
-    if (!api?.liveType) return;
+    if (!pendingAutoInsert || isPushToTalk || isListening || isTranscribing) return;
+    if (mode !== "dictation") return;
 
-    const currentText = (interimTranscript || transcript || "").trim();
-    if (currentText === lastLiveTextRef.current) return;
-    lastLiveTextRef.current = currentText;
+    // Use transcript if available, fall back to interimTranscript (Web Speech API may not finalize)
+    const finalText = (transcript || interimTranscript || "").trim();
+    if (!finalText && !transcriptionError) return;
 
-    if (currentText) {
-      api.liveType(currentText, false);
+    setPendingAutoInsert(false);
+    lastLiveTextRef.current = "";
+
+    if (finalText) {
+      window.electronAPI?.voiceOverlay?.insertText?.(finalText).catch((e: any) => {
+        console.warn("[VoiceOverlay] insertText error:", e);
+      });
     }
-  }, [isPushToTalk, mode, transcript, interimTranscript]);
 
-  // Final insert: when transcription finishes, send final text and minimize
-  useEffect(() => {
-    if (pendingAutoInsert && !isPushToTalk && !isListening && !isTranscribing && transcript.trim() && mode === "dictation") {
-      setPendingAutoInsert(false);
-      const api = window.electronAPI?.voiceOverlay;
-      if (api?.liveType) {
-        api.liveType(transcript.trim(), true);
-      }
-      lastLiveTextRef.current = "";
-      minimizeOverlayFn();
-    }
-    if (pendingAutoInsert && !isPushToTalk && !isListening && !isTranscribing && transcriptionError) {
-      setPendingAutoInsert(false);
-      lastLiveTextRef.current = "";
+    if (transcriptionError && !finalText) {
+      // Show error briefly then minimize
       setTimeout(() => minimizeOverlayFn(), 1500);
     }
-  }, [pendingAutoInsert, isPushToTalk, isListening, isTranscribing, transcript, transcriptionError, mode, minimizeOverlayFn]);
+  }, [pendingAutoInsert, isPushToTalk, isListening, isTranscribing, transcript, interimTranscript, transcriptionError, mode, minimizeOverlayFn]);
 
   // ─── Quick Chat (Option+Space) ────────────────────────────────────
   useEffect(() => {
@@ -645,14 +700,38 @@ export default function VoiceOverlayPage() {
         const textarea = document.querySelector("textarea");
         textarea?.focus();
       }, 150);
-      // Pull screenshot via invoke (renderer-initiated, more reliable)
-      if (api.captureScreen) {
-        api.captureScreen().then((result) => {
-          if (result?.dataUrl) {
-            setScreenshotDataUrl(result.dataUrl);
+      // Pull screenshot — try desktopCapturer first, fall back to getDisplayMedia picker
+      (async () => {
+        try {
+          const hasPermission = await api.hasScreenPermission?.();
+          if (hasPermission && api.captureScreen) {
+            const result = await api.captureScreen();
+            if (result?.dataUrl) {
+              setScreenshotDataUrl(result.dataUrl);
+              return;
+            }
           }
-        }).catch(() => {});
-      }
+          // Fall back to getDisplayMedia (native system picker, no permission needed)
+          const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+          const track = stream.getVideoTracks()[0];
+          const video = document.createElement("video");
+          video.srcObject = stream;
+          video.muted = true;
+          await video.play();
+          // Wait for a frame so the video has pixel data
+          await new Promise<void>((r) => { video.onloadeddata = () => r(); if (video.readyState >= 2) r(); });
+          const canvas = document.createElement("canvas");
+          canvas.width = video.videoWidth || 1280;
+          canvas.height = video.videoHeight || 800;
+          canvas.getContext("2d")!.drawImage(video, 0, 0);
+          track.stop();
+          stream.getTracks().forEach((t) => t.stop());
+          const dataUrl = canvas.toDataURL("image/jpeg", 0.7);
+          if (dataUrl.length > 500) setScreenshotDataUrl(dataUrl);
+        } catch {
+          // Capture failed or user cancelled picker — continue without screenshot
+        }
+      })();
     });
     return () => { api.removeQuickChatListener?.(); };
   }, [selectedAgent, setGatewaySessionKey]);

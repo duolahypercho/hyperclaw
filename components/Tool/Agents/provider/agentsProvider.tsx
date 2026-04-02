@@ -58,6 +58,10 @@ interface AgentsContextValue {
   saveDoc: () => Promise<boolean>;
   /** The agent ID marked as the HyperClaw orchestrator (CEO), or null if none */
   ceoAgentId: string | null;
+  /** Optimistically add an agent before server confirms */
+  addOptimisticAgent: (name: string) => void;
+  /** Refresh with retry delay for post-mutation sync */
+  refreshAfterMutation: () => Promise<void>;
 }
 
 const AgentsContext = createContext<AgentsContextValue | undefined>(undefined);
@@ -133,12 +137,15 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
   const [deleteAgentDialogOpen, setDeleteAgentDialogOpen] = useState(false);
   const selectedPathRef = useRef<string | null>(null);
   const [ceoAgentId, setCeoAgentId] = useState<string | null>(null);
+  const [deployingCeo, setDeployingCeo] = useState(false);
 
   // Load CEO agent ID from dashboard state
   useEffect(() => {
     const id = dashboardState.get("hyperclaw-ceo-id");
     setCeoAgentId(id || null);
   }, [loading]);
+
+  // handleDeployOrchestrator is defined after refreshAfterMutation / addOptimisticAgent (below)
 
   // Files belonging to the selected agent: match by workspace folder from getTeam()
   const filteredAgentFiles = useMemo(() => {
@@ -155,7 +162,7 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
     );
   }, [agentFiles, agents, selectedAgentId]);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (retries = 0) => {
     setLoading(true);
     setError(null);
     try {
@@ -175,6 +182,66 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
       setLoading(false);
     }
   }, [fetchAgents]);
+
+  /** Refresh with a short delay + retry — gives the connector time to register the new agent */
+  const refreshAfterMutation = useCallback(async () => {
+    // First refresh immediately
+    await refresh();
+    // Then retry after a short delay in case the connector hasn't caught up
+    setTimeout(() => refresh(), 1500);
+  }, [refresh]);
+
+  /** Optimistically add an agent to the list before server confirms */
+  const addOptimisticAgent = useCallback((name: string) => {
+    const normalizedId = name.toLowerCase().replace(/[^a-z0-9_.-]/g, "");
+    const optimistic: Agent = {
+      id: normalizedId,
+      name,
+      status: "idle",
+      role: "",
+    };
+    setAgents((prev) => {
+      if (prev.some((a) => a.id === normalizedId)) return prev;
+      return [...prev, optimistic];
+    });
+    setSelectedAgentId(normalizedId);
+  }, []);
+
+  // Deploy orchestrator: create agent + write CEO template files
+  const handleDeployOrchestrator = useCallback(async () => {
+    if (ceoAgentId || deployingCeo) return;
+    setDeployingCeo(true);
+    try {
+      const { deployCEOTemplates } = await import("$/lib/ceo-templates");
+      const name = "hyperclaw";
+      // Optimistic: show agent immediately
+      addOptimisticAgent(name);
+
+      const result = (await bridgeInvoke("add-agent", { agentName: name })) as {
+        success?: boolean;
+        error?: string;
+      };
+      if (!result?.success) {
+        console.error("[Orchestrator] Failed to create agent:", result?.error);
+        await refreshAfterMutation(); // revert optimistic on failure
+        return;
+      }
+      // Deploy template files to workspace (pass name for IDENTITY.md)
+      const displayName = name.charAt(0).toUpperCase() + name.slice(1);
+      const deployResult = await deployCEOTemplates(`workspace-${name}`, displayName);
+      if (!deployResult.success) {
+        await deployCEOTemplates(name, displayName);
+      }
+      // Mark as CEO
+      dashboardState.set("hyperclaw-ceo-id", name, { flush: true });
+      setCeoAgentId(name);
+      await refreshAfterMutation();
+    } catch (err) {
+      console.error("[Orchestrator] Deploy failed:", err);
+    } finally {
+      setDeployingCeo(false);
+    }
+  }, [ceoAgentId, deployingCeo, addOptimisticAgent, refreshAfterMutation]);
 
   const initialLoadDone = useRef(false);
   useEffect(() => {
@@ -347,6 +414,16 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
         rightUI: {
           type: "buttons",
           buttons: [
+            ...(!ceoAgentId ? [{
+              id: "deploy-orchestrator",
+              label: deployingCeo ? "Deploying…" : "Deploy Orchestrator",
+              icon: deployingCeo
+                ? <Loader2 className="h-4 w-4 animate-spin" />
+                : <Crown className="h-4 w-4 text-amber-500" />,
+              onClick: handleDeployOrchestrator,
+              disabled: deployingCeo,
+              className: "text-amber-500 hover:text-amber-400",
+            }] : []),
             {
               id: "add-agent",
               label: "Add agent",
@@ -403,6 +480,9 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
       agents,
       selectedAgentId,
       selectedAgentName,
+      ceoAgentId,
+      deployingCeo,
+      handleDeployOrchestrator,
     ]
   );
 
@@ -427,6 +507,8 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
       refresh,
       saveDoc,
       ceoAgentId,
+      addOptimisticAgent,
+      refreshAfterMutation,
     }),
     [
       agents,
@@ -446,6 +528,8 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
       refresh,
       saveDoc,
       ceoAgentId,
+      addOptimisticAgent,
+      refreshAfterMutation,
     ]
   );
 
@@ -455,7 +539,10 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
       <AddAgentDialog
         open={addAgentDialogOpen}
         onOpenChange={setAddAgentDialogOpen}
-        onSuccess={() => refresh()}
+        onSuccess={(name) => {
+          addOptimisticAgent(name);
+          refreshAfterMutation();
+        }}
       />
       <DeleteAgentDialog
         open={deleteAgentDialogOpen}
