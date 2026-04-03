@@ -1321,6 +1321,210 @@ ipcMain.handle("claude-code:abort", async (event, body) => {
   return { success: false, error: "No active process for session" };
 });
 
+// ─── IPC Handlers: OpenAI Codex CLI ───────────────────────────────────────────
+
+// Track active Codex subprocess per session
+const codexProcesses = new Map();
+
+/**
+ * Check if `codex` CLI is available on the system.
+ */
+ipcMain.handle("codex:status", async () => {
+  try {
+    const { execFileSync } = require("child_process");
+    const version = execFileSync("codex", ["--version"], {
+      timeout: 5000,
+      encoding: "utf-8",
+    }).trim();
+    return { available: true, version };
+  } catch (err) {
+    return { available: false, error: err.message || "codex CLI not found" };
+  }
+});
+
+/**
+ * Send a message to Codex via the CLI.
+ * Spawns `codex exec <message> --json` (or `codex resume <id> <message> --json`)
+ * and collects JSONL output.
+ *
+ * Codex JSONL event types:
+ *   thread.started  → { thread_id }
+ *   item.completed  → { item: { type: "agent_message", text } }
+ *   item.completed  → { item: { type: "command_execution", command, aggregated_output, exit_code } }
+ *   turn.completed  → { usage: { input_tokens, output_tokens } }
+ */
+ipcMain.handle("codex:send", async (event, body) => {
+  const { message, sessionId, sessionKey, model } = body || {};
+  if (!message || typeof message !== "string") {
+    return { success: false, error: "No message provided" };
+  }
+
+  try {
+    const { spawn } = require("child_process");
+
+    let args;
+    if (sessionId) {
+      // Resume existing session
+      args = ["resume", sessionId, message, "--json", "--color", "never"];
+    } else {
+      args = ["exec", message, "--json", "--color", "never", "-s", "read-only"];
+    }
+
+    if (model) {
+      args.push("-m", model);
+    }
+
+    return new Promise((resolve) => {
+      const proc = spawn("codex", args, {
+        timeout: 300000, // 5 minute timeout
+        env: { ...process.env },
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+
+      if (sessionKey) {
+        codexProcesses.set(sessionKey, proc);
+      }
+
+      let stdout = "";
+      let stderr = "";
+      const collectedMessages = [];
+      let resolvedSessionId = sessionId || null;
+
+      proc.stdout.on("data", (chunk) => {
+        stdout += chunk.toString();
+
+        const lines = stdout.split("\n");
+        stdout = lines.pop() || "";
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          try {
+            const event = JSON.parse(trimmed);
+
+            // Extract thread/session ID
+            if (event.type === "thread.started" && event.thread_id) {
+              resolvedSessionId = event.thread_id;
+            }
+
+            // Agent message
+            if (event.type === "item.completed" && event.item) {
+              const item = event.item;
+
+              if (item.type === "agent_message" && item.text) {
+                // Update last text message or create new one
+                const lastTextIdx = collectedMessages.findLastIndex(
+                  (m) => m.role === "assistant" && !m.toolCalls
+                );
+                if (lastTextIdx !== -1) {
+                  collectedMessages[lastTextIdx].content = item.text;
+                } else {
+                  collectedMessages.push({
+                    id: item.id || `cx-text-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                    role: "assistant",
+                    content: item.text,
+                    timestamp: Date.now(),
+                  });
+                }
+              }
+
+              // Command execution (tool use)
+              if (item.type === "command_execution") {
+                // Tool call message
+                collectedMessages.push({
+                  id: item.id || `cx-tool-${Date.now()}`,
+                  role: "assistant",
+                  content: "",
+                  timestamp: Date.now(),
+                  toolCalls: [{
+                    id: item.id || `cx-tool-${Date.now()}`,
+                    name: "shell",
+                    arguments: JSON.stringify({ command: item.command }),
+                    function: {
+                      name: "shell",
+                      arguments: JSON.stringify({ command: item.command }),
+                    },
+                  }],
+                });
+
+                // Tool result message
+                collectedMessages.push({
+                  id: `result-${item.id || Date.now()}`,
+                  role: "toolResult",
+                  content: item.aggregated_output || "",
+                  timestamp: Date.now(),
+                  toolResults: [{
+                    toolCallId: item.id || "",
+                    toolName: "shell",
+                    content: item.aggregated_output || "",
+                    isError: item.exit_code !== 0,
+                  }],
+                });
+              }
+            }
+          } catch {
+            // Ignore unparseable lines
+          }
+        }
+      });
+
+      proc.stderr.on("data", (chunk) => {
+        stderr += chunk.toString();
+      });
+
+      proc.on("close", (code) => {
+        if (sessionKey) {
+          codexProcesses.delete(sessionKey);
+        }
+
+        if (code !== 0 && collectedMessages.length === 0) {
+          resolve({
+            success: false,
+            error: stderr.trim() || `Codex exited with code ${code}`,
+            sessionId: resolvedSessionId,
+          });
+          return;
+        }
+
+        resolve({
+          success: true,
+          sessionId: resolvedSessionId,
+          messages: collectedMessages,
+        });
+      });
+
+      proc.on("error", (err) => {
+        if (sessionKey) {
+          codexProcesses.delete(sessionKey);
+        }
+        resolve({
+          success: false,
+          error: err.message || "Failed to spawn codex process",
+          sessionId: resolvedSessionId,
+        });
+      });
+    });
+  } catch (err) {
+    return { success: false, error: err.message || "Codex send failed" };
+  }
+});
+
+/**
+ * Abort an in-flight Codex request.
+ */
+ipcMain.handle("codex:abort", async (event, body) => {
+  const { sessionKey } = body || {};
+  if (!sessionKey) return { success: false, error: "No session key" };
+
+  const proc = codexProcesses.get(sessionKey);
+  if (proc) {
+    proc.kill("SIGTERM");
+    codexProcesses.delete(sessionKey);
+    return { success: true };
+  }
+  return { success: false, error: "No active process for session" };
+});
+
 // ─── IPC Handlers: Gateway Config ───────────────────────────────────────────
 
 ipcMain.handle("hyperclaw:set-gateway-config", async (event, { host, port, token }) => {

@@ -19,6 +19,7 @@ import HyperchoTooltip from "$/components/UI/HyperchoTooltip";
 import CopanionIcon from "@OS/assets/copanion";
 import { useGatewayChat, GatewayChatMessage, GatewayChatAttachment } from "@OS/AI/core/hook/use-gateway-chat";
 import { useClaudeCodeChat } from "@OS/AI/core/hook/use-claude-code-chat";
+import { useCodexChat } from "@OS/AI/core/hook/use-codex-chat";
 import type { AttachmentType } from "@OS/AI/components/Chat";
 import { gatewayConnection } from "$/lib/openclaw-gateway-ws";
 import { useAIProviderSafe, type AIProviderType } from "$/Providers/AIProviderProv";
@@ -498,7 +499,14 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
     autoConnect: activeProvider === "claude-code",
   });
 
-  const activeChat = activeProvider === "claude-code" ? claudeCodeChat : openClawChat;
+  const codexChat = useCodexChat({
+    sessionKey: sessionKeyState,
+    autoConnect: activeProvider === "codex",
+  });
+
+  const activeChat = activeProvider === "claude-code" ? claudeCodeChat
+    : activeProvider === "codex" ? codexChat
+    : openClawChat;
 
   const {
     messages,
@@ -697,7 +705,7 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
               <CardTitle>{personality.name || "Copanion"}</CardTitle>
               <p className="text-xs text-muted-foreground">
                 {isConnected ? "Online" : isLoading ? "Connecting..." : "Offline"}
-                {activeProvider === "claude-code" && " (Claude Code)"}
+                {activeProvider !== "openclaw" && ` (${activeProvider === "claude-code" ? "Claude Code" : "Codex"})`}
               </p>
             </div>
           </div>
@@ -718,7 +726,7 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
                           : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
                       )}
                     >
-                      {p.id === "openclaw" ? "OC" : "CC"}
+                      {p.id === "openclaw" ? "OC" : p.id === "claude-code" ? "CC" : "CX"}
                     </button>
                   </HyperchoTooltip>
                 ))}

@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useGatewayChat, GatewayChatMessage, GatewayChatAttachment } from "@OS/AI/core/hook/use-gateway-chat";
 import { useClaudeCodeChat } from "@OS/AI/core/hook/use-claude-code-chat";
+import { useCodexChat } from "@OS/AI/core/hook/use-codex-chat";
 import { useAIProviderSafe } from "$/Providers/AIProviderProv";
 import { gatewayConnection } from "$/lib/openclaw-gateway-ws";
 import { useUser } from "$/Providers/UserProv";
@@ -171,6 +172,11 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
     autoConnect: activeProvider === "claude-code",
   });
 
+  const codexChat = useCodexChat({
+    sessionKey,
+    autoConnect: activeProvider === "codex",
+  });
+
   const {
     messages,
     isLoading,
@@ -185,7 +191,9 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
     loadMoreHistory,
     clearChat,
     setSessionKey,
-  } = activeProvider === "claude-code" ? claudeCodeChat : openClawChat;
+  } = activeProvider === "claude-code" ? claudeCodeChat
+    : activeProvider === "codex" ? codexChat
+    : openClawChat;
 
   // Unified tool state management - handles ALL tool types!
   const { toolStates, toggleToolExpansion, resetToolStates } = useUnifiedToolState(messages as any);

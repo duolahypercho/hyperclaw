@@ -27,6 +27,25 @@ export async function bridgeInvoke(action: string, body: BridgeBody = {}): Promi
     }
   }
 
+  // Route Codex actions through dedicated Electron IPC when available
+  if (
+    typeof window !== "undefined" &&
+    window.electronAPI?.codex &&
+    action.startsWith("codex-")
+  ) {
+    const cx = window.electronAPI.codex;
+    switch (action) {
+      case "codex-status":
+        return cx.status();
+      case "codex-send":
+        return cx.send(body as Parameters<typeof cx.send>[0]);
+      case "codex-abort":
+        return cx.abort(body as Parameters<typeof cx.abort>[0]);
+      default:
+        break;
+    }
+  }
+
   if (
     typeof window !== "undefined" &&
     window.electronAPI?.hyperClawBridge?.invoke

@@ -10,7 +10,7 @@ import {
 
 // ── AI Provider types ────────────────────────────────────────────────────────
 
-export type AIProviderType = "openclaw" | "claude-code";
+export type AIProviderType = "openclaw" | "claude-code" | "codex";
 
 export interface AIProviderInfo {
   id: AIProviderType;
@@ -30,6 +30,11 @@ const PROVIDERS: Record<AIProviderType, Omit<AIProviderInfo, "available">> = {
     id: "claude-code",
     label: "Claude Code",
     description: "Claude Code CLI (local subprocess)",
+  },
+  codex: {
+    id: "codex",
+    label: "Codex",
+    description: "OpenAI Codex CLI (local subprocess)",
   },
 };
 
@@ -55,6 +60,7 @@ export function AIProviderProvider({ children }: { children: ReactNode }) {
   const [availability, setAvailability] = useState<Record<AIProviderType, boolean>>({
     openclaw: true,     // Assumed available by default
     "claude-code": false, // Unknown until checked
+    codex: false,         // Unknown until checked
   });
 
   const setProviderAvailable = useCallback(
