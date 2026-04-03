@@ -57,8 +57,13 @@ export function useClaudeCodeChat(
   // Abort controller for in-flight requests
   const abortRef = useRef<AbortController | null>(null);
 
-  // Check if Claude Code is available on mount
+  // Check if Claude Code is available on mount (Electron only)
   useEffect(() => {
+    // Skip in browser mode — no Electron IPC available
+    if (typeof window === "undefined" || !window.electronAPI?.claudeCode) {
+      setIsConnected(false);
+      return;
+    }
     let cancelled = false;
     (async () => {
       try {
