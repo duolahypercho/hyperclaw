@@ -81,7 +81,7 @@ const MainLayout = ({ children }: any) => {
   const showAppWithLayout =
     status === "authenticated" || (hasBeenAuthenticatedRef.current && status === "loading");
 
-  const showGuidedOnboarding = true; // DEBUG: force onboarding — revert before shipping
+  const showGuidedOnboarding = !guidedSetupComplete && !setupSkipped;
 
   const handleGuidedSetupComplete = useCallback(() => {
     setGuidedSetupComplete(true);
