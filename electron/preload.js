@@ -72,6 +72,13 @@ contextBridge.exposeInMainWorld("electronAPI", {
     cronDisable: (id) => ipcRenderer.invoke("openclaw:cron-disable", id),
   },
 
+  // Claude Code CLI bridge — spawns `claude` subprocess in main process
+  claudeCode: {
+    status: () => ipcRenderer.invoke("claude-code:status"),
+    send: (params) => ipcRenderer.invoke("claude-code:send", params),
+    abort: (params) => ipcRenderer.invoke("claude-code:abort", params),
+  },
+
   // HyperClaw Bridge — two-way relay with OpenClaw plugin via ~/.hyperclaw/
   // invoke(action, body): used by production desktop app so all bridge calls run locally (no Vercel).
   hyperClawBridge: {
