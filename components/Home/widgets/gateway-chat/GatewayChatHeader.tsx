@@ -18,6 +18,7 @@ import { ChevronDown, Check, RefreshCw, Download } from "lucide-react";
 import SessionHistoryDropdown from "$/components/SessionHistoryDropdown";
 import { useAgentIdentity, resolveAvatarUrl, isAvatarText } from "$/hooks/useAgentIdentity";
 import { AgentDetailDialog } from "$/components/Tool/Agents/AgentDetailDialog";
+import HermesIcon from "@OS/assets/hermes";
 
 export interface GatewayChatHeaderProps extends CustomProps {
   onAgentChange?: (agentId: string) => void;
@@ -64,11 +65,12 @@ export const GatewayChatCustomHeader: React.FC<GatewayChatHeaderProps> = ({
 
   const { loading: agentsLoading, fetchAgents } = useOpenClawContext();
   const agent = selectedAgent || { id: "main", name: "General Assistant", status: "active" };
+  const isHermes = agent.id === "hermes" || (agent as any).backend === "hermes";
   // Use currentAgentId directly for identity lookup — agents array may not be loaded yet,
   // which would cause agent.id to fall back to "main" and fetch the wrong identity.
-  const headerIdentity = useAgentIdentity(currentAgentId || agent.id);
-  const headerAvatarUrl = resolveAvatarUrl(headerIdentity?.avatar);
-  const headerAvatarText = isAvatarText(headerIdentity?.avatar) ? headerIdentity!.avatar! : undefined;
+  const headerIdentity = useAgentIdentity(isHermes ? undefined : (currentAgentId || agent.id));
+  const headerAvatarUrl = isHermes ? undefined : resolveAvatarUrl(headerIdentity?.avatar);
+  const headerAvatarText = isHermes ? undefined : (isAvatarText(headerIdentity?.avatar) ? headerIdentity!.avatar! : undefined);
 
   // Agent detail dialog state
   const [agentDetailOpen, setAgentDetailOpen] = useState(false);
@@ -88,24 +90,32 @@ export const GatewayChatCustomHeader: React.FC<GatewayChatHeaderProps> = ({
             onClick={() => setAgentDetailOpen(true)}
             title="View agent details"
           >
-            <Avatar key={headerAvatarUrl || "no-avatar"} className="w-10 h-10 transition-opacity group-hover:opacity-80">
+            <Avatar key={headerAvatarUrl || (isHermes ? "hermes" : "no-avatar")} className="w-10 h-10 transition-opacity group-hover:opacity-80">
               {headerAvatarUrl ? (
                 <AvatarImage src={headerAvatarUrl} alt={headerIdentity?.name || agent.name} />
               ) : null}
-              <AvatarFallback className="bg-primary/10 text-primary">
-                <span className="text-xl">{headerAvatarText || headerIdentity?.emoji || "🤖"}</span>
+              <AvatarFallback className={cn("text-primary", isHermes ? "bg-orange-500/10" : "bg-primary/10")}>
+                {isHermes ? (
+                  <HermesIcon className="w-5 h-5 text-orange-500" />
+                ) : (
+                  <span className="text-xl">{headerAvatarText || headerIdentity?.emoji || "🤖"}</span>
+                )}
               </AvatarFallback>
             </Avatar>
-            {/* Connection status dot — uses probed gateway health, not raw hub WS state */}
+            {/* Connection status dot — uses probed gateway health, or Hermes health */}
             <span className="absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-background shadow-sm">
               <span
                 className={cn(
                   "h-2.5 w-2.5 rounded-full transition-all duration-300",
-                  gatewayHealthy === true
-                    ? "bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.6)]"
-                    : gatewayHealthy === false
-                      ? "bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.6)]"
-                      : "bg-amber-500/80 animate-pulse"
+                  isHermes
+                    ? (isConnected
+                        ? "bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.6)]"
+                        : "bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.6)]")
+                    : gatewayHealthy === true
+                      ? "bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.6)]"
+                      : gatewayHealthy === false
+                        ? "bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.6)]"
+                        : "bg-amber-500/80 animate-pulse"
                 )}
               />
             </span>
@@ -122,18 +132,24 @@ export const GatewayChatCustomHeader: React.FC<GatewayChatHeaderProps> = ({
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="start" className="w-48">
-                  {agents.map((a) => (
-                    <DropdownMenuItem
-                      key={a.id}
-                      onClick={() => onAgentChange?.(a.id)}
-                      className="flex items-center justify-between cursor-pointer"
-                    >
-                      <span>{a.name}</span>
-                      {a.id === (currentAgentId || configAgentId || agents[0]?.id) && (
-                        <Check className="w-3 h-3" />
-                      )}
-                    </DropdownMenuItem>
-                  ))}
+                  {agents.map((a) => {
+                    const isAgentHermes = a.id === "hermes" || (a as any).backend === "hermes";
+                    return (
+                      <DropdownMenuItem
+                        key={a.id}
+                        onClick={() => onAgentChange?.(a.id)}
+                        className="flex items-center justify-between cursor-pointer"
+                      >
+                        <span className="flex items-center gap-2">
+                          {isAgentHermes && <HermesIcon className="w-3.5 h-3.5 text-orange-500" />}
+                          {a.name}
+                        </span>
+                        {a.id === (currentAgentId || configAgentId || agents[0]?.id) && (
+                          <Check className="w-3 h-3" />
+                        )}
+                      </DropdownMenuItem>
+                    );
+                  })}
                 </DropdownMenuContent>
               </DropdownMenu>
             ) : (

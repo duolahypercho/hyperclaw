@@ -28,7 +28,15 @@ import { GenericToolMessage } from "@OS/AI/components/GenericToolMessage";
 import { useUnifiedToolState } from "@OS/AI/components/hooks/useUnifiedToolState";
 import { toolRegistry, UnifiedToolState } from "@OS/AI/components/ToolRegistry";
 import { Collapsible } from "@/components/ui/collapsible";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, Check } from "lucide-react";
+import { useOpenClawContext } from "$/Providers/OpenClawProv";
+import HermesIcon from "@OS/assets/hermes";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 // Memoized ReactMarkdown component for better performance
 const MemoizedReactMarkdown: React.FC<Options> = React.memo(
@@ -250,6 +258,8 @@ interface GatewayChatProps {
   sessionKey?: string;
   autoConnect?: boolean;
   className?: string;
+  backend?: "openclaw" | "hermes";
+  agentId?: string;
 }
 
 // Enhanced message bubble component with tool support
@@ -468,12 +478,25 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
   sessionKey,
   autoConnect = true,
   className,
+  backend: backendProp,
+  agentId: agentIdProp,
 }) => {
   const { userInfo } = useUser();
   const { personality } = useAssistant();
+  const { agents } = useOpenClawContext();
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
-  const [sessionKeyState, setSessionKeyState] = useState(sessionKey || "default");
+  const [selectedAgentId, setSelectedAgentId] = useState<string | undefined>(agentIdProp);
+
+  // Resolve current agent and backend
+  const currentAgentId = selectedAgentId || agentIdProp || "main";
+  const currentAgent = agents.find(a => a.id === currentAgentId);
+  const backend = (currentAgent as any)?.backend || backendProp || "openclaw";
+  const isHermes = backend === "hermes";
+
+  const [sessionKeyState, setSessionKeyState] = useState(
+    sessionKey || `agent:${currentAgentId}:main`
+  );
 
   // Sync sessionKey prop with internal state and reload when it changes
   useEffect(() => {
@@ -496,6 +519,7 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
   } = useGatewayChat({
     sessionKey: sessionKeyState,
     autoConnect,
+    backend,
   });
 
   // Unified tool state management
@@ -506,11 +530,13 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const [sessionsError, setSessionsError] = useState<string | null>(null);
 
-  // Parse agentId from session key (format: agent:{id}:rest)
-  const currentAgentId = useMemo(() => {
-    const parts = sessionKeyState.split(":");
-    return parts.length >= 2 && parts[0] === "agent" ? parts[1] : "default";
-  }, [sessionKeyState]);
+  // Handle agent change
+  const handleAgentChange = useCallback((agentId: string) => {
+    setSelectedAgentId(agentId);
+    const newSessionKey = `agent:${agentId}:main`;
+    setSessionKeyState(newSessionKey);
+    setHookSessionKey(newSessionKey);
+  }, [setHookSessionKey]);
 
   // Fetch sessions callback
   const fetchSessions = useCallback(async () => {
@@ -660,12 +686,16 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
           <div className="flex items-center gap-3">
             <div className="relative">
               <Avatar className="w-10 h-10">
-                <AvatarImage src={getMediaUrl(personality.coverPhoto)} />
-                <AvatarFallback className="bg-primary/10 text-primary">
-                  <CopanionIcon className="w-5 h-5" />
+                {isHermes ? null : <AvatarImage src={getMediaUrl(personality.coverPhoto)} />}
+                <AvatarFallback className={cn("text-primary", isHermes ? "bg-orange-500/10" : "bg-primary/10")}>
+                  {isHermes ? (
+                    <HermesIcon className="w-5 h-5 text-orange-500" />
+                  ) : (
+                    <CopanionIcon className="w-5 h-5" />
+                  )}
                 </AvatarFallback>
               </Avatar>
-              {/* Connection status dot — matches navbar user avatar style */}
+              {/* Connection status dot */}
               <span className="absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-background shadow-sm">
                 <span
                   className={cn(
@@ -680,7 +710,38 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
               </span>
             </div>
             <div>
-              <CardTitle>{personality.name || "Copanion"}</CardTitle>
+              {agents.length > 1 ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button className="flex items-center gap-1 hover:opacity-80 transition-opacity text-left">
+                      <CardTitle className="text-sm">
+                        {isHermes ? "Hermes Agent" : (personality.name || "Copanion")}
+                      </CardTitle>
+                      <ChevronDown className="w-3 h-3 text-muted-foreground" />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-48">
+                    {agents.map((a) => {
+                      const isAgentHermes = a.id === "hermes" || (a as any).backend === "hermes";
+                      return (
+                        <DropdownMenuItem
+                          key={a.id}
+                          onClick={() => handleAgentChange(a.id)}
+                          className="flex items-center justify-between cursor-pointer"
+                        >
+                          <span className="flex items-center gap-2">
+                            {isAgentHermes && <HermesIcon className="w-3.5 h-3.5 text-orange-500" />}
+                            {a.name}
+                          </span>
+                          {a.id === currentAgentId && <Check className="w-3 h-3" />}
+                        </DropdownMenuItem>
+                      );
+                    })}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : (
+                <CardTitle>{isHermes ? "Hermes Agent" : (personality.name || "Copanion")}</CardTitle>
+              )}
               <p className="text-xs text-muted-foreground">
                 {isConnected ? "Online" : isLoading ? "Connecting..." : "Offline"}
               </p>
