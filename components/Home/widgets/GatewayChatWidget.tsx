@@ -173,6 +173,7 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
   } = useGatewayChat({
     sessionKey,
     autoConnect: true,
+    backend: (currentAgent as any)?.backend || "openclaw",
   });
 
   // Unified tool state management - handles ALL tool types!

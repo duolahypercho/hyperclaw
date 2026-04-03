@@ -116,6 +116,7 @@ export interface GatewayChatAttachment {
 export interface UseGatewayChatOptions {
   sessionKey?: string;
   autoConnect?: boolean;
+  backend?: "openclaw" | "hermes";
 }
 
 export interface UseGatewayChatReturn {
@@ -566,8 +567,49 @@ export const _testHelpers = {
   runIdOwners,
 };
 
+async function sendMessageViaHermes(
+  messages: Array<{ role: string; content: string }>,
+  signal: AbortSignal,
+  onDelta: (content: string) => void,
+  onDone: () => void,
+  onError: (error: string) => void,
+): Promise<void> {
+  const res = await fetch("/api/hermes/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ messages, stream: true }),
+    signal,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: "Hermes request failed" }));
+    onError(err.error || `HTTP ${res.status}`);
+    return;
+  }
+  const reader = res.body?.getReader();
+  if (!reader) { onError("No response body"); return; }
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      const data = line.slice(6).trim();
+      if (data === "[DONE]") { onDone(); return; }
+      try {
+        const parsed = JSON.parse(data);
+        if (parsed.content) onDelta(parsed.content);
+      } catch { /* skip malformed */ }
+    }
+  }
+  onDone();
+}
+
 export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayChatReturn {
-  const { sessionKey: initialSessionKey, autoConnect = true } = options;
+  const { sessionKey: initialSessionKey, autoConnect = true, backend = "openclaw" } = options;
 
   // State
   const [messages, setMessages] = useState<GatewayChatMessage[]>([]);
@@ -650,6 +692,9 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
   const receivedEventRef = useRef(false);
   const isMergingRef = useRef(false);
   const disconnectGraceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hermesAbortRef = useRef<AbortController | null>(null);
+  const messagesRef = useRef<GatewayChatMessage[]>([]);
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
 
   // Shared helper: fetch history and merge into current messages.
   // Optionally auto-finalizes if the last message is a completed assistant text.
@@ -1328,6 +1373,16 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
   // The singleton is typically established by useOpenClaw (hub-aware, Electron-aware).
   // Only attempt our own connection if the singleton is not connected.
   const connect = useCallback(async () => {
+    if (backend === "hermes") {
+      try {
+        const res = await fetch("/api/hermes/health");
+        const data = await res.json();
+        setIsConnected(data.available === true);
+      } catch {
+        setIsConnected(false);
+      }
+      return;
+    }
     // If singleton is already connected (by useOpenClaw or prior call), just sync state
     if (gatewayConnection.isConnected()) {
       setIsConnected(true);
@@ -1347,7 +1402,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to connect");
     }
-  }, []);
+  }, [backend]);
 
   // Disconnect — do NOT kill the singleton WS, just unsubscribe from state.
   // The singleton is shared with useOpenClaw and other consumers.
@@ -1359,6 +1414,16 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
   // Guard isLoading so a history reload during active streaming doesn't kill the
   // "AI is generating" state (currentRunIdRef.current !== null while streaming).
   const loadChatHistory = useCallback(async () => {
+    if (backend === "hermes") {
+      try {
+        const stored = localStorage.getItem(`hermes-chat:${sessionKeyRef.current}`);
+        if (stored) {
+          const parsed = JSON.parse(stored) as GatewayChatMessage[];
+          setMessages(parsed);
+        }
+      } catch { /* ignore parse errors */ }
+      return;
+    }
     if (currentRunIdRef.current === null) setIsLoading(true);
     setError(null);
     try {
@@ -1369,7 +1434,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
     } finally {
       if (currentRunIdRef.current === null) setIsLoading(false);
     }
-  }, [fetchAndSetHistory]);
+  }, [backend, fetchAndSetHistory]);
 
   // Load more (older) history — steps through tiers: 10 → 50 → 200 → 1000.
   // Re-fetches the full tail with a larger window; the gateway returns the last N
@@ -1395,11 +1460,105 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       return;
     }
 
+    const now = Date.now();
+    const userMessage: GatewayChatMessage = {
+      id: uuidv4(),
+      role: "user",
+      content: content.trim(),
+      timestamp: now,
+      attachments: attachments?.length ? attachments : undefined,
+    };
+
+    // Optimistically add user message
+    setMessages((prev) => [...prev, userMessage]);
+
+    // Generate runId for this conversation
+    const runId = uuidv4();
+
+    setIsLoading(true);
+    setError(null);
+
+    currentRunIdRef.current = runId;
+    registerRunId(runId, sessionKeyRef.current);
+    streamContentRef.current = "";
+
+    if (backend === "hermes") {
+      // Build conversation history for Hermes (stateless API needs full history)
+      const hermesMessages = [...messagesRef.current]
+        .filter(m => m.role === "user" || m.role === "assistant")
+        .map(m => ({ role: m.role, content: m.content }));
+
+      hermesAbortRef.current = new AbortController();
+
+      // Create streaming assistant message
+      const assistantMsgId = uuidv4();
+      setMessages(prev => [...prev, {
+        id: assistantMsgId,
+        role: "assistant" as ChatMessageRole,
+        content: "",
+        timestamp: Date.now(),
+      }]);
+
+      try {
+        await sendMessageViaHermes(
+          hermesMessages,
+          hermesAbortRef.current.signal,
+          (delta) => {
+            streamContentRef.current += delta;
+            setMessages(prev => prev.map(m =>
+              m.id === assistantMsgId
+                ? { ...m, content: streamContentRef.current }
+                : m
+            ));
+          },
+          () => {
+            // Persist to localStorage
+            setMessages(prev => {
+              try {
+                localStorage.setItem(
+                  `hermes-chat:${sessionKeyRef.current}`,
+                  JSON.stringify(prev)
+                );
+              } catch { /* ignore storage errors */ }
+              return prev;
+            });
+            currentRunIdRef.current = null;
+            setIsLoading(false);
+            hermesAbortRef.current = null;
+          },
+          (error) => {
+            setError(error);
+            setMessages(prev => prev.map(m =>
+              m.id === assistantMsgId
+                ? { ...m, content: `Error: ${error}` }
+                : m
+            ));
+            currentRunIdRef.current = null;
+            setIsLoading(false);
+            hermesAbortRef.current = null;
+          },
+        );
+      } catch (err) {
+        if ((err as Error).name !== "AbortError") {
+          const msg = err instanceof Error ? err.message : "Failed to send";
+          setError(msg);
+        }
+        currentRunIdRef.current = null;
+        setIsLoading(false);
+        hermesAbortRef.current = null;
+      }
+      return;
+    }
+
+    // --- Existing OpenClaw WebSocket path ---
+
     if (!gatewayConnection.isConnected()) {
       try {
         const config = await getGatewayConfig();
         if (!config.gatewayUrl) {
           setError("No hub configured");
+          setIsLoading(false);
+          currentRunIdRef.current = null;
           return;
         }
         connectGatewayWs(config.gatewayUrl, {
@@ -1420,32 +1579,16 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
         });
       } catch (e) {
         setError(e instanceof Error ? e.message : "Auto-connect failed");
+        currentRunIdRef.current = null;
+        setIsLoading(false);
         return;
       }
     }
-
-    const now = Date.now();
-    const userMessage: GatewayChatMessage = {
-      id: uuidv4(),
-      role: "user",
-      content: content.trim(),
-      timestamp: now,
-      attachments: attachments?.length ? attachments : undefined,
-    };
-
-    // Optimistically add user message
-    setMessages((prev) => [...prev, userMessage]);
-
-    // Generate runId for this conversation
-    const runId = uuidv4();
 
     // Don't add an empty assistant "thinking" placeholder — it would get an
     // early timestamp and sort before tool actions. The GatewayChatWidget's
     // thinking indicator handles the "AI is thinking" state via isLoading.
     // Text content is appended when it actually arrives (after tools).
-
-    setIsLoading(true);
-    setError(null);
 
     // Clear any idle reload timer from previous conversation
     if (idleReloadRef.current) {
@@ -1461,9 +1604,6 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       mergeHistoryAndMaybeFinalize(false);
     }, 300_000);
 
-    currentRunIdRef.current = runId;
-    registerRunId(runId, sessionKeyRef.current);
-    streamContentRef.current = "";
     receivedEventRef.current = false;
 
     // No-response check: if no streaming events arrive within 15s after send,
@@ -1513,10 +1653,17 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       currentRunIdRef.current = null;
       setIsLoading(false);
     }
-  }, [getSessionKey, mergeHistoryAndMaybeFinalize]);
+  }, [backend, getSessionKey, mergeHistoryAndMaybeFinalize]);
 
   // Stop generation
   const stopGeneration = useCallback(async () => {
+    if (backend === "hermes" && hermesAbortRef.current) {
+      hermesAbortRef.current.abort();
+      hermesAbortRef.current = null;
+      currentRunIdRef.current = null;
+      setIsLoading(false);
+      return;
+    }
     // Immediately stop loading — don't wait for the gateway's "aborted" event
     // which may be slow or never arrive (e.g. disconnected, hub relay delay).
     const runIdToAbort = currentRunIdRef.current;
@@ -1556,10 +1703,13 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
           /* abort is best-effort; hub/device timeouts are expected */
         });
     }
-  }, [getSessionKey]);
+  }, [backend, getSessionKey]);
 
   // Clear chat
   const clearChat = useCallback(() => {
+    if (backend === "hermes") {
+      localStorage.removeItem(`hermes-chat:${sessionKeyRef.current}`);
+    }
     setMessages([]);
     setError(null);
     streamContentRef.current = "";
@@ -1572,7 +1722,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       clearTimeout(noResponseRef.current);
       noResponseRef.current = null;
     }
-  }, []);
+  }, [backend]);
 
   // Clear loading/finalize timeouts when isLoading becomes false
   useEffect(() => {

@@ -47,6 +47,7 @@ export interface OpenClawRegistryAgent {
   status: string;
   role?: string;
   lastActive?: string;
+  backend?: "openclaw" | "hermes";
 }
 
 export interface OpenClawAgentListResult {

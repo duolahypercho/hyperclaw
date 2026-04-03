@@ -297,6 +297,23 @@ export function useOpenClaw(autoRefreshMs = 0) {
         role: (a as any).role,
         lastActive: (a as any).lastActive,
       }));
+      // Check if Hermes agent is available and inject it
+      try {
+        const hermesHealth = await fetch("/api/hermes/health");
+        if (hermesHealth.ok) {
+          const data = await hermesHealth.json();
+          if (data.available) {
+            mapped.push({
+              id: "hermes",
+              name: "Hermes Agent",
+              status: "online",
+              role: "Self-improving AI agent",
+              backend: "hermes" as const,
+            });
+          }
+        }
+      } catch { /* Hermes not available */ }
+
       setState((prev) => ({ ...prev, agents: mapped, errors: { ...prev.errors, agents: null } }));
       return mapped;
     } else {
