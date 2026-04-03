@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useState, useCallback, useEffect } from "react";
+import React, { createContext, useContext, useState, useCallback } from "react";
 
 interface GuidanceContextType {
   activeTour: string | null;
@@ -31,20 +31,18 @@ interface GuidanceProviderProps {
 export const GuidanceProvider: React.FC<GuidanceProviderProps> = ({ children }) => {
   const [activeTour, setActiveTour] = useState<string | null>(null);
   const [currentStep, setCurrentStep] = useState(0);
-  const [completedTours, setCompletedTours] = useState<Set<string>>(new Set());
-
-  // Load completed tours from localStorage on mount
-  useEffect(() => {
+  const [completedTours, setCompletedTours] = useState<Set<string>>(() => {
+    if (typeof window === "undefined") return new Set();
     const stored = localStorage.getItem("hypercho-guidance-completed");
     if (stored) {
       try {
-        const completed = JSON.parse(stored) as string[];
-        setCompletedTours(new Set(completed));
+        return new Set(JSON.parse(stored) as string[]);
       } catch (e) {
         // Ignore parse errors
       }
     }
-  }, []);
+    return new Set();
+  });
 
   const startTour = useCallback((tourId: string) => {
     setActiveTour(tourId);

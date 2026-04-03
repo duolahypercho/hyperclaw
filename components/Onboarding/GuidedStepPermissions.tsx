@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { motion } from "framer-motion";
-import { Shield, Mic, Keyboard, Monitor, Check, Download, Loader2, Globe } from "lucide-react";
+import { Shield, Mic, Keyboard, Monitor, Check } from "lucide-react";
 
 const EASE = [0.16, 1, 0.3, 1] as const;
 
@@ -32,10 +32,6 @@ export default function GuidedStepPermissions({ onComplete }: GuidedStepPermissi
   });
   const [requesting, setRequesting] = useState<string | null>(null);
 
-  // Whisper local model state
-  const [whisperInstalling, setWhisperInstalling] = useState(false);
-  const [whisperProgress, setWhisperProgress] = useState("");
-  const [whisperInstalled, setWhisperInstalled] = useState(false);
 
   const checkPermissions = useCallback(async () => {
     if (!window.electronAPI?.permissions) {
@@ -62,25 +58,6 @@ export default function GuidedStepPermissions({ onComplete }: GuidedStepPermissi
   useEffect(() => {
     if (isElectron) checkPermissions();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Whisper install progress listener
-  useEffect(() => {
-    const whisper = window.electronAPI?.voiceOverlay?.whisper;
-    if (!whisper) return;
-
-    const handler = (data: { step: string; detail: string }) => {
-      setWhisperProgress(data.detail);
-      if (data.step === "done") {
-        setWhisperInstalling(false);
-        setWhisperInstalled(true);
-      }
-    };
-
-    whisper.onInstallProgress?.(handler);
-    return () => {
-      whisper.removeInstallProgressListener?.();
-    };
-  }, []);
 
   // Poll every 2s while any permission is not granted yet
   // Catches when the user toggles the switch in System Settings and comes back
@@ -122,25 +99,6 @@ export default function GuidedStepPermissions({ onComplete }: GuidedStepPermissi
     } catch { /* ignore */ }
     setRequesting(null);
     // Polling will pick up the change when user toggles in System Settings
-  };
-
-  const handleWhisperInstall = async () => {
-    setWhisperInstalling(true);
-    setWhisperProgress("Starting installation...");
-    try {
-      const res = await window.electronAPI?.voiceOverlay?.whisper?.runtimeInstall?.();
-      if (!res?.success) {
-        setWhisperInstalling(false);
-        setWhisperProgress("");
-      }
-    } catch {
-      setWhisperInstalling(false);
-      setWhisperProgress("");
-    }
-  };
-
-  const handleWhisperSkip = async () => {
-    await window.electronAPI?.voiceOverlay?.settings?.set?.({ localWhisper: false });
   };
 
   useEffect(() => {
@@ -251,66 +209,6 @@ export default function GuidedStepPermissions({ onComplete }: GuidedStepPermissi
           Some permissions open System Settings. Toggle HyperClaw on, then come back.
         </motion.p>
       )}
-
-      {/* Whisper local voice model */}
-      <motion.div className="max-w-sm mx-auto space-y-2" variants={fadeUp}>
-        <div className="text-[12px] text-white/25 uppercase tracking-widest mb-1">Voice model</div>
-        <div className="rounded-xl border bg-white/[0.03] border-white/8 p-4">
-          {whisperInstalled ? (
-            <motion.div
-              className="flex items-center gap-3"
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-            >
-              <div className="w-9 h-9 rounded-lg bg-white/[0.06] flex items-center justify-center shrink-0">
-                <Check className="w-4.5 h-4.5 text-white/60" />
-              </div>
-              <div className="text-left">
-                <div className="text-[14px] font-medium text-white/90">Local Whisper ready</div>
-                <div className="text-[12px] text-white/30 mt-0.5">Offline transcription enabled</div>
-              </div>
-            </motion.div>
-          ) : whisperInstalling ? (
-            <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-lg bg-white/[0.06] flex items-center justify-center shrink-0">
-                <Loader2 className="w-4.5 h-4.5 text-white/50 animate-spin" />
-              </div>
-              <div className="text-left flex-1">
-                <div className="text-[14px] font-medium text-white/90">Installing…</div>
-                <div className="text-[12px] text-white/30 mt-0.5">{whisperProgress || "This may take a few minutes"}</div>
-              </div>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-lg bg-white/[0.06] flex items-center justify-center shrink-0">
-                  <Mic className="w-4.5 h-4.5 text-white/50" />
-                </div>
-                <div className="text-left flex-1">
-                  <div className="text-[14px] font-medium text-white/90">Local voice transcription</div>
-                  <div className="text-[12px] text-white/30 mt-0.5">Download Whisper (~200 MB) for private, offline speech-to-text</div>
-                </div>
-              </div>
-              <div className="flex gap-2 pt-1">
-                <button
-                  onClick={handleWhisperSkip}
-                  className="flex-1 text-[13px] text-white/50 hover:text-white/80 border border-white/12 hover:border-white/25 rounded-lg px-3.5 py-1.5 transition-all flex items-center justify-center gap-1.5"
-                >
-                  <Globe className="w-3.5 h-3.5" />
-                  Use browser
-                </button>
-                <button
-                  onClick={handleWhisperInstall}
-                  className="flex-1 text-[13px] text-white/80 bg-white/10 hover:bg-white/[0.15] border border-white/15 hover:border-white/25 rounded-lg px-3.5 py-1.5 transition-all flex items-center justify-center gap-1.5"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  Download
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      </motion.div>
 
       <motion.div variants={fadeUp}>
         <motion.button

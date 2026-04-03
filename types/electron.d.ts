@@ -264,56 +264,6 @@ declare global {
       hyperClawBridge: HyperClawBridgeAPI;
       noteFS: any;
       memoryFS: MemoryAPI;
-      // Voice Overlay - global voice input (Alt+Space)
-      voiceOverlay?: {
-        signalReady?: () => Promise<void>;
-        hide: () => Promise<void>;
-        expand: () => Promise<void>;
-        minimize: () => Promise<void>;
-        isVisible: () => Promise<boolean>;
-        /** useNativeWindowBlur: macOS + Windows 11+ (native blur). Linux / Win10 use CSS frosted glass in-page. */
-        getGlassConfig: () => Promise<{ useNativeWindowBlur?: boolean }>;
-        resize: (width: number, height: number) => Promise<void>;
-        setClickThrough: (ignore: boolean) => Promise<void>;
-        setRecordingState?: (isRecording: boolean) => void;
-        insertText: (text: string) => Promise<{ success: boolean; error?: string }>;
-        liveType?: (text: string, isFinal: boolean) => Promise<void>;
-        liveTypeReset?: () => Promise<void>;
-        onPushToTalk: (callback: (action: "start" | "stop", mode: "dictation" | "agent-chat") => void) => void;
-        removePushToTalkListener: () => void;
-        onQuickChat: (callback: (data: { screenshot?: string | null }) => void) => void;
-        removeQuickChatListener: () => void;
-        onQuickChatScreenshot: (callback: (dataUrl: string) => void) => void;
-        onQuickChatScreenshotError?: (callback: (error: string) => void) => void;
-        removeQuickChatScreenshotListener: () => void;
-        captureScreen?: () => Promise<{ dataUrl?: string; error?: string }>;
-        hasScreenPermission?: () => Promise<boolean>;
-        onMinimize: (callback: () => void) => void;
-        removeMinimizeListener: () => void;
-        onTranscript: (callback: (data: { text: string; agentId?: string; sessionKey?: string }) => void) => void;
-        removeTranscriptListener: () => void;
-        wakeWord?: {
-          toggle: (enabled: boolean) => Promise<{ success: boolean; enabled: boolean }>;
-          getStatus: () => Promise<{ enabled: boolean }>;
-          triggerDetected: () => Promise<{ success: boolean }>;
-        };
-        onWakeWordActivated?: (callback: () => void) => void;
-        removeWakeWordActivatedListener?: () => void;
-        whisper?: {
-          initialize: () => Promise<{ success: boolean; info?: any; error?: string }>;
-          transcribe: (audioData: number[]) => Promise<{ success: boolean; text?: string; error?: string }>;
-          getStatus: () => Promise<{ ready: boolean; info?: any; language?: string }>;
-          runtimeStatus: () => Promise<{ success: boolean; enabled: boolean; installed: boolean; installing: boolean }>;
-          runtimeInstall: () => Promise<{ success: boolean; error?: string }>;
-          runtimeRemove: () => Promise<{ success: boolean; error?: string }>;
-          onInstallProgress: (callback: (data: { step: string; detail: string }) => void) => void;
-          removeInstallProgressListener: () => void;
-        };
-        settings?: {
-          get: () => Promise<{ success: boolean; settings?: { language?: string; localWhisper?: boolean }; error?: string }>;
-          set: (patch: { language?: string; localWhisper?: boolean }) => Promise<{ success: boolean; settings?: { language?: string; localWhisper?: boolean }; error?: string }>;
-        };
-      };
     };
   }
 }

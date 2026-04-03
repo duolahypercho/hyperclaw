@@ -648,7 +648,7 @@ export default function Home() {
       )}
       <div
         className={cn(
-          "flex-1 overflow-auto customScrollbar2 bg-background/80 backdrop-blur-xl",
+          "flex-1 overflow-auto customScrollbar2 bg-card/70 backdrop-blur-xl",
           isEditMode && "select-none"
         )}
         data-dashboard="true"

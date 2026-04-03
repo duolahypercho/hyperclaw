@@ -79,7 +79,7 @@ export const IntelligenceCustomHeader: React.FC<CustomProps> = ({
   const selectedMeta = selectedTable ? schema?.tables[selectedTable] : null;
 
   return (
-    <div className="flex flex-col gap-1.5 px-3 py-2 min-h-0">
+    <div className={cn("flex flex-col gap-1.5 px-3 py-2 min-h-0 transition-opacity duration-200", !isEditMode && "absolute top-0 left-0 right-0 z-10 bg-card/90 backdrop-blur-sm rounded-t-md opacity-0 group-hover:opacity-100")}>
       {/* Top row: title + controls */}
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0 flex-1 overflow-hidden">
@@ -211,7 +211,7 @@ const IntelligenceWidgetContent = memo((props: CustomProps) => {
     >
       <Card
         className={cn(
-          "h-full w-full flex flex-col overflow-hidden bg-card/70 backdrop-blur-xl border border-border transition-all shadow-sm duration-300 rounded-md",
+          "group h-full w-full flex flex-col overflow-hidden bg-card/70 backdrop-blur-xl border border-border transition-all duration-300 rounded-md",
           isFocusModeActive && "border-transparent grayscale-[30%]"
         )}
       >

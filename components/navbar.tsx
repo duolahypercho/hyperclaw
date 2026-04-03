@@ -10,7 +10,6 @@ import { useRouter } from "next/router";
 import HyperchoTooltip from "$/components/UI/HyperchoTooltip";
 import HyperchoIcon from "$/components/Navigation/HyperchoIcon";
 import Userdropdown from "$/components/Navigation/Userdropdown";
-import ClockWidget from "$/components/clock-widget";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
 import { dashboardState } from "$/lib/dashboard-state";
 import { LuGrid2X2Plus } from "react-icons/lu";
@@ -765,10 +764,6 @@ const Navbar = () => {
               </HyperchoTooltip>
             </>
           )}
-        </div>
-
-        <div data-guidance="navbar-clock">
-          <ClockWidget className="px-2 py-0 gap-0 bg-transparent" />
         </div>
 
         {/* User Dropdown */}

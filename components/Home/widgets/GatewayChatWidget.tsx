@@ -717,7 +717,7 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
     >
       <Card
         className={cn(
-          "h-full w-full flex flex-col overflow-hidden bg-card/70 backdrop-blur-xl border border-border transition-all shadow-sm duration-300 rounded-md",
+          "group h-full w-full flex flex-col overflow-hidden bg-card/70 backdrop-blur-xl border border-border transition-all duration-300 rounded-md",
           isFocusModeActive && "border-transparent grayscale-[30%]"
         )}
         onDragEnter={handleDragEnter}
