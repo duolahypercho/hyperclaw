@@ -13,4 +13,5 @@ export {
 export {
   AIProviderProvider as AIProviderProvider,
   useAIProvider as useAIProvider,
+  useAIProviderSafe as useAIProviderSafe,
 } from "./AIProviderProv";

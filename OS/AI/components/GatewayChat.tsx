@@ -21,7 +21,7 @@ import { useGatewayChat, GatewayChatMessage, GatewayChatAttachment } from "@OS/A
 import { useClaudeCodeChat } from "@OS/AI/core/hook/use-claude-code-chat";
 import type { AttachmentType } from "@OS/AI/components/Chat";
 import { gatewayConnection } from "$/lib/openclaw-gateway-ws";
-import { useAIProvider, type AIProviderType } from "$/Providers/AIProviderProv";
+import { useAIProviderSafe, type AIProviderType } from "$/Providers/AIProviderProv";
 import { InputContainer } from "@OS/AI/components/InputContainer";
 import SessionHistoryDropdown from "$/components/SessionHistoryDropdown";
 import createMarkdownComponents from "@OS/AI/components/createMarkdownComponents";
@@ -477,19 +477,8 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [sessionKeyState, setSessionKeyState] = useState(sessionKey || "default");
 
-  // AI provider switching
-  let aiProvider: { provider: AIProviderType; setProvider: (p: AIProviderType) => void; providers: Array<{ id: AIProviderType; label: string; available: boolean }> };
-  try {
-    aiProvider = useAIProvider();
-  } catch {
-    // Fallback when AIProviderProvider is not mounted
-    aiProvider = {
-      provider: "openclaw" as AIProviderType,
-      setProvider: () => {},
-      providers: [{ id: "openclaw" as AIProviderType, label: "OpenClaw", available: true }],
-    };
-  }
-  const { provider: activeProvider, setProvider, providers: availableProviders } = aiProvider;
+  // AI provider switching (safe variant returns defaults if provider not mounted)
+  const { provider: activeProvider, setProvider, providers: availableProviders } = useAIProviderSafe();
 
   // Sync sessionKey prop with internal state and reload when it changes
   useEffect(() => {

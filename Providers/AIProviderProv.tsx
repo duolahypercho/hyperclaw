@@ -80,7 +80,7 @@ export function AIProviderProvider({ children }: { children: ReactNode }) {
   );
 }
 
-// ── Hook ─────────────────────────────────────────────────────────────────────
+// ── Hooks ────────────────────────────────────────────────────────────────────
 
 export function useAIProvider(): AIProviderContextValue {
   const ctx = useContext(AIProviderContext);
@@ -88,4 +88,17 @@ export function useAIProvider(): AIProviderContextValue {
     throw new Error("useAIProvider must be used within AIProviderProvider");
   }
   return ctx;
+}
+
+const defaultProviderValue: AIProviderContextValue = {
+  provider: "openclaw",
+  setProvider: () => {},
+  providers: [{ ...PROVIDERS.openclaw, available: true }],
+  setProviderAvailable: () => {},
+};
+
+/** Safe variant that returns defaults when AIProviderProvider is not mounted. */
+export function useAIProviderSafe(): AIProviderContextValue {
+  const ctx = useContext(AIProviderContext);
+  return ctx ?? defaultProviderValue;
 }
