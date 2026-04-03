@@ -188,6 +188,12 @@ export function useClaudeCodeChat(
       abortRef.current.abort();
       abortRef.current = null;
     }
+    // Tell Electron to kill the Claude Code subprocess
+    try {
+      await bridgeInvoke("claude-code-abort", { sessionKey: sessionKeyRef.current });
+    } catch {
+      // Ignore abort errors
+    }
     setIsLoading(false);
   }, []);
 
