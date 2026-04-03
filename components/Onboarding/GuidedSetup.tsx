@@ -115,7 +115,7 @@ export default function GuidedSetup({ onComplete }: GuidedSetupProps) {
       aria-label="Setup wizard"
     >
       {/* Left side — form area */}
-      <div className="relative flex-1 flex flex-col items-center justify-center">
+      <div className="relative flex-1 flex flex-col items-center justify-center overflow-hidden">
         <TechGridBackground />
 
         {/* Subtle center gradient */}
@@ -170,7 +170,7 @@ export default function GuidedSetup({ onComplete }: GuidedSetupProps) {
 
         {/* Content */}
         <motion.div
-          className="w-full max-w-lg px-6 z-10"
+          className="w-full max-w-lg px-6 z-10 max-h-[calc(100vh-160px)] overflow-hidden"
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.1, duration: 0.6, ease: EASE }}
@@ -268,7 +268,7 @@ export default function GuidedSetup({ onComplete }: GuidedSetupProps) {
                 <GuidedStep4
                   companyName={companyName}
                   agentName={agentName}
-                  runtime="openclaw"
+                  provider={guidedState.selectedRuntimes?.map((id) => id.charAt(0).toUpperCase() + id.slice(1)).join(", ") || "Not configured"}
                   onComplete={() => completeStep(6)}
                 />
               )}

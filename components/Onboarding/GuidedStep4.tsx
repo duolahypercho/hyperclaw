@@ -1,8 +1,6 @@
 import React, { useEffect } from "react";
 import { motion } from "framer-motion";
 import { Rocket, Building2, Bot, Monitor, Check } from "lucide-react";
-import type { RuntimeChoice } from "./GuidedStep3";
-
 const EASE = [0.16, 1, 0.3, 1] as const;
 
 const stagger = {
@@ -17,11 +15,11 @@ const fadeUp = {
 interface GuidedStep4Props {
   companyName: string;
   agentName: string;
-  runtime: RuntimeChoice;
+  provider?: string;
   onComplete: () => void;
 }
 
-export default function GuidedStep4({ companyName, agentName, runtime, onComplete }: GuidedStep4Props) {
+export default function GuidedStep4({ companyName, agentName, provider, onComplete }: GuidedStep4Props) {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Enter") onComplete();
@@ -30,12 +28,10 @@ export default function GuidedStep4({ companyName, agentName, runtime, onComplet
     return () => window.removeEventListener("keydown", handler);
   }, [onComplete]);
 
-  const runtimeLabel = runtime === "openclaw" ? "OpenClaw" : "Hermes Agent";
-
   const summaryItems = [
     { icon: Building2, label: "Company", value: companyName },
     { icon: Bot, label: "Agent", value: agentName },
-    { icon: Monitor, label: "Runtime", value: runtimeLabel },
+    { icon: Monitor, label: "Provider", value: provider || "Not configured" },
   ];
 
   return (

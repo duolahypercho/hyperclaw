@@ -504,8 +504,8 @@ export default function GuidedStepRuntimes({ onComplete }: GuidedStepRuntimesPro
       </motion.div>
 
       <motion.div
-        className={`max-w-sm mx-auto text-left overflow-y-auto ${scrollClass}`}
-        style={{ maxHeight: "calc(100vh - 340px)" }}
+        className={`max-w-sm mx-auto text-left overflow-y-auto overflow-x-hidden ${scrollClass}`}
+        style={{ maxHeight: "clamp(200px, calc(100vh - 380px), 500px)" }}
         variants={fadeUp}
       >
         {/* Added providers — expanded cards */}
@@ -553,23 +553,13 @@ export default function GuidedStepRuntimes({ onComplete }: GuidedStepRuntimesPro
               <Plus className={`w-3.5 h-3.5 transition-transform duration-200 ${showMore ? "rotate-45" : ""}`} />
               {showMore ? "Less" : `More providers (${unselectedMore.length})`}
             </button>
-            <AnimatePresence>
-              {showMore && (
-                <motion.div
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: "auto", opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }}
-                  transition={{ duration: 0.3, ease: EASE }}
-                  className="overflow-hidden"
-                >
-                  <div className="space-y-2 pt-1">
-                    {unselectedMore.map((p, i) => (
-                      <PickerButton key={p.id} provider={p} onSelect={() => selectProvider(p.id)} index={i} />
-                    ))}
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
+            {showMore && (
+              <div className="space-y-2 pt-1">
+                {unselectedMore.map((p, i) => (
+                  <PickerButton key={p.id} provider={p} onSelect={() => selectProvider(p.id)} index={i} />
+                ))}
+              </div>
+            )}
           </>
         )}
 
