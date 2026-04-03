@@ -1,19 +1,11 @@
-import React, { useState, useId } from "react";
+import React, { useState, useId, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Check, Eye, EyeOff, ChevronDown, Plus, Key, ExternalLink, Terminal, X } from "lucide-react";
+import { Eye, EyeOff, ChevronDown, Plus, X } from "lucide-react";
 
 /*
   Step 2: "Pick your brain"
-  Select AI providers, authenticate, and choose default models.
-
-  Auth methods (matching OpenClaw):
-  - api-key: Paste an API key
-  - setup-token: Run a CLI command, paste the token
-  - oauth: Browser-based PKCE OAuth flow (Google, OpenAI Codex)
-  - cli: Detect existing CLI auth (Claude CLI, Gemini CLI)
-
-  UX: Once any provider is selected, unselected providers hide
-  and only selected ones show with their config expanded.
+  Simple flow: pick providers, paste API keys, choose models.
+  Auto-detects provider from key prefix when possible.
 */
 
 const EASE = [0.16, 1, 0.3, 1] as const;
@@ -34,57 +26,26 @@ interface ModelOption {
   label: string;
 }
 
-type AuthMethod = "api-key" | "setup-token" | "oauth" | "cli";
-
-interface AuthMethodDef {
-  method: AuthMethod;
-  label: string;
-  placeholder: string;
-  /** For setup-token: the CLI command to run */
-  cliCommand?: string;
-  /** For oauth: opens browser to this URL (PKCE handled separately) */
-  oauthUrl?: string;
-  /** For cli: which CLI to detect */
-  cliName?: string;
-  hint?: string;
-}
-
 interface ProviderDef {
   id: string;
   name: string;
   color: string;
   placeholder: string;
+  /** Key prefixes used for auto-detection */
+  keyPrefixes?: string[];
   models: ModelOption[];
   hint?: string;
   featured?: boolean;
-  authMethods?: AuthMethodDef[];
 }
 
 const PROVIDERS: ProviderDef[] = [
-  // --- Featured ---
   {
     id: "anthropic",
     name: "Anthropic",
     color: "#D4A574",
     placeholder: "sk-ant-api03-...",
+    keyPrefixes: ["sk-ant-"],
     featured: true,
-    authMethods: [
-      { method: "api-key", label: "API Key", placeholder: "sk-ant-api03-..." },
-      {
-        method: "setup-token",
-        label: "Setup Token",
-        placeholder: "Paste the setup token...",
-        cliCommand: "claude setup-token",
-        hint: "Run the command below, then paste the generated token",
-      },
-      {
-        method: "cli",
-        label: "Claude CLI",
-        placeholder: "",
-        cliName: "claude",
-        hint: "Reuse your existing Claude CLI login",
-      },
-    ],
     models: [
       { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
       { id: "claude-opus-4-6", label: "Claude Opus 4.6" },
@@ -96,17 +57,8 @@ const PROVIDERS: ProviderDef[] = [
     name: "OpenAI",
     color: "#74AA9C",
     placeholder: "sk-proj-...",
+    keyPrefixes: ["sk-proj-", "sk-svcacct-"],
     featured: true,
-    authMethods: [
-      { method: "api-key", label: "API Key", placeholder: "sk-proj-..." },
-      {
-        method: "oauth",
-        label: "ChatGPT OAuth",
-        placeholder: "",
-        oauthUrl: "https://auth.openai.com",
-        hint: "Sign in with your ChatGPT account via browser",
-      },
-    ],
     models: [
       { id: "gpt-4.1", label: "GPT-4.1" },
       { id: "o3", label: "o3" },
@@ -119,17 +71,8 @@ const PROVIDERS: ProviderDef[] = [
     name: "Google Gemini",
     color: "#4285F4",
     placeholder: "AIza...",
+    keyPrefixes: ["AIza"],
     featured: true,
-    authMethods: [
-      { method: "api-key", label: "API Key", placeholder: "AIza..." },
-      {
-        method: "oauth",
-        label: "Google OAuth",
-        placeholder: "",
-        oauthUrl: "https://accounts.google.com/o/oauth2/v2/auth",
-        hint: "Sign in with your Google account via browser",
-      },
-    ],
     models: [
       { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro" },
       { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash" },
@@ -140,10 +83,8 @@ const PROVIDERS: ProviderDef[] = [
     name: "OpenRouter",
     color: "#B175FF",
     placeholder: "sk-or-v1-...",
+    keyPrefixes: ["sk-or-"],
     featured: true,
-    authMethods: [
-      { method: "api-key", label: "API Key", placeholder: "sk-or-v1-..." },
-    ],
     models: [
       { id: "anthropic/claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
       { id: "openai/gpt-4.1", label: "GPT-4.1" },
@@ -151,7 +92,6 @@ const PROVIDERS: ProviderDef[] = [
       { id: "meta-llama/llama-4-maverick", label: "Llama 4 Maverick" },
     ],
   },
-  // --- More providers ---
   {
     id: "deepseek",
     name: "DeepSeek",
@@ -177,6 +117,7 @@ const PROVIDERS: ProviderDef[] = [
     name: "xAI",
     color: "#FFFFFF",
     placeholder: "xai-...",
+    keyPrefixes: ["xai-"],
     models: [
       { id: "grok-3", label: "Grok 3" },
       { id: "grok-3-mini", label: "Grok 3 Mini" },
@@ -187,6 +128,7 @@ const PROVIDERS: ProviderDef[] = [
     name: "Groq",
     color: "#F55036",
     placeholder: "gsk_...",
+    keyPrefixes: ["gsk_"],
     hint: "Ultra-fast inference",
     models: [
       { id: "llama-4-maverick-17b-128e", label: "Llama 4 Maverick" },
@@ -208,33 +150,29 @@ const PROVIDERS: ProviderDef[] = [
     name: "MiniMax",
     color: "#6C5CE7",
     placeholder: "...",
-    models: [
-      { id: "MiniMax-M2.7", label: "MiniMax M2.7" },
-    ],
+    models: [{ id: "MiniMax-M2.7", label: "MiniMax M2.7" }],
   },
   {
     id: "moonshot",
     name: "Moonshot (Kimi)",
     color: "#1A1A2E",
     placeholder: "sk-...",
-    models: [
-      { id: "kimi-k2.5", label: "Kimi K2.5" },
-    ],
+    models: [{ id: "kimi-k2.5", label: "Kimi K2.5" }],
   },
   {
     id: "cerebras",
     name: "Cerebras",
     color: "#FF6B35",
     placeholder: "csk-...",
-    models: [
-      { id: "llama-4-scout-17b-16e", label: "Llama 4 Scout" },
-    ],
+    keyPrefixes: ["csk-"],
+    models: [{ id: "llama-4-scout-17b-16e", label: "Llama 4 Scout" }],
   },
   {
     id: "huggingface",
     name: "Hugging Face",
     color: "#FFD21E",
     placeholder: "hf_...",
+    keyPrefixes: ["hf_"],
     hint: "Inference API",
     models: [
       { id: "deepseek-ai/DeepSeek-R1", label: "DeepSeek R1" },
@@ -246,15 +184,15 @@ const PROVIDERS: ProviderDef[] = [
     name: "NVIDIA",
     color: "#76B900",
     placeholder: "nvapi-...",
-    models: [
-      { id: "meta/llama-4-maverick-17b-128e-instruct", label: "Llama 4 Maverick" },
-    ],
+    keyPrefixes: ["nvapi-"],
+    models: [{ id: "meta/llama-4-maverick-17b-128e-instruct", label: "Llama 4 Maverick" }],
   },
   {
     id: "perplexity",
     name: "Perplexity",
     color: "#20808D",
     placeholder: "pplx-...",
+    keyPrefixes: ["pplx-"],
     hint: "Search-augmented AI",
     models: [
       { id: "sonar-pro", label: "Sonar Pro" },
@@ -266,13 +204,22 @@ const PROVIDERS: ProviderDef[] = [
 const FEATURED = PROVIDERS.filter((p) => p.featured);
 const MORE = PROVIDERS.filter((p) => !p.featured);
 
+/** Detect provider from API key prefix */
+function detectProvider(key: string): ProviderDef | null {
+  const trimmed = key.trim();
+  if (!trimmed) return null;
+  for (const p of PROVIDERS) {
+    if (p.keyPrefixes?.some((prefix) => trimmed.startsWith(prefix))) return p;
+  }
+  return null;
+}
+
 // --- Types ---
 
 export interface ProviderConfig {
   providerId: string;
   apiKey: string;
   model: string;
-  authMethod?: AuthMethod;
 }
 
 interface GuidedStepRuntimesProps {
@@ -325,187 +272,34 @@ function ProviderMark({ id, color }: { id: string; color: string }) {
   }
 }
 
-// --- Auth method content ---
+// --- Added provider card (expanded inline) ---
 
-function AuthMethodContent({
+function AddedProviderCard({
   provider,
-  activeMethod,
-  config,
+  apiKey,
+  model,
   showKeyVisible,
-  onUpdateConfig,
+  onUpdateKey,
+  onUpdateModel,
   onToggleShowKey,
-}: {
-  provider: ProviderDef;
-  activeMethod: AuthMethodDef | undefined;
-  config: { apiKey: string; model: string; enabled: boolean } | undefined;
-  showKeyVisible: boolean;
-  onUpdateConfig: (field: "apiKey" | "model", value: string) => void;
-  onToggleShowKey: () => void;
-}) {
-  const method = activeMethod?.method || "api-key";
-  const placeholder = activeMethod?.placeholder || provider.placeholder;
-
-  if (method === "cli") {
-    return (
-      <div className="space-y-2">
-        <div className="flex items-center gap-2 py-3 px-3 rounded-lg bg-white/[0.04] border border-white/8">
-          <Terminal className="w-4 h-4 text-white/30 shrink-0" />
-          <div className="flex-1 min-w-0">
-            <p className="text-[12px] text-white/60">
-              Detecting <span className="font-mono text-white/80">{activeMethod?.cliName}</span> login...
-            </p>
-            {activeMethod?.hint && (
-              <p className="text-[10px] text-white/25 mt-0.5">{activeMethod.hint}</p>
-            )}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (method === "oauth") {
-    return (
-      <div className="space-y-2">
-        <button
-          onClick={() => {
-            // TODO: Implement real PKCE OAuth flow via Electron IPC
-            // For now, this is a placeholder that will be wired to the actual flow
-            if (activeMethod?.oauthUrl) {
-              window.open(activeMethod.oauthUrl, "_blank");
-            }
-          }}
-          className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg text-[12px] font-medium text-white/90 border border-white/15 bg-white/[0.06] hover:bg-white/[0.1] hover:border-white/25 transition-all"
-        >
-          <ExternalLink className="w-3.5 h-3.5" />
-          Sign in with {provider.name}
-        </button>
-        {activeMethod?.hint && (
-          <p className="text-[10px] text-white/25 text-center">{activeMethod.hint}</p>
-        )}
-        {/* Fallback paste for remote/headless */}
-        <div className="space-y-1">
-          <label className="text-[11px] text-white/20 block">Or paste authorization code</label>
-          <div className="relative">
-            <input
-              type={showKeyVisible ? "text" : "password"}
-              value={config?.apiKey || ""}
-              onChange={(e) => onUpdateConfig("apiKey", e.target.value)}
-              placeholder="Paste redirect URL or auth code..."
-              className="w-full bg-white/[0.04] border border-white/10 rounded-lg px-3 py-2 text-[12px] text-white/80 placeholder-white/15 focus:outline-none focus:border-white/25 transition-colors font-mono pr-9"
-              autoComplete="off"
-              spellCheck={false}
-            />
-            <button
-              onClick={onToggleShowKey}
-              className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-white/20 hover:text-white/40 transition-colors"
-              tabIndex={-1}
-            >
-              {showKeyVisible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (method === "setup-token") {
-    return (
-      <div className="space-y-2">
-        {/* CLI command to run */}
-        {activeMethod?.cliCommand && (
-          <div className="space-y-1">
-            {activeMethod.hint && (
-              <p className="text-[11px] text-white/30">{activeMethod.hint}</p>
-            )}
-            <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-white/[0.04] border border-white/8">
-              <Terminal className="w-3.5 h-3.5 text-white/25 shrink-0" />
-              <code className="text-[12px] font-mono text-white/70 flex-1">{activeMethod.cliCommand}</code>
-              <button
-                onClick={() => navigator.clipboard.writeText(activeMethod.cliCommand!)}
-                className="text-[10px] text-white/25 hover:text-white/50 transition-colors shrink-0"
-              >
-                copy
-              </button>
-            </div>
-          </div>
-        )}
-        {/* Token paste */}
-        <div className="space-y-1">
-          <label className="text-[11px] text-white/30 block">Paste token</label>
-          <div className="relative">
-            <input
-              type={showKeyVisible ? "text" : "password"}
-              value={config?.apiKey || ""}
-              onChange={(e) => onUpdateConfig("apiKey", e.target.value)}
-              placeholder={placeholder}
-              className="w-full bg-white/[0.04] border border-white/10 rounded-lg px-3 py-2 text-[12px] text-white/80 placeholder-white/15 focus:outline-none focus:border-white/25 transition-colors font-mono pr-9"
-              autoComplete="off"
-              spellCheck={false}
-            />
-            <button
-              onClick={onToggleShowKey}
-              className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-white/20 hover:text-white/40 transition-colors"
-              tabIndex={-1}
-            >
-              {showKeyVisible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Default: api-key
-  return (
-    <div className="space-y-1">
-      <label className="text-[11px] text-white/30 block">API Key</label>
-      <div className="relative">
-        <input
-          type={showKeyVisible ? "text" : "password"}
-          value={config?.apiKey || ""}
-          onChange={(e) => onUpdateConfig("apiKey", e.target.value)}
-          placeholder={placeholder}
-          className="w-full bg-white/[0.04] border border-white/10 rounded-lg px-3 py-2 text-[12px] text-white/80 placeholder-white/15 focus:outline-none focus:border-white/25 transition-colors font-mono pr-9"
-          autoComplete="off"
-          spellCheck={false}
-        />
-        <button
-          onClick={onToggleShowKey}
-          className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-white/20 hover:text-white/40 transition-colors"
-          tabIndex={-1}
-        >
-          {showKeyVisible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// --- Selected provider card (expanded, no checkbox) ---
-
-function SelectedProviderCard({
-  provider,
-  config,
-  showKeyVisible,
-  authMethod,
   onRemove,
-  onUpdateConfig,
-  onToggleShowKey,
-  onSetAuthMethod,
 }: {
   provider: ProviderDef;
-  config: { apiKey: string; model: string; enabled: boolean } | undefined;
+  apiKey: string;
+  model: string;
   showKeyVisible: boolean;
-  authMethod: AuthMethod;
-  onRemove: () => void;
-  onUpdateConfig: (field: "apiKey" | "model", value: string) => void;
+  onUpdateKey: (value: string) => void;
+  onUpdateModel: (value: string) => void;
   onToggleShowKey: () => void;
-  onSetAuthMethod: (method: AuthMethod) => void;
+  onRemove: () => void;
 }) {
-  const hasKey = !!(config?.apiKey?.trim());
-  const methods = provider.authMethods || [{ method: "api-key" as AuthMethod, label: "API Key", placeholder: provider.placeholder }];
-  const hasMultipleMethods = methods.length > 1;
-  const activeMethod = methods.find((m) => m.method === authMethod) || methods[0];
+  const hasKey = apiKey.trim().length > 0;
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const timer = setTimeout(() => inputRef.current?.focus(), 100);
+    return () => clearTimeout(timer);
+  }, []);
 
   return (
     <motion.div
@@ -513,13 +307,13 @@ function SelectedProviderCard({
       className={`rounded-xl border overflow-hidden ${
         hasKey ? "bg-white/[0.06] border-white/20" : "bg-white/[0.05] border-white/15"
       }`}
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -8 }}
-      transition={{ duration: 0.3, ease: EASE }}
+      initial={{ opacity: 0, y: 8, scale: 0.98 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.95 }}
+      transition={{ duration: 0.25, ease: EASE }}
     >
       {/* Header */}
-      <div className="flex items-center gap-3 p-3.5">
+      <div className="flex items-center gap-3 p-3.5 pb-0">
         <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 bg-white/[0.06]">
           <ProviderMark id={provider.id} color={provider.color} />
         </div>
@@ -541,48 +335,37 @@ function SelectedProviderCard({
         </button>
       </div>
 
-      {/* Config body */}
-      <div className="px-3.5 pb-3.5 space-y-2.5">
-        {/* Auth method tabs */}
-        {hasMultipleMethods && (
-          <div className="flex gap-1 p-0.5 bg-white/[0.04] rounded-lg">
-            {methods.map((m) => (
-              <button
-                key={m.method}
-                onClick={() => onSetAuthMethod(m.method)}
-                className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-md text-[11px] font-medium transition-all ${
-                  authMethod === m.method
-                    ? "bg-white/[0.08] text-white/80"
-                    : "text-white/30 hover:text-white/50"
-                }`}
-              >
-                {m.method === "api-key" && <Key className="w-3 h-3" />}
-                {m.method === "setup-token" && <Terminal className="w-3 h-3" />}
-                {m.method === "oauth" && <ExternalLink className="w-3 h-3" />}
-                {m.method === "cli" && <Terminal className="w-3 h-3" />}
-                {m.label}
-              </button>
-            ))}
+      {/* Config */}
+      <div className="p-3.5 pt-2.5 space-y-2.5">
+        <div className="space-y-1">
+          <label className="text-[11px] text-white/30 block">API Key</label>
+          <div className="relative">
+            <input
+              ref={inputRef}
+              type={showKeyVisible ? "text" : "password"}
+              value={apiKey}
+              onChange={(e) => onUpdateKey(e.target.value)}
+              placeholder={provider.placeholder}
+              className="w-full bg-white/[0.04] border border-white/10 rounded-lg px-3 py-2 text-[12px] text-white/80 placeholder-white/15 focus:outline-none focus:border-white/25 transition-colors font-mono pr-9"
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <button
+              onClick={onToggleShowKey}
+              className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-white/20 hover:text-white/40 transition-colors"
+              tabIndex={-1}
+            >
+              {showKeyVisible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+            </button>
           </div>
-        )}
+        </div>
 
-        {/* Auth method content */}
-        <AuthMethodContent
-          provider={provider}
-          activeMethod={activeMethod}
-          config={config}
-          showKeyVisible={showKeyVisible}
-          onUpdateConfig={onUpdateConfig}
-          onToggleShowKey={onToggleShowKey}
-        />
-
-        {/* Model selector */}
         <div className="space-y-1">
           <label className="text-[11px] text-white/30 block">Default Model</label>
           <div className="relative">
             <select
-              value={config?.model || provider.models[0].id}
-              onChange={(e: React.ChangeEvent<HTMLSelectElement>) => onUpdateConfig("model", e.target.value)}
+              value={model}
+              onChange={(e: React.ChangeEvent<HTMLSelectElement>) => onUpdateModel(e.target.value)}
               className="w-full appearance-none bg-white/[0.04] border border-white/10 rounded-lg px-3 py-2 text-[12px] text-white/80 focus:outline-none focus:border-white/25 transition-colors pr-8"
             >
               {provider.models.map((m) => (
@@ -599,9 +382,9 @@ function SelectedProviderCard({
   );
 }
 
-// --- Picker card (unselected, compact) ---
+// --- Picker button ---
 
-function PickerCard({
+function PickerButton({
   provider,
   onSelect,
   index,
@@ -616,7 +399,8 @@ function PickerCard({
       className="w-full flex items-center gap-3.5 p-3.5 rounded-xl border border-white/8 bg-white/[0.03] hover:border-white/15 hover:bg-white/[0.06] text-left transition-all duration-200"
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: 0.1 + index * 0.03, duration: 0.4, ease: EASE }}
+      exit={{ opacity: 0, y: -4 }}
+      transition={{ delay: 0.05 + index * 0.025, duration: 0.35, ease: EASE }}
       whileHover={{ y: -1 }}
       whileTap={{ y: 0 }}
     >
@@ -625,9 +409,7 @@ function PickerCard({
       </div>
       <div className="flex-1 min-w-0">
         <div className="text-[13px] font-medium text-white/90">{provider.name}</div>
-        {provider.hint && (
-          <div className="text-[11px] text-white/25 mt-0.5">{provider.hint}</div>
-        )}
+        {provider.hint && <div className="text-[11px] text-white/25 mt-0.5">{provider.hint}</div>}
       </div>
       <Plus className="w-4 h-4 text-white/15" />
     </motion.button>
@@ -638,60 +420,60 @@ function PickerCard({
 
 export default function GuidedStepRuntimes({ onComplete }: GuidedStepRuntimesProps) {
   const scopeId = useId().replace(/:/g, "");
-  const [configs, setConfigs] = useState<Record<string, { apiKey: string; model: string; enabled: boolean }>>({});
+  const [added, setAdded] = useState<Record<string, { apiKey: string; model: string }>>({});
   const [showKey, setShowKey] = useState<Record<string, boolean>>({});
-  const [authMethods, setAuthMethods] = useState<Record<string, AuthMethod>>({});
   const [showMore, setShowMore] = useState(false);
 
   function selectProvider(id: string) {
-    const provider = PROVIDERS.find((p) => p.id === id)!;
-    setConfigs((prev) => ({
-      ...prev,
-      [id]: {
-        apiKey: prev[id]?.apiKey || "",
-        model: prev[id]?.model || provider.models[0].id,
-        enabled: true,
-      },
-    }));
+    const p = PROVIDERS.find((x) => x.id === id)!;
+    setAdded((prev) => ({ ...prev, [id]: { apiKey: "", model: p.models[0].id } }));
   }
 
   function removeProvider(id: string) {
-    setConfigs((prev) => ({
-      ...prev,
-      [id]: { ...prev[id], enabled: false },
-    }));
+    setAdded((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
   }
 
-  function updateConfig(id: string, field: "apiKey" | "model", value: string) {
-    setConfigs((prev) => ({
-      ...prev,
-      [id]: { ...prev[id], [field]: value },
-    }));
+  function updateKey(id: string, value: string) {
+    setAdded((prev) => ({ ...prev, [id]: { ...prev[id], apiKey: value } }));
+
+    // Auto-detect: if user pasted a key for a different provider, swap
+    const detected = detectProvider(value);
+    if (detected && detected.id !== id && !added[detected.id]) {
+      setAdded((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        next[detected.id] = { apiKey: value, model: detected.models[0].id };
+        return next;
+      });
+    }
   }
 
-  const selectedIds = new Set(
-    Object.entries(configs).filter(([, c]) => c.enabled).map(([id]) => id)
-  );
-  const hasSelections = selectedIds.size > 0;
-  const enabledWithKeys = Object.entries(configs).filter(
-    ([, c]) => c.enabled && c.apiKey.trim()
-  );
-  const canContinue = enabledWithKeys.length > 0;
+  function updateModel(id: string, value: string) {
+    setAdded((prev) => ({ ...prev, [id]: { ...prev[id], model: value } }));
+  }
+
+  const addedIds = new Set(Object.keys(added));
+  const hasAdded = addedIds.size > 0;
+  const readyProviders = Object.entries(added).filter(([, v]) => v.apiKey.trim());
+  const canContinue = readyProviders.length > 0;
 
   function handleContinue() {
-    const result: ProviderConfig[] = enabledWithKeys.map(([id, c]) => ({
-      providerId: id,
-      apiKey: c.apiKey.trim(),
-      model: c.model,
-      authMethod: authMethods[id] || "api-key",
-    }));
-    onComplete(result);
+    onComplete(
+      readyProviders.map(([id, v]) => ({
+        providerId: id,
+        apiKey: v.apiKey.trim(),
+        model: v.model,
+      }))
+    );
   }
 
-  // Unselected providers for the picker
-  const unselectedFeatured = FEATURED.filter((p) => !selectedIds.has(p.id));
-  const unselectedMore = MORE.filter((p) => !selectedIds.has(p.id));
-  const selectedProviders = PROVIDERS.filter((p) => selectedIds.has(p.id));
+  const unselectedFeatured = FEATURED.filter((p) => !addedIds.has(p.id));
+  const unselectedMore = MORE.filter((p) => !addedIds.has(p.id));
+  const addedProviders = PROVIDERS.filter((p) => addedIds.has(p.id));
 
   const scrollClass = `scroll-${scopeId}`;
 
@@ -702,17 +484,11 @@ export default function GuidedStepRuntimes({ onComplete }: GuidedStepRuntimesPro
       initial="hidden"
       animate="show"
     >
-      {/* Scoped thin scrollbar */}
       <style>{`
         .${scrollClass}::-webkit-scrollbar { width: 4px; }
         .${scrollClass}::-webkit-scrollbar-track { background: transparent; }
-        .${scrollClass}::-webkit-scrollbar-thumb {
-          background: rgba(255,255,255,0.08);
-          border-radius: 4px;
-        }
-        .${scrollClass}::-webkit-scrollbar-thumb:hover {
-          background: rgba(255,255,255,0.15);
-        }
+        .${scrollClass}::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 4px; }
+        .${scrollClass}::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.15); }
         .${scrollClass} { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.08) transparent; }
       `}</style>
 
@@ -721,70 +497,62 @@ export default function GuidedStepRuntimes({ onComplete }: GuidedStepRuntimesPro
           Pick your brain
         </h1>
         <p className="text-white/40 text-[15px] max-w-sm mx-auto">
-          {hasSelections
-            ? "Configure your providers below, or add more."
-            : "Connect at least one AI provider. Your keys are encrypted and stored locally."}
+          {hasAdded
+            ? "Paste your API key. Add more providers if you'd like."
+            : "Which AI provider do you want to use?"}
         </p>
       </motion.div>
 
-      {/* Scrollable content area */}
       <motion.div
         className={`max-w-sm mx-auto text-left overflow-y-auto ${scrollClass}`}
         style={{ maxHeight: "calc(100vh - 340px)" }}
         variants={fadeUp}
       >
-        {/* Selected providers — always visible, expanded */}
-        {selectedProviders.length > 0 && (
+        {/* Added providers — expanded cards */}
+        {addedProviders.length > 0 && (
           <div className="space-y-2 mb-3">
             <AnimatePresence mode="popLayout">
-              {selectedProviders.map((provider) => (
-                <SelectedProviderCard
-                  key={provider.id}
-                  provider={provider}
-                  config={configs[provider.id]}
-                  showKeyVisible={showKey[provider.id] ?? false}
-                  authMethod={authMethods[provider.id] || "api-key"}
-                  onRemove={() => removeProvider(provider.id)}
-                  onUpdateConfig={(field, value) => updateConfig(provider.id, field, value)}
-                  onToggleShowKey={() => setShowKey((prev) => ({ ...prev, [provider.id]: !prev[provider.id] }))}
-                  onSetAuthMethod={(method) => setAuthMethods((prev) => ({ ...prev, [provider.id]: method }))}
+              {addedProviders.map((p) => (
+                <AddedProviderCard
+                  key={p.id}
+                  provider={p}
+                  apiKey={added[p.id].apiKey}
+                  model={added[p.id].model}
+                  showKeyVisible={showKey[p.id] ?? false}
+                  onUpdateKey={(v) => updateKey(p.id, v)}
+                  onUpdateModel={(v) => updateModel(p.id, v)}
+                  onToggleShowKey={() => setShowKey((prev) => ({ ...prev, [p.id]: !prev[p.id] }))}
+                  onRemove={() => removeProvider(p.id)}
                 />
               ))}
             </AnimatePresence>
           </div>
         )}
 
-        {/* Unselected providers — picker mode */}
+        {/* Unselected featured */}
         {unselectedFeatured.length > 0 && (
           <div className="space-y-2">
-            {hasSelections && (
-              <p className="text-[11px] text-white/20 mb-1">Add another provider</p>
+            {hasAdded && unselectedFeatured.length < FEATURED.length && (
+              <p className="text-[11px] text-white/20 mb-1">Add another</p>
             )}
-            {unselectedFeatured.map((provider, i) => (
-              <PickerCard
-                key={provider.id}
-                provider={provider}
-                onSelect={() => selectProvider(provider.id)}
-                index={i}
-              />
-            ))}
+            <AnimatePresence>
+              {unselectedFeatured.map((p, i) => (
+                <PickerButton key={p.id} provider={p} onSelect={() => selectProvider(p.id)} index={i} />
+              ))}
+            </AnimatePresence>
           </div>
         )}
 
-        {/* More providers toggle */}
+        {/* More providers */}
         {unselectedMore.length > 0 && (
           <>
-            <motion.button
-              onClick={() => setShowMore((prev) => !prev)}
+            <button
+              onClick={() => setShowMore((v) => !v)}
               className="w-full flex items-center justify-center gap-2 py-3 mt-3 text-[12px] text-white/30 hover:text-white/50 transition-colors"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ delay: 0.35, duration: 0.4 }}
             >
               <Plus className={`w-3.5 h-3.5 transition-transform duration-200 ${showMore ? "rotate-45" : ""}`} />
-              {showMore ? "Less providers" : `More providers (${unselectedMore.length})`}
-            </motion.button>
-
+              {showMore ? "Less" : `More providers (${unselectedMore.length})`}
+            </button>
             <AnimatePresence>
               {showMore && (
                 <motion.div
@@ -795,13 +563,8 @@ export default function GuidedStepRuntimes({ onComplete }: GuidedStepRuntimesPro
                   className="overflow-hidden"
                 >
                   <div className="space-y-2 pt-1">
-                    {unselectedMore.map((provider, i) => (
-                      <PickerCard
-                        key={provider.id}
-                        provider={provider}
-                        onSelect={() => selectProvider(provider.id)}
-                        index={i}
-                      />
+                    {unselectedMore.map((p, i) => (
+                      <PickerButton key={p.id} provider={p} onSelect={() => selectProvider(p.id)} index={i} />
                     ))}
                   </div>
                 </motion.div>
@@ -810,7 +573,6 @@ export default function GuidedStepRuntimes({ onComplete }: GuidedStepRuntimesPro
           </>
         )}
 
-        {/* All providers selected */}
         {unselectedFeatured.length === 0 && unselectedMore.length === 0 && (
           <p className="text-[11px] text-white/20 text-center py-2">All providers added</p>
         )}
@@ -832,7 +594,9 @@ export default function GuidedStepRuntimes({ onComplete }: GuidedStepRuntimesPro
           Continue
         </motion.button>
         {!canContinue && (
-          <p className="text-[11px] text-white/20">Add at least one API key to continue</p>
+          <p className="text-[11px] text-white/20">
+            {hasAdded ? "Paste an API key to continue" : "Select a provider to get started"}
+          </p>
         )}
       </motion.div>
     </motion.div>
