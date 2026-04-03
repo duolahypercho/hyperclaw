@@ -262,6 +262,52 @@ declare global {
         requestScreen: () => Promise<boolean>;
       };
       openClaw: OpenClawAPI;
+      codex: {
+        status: () => Promise<{ available: boolean; version?: string; error?: string }>;
+        send: (params: {
+          message: string;
+          sessionId?: string;
+          sessionKey?: string;
+          model?: string;
+        }) => Promise<{
+          success: boolean;
+          error?: string;
+          sessionId?: string;
+          messages?: Array<{
+            id: string;
+            role: string;
+            content: string;
+            timestamp?: number;
+            toolCalls?: Array<{ id: string; name?: string; arguments?: string; function?: { name: string; arguments: string } }>;
+            toolResults?: Array<{ toolCallId: string; toolName: string; content: string; isError?: boolean }>;
+          }>;
+        }>;
+        abort: (params: { sessionKey: string }) => Promise<{ success: boolean; error?: string }>;
+      };
+      claudeCode: {
+        status: () => Promise<{ available: boolean; version?: string; error?: string }>;
+        send: (params: {
+          message: string;
+          sessionId?: string;
+          sessionKey?: string;
+          model?: string;
+          allowedTools?: string[];
+        }) => Promise<{
+          success: boolean;
+          error?: string;
+          sessionId?: string;
+          messages?: Array<{
+            id: string;
+            role: string;
+            content: string;
+            timestamp?: number;
+            thinking?: string;
+            toolCalls?: Array<{ id: string; name?: string; arguments?: string; function?: { name: string; arguments: string } }>;
+            toolResults?: Array<{ toolCallId: string; toolName: string; content: string; isError?: boolean }>;
+          }>;
+        }>;
+        abort: (params: { sessionKey: string }) => Promise<{ success: boolean; error?: string }>;
+      };
       hyperClawBridge: HyperClawBridgeAPI;
       noteFS: any;
       memoryFS: MemoryAPI;

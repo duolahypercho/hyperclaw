@@ -8,6 +8,9 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useGatewayChat, GatewayChatMessage, GatewayChatAttachment } from "@OS/AI/core/hook/use-gateway-chat";
+import { useClaudeCodeChat } from "@OS/AI/core/hook/use-claude-code-chat";
+import { useCodexChat } from "@OS/AI/core/hook/use-codex-chat";
+import { useAIProviderSafe } from "$/Providers/AIProviderProv";
 import { gatewayConnection } from "$/lib/openclaw-gateway-ws";
 import { useUser } from "$/Providers/UserProv";
 import { useOpenClawContext } from "$/Providers/OpenClawProv";
@@ -156,6 +159,25 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
   // The format follows OpenClaw's session key pattern: agent:{agentId}:main
   const sessionKey = selectedSessionKey || `agent:${currentAgentId}:main`;
 
+  // AI provider switching
+  const { provider: activeProvider } = useAIProviderSafe();
+
+  const gatewayChat = useGatewayChat({
+    sessionKey,
+    autoConnect: activeProvider !== "claude-code" && activeProvider !== "codex",
+    backend: (currentAgent as any)?.backend || "openclaw",
+  });
+
+  const claudeCodeChat = useClaudeCodeChat({
+    sessionKey,
+    autoConnect: activeProvider === "claude-code",
+  });
+
+  const codexChat = useCodexChat({
+    sessionKey,
+    autoConnect: activeProvider === "codex",
+  });
+
   const {
     messages,
     isLoading,
@@ -170,11 +192,9 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
     loadMoreHistory,
     clearChat,
     setSessionKey,
-  } = useGatewayChat({
-    sessionKey,
-    autoConnect: true,
-    backend: (currentAgent as any)?.backend || "openclaw",
-  });
+  } = activeProvider === "claude-code" ? claudeCodeChat
+    : activeProvider === "codex" ? codexChat
+    : gatewayChat;
 
   // Unified tool state management - handles ALL tool types!
   const { toolStates, toggleToolExpansion, resetToolStates } = useUnifiedToolState(messages as any);

@@ -7,6 +7,7 @@ import {
   ThemeProvider,
   OpenClawProvider,
 } from "$/Providers";
+import { AIProviderProvider } from "$/Providers/AIProviderProv";
 import { SessionProvider } from "next-auth/react";
 import Router from "next/router";
 import nProgress from "nprogress";
@@ -40,6 +41,7 @@ function MyApp({ Component, pageProps, router }: any) {
         <ThemeProvider attribute="class" enableSystem disableTransitionOnChange>
           <UserProvider>
           <OpenClawProvider>
+          <AIProviderProvider>
           <OSProvider>
             <GuidanceProvider>
               <TooltipProvider>
@@ -56,6 +58,7 @@ function MyApp({ Component, pageProps, router }: any) {
               </TooltipProvider>
             </GuidanceProvider>
           </OSProvider>
+          </AIProviderProvider>
           </OpenClawProvider>
           </UserProvider>
         </ThemeProvider>

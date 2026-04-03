@@ -12,6 +12,9 @@ import {
   GatewayChatMessage,
   GatewayChatAttachment,
 } from "@OS/AI/core/hook/use-gateway-chat";
+import { useClaudeCodeChat } from "@OS/AI/core/hook/use-claude-code-chat";
+import { useCodexChat } from "@OS/AI/core/hook/use-codex-chat";
+import { useAIProviderSafe } from "$/Providers/AIProviderProv";
 import { useUser } from "$/Providers/UserProv";
 import { useOpenClawContext } from "$/Providers/OpenClawProv";
 import ReactMarkdown, { Options } from "react-markdown";
@@ -537,6 +540,13 @@ export function FloatingChatViewer({ agentId, sessionKey: providedSessionKey, ta
     return () => clearTimeout(timer);
   }, [isTaskMode, taskContext, providedSessionKey, effectiveAgentId]);
 
+  // AI provider switching
+  const { provider: activeProvider } = useAIProviderSafe();
+
+  const openClawChat = useGatewayChat({ sessionKey: resolvedSessionKey, autoConnect: activeProvider === "openclaw" });
+  const claudeCodeChat = useClaudeCodeChat({ sessionKey: resolvedSessionKey, autoConnect: activeProvider === "claude-code" });
+  const codexChat = useCodexChat({ sessionKey: resolvedSessionKey, autoConnect: activeProvider === "codex" });
+
   const {
     messages,
     isLoading,
@@ -550,7 +560,9 @@ export function FloatingChatViewer({ agentId, sessionKey: providedSessionKey, ta
     loadMoreHistory,
     clearChat,
     setSessionKey,
-  } = useGatewayChat({ sessionKey: resolvedSessionKey, autoConnect: true });
+  } = activeProvider === "claude-code" ? claudeCodeChat
+    : activeProvider === "codex" ? codexChat
+    : openClawChat;
 
   // Keep the hook's internal session key in sync — without this, the hook may
   // filter out streaming events that arrive with a session key differing from

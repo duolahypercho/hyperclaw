@@ -8,6 +8,44 @@ import { hubCommand } from "$/lib/hub-direct";
 export type BridgeBody = Record<string, unknown>;
 
 export async function bridgeInvoke(action: string, body: BridgeBody = {}): Promise<unknown> {
+  // Route Claude Code actions through dedicated Electron IPC when available
+  if (
+    typeof window !== "undefined" &&
+    window.electronAPI?.claudeCode &&
+    action.startsWith("claude-code-")
+  ) {
+    const cc = window.electronAPI.claudeCode;
+    switch (action) {
+      case "claude-code-status":
+        return cc.status();
+      case "claude-code-send":
+        return cc.send(body as Parameters<typeof cc.send>[0]);
+      case "claude-code-abort":
+        return cc.abort(body as Parameters<typeof cc.abort>[0]);
+      default:
+        break;
+    }
+  }
+
+  // Route Codex actions through dedicated Electron IPC when available
+  if (
+    typeof window !== "undefined" &&
+    window.electronAPI?.codex &&
+    action.startsWith("codex-")
+  ) {
+    const cx = window.electronAPI.codex;
+    switch (action) {
+      case "codex-status":
+        return cx.status();
+      case "codex-send":
+        return cx.send(body as Parameters<typeof cx.send>[0]);
+      case "codex-abort":
+        return cx.abort(body as Parameters<typeof cx.abort>[0]);
+      default:
+        break;
+    }
+  }
+
   if (
     typeof window !== "undefined" &&
     window.electronAPI?.hyperClawBridge?.invoke

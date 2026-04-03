@@ -1224,6 +1224,446 @@ ipcMain.handle("openclaw:run-command", async (event, args) => {
   return hubCommandFromElectron({ action: "send-command", command: args });
 });
 
+// ─── IPC Handlers: Claude Code CLI ────────────────────────────────────────────
+
+// Track active Claude Code subprocess per session
+const claudeCodeProcesses = new Map();
+
+/**
+ * Check if `claude` CLI is available on the system.
+ */
+ipcMain.handle("claude-code:status", async () => {
+  try {
+    const { execFileSync } = require("child_process");
+    const version = execFileSync("claude", ["--version"], {
+      timeout: 5000,
+      encoding: "utf-8",
+    }).trim();
+    return { available: true, version };
+  } catch (err) {
+    return { available: false, error: err.message || "claude CLI not found" };
+  }
+});
+
+/**
+ * Send a message to Claude Code via the CLI.
+ * Spawns `claude -p <message> --output-format stream-json` and collects output.
+ */
+ipcMain.handle("claude-code:send", async (event, body) => {
+  const { message, sessionId, sessionKey, model, allowedTools } = body || {};
+  if (!message || typeof message !== "string") {
+    return { success: false, error: "No message provided" };
+  }
+
+  try {
+    const { spawn } = require("child_process");
+
+    const args = ["-p", message, "--output-format", "stream-json"];
+
+    // Resume existing session
+    if (sessionId) {
+      args.push("--resume", sessionId);
+    }
+
+    // Model selection
+    if (model) {
+      args.push("--model", model);
+    }
+
+    // Allowed tools
+    if (allowedTools && Array.isArray(allowedTools) && allowedTools.length > 0) {
+      args.push("--allowedTools", allowedTools.join(","));
+    }
+
+    return new Promise((resolve) => {
+      const proc = spawn("claude", args, {
+        timeout: 300000, // 5 minute timeout
+        env: { ...process.env },
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+
+      // Track the process for abort
+      if (sessionKey) {
+        claudeCodeProcesses.set(sessionKey, proc);
+      }
+
+      let stdout = "";
+      let stderr = "";
+      const collectedMessages = [];
+      let resolvedSessionId = sessionId || null;
+
+      proc.stdout.on("data", (chunk) => {
+        stdout += chunk.toString();
+
+        // Process complete lines
+        const lines = stdout.split("\n");
+        stdout = lines.pop() || ""; // keep incomplete last line
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          try {
+            const event = JSON.parse(trimmed);
+
+            // Extract session ID
+            if (event.session_id) {
+              resolvedSessionId = event.session_id;
+            }
+
+            // Process different event types
+            if (event.type === "assistant" && event.message) {
+              const blocks = event.message.content || [];
+              let textContent = "";
+              let thinking;
+              const toolCalls = [];
+
+              for (const block of blocks) {
+                if (block.type === "text" && block.text) {
+                  textContent += block.text;
+                } else if (block.type === "thinking" && block.text) {
+                  thinking = block.text;
+                } else if (block.type === "tool_use" && block.id && block.name) {
+                  toolCalls.push({
+                    id: block.id,
+                    name: block.name,
+                    arguments: JSON.stringify(block.input || {}),
+                    function: {
+                      name: block.name,
+                      arguments: JSON.stringify(block.input || {}),
+                    },
+                  });
+                }
+              }
+
+              if (toolCalls.length > 0) {
+                collectedMessages.push({
+                  id: toolCalls[0].id || `cc-tool-${Date.now()}`,
+                  role: "assistant",
+                  content: textContent,
+                  timestamp: Date.now(),
+                  toolCalls,
+                  ...(thinking && { thinking }),
+                });
+              } else if (textContent.trim()) {
+                // Update the last text message or add new one
+                const lastTextIdx = collectedMessages.findLastIndex(
+                  (m) => m.role === "assistant" && !m.toolCalls
+                );
+                if (lastTextIdx !== -1) {
+                  collectedMessages[lastTextIdx].content = textContent;
+                } else {
+                  collectedMessages.push({
+                    id: `cc-text-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                    role: "assistant",
+                    content: textContent,
+                    timestamp: Date.now(),
+                    ...(thinking && { thinking }),
+                  });
+                }
+              }
+            } else if (event.type === "tool_result") {
+              collectedMessages.push({
+                id: `result-${event.tool_use_id || Date.now()}`,
+                role: "toolResult",
+                content: event.tool_result || "",
+                timestamp: Date.now(),
+                toolResults: [{
+                  toolCallId: event.tool_use_id || "",
+                  toolName: event.tool_name || "unknown",
+                  content: event.tool_result || "",
+                  isError: event.is_error || false,
+                }],
+              });
+            } else if (event.type === "result" && event.result) {
+              // Final result — update last text message
+              const lastTextIdx = collectedMessages.findLastIndex(
+                (m) => m.role === "assistant" && !m.toolCalls
+              );
+              if (lastTextIdx !== -1) {
+                collectedMessages[lastTextIdx].content = event.result;
+              } else {
+                collectedMessages.push({
+                  id: `cc-final-${Date.now()}`,
+                  role: "assistant",
+                  content: event.result,
+                  timestamp: Date.now(),
+                });
+              }
+            } else if (event.type === "error") {
+              collectedMessages.push({
+                id: `cc-err-${Date.now()}`,
+                role: "assistant",
+                content: `Error: ${event.error?.message || "Unknown error"}`,
+                timestamp: Date.now(),
+              });
+            }
+          } catch {
+            // Ignore unparseable lines
+          }
+        }
+      });
+
+      proc.stderr.on("data", (chunk) => {
+        stderr += chunk.toString();
+      });
+
+      proc.on("close", (code) => {
+        if (sessionKey) {
+          claudeCodeProcesses.delete(sessionKey);
+        }
+
+        if (code !== 0 && collectedMessages.length === 0) {
+          resolve({
+            success: false,
+            error: stderr.trim() || `Claude Code exited with code ${code}`,
+            sessionId: resolvedSessionId,
+          });
+          return;
+        }
+
+        resolve({
+          success: true,
+          sessionId: resolvedSessionId,
+          messages: collectedMessages,
+        });
+      });
+
+      proc.on("error", (err) => {
+        if (sessionKey) {
+          claudeCodeProcesses.delete(sessionKey);
+        }
+        resolve({
+          success: false,
+          error: err.message || "Failed to spawn claude process",
+          sessionId: resolvedSessionId,
+        });
+      });
+    });
+  } catch (err) {
+    return { success: false, error: err.message || "Claude Code send failed" };
+  }
+});
+
+/**
+ * Abort an in-flight Claude Code request.
+ */
+ipcMain.handle("claude-code:abort", async (event, body) => {
+  const { sessionKey } = body || {};
+  if (!sessionKey) return { success: false, error: "No session key" };
+
+  const proc = claudeCodeProcesses.get(sessionKey);
+  if (proc) {
+    proc.kill("SIGTERM");
+    claudeCodeProcesses.delete(sessionKey);
+    return { success: true };
+  }
+  return { success: false, error: "No active process for session" };
+});
+
+// ─── IPC Handlers: OpenAI Codex CLI ───────────────────────────────────────────
+
+// Track active Codex subprocess per session
+const codexProcesses = new Map();
+
+/**
+ * Check if `codex` CLI is available on the system.
+ */
+ipcMain.handle("codex:status", async () => {
+  try {
+    const { execFileSync } = require("child_process");
+    const version = execFileSync("codex", ["--version"], {
+      timeout: 5000,
+      encoding: "utf-8",
+    }).trim();
+    return { available: true, version };
+  } catch (err) {
+    return { available: false, error: err.message || "codex CLI not found" };
+  }
+});
+
+/**
+ * Send a message to Codex via the CLI.
+ * Spawns `codex exec <message> --json` (or `codex resume <id> <message> --json`)
+ * and collects JSONL output.
+ *
+ * Codex JSONL event types:
+ *   thread.started  → { thread_id }
+ *   item.completed  → { item: { type: "agent_message", text } }
+ *   item.completed  → { item: { type: "command_execution", command, aggregated_output, exit_code } }
+ *   turn.completed  → { usage: { input_tokens, output_tokens } }
+ */
+ipcMain.handle("codex:send", async (event, body) => {
+  const { message, sessionId, sessionKey, model } = body || {};
+  if (!message || typeof message !== "string") {
+    return { success: false, error: "No message provided" };
+  }
+
+  try {
+    const { spawn } = require("child_process");
+
+    let args;
+    if (sessionId) {
+      // Resume existing session
+      args = ["resume", sessionId, message, "--json", "--color", "never"];
+    } else {
+      args = ["exec", message, "--json", "--color", "never", "-s", "read-only"];
+    }
+
+    if (model) {
+      args.push("-m", model);
+    }
+
+    return new Promise((resolve) => {
+      const proc = spawn("codex", args, {
+        timeout: 300000, // 5 minute timeout
+        env: { ...process.env },
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+
+      if (sessionKey) {
+        codexProcesses.set(sessionKey, proc);
+      }
+
+      let stdout = "";
+      let stderr = "";
+      const collectedMessages = [];
+      let resolvedSessionId = sessionId || null;
+
+      proc.stdout.on("data", (chunk) => {
+        stdout += chunk.toString();
+
+        const lines = stdout.split("\n");
+        stdout = lines.pop() || "";
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          try {
+            const event = JSON.parse(trimmed);
+
+            // Extract thread/session ID
+            if (event.type === "thread.started" && event.thread_id) {
+              resolvedSessionId = event.thread_id;
+            }
+
+            // Agent message
+            if (event.type === "item.completed" && event.item) {
+              const item = event.item;
+
+              if (item.type === "agent_message" && item.text) {
+                // Update last text message or create new one
+                const lastTextIdx = collectedMessages.findLastIndex(
+                  (m) => m.role === "assistant" && !m.toolCalls
+                );
+                if (lastTextIdx !== -1) {
+                  collectedMessages[lastTextIdx].content = item.text;
+                } else {
+                  collectedMessages.push({
+                    id: item.id || `cx-text-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                    role: "assistant",
+                    content: item.text,
+                    timestamp: Date.now(),
+                  });
+                }
+              }
+
+              // Command execution (tool use)
+              if (item.type === "command_execution") {
+                // Tool call message
+                collectedMessages.push({
+                  id: item.id || `cx-tool-${Date.now()}`,
+                  role: "assistant",
+                  content: "",
+                  timestamp: Date.now(),
+                  toolCalls: [{
+                    id: item.id || `cx-tool-${Date.now()}`,
+                    name: "shell",
+                    arguments: JSON.stringify({ command: item.command }),
+                    function: {
+                      name: "shell",
+                      arguments: JSON.stringify({ command: item.command }),
+                    },
+                  }],
+                });
+
+                // Tool result message
+                collectedMessages.push({
+                  id: `result-${item.id || Date.now()}`,
+                  role: "toolResult",
+                  content: item.aggregated_output || "",
+                  timestamp: Date.now(),
+                  toolResults: [{
+                    toolCallId: item.id || "",
+                    toolName: "shell",
+                    content: item.aggregated_output || "",
+                    isError: item.exit_code !== 0,
+                  }],
+                });
+              }
+            }
+          } catch {
+            // Ignore unparseable lines
+          }
+        }
+      });
+
+      proc.stderr.on("data", (chunk) => {
+        stderr += chunk.toString();
+      });
+
+      proc.on("close", (code) => {
+        if (sessionKey) {
+          codexProcesses.delete(sessionKey);
+        }
+
+        if (code !== 0 && collectedMessages.length === 0) {
+          resolve({
+            success: false,
+            error: stderr.trim() || `Codex exited with code ${code}`,
+            sessionId: resolvedSessionId,
+          });
+          return;
+        }
+
+        resolve({
+          success: true,
+          sessionId: resolvedSessionId,
+          messages: collectedMessages,
+        });
+      });
+
+      proc.on("error", (err) => {
+        if (sessionKey) {
+          codexProcesses.delete(sessionKey);
+        }
+        resolve({
+          success: false,
+          error: err.message || "Failed to spawn codex process",
+          sessionId: resolvedSessionId,
+        });
+      });
+    });
+  } catch (err) {
+    return { success: false, error: err.message || "Codex send failed" };
+  }
+});
+
+/**
+ * Abort an in-flight Codex request.
+ */
+ipcMain.handle("codex:abort", async (event, body) => {
+  const { sessionKey } = body || {};
+  if (!sessionKey) return { success: false, error: "No session key" };
+
+  const proc = codexProcesses.get(sessionKey);
+  if (proc) {
+    proc.kill("SIGTERM");
+    codexProcesses.delete(sessionKey);
+    return { success: true };
+  }
+  return { success: false, error: "No active process for session" };
+});
+
 // ─── IPC Handlers: Gateway Config ───────────────────────────────────────────
 
 ipcMain.handle("hyperclaw:set-gateway-config", async (event, { host, port, token }) => {

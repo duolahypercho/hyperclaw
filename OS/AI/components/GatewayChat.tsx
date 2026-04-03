@@ -18,8 +18,11 @@ import { rehypePlugins } from "@OS/AI/components/rehypeConfig";
 import HyperchoTooltip from "$/components/UI/HyperchoTooltip";
 import CopanionIcon from "@OS/assets/copanion";
 import { useGatewayChat, GatewayChatMessage, GatewayChatAttachment } from "@OS/AI/core/hook/use-gateway-chat";
+import { useClaudeCodeChat } from "@OS/AI/core/hook/use-claude-code-chat";
+import { useCodexChat } from "@OS/AI/core/hook/use-codex-chat";
 import type { AttachmentType } from "@OS/AI/components/Chat";
 import { gatewayConnection } from "$/lib/openclaw-gateway-ws";
+import { useAIProviderSafe, type AIProviderType } from "$/Providers/AIProviderProv";
 import { InputContainer } from "@OS/AI/components/InputContainer";
 import SessionHistoryDropdown from "$/components/SessionHistoryDropdown";
 import createMarkdownComponents from "@OS/AI/components/createMarkdownComponents";
@@ -498,6 +501,9 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
     sessionKey || `agent:${currentAgentId}:main`
   );
 
+  // AI provider switching (safe variant returns defaults if provider not mounted)
+  const { provider: activeProvider, setProvider, providers: availableProviders } = useAIProviderSafe();
+
   // Sync sessionKey prop with internal state and reload when it changes
   useEffect(() => {
     if (sessionKey && sessionKey !== sessionKeyState) {
@@ -505,7 +511,27 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
     }
   }, [sessionKey, sessionKeyState]);
 
-  // Use the gateway chat hook
+  // Use the correct chat hook based on provider
+  const gatewayChat = useGatewayChat({
+    sessionKey: sessionKeyState,
+    autoConnect: autoConnect && activeProvider !== "claude-code" && activeProvider !== "codex",
+    backend,
+  });
+
+  const claudeCodeChat = useClaudeCodeChat({
+    sessionKey: sessionKeyState,
+    autoConnect: activeProvider === "claude-code",
+  });
+
+  const codexChat = useCodexChat({
+    sessionKey: sessionKeyState,
+    autoConnect: activeProvider === "codex",
+  });
+
+  const activeChat = activeProvider === "claude-code" ? claudeCodeChat
+    : activeProvider === "codex" ? codexChat
+    : gatewayChat;
+
   const {
     messages,
     isLoading,
@@ -516,11 +542,7 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
     loadChatHistory,
     clearChat,
     setSessionKey: setHookSessionKey,
-  } = useGatewayChat({
-    sessionKey: sessionKeyState,
-    autoConnect,
-    backend,
-  });
+  } = activeChat;
 
   // Unified tool state management
   const { toolStates, toggleToolExpansion, resetToolStates } = useUnifiedToolState(messages as any);
@@ -744,11 +766,34 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
               )}
               <p className="text-xs text-muted-foreground">
                 {isConnected ? "Online" : isLoading ? "Connecting..." : "Offline"}
+                {activeProvider !== "openclaw" && ` (${activeProvider === "claude-code" ? "Claude Code" : "Codex"})`}
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-1">
+            {/* AI Provider Toggle */}
+            {availableProviders.length > 1 && (
+              <div className="flex items-center rounded-md border border-border/50 overflow-hidden mr-1">
+                {availableProviders.map((p) => (
+                  <HyperchoTooltip key={p.id} value={p.label}>
+                    <button
+                      type="button"
+                      onClick={() => setProvider(p.id)}
+                      className={cn(
+                        "px-2 py-1 text-[10px] font-medium transition-colors",
+                        activeProvider === p.id
+                          ? "bg-primary text-primary-foreground"
+                          : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                      )}
+                    >
+                      {p.id === "openclaw" ? "OC" : p.id === "claude-code" ? "CC" : "CX"}
+                    </button>
+                  </HyperchoTooltip>
+                ))}
+              </div>
+            )}
+
             <HyperchoTooltip value="Reload Chat">
               <Button
                 variant="ghost"

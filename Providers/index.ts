@@ -10,3 +10,8 @@ export {
   OpenClawProvider as OpenClawProvider,
   useOpenClawContext as useOpenClawContext,
 } from "./OpenClawProv";
+export {
+  AIProviderProvider as AIProviderProvider,
+  useAIProvider as useAIProvider,
+  useAIProviderSafe as useAIProviderSafe,
+} from "./AIProviderProv";
