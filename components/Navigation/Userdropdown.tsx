@@ -119,9 +119,6 @@ const Userdropdown = () => {
     }
   };
 
-  useEffect(() => {
-    console.log("[Userdropdown] mounted, userInfo:", userInfo?.email, "gatewayHealthy:", gatewayHealthy);
-  }, []);
 
   // OpenClaw gateway health: true = green, false = red, null = unknown/loading (amber)
   const healthDot =
@@ -139,12 +136,16 @@ const Userdropdown = () => {
         ? gatewayHealthError || "OpenClaw gateway disconnected"
         : "OpenClaw status checking...";
 
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+
   return (
     <>
-    <DropdownMenu onOpenChange={(open) => console.log("[Userdropdown] DropdownMenu onOpenChange:", open)}>
+    <DropdownMenu open={dropdownOpen} onOpenChange={setDropdownOpen}>
       <DropdownMenuTrigger
-        onClick={() => console.log("[Userdropdown] trigger onClick")}
-        onPointerDown={(e: React.PointerEvent) => console.log("[Userdropdown] trigger onPointerDown, defaultPrevented:", e.defaultPrevented, "button:", e.button)}
+        onClick={(e) => {
+          e.preventDefault();
+          setDropdownOpen((prev) => !prev);
+        }}
         className="relative flex items-center justify-center px-0 py-0 rounded-md hover:bg-primary/10 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-primary/20 hover:scale-105 active:scale-95"
         style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
       >
