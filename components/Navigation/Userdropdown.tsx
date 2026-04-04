@@ -146,6 +146,7 @@ const Userdropdown = () => {
         onClick={() => console.log("[Userdropdown] trigger onClick")}
         onPointerDown={(e: React.PointerEvent) => console.log("[Userdropdown] trigger onPointerDown, defaultPrevented:", e.defaultPrevented, "button:", e.button)}
         className="relative flex items-center justify-center px-0 py-0 rounded-md hover:bg-primary/10 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-primary/20 hover:scale-105 active:scale-95"
+        style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
       >
         <Avatar className="h-9 w-9 rounded-md">
           <AvatarImage
