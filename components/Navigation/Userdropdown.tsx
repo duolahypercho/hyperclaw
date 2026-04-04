@@ -119,6 +119,10 @@ const Userdropdown = () => {
     }
   };
 
+  useEffect(() => {
+    console.log("[Userdropdown] mounted, userInfo:", userInfo?.email, "gatewayHealthy:", gatewayHealthy);
+  }, []);
+
   // OpenClaw gateway health: true = green, false = red, null = unknown/loading (amber)
   const healthDot =
     gatewayHealthy === true ? (
@@ -137,12 +141,12 @@ const Userdropdown = () => {
 
   return (
     <>
-    <DropdownMenu>
+    <DropdownMenu onOpenChange={(open) => console.log("[Userdropdown] DropdownMenu onOpenChange:", open)}>
       <DropdownMenuTrigger asChild>
-        <motion.button
-          whileHover={{ scale: 1.05 }}
-          whileTap={{ scale: 0.95 }}
-          className="relative flex items-center justify-center px-0 py-0 rounded-md hover:bg-primary/10 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-primary/20"
+        <button
+          onClick={(e) => console.log("[Userdropdown] onClick", e.defaultPrevented)}
+          onPointerDown={(e) => console.log("[Userdropdown] onPointerDown", e.defaultPrevented, e.button)}
+          className="relative flex items-center justify-center px-0 py-0 rounded-md hover:bg-primary/10 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-primary/20 hover:scale-105 active:scale-95"
         >
           <Avatar className="h-9 w-9 rounded-md">
             <AvatarImage
@@ -154,32 +158,25 @@ const Userdropdown = () => {
               {getInitials(userInfo.Firstname, userInfo.Lastname)}
             </AvatarFallback>
           </Avatar>
-          <TooltipProvider delayDuration={300}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span
-                  className="absolute bottom-0 right-0 flex h-3 w-3 items-center justify-center rounded-full bg-secondary shadow-sm"
-                  aria-label={healthLabel}
-                >
-                  <span
-                    className={cn(
-                      "h-2 w-2 rounded-full transition-all duration-300",
-                      healthDot
-                    )}
-                  />
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" className="text-xs">
-                {healthLabel}
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        </motion.button>
+          <span
+            className="absolute bottom-0 right-0 flex h-3 w-3 items-center justify-center rounded-full bg-secondary shadow-sm pointer-events-none"
+            aria-label={healthLabel}
+            title={healthLabel}
+          >
+            <span
+              className={cn(
+                "h-2 w-2 rounded-full transition-all duration-300",
+                healthDot
+              )}
+            />
+          </span>
+        </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
         side="right"
         align="end"
-        className="w-56 bg-card/95 backdrop-blur-sm"
+        className="w-56 bg-card/95 backdrop-blur-sm z-[9999]"
+        onCloseAutoFocus={(e) => console.log("[Userdropdown] content onCloseAutoFocus")}
       >
         <DropdownMenuLabel className="font-normal">
           <div className="flex flex-row items-center gap-2">

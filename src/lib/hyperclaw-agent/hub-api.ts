@@ -127,7 +127,7 @@ export class HubApiClient {
     });
     if (!res.ok) throw new Error(`Hub API ${path}: ${res.status} ${res.statusText}`);
     const text = await res.text();
-    return text ? JSON.parse(text) : undefined;
+    return text ? (JSON.parse(text) as T) : (undefined as unknown as T);
   }
 
   private async del(path: string): Promise<void> {

@@ -2,15 +2,12 @@ import React, { useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import GuidedStepConnect from "./GuidedStepConnect";
 import GuidedStepRuntimes, { type ProviderConfig } from "./GuidedStepRuntimes";
-import GuidedStepPermissions from "./GuidedStepPermissions";
-import GuidedStep1 from "./GuidedStep1";
-import GuidedStep2 from "./GuidedStep2";
 import GuidedStep4 from "./GuidedStep4";
 import TechGridBackground from "./TechGridBackground";
 import StepAnimations from "./StepAnimations";
 import { dashboardState } from "$/lib/dashboard-state";
 
-const TOTAL_STEPS = 6;
+const TOTAL_STEPS = 4;
 const GUIDED_STATE_KEY = "guided-setup-state";
 const EASE = [0.16, 1, 0.3, 1] as const;
 
@@ -40,6 +37,112 @@ interface GuidedSetupProps {
   onComplete: () => void;
 }
 
+// --- Combined Company + Agent step ---
+
+function CompanyAgentStep({ onComplete }: {
+  onComplete: (data: { companyName: string; agentName: string }) => void;
+}) {
+  const [companyName, setCompanyName] = useState(() => {
+    const saved = dashboardState.get("hyperclaw-company");
+    if (saved) {
+      try { return JSON.parse(saved).name || ""; } catch { /* ignore */ }
+    }
+    return "";
+  });
+  const [agentName, setAgentName] = useState("CEO");
+
+  const canSubmit = companyName.trim() && agentName.trim();
+
+  const handleSubmit = () => {
+    if (!canSubmit) return;
+    dashboardState.set("hyperclaw-company", JSON.stringify({
+      name: companyName.trim(),
+      createdAt: new Date().toISOString(),
+    }), { flush: true });
+    onComplete({ companyName: companyName.trim(), agentName: agentName.trim() });
+  };
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Enter" && !e.shiftKey && canSubmit) {
+        e.preventDefault();
+        handleSubmit();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [companyName, agentName]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const stagger = {
+    hidden: {},
+    show: { transition: { staggerChildren: 0.08, delayChildren: 0.05 } },
+  };
+  const fadeUp = {
+    hidden: { opacity: 0, y: 14 },
+    show: { opacity: 1, y: 0, transition: { duration: 0.5, ease: EASE } },
+  };
+
+  return (
+    <motion.div
+      className="text-center space-y-8"
+      variants={stagger}
+      initial="hidden"
+      animate="show"
+    >
+      <motion.div className="space-y-3" variants={fadeUp}>
+        <h1 className="text-[28px] font-medium text-white tracking-tight">
+          Set up your workspace
+        </h1>
+        <p className="text-white/40 text-[15px]">
+          Name your company and first agent.
+        </p>
+      </motion.div>
+
+      <motion.div className="space-y-5 max-w-sm mx-auto text-left" variants={fadeUp}>
+        <div className="space-y-1.5">
+          <label className="text-[13px] text-white/50">Company name</label>
+          <input
+            type="text"
+            value={companyName}
+            onChange={(e) => setCompanyName(e.target.value)}
+            placeholder="Acme Corp"
+            className="w-full bg-white/[0.06] border border-white/10 rounded-lg px-3.5 py-3 text-[15px] text-white placeholder:text-white/20 focus:outline-none focus:border-white/25 transition-colors min-h-[48px]"
+            autoFocus
+          />
+        </div>
+
+        <div className="space-y-1.5">
+          <label className="text-[13px] text-white/50">First agent name</label>
+          <input
+            type="text"
+            value={agentName}
+            onChange={(e) => setAgentName(e.target.value)}
+            placeholder="e.g. CEO"
+            className="w-full bg-white/[0.06] border border-white/10 rounded-lg px-3.5 py-3 text-[15px] text-white placeholder:text-white/20 focus:outline-none focus:border-white/25 transition-colors min-h-[48px]"
+          />
+          <p className="text-[13px] text-white/20 pt-0.5">
+            You can add more agents later from the Org Chart.
+          </p>
+        </div>
+      </motion.div>
+
+      <motion.div variants={fadeUp}>
+        <motion.button
+          onClick={handleSubmit}
+          disabled={!canSubmit}
+          className="min-h-[44px] px-8 py-2.5 rounded-lg text-sm font-medium text-white bg-white/10 hover:bg-white/[0.15] disabled:opacity-20 disabled:hover:bg-white/10 border border-white/10 hover:border-white/20 transition-all"
+          whileHover={canSubmit ? { y: -1 } : {}}
+          whileTap={canSubmit ? { y: 0 } : {}}
+        >
+          Continue
+        </motion.button>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+// --- Main setup wizard ---
+
 export default function GuidedSetup({ onComplete }: GuidedSetupProps) {
   const [currentStep, setCurrentStep] = useState(1);
   const [guidedState, setGuidedState] = useState<GuidedState>(loadGuidedState);
@@ -56,7 +159,6 @@ export default function GuidedSetup({ onComplete }: GuidedSetupProps) {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const completeStep = useCallback((step: number, data?: Partial<GuidedState>) => {
-    console.log("[guided-setup] completeStep:", step, "of", TOTAL_STEPS);
     setGuidedState((prev) => {
       const next: GuidedState = {
         ...prev,
@@ -67,8 +169,6 @@ export default function GuidedSetup({ onComplete }: GuidedSetupProps) {
       return next;
     });
     if (step >= TOTAL_STEPS) {
-      // Final step — launch dashboard
-      console.log("[guided-setup] all steps complete, launching dashboard");
       onComplete();
     } else {
       setDirection(1);
@@ -84,27 +184,16 @@ export default function GuidedSetup({ onComplete }: GuidedSetupProps) {
   }, [currentStep]);
 
   const slideVariants = {
-    enter: (dir: number) => ({
-      x: dir > 0 ? 80 : -80,
-      opacity: 0,
-    }),
-    center: {
-      x: 0,
-      opacity: 1,
-    },
-    exit: (dir: number) => ({
-      x: dir > 0 ? -80 : 80,
-      opacity: 0,
-    }),
+    enter: (dir: number) => ({ x: dir > 0 ? 80 : -80, opacity: 0 }),
+    center: { x: 0, opacity: 1 },
+    exit: (dir: number) => ({ x: dir > 0 ? -80 : 80, opacity: 0 }),
   };
 
-  const stepLabels = ["Device", "Brain", "Permissions", "Company", "Agent", "Launch"];
+  const stepLabels = ["Set up", "Brain", "Company", "Launch"];
   const animationLabels = [
     "choosing your setup",
     "picking your brain",
-    "securing access",
     "setting up mission control",
-    "initializing agent",
     "ready for launch",
   ];
 
@@ -117,11 +206,9 @@ export default function GuidedSetup({ onComplete }: GuidedSetupProps) {
       {/* Left side — form area */}
       <div className="relative flex-1 flex flex-col items-center justify-center overflow-hidden">
         <TechGridBackground />
-
-        {/* Subtle center gradient */}
         <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(ellipse_at_center,rgba(255,255,255,0.02)_0%,transparent_60%)]" />
 
-        {/* Progress — minimal dots + thin line */}
+        {/* Progress dots */}
         <motion.div
           className="absolute top-10 flex items-center gap-0 z-10"
           initial={{ opacity: 0 }}
@@ -153,7 +240,7 @@ export default function GuidedSetup({ onComplete }: GuidedSetupProps) {
                   </span>
                 </div>
                 {step < TOTAL_STEPS && (
-                  <div className="relative w-6 sm:w-12 h-px mx-1">
+                  <div className="relative w-6 sm:w-16 h-px mx-1">
                     <div className="absolute inset-0 bg-white/8" />
                     <motion.div
                       className="absolute inset-y-0 left-0 bg-white/40"
@@ -175,7 +262,7 @@ export default function GuidedSetup({ onComplete }: GuidedSetupProps) {
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.1, duration: 0.6, ease: EASE }}
         >
-          {/* Logo with heartbeat */}
+          {/* Logo */}
           <motion.div
             className="flex justify-center mb-8"
             initial={{ opacity: 0, scale: 0.9 }}
@@ -187,41 +274,18 @@ export default function GuidedSetup({ onComplete }: GuidedSetupProps) {
                 src="/logo-256.png"
                 alt="HyperClaw"
                 className="w-14 h-14 rounded-xl relative z-10"
-                animate={{
-                  scale: [1, 1.06, 1, 1.03, 1],
-                }}
-                transition={{
-                  duration: 1.8,
-                  repeat: Infinity,
-                  repeatDelay: 1.5,
-                  ease: "easeInOut",
-                }}
+                animate={{ scale: [1, 1.06, 1, 1.03, 1] }}
+                transition={{ duration: 1.8, repeat: Infinity, repeatDelay: 1.5, ease: "easeInOut" }}
               />
               <motion.div
                 className="absolute -inset-2 rounded-2xl bg-white/[0.04] z-0"
-                animate={{
-                  scale: [1, 1.15, 1, 1.08, 1],
-                  opacity: [0.3, 0.6, 0.3, 0.45, 0.3],
-                }}
-                transition={{
-                  duration: 1.8,
-                  repeat: Infinity,
-                  repeatDelay: 1.5,
-                  ease: "easeInOut",
-                }}
+                animate={{ scale: [1, 1.15, 1, 1.08, 1], opacity: [0.3, 0.6, 0.3, 0.45, 0.3] }}
+                transition={{ duration: 1.8, repeat: Infinity, repeatDelay: 1.5, ease: "easeInOut" }}
               />
               <motion.div
                 className="absolute -inset-4 rounded-3xl bg-white/[0.02] z-0"
-                animate={{
-                  scale: [1, 1.2, 1, 1.1, 1],
-                  opacity: [0.15, 0.35, 0.15, 0.25, 0.15],
-                }}
-                transition={{
-                  duration: 1.8,
-                  repeat: Infinity,
-                  repeatDelay: 1.5,
-                  ease: "easeInOut",
-                }}
+                animate={{ scale: [1, 1.2, 1, 1.1, 1], opacity: [0.15, 0.35, 0.15, 0.25, 0.15] }}
+                transition={{ duration: 1.8, repeat: Infinity, repeatDelay: 1.5, ease: "easeInOut" }}
               />
             </div>
           </motion.div>
@@ -246,37 +310,25 @@ export default function GuidedSetup({ onComplete }: GuidedSetupProps) {
                 })} />
               )}
               {currentStep === 3 && (
-                <GuidedStepPermissions onComplete={() => completeStep(3)} />
+                <CompanyAgentStep onComplete={(data) => {
+                  setCompanyName(data.companyName);
+                  setAgentName(data.agentName);
+                  completeStep(3, { companyName: data.companyName, agentName: data.agentName });
+                }} />
               )}
               {currentStep === 4 && (
-                <GuidedStep1
-                  onComplete={(data) => {
-                    setCompanyName(data.companyName);
-                    completeStep(4, { companyName: data.companyName });
-                  }}
-                />
-              )}
-              {currentStep === 5 && (
-                <GuidedStep2
-                  onComplete={(name) => {
-                    setAgentName(name);
-                    completeStep(5, { agentName: name });
-                  }}
-                />
-              )}
-              {currentStep === 6 && (
                 <GuidedStep4
                   companyName={companyName}
                   agentName={agentName}
                   provider={guidedState.selectedRuntimes?.map((id) => id.charAt(0).toUpperCase() + id.slice(1)).join(", ") || "Not configured"}
-                  onComplete={() => completeStep(6)}
+                  onComplete={() => completeStep(4)}
                 />
               )}
             </motion.div>
           </AnimatePresence>
         </motion.div>
 
-        {/* Back + step counter — bottom */}
+        {/* Back + step counter */}
         <motion.div
           className="absolute bottom-10 flex items-center gap-6 z-10"
           initial={{ opacity: 0 }}

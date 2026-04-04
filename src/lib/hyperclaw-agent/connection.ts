@@ -4,7 +4,7 @@
  * Connects to the Hub's /ws/dashboard endpoint using JWT auth.
  * Handles reconnection, heartbeat, and request/response correlation.
  */
-import * as WebSocket from 'ws';
+import WebSocket from 'ws';
 import { EventEmitter } from 'events';
 import type {
   HubMessage,

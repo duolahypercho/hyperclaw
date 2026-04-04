@@ -35,7 +35,7 @@ import DeviceSetup from "$/components/Onboarding/DeviceSetup";
 import GuidedSetup from "$/components/Onboarding/GuidedSetup";
 import { dashboardState } from "$/lib/dashboard-state";
 
-const TOTAL_GUIDED_STEPS = 6;
+const TOTAL_GUIDED_STEPS = 4;
 
 const MainLayout = ({ children }: any) => {
   const { mobileScreen, tabletScreen } = useInterim();
@@ -81,7 +81,9 @@ const MainLayout = ({ children }: any) => {
   const showAppWithLayout =
     status === "authenticated" || (hasBeenAuthenticatedRef.current && status === "loading");
 
-  const showGuidedOnboarding = true; // DEBUG: force onboarding — revert before shipping
+  const showGuidedOnboarding = !guidedSetupComplete && !setupSkipped;
+
+  //onst showGuideOnboarding = true; // DEBUG: force onboarding — revert before shipping
 
   const handleGuidedSetupComplete = useCallback(() => {
     setGuidedSetupComplete(true);
