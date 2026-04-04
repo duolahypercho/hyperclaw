@@ -142,38 +142,36 @@ const Userdropdown = () => {
   return (
     <>
     <DropdownMenu onOpenChange={(open) => console.log("[Userdropdown] DropdownMenu onOpenChange:", open)}>
-      <DropdownMenuTrigger asChild>
-        <button
-          onClick={(e) => console.log("[Userdropdown] onClick", e.defaultPrevented)}
-          onPointerDown={(e) => console.log("[Userdropdown] onPointerDown", e.defaultPrevented, e.button)}
-          className="relative flex items-center justify-center px-0 py-0 rounded-md hover:bg-primary/10 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-primary/20 hover:scale-105 active:scale-95"
+      <DropdownMenuTrigger
+        onClick={() => console.log("[Userdropdown] trigger onClick")}
+        onPointerDown={(e: React.PointerEvent) => console.log("[Userdropdown] trigger onPointerDown, defaultPrevented:", e.defaultPrevented, "button:", e.button)}
+        className="relative flex items-center justify-center px-0 py-0 rounded-md hover:bg-primary/10 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-primary/20 hover:scale-105 active:scale-95"
+      >
+        <Avatar className="h-9 w-9 rounded-md">
+          <AvatarImage
+            src={getMediaUrl(userInfo.profilePic)}
+            alt={userInfo.username || "User"}
+            className="object-cover object-center"
+          />
+          <AvatarFallback className="bg-primary/20 text-primary text-[10px] font-medium rounded-md">
+            {getInitials(userInfo.Firstname, userInfo.Lastname)}
+          </AvatarFallback>
+        </Avatar>
+        <span
+          className="absolute bottom-0 right-0 flex h-3 w-3 items-center justify-center rounded-full bg-secondary shadow-sm pointer-events-none"
+          aria-label={healthLabel}
+          title={healthLabel}
         >
-          <Avatar className="h-9 w-9 rounded-md">
-            <AvatarImage
-              src={getMediaUrl(userInfo.profilePic)}
-              alt={userInfo.username || "User"}
-              className="object-cover object-center"
-            />
-            <AvatarFallback className="bg-primary/20 text-primary text-[10px] font-medium rounded-md">
-              {getInitials(userInfo.Firstname, userInfo.Lastname)}
-            </AvatarFallback>
-          </Avatar>
           <span
-            className="absolute bottom-0 right-0 flex h-3 w-3 items-center justify-center rounded-full bg-secondary shadow-sm pointer-events-none"
-            aria-label={healthLabel}
-            title={healthLabel}
-          >
-            <span
-              className={cn(
-                "h-2 w-2 rounded-full transition-all duration-300",
-                healthDot
-              )}
-            />
-          </span>
-        </button>
+            className={cn(
+              "h-2 w-2 rounded-full transition-all duration-300",
+              healthDot
+            )}
+          />
+        </span>
       </DropdownMenuTrigger>
       <DropdownMenuContent
-        side="right"
+        side="bottom"
         align="end"
         className="w-56 bg-card/95 backdrop-blur-sm z-[9999]"
         onCloseAutoFocus={(e) => console.log("[Userdropdown] content onCloseAutoFocus")}
