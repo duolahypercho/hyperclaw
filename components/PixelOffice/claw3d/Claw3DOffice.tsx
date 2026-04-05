@@ -2304,6 +2304,18 @@ const Claw3DOffice = memo(function Claw3DOffice({
   // delegates to the rest of the source.
   // --- BEGIN BODY (lines 2425–6754 of the GitHub source, with local adaptations) ---
 
+  // Detect WebGL support once — skip Canvas entirely if unavailable to prevent
+  // THREE.WebGLRenderer crash and Next.js dev error overlay
+  const webglSupported = useMemo(() => {
+    if (typeof document === "undefined") return false;
+    try {
+      const c = document.createElement("canvas");
+      return !!(c.getContext("webgl2") || c.getContext("webgl"));
+    } catch {
+      return false;
+    }
+  }, []);
+
   const resolvedCleaningCues = animationState?.cleaningCues ?? cleaningCues;
   const resolvedDeskHoldByAgentId =
     animationState?.deskHoldByAgentId ?? deskHoldByAgentId;
@@ -4771,7 +4783,13 @@ const Claw3DOffice = memo(function Claw3DOffice({
         onMouseUp={() => setSpaceDragging(false)}
         onDoubleClick={() => orbitRef.current?.reset()}
       >
-        {!immersiveOverlayActive ? (
+        {!webglSupported ? (
+          <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "0.5rem", color: "var(--muted-foreground, #888)" }}>
+            <span style={{ fontSize: "1.5rem" }}>🏢</span>
+            <span style={{ fontSize: "0.8rem" }}>3D office unavailable</span>
+            <span style={{ fontSize: "0.7rem", opacity: 0.7 }}>WebGL is not supported in this environment</span>
+          </div>
+        ) : !immersiveOverlayActive ? (
           <Canvas
             orthographic
             dpr={[0.85, 1.5]}
