@@ -132,7 +132,7 @@ const Userdropdown = () => {
     gatewayHealthy === true
       ? "OpenClaw gateway connected"
       : gatewayHealthy === false
-        ? gatewayHealthError || "OpenClaw gateway disconnected"
+        ? "OpenClaw gateway disconnected"
         : "OpenClaw status checking...";
 
   return (
