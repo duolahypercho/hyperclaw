@@ -21,6 +21,7 @@ import type {
 export interface UseCodexChatOptions {
   sessionKey?: string;
   autoConnect?: boolean;
+  defaultModel?: string;
 }
 
 // Map HyperClaw session keys → Codex thread IDs for resume
@@ -29,12 +30,13 @@ const sessionIdMap = new Map<string, string>();
 export function useCodexChat(
   options: UseCodexChatOptions = {}
 ): UseGatewayChatReturn {
-  const { sessionKey: initialSessionKey } = options;
+  const { sessionKey: initialSessionKey, defaultModel } = options;
 
   const [messages, setMessages] = useState<GatewayChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [model, setModel] = useState<string>(defaultModel || "");
 
   const sessionKeyRef = useRef<string>(initialSessionKey || "default");
   const [sessionKeyState, setSessionKeyState] = useState<string>(
@@ -119,6 +121,7 @@ export function useCodexChat(
           message: content.trim(),
           sessionId: codexThreadId || undefined,
           sessionKey: currentSessionKey,
+          ...(model && { model }),
         })) as {
           success?: boolean;
           error?: string;
@@ -186,7 +189,44 @@ export function useCodexChat(
     setIsLoading(false);
   }, []);
 
-  const loadChatHistory = useCallback(async () => {}, []);
+  const loadChatHistory = useCallback(async () => {
+    const key = sessionKeyRef.current;
+    const sessionId = sessionIdMap.get(key) || key.replace(/^codex:/, "");
+    if (!sessionId || sessionId === "default") return;
+
+    try {
+      const result = (await bridgeInvoke("codex-load-history", { sessionId })) as {
+        messages?: Array<{
+          id: string;
+          role: string;
+          content: string;
+          timestamp?: number;
+          toolCalls?: GatewayChatMessage["toolCalls"];
+          toolResults?: GatewayChatMessage["toolResults"];
+        }>;
+        sessionId?: string;
+        error?: string;
+      };
+
+      if (result?.sessionId) {
+        sessionIdMap.set(key, result.sessionId);
+      }
+
+      if (result?.messages && result.messages.length > 0) {
+        const parsed: GatewayChatMessage[] = result.messages.map((m) => ({
+          id: m.id || uuidv4(),
+          role: m.role as ChatMessageRole,
+          content: m.content || "",
+          timestamp: m.timestamp || Date.now(),
+          ...(m.toolCalls && { toolCalls: m.toolCalls }),
+          ...(m.toolResults && { toolResults: m.toolResults }),
+        }));
+        setMessages(parsed);
+      }
+    } catch {
+      // Ignore load errors — session may not exist yet
+    }
+  }, []);
   const loadMoreHistory = useCallback(async () => {}, []);
 
   const clearChat = useCallback(() => {
@@ -224,6 +264,8 @@ export function useCodexChat(
     loadMoreHistory,
     clearChat,
     setSessionKey: handleSessionChange,
+    model,
+    setModel,
     connect,
     disconnect,
   };

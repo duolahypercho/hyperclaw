@@ -10,6 +10,7 @@ import {
   probeGatewayHealth,
 } from "$/lib/openclaw-gateway-ws";
 import { v4 as uuidv4 } from "uuid";
+import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
 
 // Module-level registry: maps active runId → sessionKey.
 // Prevents cross-chat event bleed when multiple useGatewayChat instances
@@ -136,6 +137,10 @@ export interface UseGatewayChatReturn {
   loadMoreHistory: () => Promise<void>;
   clearChat: () => void;
   setSessionKey: (key: string) => void;
+
+  // Model selection
+  model?: string;
+  setModel?: (model: string) => void;
 
   // Connection
   connect: () => Promise<void>;
@@ -567,45 +572,61 @@ export const _testHelpers = {
   runIdOwners,
 };
 
+// Tracks hermes session state per chat session key for multi-turn conversations.
+// API mode: stores conversation name (stable). CLI mode: stores hermes session ID.
+const hermesSessionState = new Map<string, { sessionId?: string; conversation?: string }>();
+
 async function sendMessageViaHermes(
   messages: Array<{ role: string; content: string }>,
-  signal: AbortSignal,
+  _signal: AbortSignal,
   onDelta: (content: string) => void,
   onDone: () => void,
   onError: (error: string) => void,
+  chatSessionKey?: string,
 ): Promise<void> {
-  const res = await fetch("/api/hermes/chat", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ messages, stream: true }),
-    signal,
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: "Hermes request failed" }));
-    onError(err.error || `HTTP ${res.status}`);
-    return;
-  }
-  const reader = res.body?.getReader();
-  if (!reader) { onError("No response body"); return; }
-  const decoder = new TextDecoder();
-  let buffer = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
-    for (const line of lines) {
-      if (!line.startsWith("data: ")) continue;
-      const data = line.slice(6).trim();
-      if (data === "[DONE]") { onDone(); return; }
-      try {
-        const parsed = JSON.parse(data);
-        if (parsed.content) onDelta(parsed.content);
-      } catch { /* skip malformed */ }
+  try {
+    const state = chatSessionKey ? hermesSessionState.get(chatSessionKey) : undefined;
+
+    // Use the chat session key as conversation name for API mode
+    const conversation = chatSessionKey || undefined;
+
+    const result = await bridgeInvoke("hermes-chat", {
+      messages,
+      sessionId: state?.sessionId || undefined,
+      conversation,
+    }) as {
+      content?: string;
+      sessionId?: string;
+      responseId?: string;
+      mode?: "api" | "cli";
+      success?: boolean;
+      error?: string;
+    } | null;
+
+    if (!result) {
+      onError("No response from Hermes");
+      return;
     }
+    if (result.error) {
+      onError(result.error);
+      return;
+    }
+
+    // Store session state for next turn
+    if (chatSessionKey) {
+      hermesSessionState.set(chatSessionKey, {
+        sessionId: result.sessionId || state?.sessionId,
+        conversation,
+      });
+    }
+
+    if (result.content) {
+      onDelta(result.content);
+    }
+    onDone();
+  } catch (err: any) {
+    onError(err?.message || "Hermes bridge request failed");
   }
-  onDone();
 }
 
 export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayChatReturn {
@@ -1375,9 +1396,8 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
   const connect = useCallback(async () => {
     if (backend === "hermes") {
       try {
-        const res = await fetch("/api/hermes/health");
-        const data = await res.json();
-        setIsConnected(data.available === true);
+        const result = await bridgeInvoke("hermes-health") as { available?: boolean } | null;
+        setIsConnected(result?.available === true);
       } catch {
         setIsConnected(false);
       }
@@ -1415,8 +1435,36 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
   // "AI is generating" state (currentRunIdRef.current !== null while streaming).
   const loadChatHistory = useCallback(async () => {
     if (backend === "hermes") {
+      // Try loading from Electron IPC first (reads ~/.hermes/sessions/*.jsonl)
+      const key = sessionKeyRef.current;
+      const hermesSessionId = key.replace(/^hermes:/, "").replace(/^agent:[^:]+:/, "");
+      if (typeof window !== "undefined" && (window as any).electronAPI?.hermes?.loadHistory && hermesSessionId && hermesSessionId !== "main" && hermesSessionId !== "default") {
+        try {
+          const { bridgeInvoke: invoke } = await import("$/lib/hyperclaw-bridge-client");
+          const result = await invoke("hermes-load-history", { sessionId: hermesSessionId }) as {
+            messages?: Array<{
+              id: string; role: string; content: string; timestamp?: number;
+              thinking?: string; toolCalls?: GatewayChatMessage["toolCalls"]; toolResults?: GatewayChatMessage["toolResults"];
+            }>;
+          };
+          if (result?.messages && result.messages.length > 0) {
+            const parsed: GatewayChatMessage[] = result.messages.map((m) => ({
+              id: m.id,
+              role: m.role as ChatMessageRole,
+              content: m.content || "",
+              timestamp: m.timestamp || Date.now(),
+              ...(m.thinking && { thinking: m.thinking }),
+              ...(m.toolCalls && { toolCalls: m.toolCalls }),
+              ...(m.toolResults && { toolResults: m.toolResults }),
+            }));
+            setMessages(parsed);
+            return;
+          }
+        } catch { /* fall through to localStorage */ }
+      }
+      // Fallback: localStorage
       try {
-        const stored = localStorage.getItem(`hermes-chat:${sessionKeyRef.current}`);
+        const stored = localStorage.getItem(`hermes-chat:${key}`);
         if (stored) {
           const parsed = JSON.parse(stored) as GatewayChatMessage[];
           setMessages(parsed);
@@ -1484,7 +1532,8 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
 
     if (backend === "hermes") {
       // Build conversation history for Hermes (stateless API needs full history)
-      const hermesMessages = [...messagesRef.current]
+      // Include the just-added user message since setMessages hasn't flushed yet
+      const hermesMessages = [...messagesRef.current, userMessage]
         .filter(m => m.role === "user" || m.role === "assistant")
         .map(m => ({ role: m.role, content: m.content }));
 
@@ -1537,6 +1586,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
             setIsLoading(false);
             hermesAbortRef.current = null;
           },
+          sessionKeyRef.current,
         );
       } catch (err) {
         if ((err as Error).name !== "AbortError") {

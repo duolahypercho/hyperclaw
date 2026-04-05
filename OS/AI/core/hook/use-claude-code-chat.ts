@@ -21,20 +21,51 @@ import type {
 export interface UseClaudeCodeChatOptions {
   sessionKey?: string;
   autoConnect?: boolean;
+  defaultModel?: string;
 }
 
 // Map HyperClaw session keys → Claude Code session IDs for resume
-const sessionIdMap = new Map<string, string>();
+// Persisted to sessionStorage so sessions survive page reloads
+const SESSION_MAP_STORAGE_KEY = "claude-code-session-id-map";
+
+function hydrateSessionIdMap(): Map<string, string> {
+  try {
+    const raw =
+      typeof window !== "undefined"
+        ? sessionStorage.getItem(SESSION_MAP_STORAGE_KEY)
+        : null;
+    return raw ? new Map(JSON.parse(raw)) : new Map();
+  } catch {
+    return new Map();
+  }
+}
+
+function persistSessionIdMap(map: Map<string, string>): void {
+  try {
+    if (typeof window !== "undefined") {
+      sessionStorage.setItem(
+        SESSION_MAP_STORAGE_KEY,
+        JSON.stringify([...map])
+      );
+    }
+  } catch {
+    /* storage full or unavailable */
+  }
+}
+
+const sessionIdMap = hydrateSessionIdMap();
 
 export function useClaudeCodeChat(
   options: UseClaudeCodeChatOptions = {}
 ): UseGatewayChatReturn {
-  const { sessionKey: initialSessionKey } = options;
+  const { sessionKey: initialSessionKey, defaultModel } = options;
 
   const [messages, setMessages] = useState<GatewayChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [model, setModel] = useState<string>(defaultModel || "");
+  const modelRef = useRef<string>(defaultModel || "");
 
   const sessionKeyRef = useRef<string>(initialSessionKey || "default");
   const [sessionKeyState, setSessionKeyState] = useState<string>(
@@ -53,6 +84,12 @@ export function useClaudeCodeChat(
       setError(null);
     }
   }
+
+  // Stable model setter that also updates the ref (avoids stale closure in sendMessage)
+  const handleSetModel = useCallback((m: string) => {
+    modelRef.current = m;
+    setModel(m);
+  }, []);
 
   // Abort controller for in-flight requests
   const abortRef = useRef<AbortController | null>(null);
@@ -123,6 +160,7 @@ export function useClaudeCodeChat(
           message: content.trim(),
           sessionId: claudeSessionId || undefined,
           sessionKey: currentSessionKey,
+          ...(modelRef.current && { model: modelRef.current }),
         })) as {
           success?: boolean;
           error?: string;
@@ -145,6 +183,7 @@ export function useClaudeCodeChat(
         // Store session ID for future resume
         if (result.sessionId) {
           sessionIdMap.set(currentSessionKey, result.sessionId);
+          persistSessionIdMap(sessionIdMap);
         }
 
         // Add assistant messages from the response
@@ -198,8 +237,49 @@ export function useClaudeCodeChat(
   }, []);
 
   const loadChatHistory = useCallback(async () => {
-    // Claude Code sessions are local — no server-side history to load.
-    // History is maintained in-memory via React state.
+    const key = sessionKeyRef.current;
+    // Extract session ID: keys are "claude:<sessionId>" or raw session IDs
+    const sessionId = sessionIdMap.get(key) || key.replace(/^claude:/, "");
+    if (!sessionId || sessionId === "default") return;
+
+    try {
+      const result = (await bridgeInvoke("claude-code-load-history", { sessionId })) as {
+        messages?: Array<{
+          id: string;
+          role: string;
+          content: string;
+          timestamp?: number;
+          thinking?: string;
+          toolCalls?: GatewayChatMessage["toolCalls"];
+          toolResults?: GatewayChatMessage["toolResults"];
+        }>;
+        sessionId?: string;
+        error?: string;
+      };
+
+      if (result?.sessionId) {
+        sessionIdMap.set(key, result.sessionId);
+        persistSessionIdMap(sessionIdMap);
+      }
+
+      if (result?.messages && result.messages.length > 0) {
+        const parsed: GatewayChatMessage[] = result.messages.map((m) => ({
+          id: m.id || uuidv4(),
+          role: m.role as ChatMessageRole,
+          content: m.content || "",
+          timestamp: m.timestamp || Date.now(),
+          ...(m.thinking && { thinking: m.thinking }),
+          ...(m.toolCalls && { toolCalls: m.toolCalls }),
+          ...(m.toolResults && { toolResults: m.toolResults }),
+        }));
+        setMessages(parsed);
+      }
+    } catch (err) {
+      console.error("[useClaudeCodeChat] Failed to load history:", err);
+      setError(
+        err instanceof Error ? err.message : "Failed to load session history"
+      );
+    }
   }, []);
 
   const loadMoreHistory = useCallback(async () => {
@@ -211,6 +291,7 @@ export function useClaudeCodeChat(
     setError(null);
     // Remove session mapping so next message starts a fresh session
     sessionIdMap.delete(sessionKeyRef.current);
+    persistSessionIdMap(sessionIdMap);
   }, []);
 
   const connect = useCallback(async () => {
@@ -228,6 +309,17 @@ export function useClaudeCodeChat(
     setIsConnected(false);
   }, []);
 
+  // Kill any in-flight Claude Code process when the hook unmounts
+  useEffect(() => {
+    return () => {
+      if (typeof window !== "undefined" && window.electronAPI?.claudeCode) {
+        bridgeInvoke("claude-code-abort", {
+          sessionKey: sessionKeyRef.current,
+        }).catch(() => {});
+      }
+    };
+  }, []);
+
   return {
     messages,
     isLoading,
@@ -242,6 +334,8 @@ export function useClaudeCodeChat(
     loadMoreHistory,
     clearChat,
     setSessionKey: handleSessionChange,
+    model,
+    setModel: handleSetModel,
     connect,
     disconnect,
   };

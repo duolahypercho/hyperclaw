@@ -1,11 +1,8 @@
 /**
- * HyperClaw Agent — Orchestrator
- *
- * Deploys and manages AI agents across devices. All state lives in the
- * Intel SQLite KV on the user's home device.
+ * HyperClaw Agent — Orchestrator + Chat
  *
  * Usage:
- *   import { HyperClawOrchestrator } from '@/lib/hyperclaw-agent';
+ *   import { HyperClawOrchestrator, OrchestratorChat } from '@/lib/hyperclaw-agent';
  *
  *   const orch = new HyperClawOrchestrator({
  *     hubUrl: 'wss://hub.hypercho.com',
@@ -13,32 +10,34 @@
  *   });
  *   await orch.connect();
  *
- *   // Register an agent from markdown definitions
- *   const agent = await orch.registerAgent('./src/lib/hyperclaw-agent/agents/default');
+ *   const chat = new OrchestratorChat(orch, {
+ *     llm: { provider: 'anthropic', apiKey: '<user-key>', model: 'claude-sonnet-4-6' },
+ *   });
  *
- *   // Deploy to a device
- *   const dep = await orch.deploy({ agentId: agent.id, deviceId: 'device-123' });
- *
- *   // Wake it
- *   await orch.wake({ deploymentId: dep.id });
- *
- *   // Multi-agent workflow
- *   const wf = await orch.createWorkflow('build-and-test', [
- *     { id: 'build', agentId: 'a1', deviceId: 'd1', action: 'cron-run', params: { cronId: 'build' }, dependsOn: [] },
- *     { id: 'test', agentId: 'a2', deviceId: 'd2', action: 'cron-run', params: { cronId: 'test' }, dependsOn: ['build'] },
- *   ]);
- *   await orch.executeWorkflow(wf.id);
+ *   const session = await chat.createSession();
+ *   const result = await chat.send(session.id, 'list my devices');
+ *   console.log(result.reply);
  */
 
-// Primary API — the orchestrator
+// Primary API — orchestrator + chat
 export { HyperClawOrchestrator } from './orchestrator';
 export type { DeployOptions, WakeOptions } from './orchestrator';
 
-// Legacy direct-access agent (still useful for single-device scripts)
+export { OrchestratorChat } from './chat';
+export type { ChatSession, ChatConfig, ChatResult, ToolCallRecord } from './chat';
+
+// LLM client (provider-agnostic, user's keys)
+export { LLMClient } from './llm';
+export type { LLMConfig, LLMProvider, ToolDefinition, Message, ContentBlock, ToolCall, LLMResponse } from './llm';
+
+// Tool schemas
+export { ORCHESTRATOR_TOOLS } from './tools-schema';
+
+// Legacy direct-access agent (single-device scripts)
 export { HyperClawAgent } from './agent';
 export type { AppStateOperations } from './agent';
 
-// Store — all orchestrator state
+// Store — all state in Intel SQLite KV
 export { OrchestratorStore } from './store';
 export type {
   AgentRecord,
@@ -63,7 +62,7 @@ export type {
   AgentEvent,
 } from './types';
 
-// Bridge operations (for advanced use / targeting specific devices)
+// Bridge operations (for targeting specific devices)
 export type {
   AgentOperations,
   TodoOperations,
@@ -76,7 +75,7 @@ export type {
   LayoutOperations,
 } from './bridge';
 
-// Internals (for custom setups)
+// Internals
 export { HubConnection } from './connection';
 export { HubApiClient } from './hub-api';
 export { resolveConfig, buildDashboardWsUrl } from './config';

@@ -47,7 +47,7 @@ export interface OpenClawRegistryAgent {
   status: string;
   role?: string;
   lastActive?: string;
-  backend?: "openclaw" | "hermes";
+  backend?: "openclaw" | "hermes" | "claude-code" | "codex";
 }
 
 export interface OpenClawAgentListResult {
@@ -252,6 +252,8 @@ declare global {
       clearAuthSession: () => Promise<{ ok: boolean; error?: string }>;
       runtimes: {
         detectLocal: () => Promise<Record<string, { installed: boolean; version: string | null; running: boolean }>>;
+        detectProviderKeys: () => Promise<Array<{ providerId: string; source: string }>>;
+        importProviderKey: (params: { providerId: string; source: string }) => Promise<{ apiKey: string | null }>;
       };
       permissions: {
         checkAccessibility: () => Promise<boolean>;
@@ -283,6 +285,8 @@ declare global {
           }>;
         }>;
         abort: (params: { sessionKey: string }) => Promise<{ success: boolean; error?: string }>;
+        listSessions: () => Promise<{ sessions: Array<{ id: string; key: string; label: string; updatedAt: number }>; error?: string }>;
+        loadHistory: (params: { sessionId: string }) => Promise<{ messages: Array<{ id: string; role: string; content: string; timestamp?: number; toolCalls?: Array<{ id: string; name?: string; arguments?: string }>; toolResults?: Array<{ toolCallId: string; toolName: string; content: string; isError?: boolean }> }>; sessionId?: string; error?: string }>;
       };
       claudeCode: {
         status: () => Promise<{ available: boolean; version?: string; error?: string }>;
@@ -307,6 +311,12 @@ declare global {
           }>;
         }>;
         abort: (params: { sessionKey: string }) => Promise<{ success: boolean; error?: string }>;
+        listSessions: () => Promise<{ sessions: Array<{ id: string; key: string; label: string; updatedAt: number }>; error?: string }>;
+        loadHistory: (params: { sessionId: string }) => Promise<{ messages: Array<{ id: string; role: string; content: string; timestamp?: number; thinking?: string; toolCalls?: Array<{ id: string; name?: string; arguments?: string }>; toolResults?: Array<{ toolCallId: string; toolName: string; content: string; isError?: boolean }> }>; sessionId?: string; error?: string }>;
+      };
+      hermes: {
+        listSessions: () => Promise<{ sessions: Array<{ id: string; key: string; label: string; updatedAt: number }>; error?: string }>;
+        loadHistory: (params: { sessionId: string }) => Promise<{ messages: Array<{ id: string; role: string; content: string; timestamp?: number; thinking?: string; toolCalls?: Array<{ id: string; name?: string; arguments?: string }>; toolResults?: Array<{ toolCallId: string; toolName: string; content: string; isError?: boolean }> }>; sessionId?: string; error?: string }>;
       };
       hyperClawBridge: HyperClawBridgeAPI;
       noteFS: any;

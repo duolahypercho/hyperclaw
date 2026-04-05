@@ -30,6 +30,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // Runtime detection
   runtimes: {
     detectLocal: () => ipcRenderer.invoke("runtimes:detect-local"),
+    detectProviderKeys: () => ipcRenderer.invoke("runtimes:detect-provider-keys"),
+    importProviderKey: (params) => ipcRenderer.invoke("runtimes:import-provider-key", params),
   },
 
   // Permissions
@@ -92,6 +94,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
     status: () => ipcRenderer.invoke("claude-code:status"),
     send: (params) => ipcRenderer.invoke("claude-code:send", params),
     abort: (params) => ipcRenderer.invoke("claude-code:abort", params),
+    listSessions: (params) => ipcRenderer.invoke("claude-code:list-sessions", params),
+    loadHistory: (params) => ipcRenderer.invoke("claude-code:load-history", params),
   },
 
   // OpenAI Codex CLI bridge — spawns `codex` subprocess in main process
@@ -99,6 +103,14 @@ contextBridge.exposeInMainWorld("electronAPI", {
     status: () => ipcRenderer.invoke("codex:status"),
     send: (params) => ipcRenderer.invoke("codex:send", params),
     abort: (params) => ipcRenderer.invoke("codex:abort", params),
+    listSessions: () => ipcRenderer.invoke("codex:list-sessions"),
+    loadHistory: (params) => ipcRenderer.invoke("codex:load-history", params),
+  },
+
+  // Hermes Agent bridge — reads sessions from ~/.hermes/sessions/
+  hermes: {
+    listSessions: () => ipcRenderer.invoke("hermes:list-sessions"),
+    loadHistory: (params) => ipcRenderer.invoke("hermes:load-history", params),
   },
 
   // HyperClaw Bridge — two-way relay with OpenClaw plugin via ~/.hyperclaw/

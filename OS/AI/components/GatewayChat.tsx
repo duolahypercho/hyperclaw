@@ -17,11 +17,14 @@ import remarkMath from "remark-math";
 import { rehypePlugins } from "@OS/AI/components/rehypeConfig";
 import HyperchoTooltip from "$/components/UI/HyperchoTooltip";
 import CopanionIcon from "@OS/assets/copanion";
+import { ClaudeCodeIcon, CodexIcon } from "$/components/Onboarding/RuntimeIcons";
+import { PROVIDER_MODELS } from "$/components/Home/widgets/gateway-chat/GatewayChatHeader";
 import { useGatewayChat, GatewayChatMessage, GatewayChatAttachment } from "@OS/AI/core/hook/use-gateway-chat";
 import { useClaudeCodeChat } from "@OS/AI/core/hook/use-claude-code-chat";
 import { useCodexChat } from "@OS/AI/core/hook/use-codex-chat";
 import type { AttachmentType } from "@OS/AI/components/Chat";
 import { gatewayConnection } from "$/lib/openclaw-gateway-ws";
+import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
 import { useAIProviderSafe, type AIProviderType } from "$/Providers/AIProviderProv";
 import { InputContainer } from "@OS/AI/components/InputContainer";
 import SessionHistoryDropdown from "$/components/SessionHistoryDropdown";
@@ -542,6 +545,8 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
     loadChatHistory,
     clearChat,
     setSessionKey: setHookSessionKey,
+    model: currentModel,
+    setModel: setCurrentModel,
   } = activeChat;
 
   // Unified tool state management
@@ -560,14 +565,48 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
     setHookSessionKey(newSessionKey);
   }, [setHookSessionKey]);
 
-  // Fetch sessions callback
+  // Fetch sessions callback — merges OpenClaw + Claude + Codex
   const fetchSessions = useCallback(async () => {
-    if (!gatewayConnection.isConnected()) return;
     setSessionsLoading(true);
     setSessionsError(null);
     try {
-      const result = await gatewayConnection.listSessions(currentAgentId, 50);
-      setSessions(result.sessions || []);
+      const fetches: Promise<Array<{ key: string; label?: string; updatedAt?: number }>>[] = [];
+
+      if (gatewayConnection.isConnected()) {
+        fetches.push(
+          gatewayConnection.listSessions(currentAgentId, 50)
+            .then(r => (r.sessions || []).map((s: any) => ({ ...s, label: s.label || s.key })))
+            .catch(() => [])
+        );
+      }
+
+      if (typeof window !== "undefined" && window.electronAPI?.claudeCode?.listSessions) {
+        fetches.push(
+          bridgeInvoke("claude-code-list-sessions", {})
+            .then((r: any) => (r?.sessions || []).map((s: any) => ({
+              key: s.key || `claude:${s.id}`,
+              label: `[Claude] ${s.label || s.id?.slice(0, 8)}`,
+              updatedAt: s.updatedAt,
+            })))
+            .catch(() => [])
+        );
+      }
+
+      if (typeof window !== "undefined" && window.electronAPI?.codex?.listSessions) {
+        fetches.push(
+          bridgeInvoke("codex-list-sessions", {})
+            .then((r: any) => (r?.sessions || []).map((s: any) => ({
+              key: s.key || `codex:${s.id}`,
+              label: `[Codex] ${s.label || s.id?.slice(0, 8)}`,
+              updatedAt: s.updatedAt,
+            })))
+            .catch(() => [])
+        );
+      }
+
+      const results = await Promise.all(fetches);
+      const merged = results.flat().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+      setSessions(merged);
     } catch (err) {
       console.error("[GatewayChat] Failed to fetch sessions:", err);
       setSessionsError(err instanceof Error ? err.message : "Failed to load sessions");
@@ -588,13 +627,8 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
     setSessionKeyState(newKey);
     setHookSessionKey(newKey);
     // Refresh session list so the previous session appears in history
-    if (gatewayConnection.isConnected()) {
-      try {
-        const result = await gatewayConnection.listSessions(currentAgentId, 50);
-        setSessions(result.sessions || []);
-      } catch {}
-    }
-  }, [setHookSessionKey, currentAgentId]);
+    fetchSessions();
+  }, [setHookSessionKey, currentAgentId, fetchSessions]);
 
   // Track previous message count for smart scrolling
   const prevMessagesLengthRef = useRef<number>(0);
@@ -708,14 +742,29 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
           <div className="flex items-center gap-3">
             <div className="relative">
               <Avatar className="w-10 h-10">
-                {isHermes ? null : <AvatarImage src={getMediaUrl(personality.coverPhoto)} />}
-                <AvatarFallback className={cn("text-primary", isHermes ? "bg-orange-500/10" : "bg-primary/10")}>
-                  {isHermes ? (
-                    <HermesIcon className="w-5 h-5 text-orange-500" />
-                  ) : (
-                    <CopanionIcon className="w-5 h-5" />
-                  )}
-                </AvatarFallback>
+                {activeProvider === "claude-code" ? (
+                  <AvatarFallback className="bg-primary/10">
+                    <ClaudeCodeIcon className="w-6 h-6" />
+                  </AvatarFallback>
+                ) : activeProvider === "codex" ? (
+                  <AvatarFallback className="bg-primary/10">
+                    <CodexIcon className="w-6 h-6" />
+                  </AvatarFallback>
+                ) : isHermes ? (
+                  <>
+                    <AvatarImage src="/assets/hermes-agent.png" alt="Hermes Agent" />
+                    <AvatarFallback className="bg-orange-500/10">
+                      <HermesIcon className="w-5 h-5 text-orange-500" />
+                    </AvatarFallback>
+                  </>
+                ) : (
+                  <>
+                    <AvatarImage src={getMediaUrl(personality.coverPhoto)} />
+                    <AvatarFallback className="bg-primary/10 text-primary">
+                      <CopanionIcon className="w-5 h-5" />
+                    </AvatarFallback>
+                  </>
+                )}
               </Avatar>
               {/* Connection status dot */}
               <span className="absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-background shadow-sm">
@@ -732,7 +781,37 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
               </span>
             </div>
             <div>
-              {agents.length > 1 ? (
+              {activeProvider === "claude-code" || activeProvider === "codex" ? (
+                <div className="flex flex-col">
+                  <CardTitle className="text-sm">
+                    {activeProvider === "claude-code" ? "Claude Code" : "Codex"}
+                  </CardTitle>
+                  {PROVIDER_MODELS[activeProvider] && (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-opacity text-left">
+                          {PROVIDER_MODELS[activeProvider]!.find(m => m.id === (currentModel || ""))?.label || "Default"}
+                          <ChevronDown className="w-2.5 h-2.5" />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="start" className="w-36">
+                        {PROVIDER_MODELS[activeProvider]!.map((m) => (
+                          <DropdownMenuItem
+                            key={m.id}
+                            onClick={() => setCurrentModel?.(m.id)}
+                            className="flex items-center justify-between cursor-pointer text-xs"
+                          >
+                            {m.label}
+                            {m.id === (currentModel || "") && <Check className="w-3 h-3" />}
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  )}
+                </div>
+              ) : isHermes ? (
+                <CardTitle className="text-sm">Hermes Agent</CardTitle>
+              ) : agents.length > 1 ? (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <button className="flex items-center gap-1 hover:opacity-80 transition-opacity text-left">
@@ -762,11 +841,10 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
                   </DropdownMenuContent>
                 </DropdownMenu>
               ) : (
-                <CardTitle>{isHermes ? "Hermes Agent" : (personality.name || "Copanion")}</CardTitle>
+                <CardTitle className="text-sm">{isHermes ? "Hermes Agent" : (personality.name || "Copanion")}</CardTitle>
               )}
               <p className="text-xs text-muted-foreground">
                 {isConnected ? "Online" : isLoading ? "Connecting..." : "Offline"}
-                {activeProvider !== "openclaw" && ` (${activeProvider === "claude-code" ? "Claude Code" : "Codex"})`}
               </p>
             </div>
           </div>
@@ -853,11 +931,30 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
                     alt: userInfo?.username || "User",
                   }}
                   assistantAvatar={{
-                    src: getMediaUrl(personality.coverPhoto),
-                    fallback: (typeof personality.name === "string" ? personality.name : "").slice(0, 2) || "Co",
-                    alt: (typeof personality.name === "string" ? personality.name : "") || "Copanion",
+                    src: activeProvider === "claude-code" ? "/assets/claude-code.svg"
+                      : activeProvider === "codex" ? "/assets/codex.svg"
+                      : isHermes ? "/assets/hermes-agent.png"
+                      : getMediaUrl(personality.coverPhoto),
+                    fallback: activeProvider === "claude-code" ? "CC"
+                      : activeProvider === "codex" ? "CX"
+                      : isHermes ? "H"
+                      : (typeof personality.name === "string" ? personality.name : "").slice(0, 2) || "Co",
+                    alt: activeProvider === "claude-code" ? "Claude Code"
+                      : activeProvider === "codex" ? "Codex"
+                      : isHermes ? "Hermes Agent"
+                      : (typeof personality.name === "string" ? personality.name : "") || "Copanion",
                   }}
-                  personality={personality}
+                  personality={{
+                    ...personality,
+                    name: activeProvider === "claude-code" ? "Claude Code"
+                      : activeProvider === "codex" ? "Codex"
+                      : isHermes ? "Hermes Agent"
+                      : personality.name,
+                    tag: activeProvider === "claude-code" ? "Anthropic's AI coding assistant. Ask me anything about code!"
+                      : activeProvider === "codex" ? "OpenAI's coding agent. Ask me to help with your code!"
+                      : isHermes ? "Self-improving AI agent with skill management"
+                      : personality.tag,
+                  }}
                   onSuggestionClick={handleSendMessage}
                 />
               ) : (

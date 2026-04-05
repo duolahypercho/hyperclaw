@@ -12,6 +12,7 @@ import { useClaudeCodeChat } from "@OS/AI/core/hook/use-claude-code-chat";
 import { useCodexChat } from "@OS/AI/core/hook/use-codex-chat";
 import { useAIProviderSafe } from "$/Providers/AIProviderProv";
 import { gatewayConnection } from "$/lib/openclaw-gateway-ws";
+import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
 import { useUser } from "$/Providers/UserProv";
 import { useOpenClawContext } from "$/Providers/OpenClawProv";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -28,7 +29,7 @@ import { useFocusMode } from "./hooks/useFocusMode";
 import { useUnifiedToolState } from "@OS/AI/components/hooks/useUnifiedToolState";
 import { useAgentIdentity, resolveAvatarUrl, isAvatarText } from "$/hooks/useAgentIdentity";
 
-import { GatewayChatCustomHeader } from "./gateway-chat/GatewayChatHeader";
+import { GatewayChatCustomHeader, type BackendTab } from "./gateway-chat/GatewayChatHeader";
 import { EnhancedMessageBubble, shouldShowAvatarLocal } from "./gateway-chat/EnhancedMessageBubble";
 import { GroupedToolActions } from "./gateway-chat/GroupedToolActions";
 import { createMergeToolCalls } from "./gateway-chat/mergeToolCallsWithResults";
@@ -50,6 +51,7 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
   const config = widget.config as Record<string, unknown> | undefined;
   const configAgentId = config?.agentId as string | undefined;
   const configSessionKey = config?.sessionKey as string | undefined;
+  const configActiveTab = config?.activeTab as BackendTab | undefined;
 
   // Local state for selected agent - initialized from widget config
   const [selectedAgentId, setSelectedAgentId] = useState<string | undefined>(
@@ -65,6 +67,17 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
 
   // Track if user has manually selected an agent
   const [userHasSelectedAgent, setUserHasSelectedAgent] = useState(!!configAgentId);
+
+  // Backend tab state — determines which runtime's agents are shown
+  const [activeTab, setActiveTab] = useState<BackendTab>(configActiveTab || "openclaw");
+
+  // Filter agents by active tab
+  const tabAgents = useMemo(() => {
+    return agents.filter((a) => {
+      const backend = (a as any).backend || "openclaw";
+      return backend === activeTab;
+    });
+  }, [agents, activeTab]);
 
 
   // Sessions state - initialize with configSessionKey if provided
@@ -90,6 +103,13 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
     }
   }, [configSessionKey, selectedSessionKey]);
 
+  useEffect(() => {
+    if (configActiveTab && configActiveTab !== activeTab) {
+      setActiveTab(configActiveTab);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [configActiveTab]);
+
   // Stable ref for onConfigChange to avoid re-triggering the persist effect
   // when Dashboard re-renders and creates a new closure.
   const onConfigChangeRef = useRef(onConfigChange);
@@ -101,8 +121,8 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
   // On unmount, flush the pending save instead of discarding it so navigation
   // within 500ms doesn't silently drop the user's last selection.
   const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const persistValuesRef = useRef({ agentId: selectedAgentId, sessionKey: selectedSessionKey });
-  persistValuesRef.current = { agentId: selectedAgentId, sessionKey: selectedSessionKey };
+  const persistValuesRef = useRef({ agentId: selectedAgentId, sessionKey: selectedSessionKey, activeTab });
+  persistValuesRef.current = { agentId: selectedAgentId, sessionKey: selectedSessionKey, activeTab };
   const persistMountedRef = useRef(false);
 
   useEffect(() => {
@@ -113,7 +133,7 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
     }
     if (persistTimerRef.current) clearTimeout(persistTimerRef.current);
     persistTimerRef.current = setTimeout(() => {
-      onConfigChangeRef.current?.({ agentId: selectedAgentId, sessionKey: selectedSessionKey });
+      onConfigChangeRef.current?.({ agentId: selectedAgentId, sessionKey: selectedSessionKey, activeTab });
       persistTimerRef.current = null;
     }, 500);
     return () => {
@@ -124,7 +144,7 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
         onConfigChangeRef.current?.(persistValuesRef.current);
       }
     };
-  }, [selectedAgentId, selectedSessionKey]);
+  }, [selectedAgentId, selectedSessionKey, activeTab]);
 
   // Resolve the effective agent ID.  Priority:
   // 1. User's explicit selection (persisted or in-session)
@@ -159,24 +179,33 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
   // The format follows OpenClaw's session key pattern: agent:{agentId}:main
   const sessionKey = selectedSessionKey || `agent:${currentAgentId}:main`;
 
-  // AI provider switching
+  // AI provider switching — driven by tab selection
   const { provider: activeProvider } = useAIProviderSafe();
+
+  // Map tab to effective provider: openclaw & hermes both use gateway hook
+  const effectiveProvider = activeTab === "claude-code" ? "claude-code"
+    : activeTab === "codex" ? "codex"
+    : "gateway"; // openclaw + hermes both go through gateway
 
   const gatewayChat = useGatewayChat({
     sessionKey,
-    autoConnect: activeProvider !== "claude-code" && activeProvider !== "codex",
-    backend: (currentAgent as any)?.backend || "openclaw",
+    autoConnect: effectiveProvider === "gateway",
+    backend: activeTab === "hermes" ? "hermes" : "openclaw",
   });
 
   const claudeCodeChat = useClaudeCodeChat({
     sessionKey,
-    autoConnect: activeProvider === "claude-code",
+    autoConnect: effectiveProvider === "claude-code",
   });
 
   const codexChat = useCodexChat({
     sessionKey,
-    autoConnect: activeProvider === "codex",
+    autoConnect: effectiveProvider === "codex",
   });
+
+  const activeChat = effectiveProvider === "claude-code" ? claudeCodeChat
+    : effectiveProvider === "codex" ? codexChat
+    : gatewayChat;
 
   const {
     messages,
@@ -192,9 +221,9 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
     loadMoreHistory,
     clearChat,
     setSessionKey,
-  } = activeProvider === "claude-code" ? claudeCodeChat
-    : activeProvider === "codex" ? codexChat
-    : gatewayChat;
+    model: currentModel,
+    setModel: setCurrentModel,
+  } = activeChat;
 
   // Unified tool state management - handles ALL tool types!
   const { toolStates, toggleToolExpansion, resetToolStates } = useUnifiedToolState(messages as any);
@@ -210,27 +239,26 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
   // Show skeleton until agents are loaded, WS is connected, and first history load completes.
   // Once true, never resets — subsequent session switches keep existing UI visible.
   const initialLoadDoneRef = useRef(false);
+  const initialLoadingRef = useRef(false);
   const [initialReady, setInitialReady] = useState(false);
 
   useEffect(() => {
-    if (initialLoadDoneRef.current) return; // already done, never re-show skeleton
-    if (!agentsLoading && isConnected) {
-      // Set ref synchronously to prevent duplicate fires while async work is in flight
-      initialLoadDoneRef.current = true;
-      // Agents loaded + connected — load history and sessions in parallel
-      Promise.all([
-        loadChatHistory(),
-        gatewayConnection.isConnected()
-          ? gatewayConnection.listSessions(currentAgentId, 20).then(r => {
-              setSessions(r.sessions || []);
-            }).catch((err) => {
-              console.warn("[GatewayChat] Initial session list fetch failed:", err);
-            })
-          : Promise.resolve(),
-      ]).then(() => {
+    if (initialLoadDoneRef.current || initialLoadingRef.current) return;
+    if (agentsLoading) return;
+
+    // Guard: mark loading in-flight so concurrent effect runs don't duplicate
+    initialLoadingRef.current = true;
+
+    // Attempt to load chat history (will silently no-op if gateway is
+    // not yet connected for OpenClaw; file-based hooks handle their own I/O).
+    loadChatHistory()
+      .catch(() => {})
+      .finally(() => {
+        initialLoadDoneRef.current = true;
+        initialLoadingRef.current = false;
         setInitialReady(true);
+        fetchSessions();
       });
-    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentsLoading, isConnected]);
 
@@ -242,49 +270,81 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
     if (!initialLoadDoneRef.current) return; // initial load handles first fetch
     if (!sessionKey || sessionKey === prevSessionKeyRef.current) return;
     prevSessionKeyRef.current = sessionKey;
-    if (isConnected) {
-      loadChatHistory();
-    }
-  }, [isConnected, loadChatHistory, sessionKey]);
+    // Always attempt to load — each hook handles unavailability gracefully:
+    //   - Gateway: returns early if WS not connected
+    //   - Claude Code / Codex: loads from disk via Electron IPC
+    //   - Hermes: loads from IPC or localStorage fallback
+    loadChatHistory();
+  }, [loadChatHistory, sessionKey]);
 
-  // Fetch sessions when agent changes (not on every connection toggle).
-  // Initial load is handled by the parallel fetch above, so skip if not ready yet.
-  const prevAgentIdForSessionsRef = useRef(currentAgentId);
-  useEffect(() => {
-    if (!initialLoadDoneRef.current) return; // initial load handles its own fetch
-    if (prevAgentIdForSessionsRef.current === currentAgentId) return;
-    prevAgentIdForSessionsRef.current = currentAgentId;
-    const fetchSessions = async () => {
-      if (!gatewayConnection.isConnected()) return;
-      setSessionsLoading(true);
-      try {
-        const result = await gatewayConnection.listSessions(currentAgentId, 20);
-        setSessions(result.sessions || []);
-      } catch (err) {
-        console.error("[GatewayChat] Failed to fetch sessions:", err);
-        setSessions([]);
-      } finally {
-        setSessionsLoading(false);
-      }
-    };
-    fetchSessions();
-  }, [currentAgentId]);
-
-  // Manual fetch sessions callback (for dropdown)
+  // Fetch sessions scoped to the active backend tab
   const fetchSessions = useCallback(async () => {
-    if (!gatewayConnection.isConnected()) return;
     setSessionsLoading(true);
     setSessionsError(null);
     try {
-      const result = await gatewayConnection.listSessions(currentAgentId, 50);
-      setSessions(result.sessions || []);
+      let result: Array<{ key: string; label?: string; updatedAt?: number }> = [];
+
+      if (activeTab === "openclaw") {
+        // OpenClaw sessions — live on the gateway
+        if (gatewayConnection.isConnected()) {
+          const r = await gatewayConnection.listSessions(currentAgentId, 50).catch(() => ({ sessions: [] as any[] }));
+          result = (r.sessions || []).map((s: any) => ({ ...s, label: s.label || s.key }));
+        }
+      } else if (activeTab === "hermes") {
+        // Hermes sessions — read from ~/.hermes/sessions/ via Electron IPC
+        if (typeof window !== "undefined" && window.electronAPI?.hermes?.listSessions) {
+          const r = await bridgeInvoke("hermes-list-sessions", {}).catch(() => ({ sessions: [] })) as any;
+          result = (r?.sessions || []).map((s: any) => ({
+            key: s.key || `hermes:${s.id}`,
+            label: s.label || s.id?.slice(0, 16),
+            updatedAt: s.updatedAt,
+          }));
+        }
+      } else if (activeTab === "claude-code") {
+        // Claude Code sessions (Electron only)
+        if (typeof window !== "undefined" && window.electronAPI?.claudeCode?.listSessions) {
+          const r = await bridgeInvoke("claude-code-list-sessions", {}).catch(() => ({ sessions: [] })) as any;
+          result = (r?.sessions || []).map((s: any) => ({
+            key: s.key || `claude:${s.id}`,
+            label: s.label || s.id?.slice(0, 8),
+            updatedAt: s.updatedAt,
+          }));
+        }
+      } else if (activeTab === "codex") {
+        // Codex sessions (Electron only)
+        if (typeof window !== "undefined" && window.electronAPI?.codex?.listSessions) {
+          const r = await bridgeInvoke("codex-list-sessions", {}).catch(() => ({ sessions: [] })) as any;
+          result = (r?.sessions || []).map((s: any) => ({
+            key: s.key || `codex:${s.id}`,
+            label: s.label || s.id?.slice(0, 8),
+            updatedAt: s.updatedAt,
+          }));
+        }
+      }
+
+      result.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+      setSessions(result);
     } catch (err) {
       console.error("[GatewayChat] Failed to fetch sessions:", err);
       setSessionsError(err instanceof Error ? err.message : "Failed to load sessions");
     } finally {
       setSessionsLoading(false);
     }
-  }, [currentAgentId]);
+  }, [currentAgentId, activeTab]);
+
+  // Fetch sessions when agent or tab changes. Session listing for Claude
+  // Code / Codex / Hermes reads from local files (Electron IPC) and doesn't
+  // require the gateway to be connected, so don't gate on initialLoadDoneRef.
+  const prevAgentIdForSessionsRef = useRef(currentAgentId);
+  const prevTabForSessionsRef = useRef(activeTab);
+  useEffect(() => {
+    const agentChanged = prevAgentIdForSessionsRef.current !== currentAgentId;
+    const tabChanged = prevTabForSessionsRef.current !== activeTab;
+    if (!agentChanged && !tabChanged) return;
+    prevAgentIdForSessionsRef.current = currentAgentId;
+    prevTabForSessionsRef.current = activeTab;
+    fetchSessions();
+  }, [currentAgentId, activeTab, fetchSessions]);
 
   // New chat — create a brand new session key so the old session is preserved
   const handleNewChat = useCallback(async () => {
@@ -295,13 +355,8 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
     setSessionContextTokens(null);
     setSessionTotalTokens(null);
     // Refresh session list so the previous session appears in history
-    if (gatewayConnection.isConnected()) {
-      try {
-        const result = await gatewayConnection.listSessions(currentAgentId, 50);
-        setSessions(result.sessions || []);
-      } catch {}
-    }
-  }, [setSessionKey, currentAgentId]);
+    fetchSessions();
+  }, [setSessionKey, currentAgentId, fetchSessions]);
 
   // Reload chat — re-fetch messages from server
   const handleReloadChat = useCallback(() => {
@@ -325,6 +380,20 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
   const [messageQueue, setMessageQueue] = useState<
     Array<{ id: string; text: string; displayText: string; attachments?: GatewayChatAttachment[] }>
   >([]);
+
+  // Handle tab change — switch backend, auto-select first agent, and re-fetch sessions
+  const handleTabChange = useCallback((tab: BackendTab) => {
+    setActiveTab(tab);
+    const tabFiltered = agents.filter((a) => ((a as any).backend || "openclaw") === tab);
+    const firstAgent = tabFiltered[0];
+    // Use the first agent in the tab, or a synthetic placeholder for empty tabs
+    const agentId = firstAgent?.id || tab;
+    setSelectedAgentId(agentId);
+    setUserHasSelectedAgent(true);
+    const newSessionKey = `agent:${agentId}:main`;
+    setSelectedSessionKey(newSessionKey);
+    setSessionKey(newSessionKey);
+  }, [agents, setSessionKey]);
 
   // Handle agent change - properly reset all state for new agent
   const handleAgentChange = useCallback((agentId: string) => {
@@ -717,13 +786,27 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
   };
 
   // Get agent identity from OpenClaw (avatar, name, emoji)
-  const agentIdentity = useAgentIdentity(currentAgentId);
-  const agentNameStr = agentIdentity?.name || (typeof currentAgent.name === "string" ? currentAgent.name : "");
-  const agentAvatarUrl = resolveAvatarUrl(agentIdentity?.avatar);
-  const agentAvatarText = isAvatarText(agentIdentity?.avatar) ? agentIdentity!.avatar! : undefined;
+  const isProviderTab = activeTab === "claude-code" || activeTab === "codex" || activeTab === "hermes";
+  const agentIdentity = useAgentIdentity(isProviderTab ? undefined : currentAgentId);
+  const agentNameStr = activeTab === "claude-code"
+    ? "Claude Code"
+    : activeTab === "codex"
+      ? "Codex"
+      : activeTab === "hermes"
+        ? "Hermes Agent"
+        : agentIdentity?.name || (typeof currentAgent.name === "string" ? currentAgent.name : "");
+  const agentAvatarUrl = isProviderTab ? undefined : resolveAvatarUrl(agentIdentity?.avatar);
+  const agentAvatarText = isProviderTab ? undefined : (isAvatarText(agentIdentity?.avatar) ? agentIdentity!.avatar! : undefined);
+
   const assistantAvatar = {
-    src: agentAvatarUrl,
-    fallback: agentAvatarText || agentIdentity?.emoji || agentNameStr.slice(0, 2).toUpperCase() || "AI",
+    src: activeTab === "hermes" ? "/assets/hermes-agent.png"
+      : activeTab === "claude-code" ? "/assets/claude-code.svg"
+      : activeTab === "codex" ? "/assets/codex.svg"
+      : agentAvatarUrl,
+    fallback: activeTab === "claude-code" ? "CC"
+      : activeTab === "codex" ? "CX"
+      : activeTab === "hermes" ? "H"
+      : agentAvatarText || agentIdentity?.emoji || agentNameStr.slice(0, 2).toUpperCase() || "AI",
     alt: agentNameStr || "AI Assistant",
   };
 
@@ -800,6 +883,10 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
           sessionsLoading={sessionsLoading}
           sessionsError={sessionsError}
           isConnected={isConnected}
+          activeTab={activeTab}
+          onTabChange={handleTabChange}
+          currentModel={currentModel || ""}
+          onModelChange={setCurrentModel}
         />
 
         <div className="flex flex-col w-full flex-1 p-0 overflow-hidden">
@@ -833,7 +920,10 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
                       personality={{
                         name: agentNameStr || currentAgent.name,
                         coverPhoto: "",
-                        tag: "OpenClaw Agent",
+                        tag: activeTab === "hermes" ? "Hermes Agent"
+                          : activeTab === "claude-code" ? "Claude Code"
+                          : activeTab === "codex" ? "Codex"
+                          : "OpenClaw Agent",
                       }}
                       suggestions={[]}
                       onSuggestionClick={() => {}}

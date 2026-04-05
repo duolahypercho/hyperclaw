@@ -29,8 +29,8 @@ function loadGuidedState(): GuidedState {
   return { completedSteps: [] };
 }
 
-function saveGuidedState(state: GuidedState) {
-  dashboardState.set(GUIDED_STATE_KEY, JSON.stringify(state));
+function saveGuidedState(state: GuidedState, flush = false) {
+  dashboardState.set(GUIDED_STATE_KEY, JSON.stringify(state), { flush });
 }
 
 interface GuidedSetupProps {
@@ -159,16 +159,17 @@ export default function GuidedSetup({ onComplete }: GuidedSetupProps) {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const completeStep = useCallback((step: number, data?: Partial<GuidedState>) => {
+    const isFinal = step >= TOTAL_STEPS;
     setGuidedState((prev) => {
       const next: GuidedState = {
         ...prev,
         ...data,
         completedSteps: [...new Set([...prev.completedSteps, step])],
       };
-      saveGuidedState(next);
+      saveGuidedState(next, isFinal);
       return next;
     });
-    if (step >= TOTAL_STEPS) {
+    if (isFinal) {
       onComplete();
     } else {
       setDirection(1);

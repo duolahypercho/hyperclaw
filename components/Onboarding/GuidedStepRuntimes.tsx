@@ -1,6 +1,6 @@
 import React, { useState, useId, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Eye, EyeOff, ChevronDown, Plus, X, Search } from "lucide-react";
+import { Eye, EyeOff, ChevronDown, Plus, X, Search, Download } from "lucide-react";
 import { PROVIDER_ICONS } from "./ProviderIcons";
 
 /*
@@ -257,6 +257,13 @@ function AddedPill({ provider, onRemove }: { provider: ProviderDef; onRemove: ()
 
 // --- Main component ---
 
+// --- Detected provider from local tools ---
+
+interface DetectedProvider {
+  providerId: string;
+  source: string; // "openclaw" | "hermes"
+}
+
 export default function GuidedStepRuntimes({ onComplete }: GuidedStepRuntimesProps) {
   const scopeId = useId().replace(/:/g, "");
   const [added, setAdded] = useState<Record<string, { apiKey: string; model: string }>>({});
@@ -265,9 +272,44 @@ export default function GuidedStepRuntimes({ onComplete }: GuidedStepRuntimesPro
   const [search, setSearch] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
 
+  // Auto-detect existing provider keys from OpenClaw / Hermes
+  const [detectedProviders, setDetectedProviders] = useState<DetectedProvider[]>([]);
+  const [importingProvider, setImportingProvider] = useState<string | null>(null);
+  const [dismissedDetection, setDismissedDetection] = useState(false);
+  const [isAnimating, setIsAnimating] = useState(false);
+
+  useEffect(() => {
+    if (typeof window !== "undefined" && window.electronAPI?.runtimes?.detectProviderKeys) {
+      window.electronAPI.runtimes.detectProviderKeys()
+        .then((results) => setDetectedProviders(results || []))
+        .catch(() => {});
+    }
+  }, []);
+
+  async function importDetectedProvider(det: DetectedProvider) {
+    if (!window.electronAPI?.runtimes?.importProviderKey) return;
+    setImportingProvider(det.providerId);
+    try {
+      const { apiKey } = await window.electronAPI.runtimes.importProviderKey({
+        providerId: det.providerId,
+        source: det.source,
+      });
+      if (apiKey) {
+        const p = PROVIDERS.find((x) => x.id === det.providerId);
+        if (p) {
+          setAdded((prev) => ({ ...prev, [det.providerId]: { apiKey, model: p.models[0].id } }));
+          // Remove from detected list after import
+          setDetectedProviders((prev) => prev.filter((d) => d.providerId !== det.providerId));
+        }
+      }
+    } catch { /* ignore */ }
+    setImportingProvider(null);
+  }
+
   function selectProvider(id: string) {
     const p = PROVIDERS.find((x) => x.id === id)!;
     setAdded((prev) => ({ ...prev, [id]: prev[id] || { apiKey: "", model: p.models[0].id } }));
+    setIsAnimating(true);
     setEditingProvider(id);
     setSearch("");
   }
@@ -286,6 +328,7 @@ export default function GuidedStepRuntimes({ onComplete }: GuidedStepRuntimesPro
     if (editingProvider && !added[editingProvider]?.apiKey?.trim()) {
       removeProvider(editingProvider);
     }
+    setIsAnimating(true);
     setEditingProvider(null);
   }
 
@@ -330,6 +373,7 @@ export default function GuidedStepRuntimes({ onComplete }: GuidedStepRuntimesPro
     : availableFeatured;
 
   const addedProvidersList = PROVIDERS.filter((p) => addedIds.has(p.id) && p.id !== editingProvider);
+  const availableDetected = detectedProviders.filter((d) => !addedIds.has(d.providerId));
   const editingProviderDef = editingProvider ? PROVIDERS.find((p) => p.id === editingProvider) : null;
 
   const scrollClass = `scroll-${scopeId}`;
@@ -338,7 +382,7 @@ export default function GuidedStepRuntimes({ onComplete }: GuidedStepRuntimesPro
   const isEditing = editingProvider !== null;
 
   return (
-    <motion.div className="text-center space-y-6" variants={stagger} initial="hidden" animate="show">
+    <motion.div className="text-center space-y-6 flex flex-col" style={{ maxHeight: "calc(100vh - 160px)" }} variants={stagger} initial="hidden" animate="show">
       <style>{`
         .${scrollClass}::-webkit-scrollbar { width: 4px; }
         .${scrollClass}::-webkit-scrollbar-track { background: transparent; }
@@ -359,11 +403,10 @@ export default function GuidedStepRuntimes({ onComplete }: GuidedStepRuntimesPro
       </motion.div>
 
       <motion.div
-        className={`max-w-sm mx-auto text-left overflow-y-auto overflow-x-hidden ${scrollClass}`}
-        style={{ maxHeight: "clamp(200px, calc(100vh - 380px), 500px)" }}
+        className={`${isEditing || isAnimating ? "overflow-hidden" : `overflow-y-auto overflow-x-hidden ${scrollClass}`} ${isEditing ? "w-full px-4" : "max-w-sm"} mx-auto text-left flex-1 min-h-0`}
         variants={fadeUp}
       >
-        <AnimatePresence mode="wait">
+        <AnimatePresence mode="wait" onExitComplete={() => setIsAnimating(false)}>
           {isEditing && editingProviderDef ? (
             /* ---- EDITING MODE: only show the selected provider's config ---- */
             <motion.div key="editing" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.25, ease: EASE }}>
@@ -444,13 +487,65 @@ export default function GuidedStepRuntimes({ onComplete }: GuidedStepRuntimesPro
               {isSearching && visiblePickers.length === 0 && (
                 <p className="text-[11px] text-white/25 text-center py-4">No providers match "{search}"</p>
               )}
+
+              {/* Detected existing keys — shown below providers */}
+              {!dismissedDetection && availableDetected.length > 0 && (
+                <motion.div
+                  className="mt-4 rounded-xl border border-blue-500/20 bg-blue-500/[0.06] p-3.5"
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.3, ease: EASE }}
+                >
+                  <div className="flex items-start justify-between gap-2 mb-2.5">
+                    <p className="text-[12px] text-white/50">
+                      We found existing keys on this machine. Import them?
+                    </p>
+                    <button
+                      onClick={() => setDismissedDetection(true)}
+                      className="p-0.5 text-white/20 hover:text-white/40 transition-colors shrink-0"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                  <div className="space-y-1.5">
+                    {availableDetected.map((det) => {
+                      const p = PROVIDERS.find((x) => x.id === det.providerId);
+                      if (!p) return null;
+                      const isImporting = importingProvider === det.providerId;
+                      return (
+                        <button
+                          key={det.providerId}
+                          onClick={() => importDetectedProvider(det)}
+                          disabled={isImporting}
+                          className="w-full flex items-center gap-3 px-3 py-2 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] border border-white/8 hover:border-white/15 transition-all text-left"
+                        >
+                          <div className="w-6 h-6 rounded-md flex items-center justify-center shrink-0 bg-white/[0.06]">
+                            <ProviderMark id={p.id} color={p.color} />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <span className="text-[12px] text-white/80">{p.name}</span>
+                            <span className="text-[10px] text-white/25 ml-2">
+                              via {det.source === "openclaw" ? "OpenClaw" : "Hermes"}
+                            </span>
+                          </div>
+                          {isImporting ? (
+                            <span className="text-[10px] text-blue-400/60">importing...</span>
+                          ) : (
+                            <Download className="w-3.5 h-3.5 text-blue-400/40" />
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </motion.div>
+              )}
             </motion.div>
           )}
         </AnimatePresence>
       </motion.div>
 
       {/* Continue */}
-      <motion.div variants={fadeUp} className="space-y-2">
+      <motion.div variants={fadeUp} className="space-y-2 shrink-0 pb-2">
         <motion.button onClick={handleContinue} disabled={!canContinue}
           className={`min-h-[44px] px-8 py-2.5 rounded-lg text-sm font-medium transition-all ${
             canContinue

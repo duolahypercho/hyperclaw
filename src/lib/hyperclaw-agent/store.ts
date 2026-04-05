@@ -104,7 +104,8 @@ const NS = {
 // ---------------------------------------------------------------------------
 
 export class OrchestratorStore {
-  private intel: IntelOperations;
+  /** Exposed for direct SQL from the chat engine. */
+  readonly intel: IntelOperations;
   private initialized = false;
 
   constructor(intel: IntelOperations) {

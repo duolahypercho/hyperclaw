@@ -31,7 +31,6 @@ import Loading from "$/components/Loading";
 import { PricingModalProvider, usePricingModal } from "$/Providers/PricingModalProv";
 import PricingModal from "$/components/Navigation/PricingModal";
 import { useDevices } from "$/hooks/useDevices";
-import DeviceSetup from "$/components/Onboarding/DeviceSetup";
 import GuidedSetup from "$/components/Onboarding/GuidedSetup";
 import { dashboardState } from "$/lib/dashboard-state";
 
@@ -42,10 +41,12 @@ const MainLayout = ({ children }: any) => {
   const { publicTools } = useOS();
   const { status } = useUser();
   const hasBeenAuthenticatedRef = useRef(false);
-  const [setupSkipped, setSetupSkipped] = useState(false);
   const [guidedSetupComplete, setGuidedSetupComplete] = useState(() => {
     if (typeof window === "undefined") return true;
-    const state = dashboardState.get("guided-setup-state");
+    // Try in-memory cache first, then localStorage backup (cache may not be hydrated yet)
+    const state =
+      dashboardState.get("guided-setup-state") ||
+      (() => { try { return localStorage.getItem("ds:guided-setup-state"); } catch { return null; } })();
     if (state) {
       try {
         const parsed = JSON.parse(state);
@@ -53,7 +54,10 @@ const MainLayout = ({ children }: any) => {
       } catch { /* fall through */ }
     }
     // Check if user has saved layouts (existing user, not first-time)
-    return !!dashboardState.get("dashboard-layout");
+    return !!(
+      dashboardState.get("dashboard-layout") ||
+      (() => { try { return localStorage.getItem("ds:dashboard-layout"); } catch { return null; } })()
+    );
   });
 
   // Check devices from hub — only fetch once authenticated so the JWT is
@@ -81,17 +85,12 @@ const MainLayout = ({ children }: any) => {
   const showAppWithLayout =
     status === "authenticated" || (hasBeenAuthenticatedRef.current && status === "loading");
 
-  const showGuidedOnboarding = !guidedSetupComplete && !setupSkipped;
+  const showGuidedOnboarding = !guidedSetupComplete;
 
   //onst showGuideOnboarding = true; // DEBUG: force onboarding — revert before shipping
 
   const handleGuidedSetupComplete = useCallback(() => {
     setGuidedSetupComplete(true);
-    refetchDevices();
-  }, [refetchDevices]);
-
-  const handleSetupComplete = useCallback(() => {
-    setSetupSkipped(true);
     refetchDevices();
   }, [refetchDevices]);
 

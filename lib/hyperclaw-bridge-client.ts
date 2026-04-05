@@ -22,6 +22,10 @@ export async function bridgeInvoke(action: string, body: BridgeBody = {}): Promi
         return cc.send(body as Parameters<typeof cc.send>[0]);
       case "claude-code-abort":
         return cc.abort(body as Parameters<typeof cc.abort>[0]);
+      case "claude-code-list-sessions":
+        return cc.listSessions();
+      case "claude-code-load-history":
+        return cc.loadHistory(body as Parameters<typeof cc.loadHistory>[0]);
       default:
         break;
     }
@@ -41,6 +45,27 @@ export async function bridgeInvoke(action: string, body: BridgeBody = {}): Promi
         return cx.send(body as Parameters<typeof cx.send>[0]);
       case "codex-abort":
         return cx.abort(body as Parameters<typeof cx.abort>[0]);
+      case "codex-list-sessions":
+        return cx.listSessions();
+      case "codex-load-history":
+        return cx.loadHistory(body as Parameters<typeof cx.loadHistory>[0]);
+      default:
+        break;
+    }
+  }
+
+  // Route Hermes actions through dedicated Electron IPC when available
+  if (
+    typeof window !== "undefined" &&
+    window.electronAPI?.hermes &&
+    action.startsWith("hermes-")
+  ) {
+    const hm = window.electronAPI.hermes;
+    switch (action) {
+      case "hermes-list-sessions":
+        return hm.listSessions();
+      case "hermes-load-history":
+        return hm.loadHistory(body as Parameters<typeof hm.loadHistory>[0]);
       default:
         break;
     }
