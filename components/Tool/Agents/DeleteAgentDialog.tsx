@@ -20,6 +20,7 @@ export interface DeleteAgentDialogProps {
   agentId: string;
   agentDisplayName: string;
   onSuccess?: () => void;
+  onDeleteStart?: () => void;
   /** When true, dialog will not show / will close immediately (e.g. first agent is not deletable). */
   isFirstAgent?: boolean;
 }
@@ -30,6 +31,7 @@ export function DeleteAgentDialog({
   agentId,
   agentDisplayName,
   onSuccess,
+  onDeleteStart,
   isFirstAgent = false,
 }: DeleteAgentDialogProps) {
   const [submitting, setSubmitting] = useState(false);
@@ -51,6 +53,7 @@ export function DeleteAgentDialog({
   const handleConfirm = useCallback(async () => {
     setError(null);
     setSubmitting(true);
+    onDeleteStart?.();
     try {
       const result = (await bridgeInvoke("delete-agent", { agentId })) as {
         success?: boolean;

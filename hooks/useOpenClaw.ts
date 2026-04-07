@@ -297,44 +297,6 @@ export function useOpenClaw(autoRefreshMs = 0) {
         role: (a as any).role,
         lastActive: (a as any).lastActive,
       }));
-      // OpenClaw agents stay as-is — no filtering. The "hermes" agent in OpenClaw
-      // is an OpenClaw agent, not the hermes-agent runtime.
-
-      // Inject runtime agents (separate from OpenClaw agents)
-      // These appear under their own tabs, not under OpenClaw.
-
-      // Hermes runtime — the hermes-agent project at ~/code/hermes-agent
-      try {
-        const hermesResult = await bridgeInvoke("hermes-health") as { available?: boolean } | null;
-        if (hermesResult?.available) {
-          mapped.push({
-            id: "hermes-runtime",
-            name: "Hermes",
-            status: "online",
-            role: "Self-improving AI agent runtime",
-            backend: "hermes" as const,
-          });
-        }
-      } catch { /* Hermes runtime not available */ }
-
-      // Claude Code runtime
-      mapped.push({
-        id: "claude-code",
-        name: "Claude Code",
-        status: "idle",
-        role: "AI coding assistant",
-        backend: "claude-code" as const,
-      });
-
-      // Codex runtime
-      mapped.push({
-        id: "codex",
-        name: "Codex",
-        status: "idle",
-        role: "AI coding agent",
-        backend: "codex" as const,
-      });
-
       const finalAgents = mapped;
 
       setState((prev) => ({ ...prev, agents: finalAgents, errors: { ...prev.errors, agents: null } }));

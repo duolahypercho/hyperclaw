@@ -75,7 +75,9 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
   const [footerState, setFooterState] = useState<FooterSaveState>({
     isDirty: false, saving: false, saved: false, save: null,
   });
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deleteState, setDeleteState] = useState<"idle" | "deleting" | "deleted">("idle");
   const chatRef = useRef<PanelChatViewHandle>(null);
 
   // Sync config on late hydration
@@ -155,7 +157,8 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
       <Card
         className={cn(
           "group h-full w-full flex flex-col overflow-hidden bg-card/70 backdrop-blur-xl border border-border transition-all duration-300 rounded-md",
-          isFocusModeActive && "border-transparent grayscale-[30%]"
+          isFocusModeActive && "border-transparent grayscale-[30%]",
+          deleteState !== "idle" && "border-destructive/30"
         )}
       >
         {/* ── Header: avatar + tabs + actions ── */}
@@ -175,7 +178,18 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
                 </AvatarFallback>
               </Avatar>
               <div className="min-w-0">
-                <h3 className="text-xs font-semibold truncate">{displayName}</h3>
+                <div className="flex items-center gap-1.5">
+                  <h3 className="text-xs font-semibold truncate">{displayName}</h3>
+                  {deleteState === "deleting" && (
+                    <span className="flex items-center gap-1 text-[10px] text-destructive shrink-0">
+                      <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                      Deleting…
+                    </span>
+                  )}
+                  {deleteState === "deleted" && (
+                    <span className="text-[10px] text-destructive shrink-0">Deleted</span>
+                  )}
+                </div>
                 <p className="text-[10px] text-muted-foreground truncate">{currentAgentId}</p>
               </div>
             </div>
@@ -225,7 +239,7 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
                   </Button>
                 </div>
               )}
-              <DropdownMenu>
+              <DropdownMenu open={moreMenuOpen} onOpenChange={setMoreMenuOpen}>
                 <DropdownMenuTrigger asChild>
                   <Button variant="ghost" size="iconSm" className="h-6 w-6" title="More options">
                     <MoreHorizontal className="w-3 h-3" />
@@ -235,16 +249,17 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
                   <DropdownMenuItem
                     className="text-destructive focus:text-destructive focus:bg-destructive/10 gap-2 text-xs"
                     disabled={isFirstAgent}
-                    onSelect={() => setDeleteDialogOpen(true)}
+                    onSelect={(e) => {
+                      e.preventDefault();
+                      setMoreMenuOpen(false);
+                      setDeleteDialogOpen(true);
+                    }}
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                     Delete agent
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
-              <Button variant="ghost" size="iconSm" onClick={onMaximize} className="h-6 w-6">
-                {isMaximized ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
-              </Button>
             </div>
           </div>
 
@@ -334,7 +349,15 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
         agentId={currentAgentId}
         agentDisplayName={displayName}
         isFirstAgent={isFirstAgent}
-        onSuccess={() => setSelectedAgentId(agents.find((a) => a.id !== currentAgentId)?.id)}
+        onDeleteStart={() => setDeleteState("deleting")}
+        onSuccess={() => {
+          setDeleteState("deleted");
+          // Brief pause so user sees "Deleted" status before switching agents
+          setTimeout(() => {
+            setDeleteState("idle");
+            setSelectedAgentId(agents.find((a) => a.id !== currentAgentId)?.id);
+          }, 1200);
+        }}
       />
     </motion.div>
   );
