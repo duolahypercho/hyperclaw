@@ -41,6 +41,7 @@ import {
   type AgentIdentity,
 } from "$/hooks/useAgentIdentity";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
+import { OPEN_AGENT_PANEL_EVENT } from "./AgentChatPanel";
 
 // ── Custom event for cross-widget communication ──
 // StatusWidget dispatches this; GatewayChatWidget listens.
@@ -49,6 +50,12 @@ export const OPEN_AGENT_CHAT_EVENT = "open-agent-chat";
 export function dispatchOpenAgentChat(agentId: string, sessionKey?: string) {
   window.dispatchEvent(
     new CustomEvent(OPEN_AGENT_CHAT_EVENT, { detail: { agentId, sessionKey } })
+  );
+}
+
+export function dispatchOpenAgentPanel(agentId: string, sessionKey?: string) {
+  window.dispatchEvent(
+    new CustomEvent(OPEN_AGENT_PANEL_EVENT, { detail: { agentId, sessionKey } })
   );
 }
 
@@ -407,22 +414,16 @@ const StatusWidgetContent = memo((props: CustomProps) => {
   const fetchInbox = useCallback(async () => {
     setInboxLoading(true);
     try {
-      const result = await bridgeInvoke("intel-query", {
-        sql: "SELECT * FROM inbox_items ORDER BY created_at DESC LIMIT 50",
-      });
-      const rows = (result as { rows?: InboxItem[] })?.rows || [];
-      if (isMounted.current) setInboxItems(rows);
-    } catch { /* table may not exist yet */ }
+      const result = await bridgeInvoke("inbox-list", { status: "pending", limit: 50 });
+      const items = (result as { items?: InboxItem[] })?.items || [];
+      if (isMounted.current) setInboxItems(items);
+    } catch { /* connector may not be connected yet */ }
     finally { if (isMounted.current) setInboxLoading(false); }
   }, []);
 
   const resolveInboxItem = useCallback(async (itemId: number, resolution: "approved" | "rejected" | "dismissed") => {
     try {
-      await bridgeInvoke("intel-update", {
-        table: "inbox_items",
-        data: { status: resolution, resolved_at: Date.now() },
-        where: { id: itemId },
-      });
+      await bridgeInvoke("inbox-resolve", { id: itemId, resolution });
       setInboxItems((prev) =>
         prev.map((item) => item.id === itemId ? { ...item, status: resolution } : item)
       );
@@ -633,13 +634,13 @@ const StatusWidgetContent = memo((props: CustomProps) => {
   const agentIds = useMemo(() => agents.map((a) => a.id), [agents]);
   const identities = useAgentIdentities(agentIds);
 
-  // Click handler: mark as read + switch chat widget to this agent
+  // Click handler: mark as read + open the agent chat panel
   const handleAgentClick = useCallback((agentId: string) => {
     setLastSeen(agentId, Date.now());
     setStatuses((prev) =>
       prev.map((s) => (s.agentId === agentId ? { ...s, unreadCount: 0 } : s))
     );
-    dispatchOpenAgentChat(agentId);
+    dispatchOpenAgentPanel(agentId);
   }, []);
 
   const unreadTotal = useMemo(

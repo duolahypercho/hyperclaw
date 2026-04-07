@@ -8,7 +8,6 @@ import {
   Columns3,
   Inbox,
   PlayCircle,
-  Eye,
   CheckCircle2,
   ArrowRight,
   ArrowRightLeft,
@@ -30,7 +29,6 @@ import {
   Ban,
   Pencil,
   Check,
-  RotateCcw,
   AlertTriangle,
   Zap,
 } from "lucide-react";
@@ -141,7 +139,7 @@ const AGENT_EVENT_TYPES: EventType[] = ["agent_started", "agent_completed", "age
 let _eventSeq = 0;
 function makeEventId() { return `evt-${Date.now()}-${++_eventSeq}`; }
 
-type KanbanStatus = "pending" | "in_progress" | "in_review" | "blocked" | "completed" | "cancelled";
+type KanbanStatus = "pending" | "in_progress" | "completed" | "cancelled";
 
 interface MiniColumnConfig {
   id: KanbanStatus;
@@ -165,13 +163,6 @@ const COLUMNS: MiniColumnConfig[] = [
     icon: <PlayCircle className="w-3 h-3" />,
     accentClass: "text-primary",
     dotClass: "bg-primary",
-  },
-  {
-    id: "in_review",
-    label: "Review",
-    icon: <Eye className="w-3 h-3" />,
-    accentClass: "text-amber-500",
-    dotClass: "bg-amber-500",
   },
   {
     id: "completed",
@@ -480,13 +471,12 @@ const MiniKanbanCard = React.forwardRef<HTMLDivElement, MiniKanbanCardProps>(
       return null;
     }, [columnId]);
     const isAgentRunning = useIsTaskRunningCron(task._id);
-    const isReviewColumn = columnId === "in_review";
     const stalled = columnId === "in_progress" && isTaskStalled(task);
 
     const hasMetaRow =
       task.createdAt || task.assignedAgent || task.assignedAgentId || task.linkedDocumentUrl;
 
-    const canDelete = columnId === "pending" || columnId === "in_review" || columnId === "cancelled";
+    const canDelete = columnId === "pending" || columnId === "cancelled";
 
     return (
       <ContextMenu>
@@ -502,7 +492,6 @@ const MiniKanbanCard = React.forwardRef<HTMLDivElement, MiniKanbanCardProps>(
             "group relative rounded-md border border-solid border-border/50 bg-card/60 px-2 py-1.5 cursor-pointer transition-colors hover:border-border hover:bg-card/90",
             (task.status === "completed" || task.status === "cancelled") && "opacity-60",
             isDragging && "opacity-50 scale-95",
-            isReviewColumn && "border-amber-500/40 bg-amber-500/5",
             stalled && "border-orange-500/50 bg-orange-500/5"
           )}
           onClick={() => onSelect(task._id)}
@@ -573,51 +562,21 @@ const MiniKanbanCard = React.forwardRef<HTMLDivElement, MiniKanbanCardProps>(
               )}
             </div>
             <div className="flex items-center gap-0.5 shrink-0 mt-0.5">
-              {isReviewColumn ? (
-                /* Approve / Reject for review cards — always visible */
-                <>
+              <>
+                {nextCol && (
                   <Button
                     variant="ghost"
                     size="iconSm"
-                    className="h-5 w-5 text-emerald-500 hover:text-emerald-400 hover:bg-emerald-500/10"
+                    className="h-4 w-4 opacity-0 group-hover:opacity-100 transition-opacity"
                     onClick={(e) => {
                       e.stopPropagation();
-                      onStatusChange(task._id, "completed");
+                      onStatusChange(task._id, nextCol.id);
                     }}
-                    title="Approve"
                   >
-                    <Check className="w-3 h-3" />
+                    <ArrowRight className="w-2.5 h-2.5" />
                   </Button>
-                  <Button
-                    variant="ghost"
-                    size="iconSm"
-                    className="h-5 w-5 text-orange-500 hover:text-orange-400 hover:bg-orange-500/10"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onStatusChange(task._id, "in_progress");
-                    }}
-                    title="Return to agent"
-                  >
-                    <RotateCcw className="w-3 h-3" />
-                  </Button>
-                </>
-              ) : (
-                <>
-                  {nextCol && (
-                    <Button
-                      variant="ghost"
-                      size="iconSm"
-                      className="h-4 w-4 opacity-0 group-hover:opacity-100 transition-opacity"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onStatusChange(task._id, nextCol.id);
-                      }}
-                    >
-                      <ArrowRight className="w-2.5 h-2.5" />
-                    </Button>
-                  )}
-                </>
-              )}
+                )}
+              </>
               {canDelete && (
                 <Button
                   variant="ghost"
@@ -732,15 +691,9 @@ const MiniKanbanColumn = memo<MiniKanbanColumnProps>(({
         <span className="text-xs font-medium text-foreground truncate">
           {column.label}
         </span>
-        {column.id === "in_review" && tasks.length > 0 ? (
-          <span className="ml-auto text-[10px] font-medium bg-amber-500 text-white rounded-full px-1.5 min-w-[18px] text-center">
-            {tasks.length}
-          </span>
-        ) : (
-          <span className="text-[11px] text-muted-foreground ml-auto font-normal">
-            {tasks.length}
-          </span>
-        )}
+        <span className="text-[11px] text-muted-foreground ml-auto font-normal">
+          {tasks.length}
+        </span>
       </div>
 
       <div className="flex-1 overflow-y-auto customScrollbar2 p-1 space-y-1 min-h-[48px]">
@@ -1717,8 +1670,6 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
     const g: Record<KanbanStatus, Task[]> = {
       pending: [],
       in_progress: [],
-      in_review: [],
-      blocked: [],
       completed: [],
       cancelled: [],
     };
@@ -1733,9 +1684,11 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
       const s = task.status as KanbanStatus;
       if (s === "completed") {
         if (isCompletedToday(task)) g.completed.push(task);
-      } else if (s === "blocked") {
-        // Map legacy "blocked" tasks to the review column
-        g.in_review.push(task);
+      } else if (s === "cancelled") {
+        // cancelled tasks not shown in columns
+      } else if (s === "in_progress" || (task.status as string) === "blocked" || (task.status as string) === "in_review") {
+        // Map legacy blocked/in_review → in_progress
+        g.in_progress.push(task);
       } else if (g[s]) {
         g[s].push(task);
       } else {
@@ -1747,9 +1700,7 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
 
   const handleMove = useCallback(
     (taskId: string, newStatus: KanbanStatus) => {
-      // Map the UI "in_review" column back to "blocked" for the provider
-      const providerStatus = newStatus === "in_review" ? "blocked" : newStatus;
-      handleStatusChange(taskId, providerStatus as Task["status"]);
+      handleStatusChange(taskId, newStatus as Task["status"]);
     },
     [handleStatusChange]
   );

@@ -11,6 +11,8 @@ import {
   StatusWidget,
   ChannelDashboardWidget,
   IntelligenceWidget,
+  AgentChatPanel,
+  OPEN_AGENT_PANEL_EVENT,
 } from "$/components/Home/widgets";
 import { useOS } from "@OS/Provider/OSProv";
 import { dashboardState } from "$/lib/dashboard-state";
@@ -85,6 +87,24 @@ const ACTIVE_PRESET_KEY = "dashboard-active-preset";
 
 export default function Home() {
   const { toolAbstracts } = useOS();
+
+  // ── Agent Chat Panel state ──
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [panelAgentId, setPanelAgentId] = useState("main");
+  const [panelSessionKey, setPanelSessionKey] = useState<string | undefined>();
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      const agentId = detail?.agentId as string | undefined;
+      if (!agentId) return;
+      setPanelAgentId(agentId);
+      setPanelSessionKey(detail?.sessionKey as string | undefined);
+      setPanelOpen(true);
+    };
+    window.addEventListener(OPEN_AGENT_PANEL_EVENT, handler);
+    return () => window.removeEventListener(OPEN_AGENT_PANEL_EVENT, handler);
+  }, []);
 
   // Active preset — persisted in dashboardState
   const [activePresetId, setActivePresetId] = useState<LayoutPresetId>(() => {
@@ -228,6 +248,14 @@ export default function Home() {
       >
         <Dashboard key={resetKey} widgets={widgets} />
       </div>
+
+      {/* Floating agent chat panel — opens when clicking an agent from StatusWidget */}
+      <AgentChatPanel
+        open={panelOpen}
+        agentId={panelAgentId}
+        sessionKey={panelSessionKey}
+        onClose={() => setPanelOpen(false)}
+      />
     </div>
   );
 }

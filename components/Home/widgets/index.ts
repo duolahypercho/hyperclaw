@@ -32,3 +32,7 @@ export {
   default as IntelligenceWidget,
   IntelligenceCustomHeader,
 } from "./IntelligenceWidget";
+export {
+  AgentChatPanel,
+  OPEN_AGENT_PANEL_EVENT,
+} from "./AgentChatPanel";
