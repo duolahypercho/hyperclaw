@@ -44,6 +44,7 @@ import SessionHistoryDropdown from "$/components/SessionHistoryDropdown";
 import { OPEN_AGENT_CHAT_EVENT } from "./StatusWidget";
 import { OPEN_AGENT_PANEL_EVENT } from "./AgentChatPanel";
 import type { BackendTab } from "./gateway-chat/GatewayChatHeader";
+import AgentStatsTab from "./AgentStatsTab";
 
 /* ── Tab definitions ──────────────────────────────────────── */
 
@@ -55,7 +56,7 @@ const TAB_FILES = [
   { key: "HEARTBEAT", label: "Heartbeat", desc: "Periodic tasks & health checks" },
 ] as const;
 
-type WidgetTab = "CHAT" | "INFO" | (typeof TAB_FILES)[number]["key"];
+type WidgetTab = "CHAT" | "INFO" | "STATS" | (typeof TAB_FILES)[number]["key"];
 
 /* ── Widget content ────────────────────────────────────────── */
 
@@ -143,7 +144,9 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
     };
   }, [currentAgentId]);
 
-  const isEditorTab = activeTab !== "CHAT";
+  const isEditorTab = activeTab !== "CHAT" && activeTab !== "STATS";
+  const showChatActions = activeTab === "CHAT";
+  const showSaveButton = isEditorTab;
 
   return (
     <motion.div
@@ -195,7 +198,7 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
             </div>
             <div className="flex items-center gap-1 shrink-0">
               {/* Chat actions — only on Chat tab */}
-              {!isEditorTab && (
+              {showChatActions && (
                 <>
                   <Button variant="ghost" size="iconSm" className="h-6 w-6" onClick={() => chatRef.current?.reload()} title="Reload chat">
                     <RefreshCw className="w-3 h-3" />
@@ -215,7 +218,7 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
                 </>
               )}
               {/* Save button — only on editor tabs when dirty */}
-              {isEditorTab && (
+              {showSaveButton && (
                 <div className="flex items-center gap-1.5">
                   {footerState.saved && (
                     <span className="text-[10px] text-emerald-500">Saved</span>
@@ -268,7 +271,7 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
             <button
               onClick={() => setActiveTab("CHAT")}
               className={cn(
-                "px-2 py-1 text-[10px] font-medium rounded-t-md transition-all duration-200 border-b-1 border-solid border-t-0 border-l-0 border-r-0 shrink-0",
+                "px-2 py-1 text-[10px] font-medium rounded-md transition-all duration-200 shrink-0",
                 activeTab === "CHAT"
                   ? "border-border text-foreground bg-primary/5"
                   : "border-transparent text-muted-foreground hover:text-foreground/70 hover:bg-muted/30"
@@ -279,7 +282,7 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
             <button
               onClick={() => setActiveTab("INFO")}
               className={cn(
-                "px-2 py-1 text-[10px] font-medium rounded-t-md transition-all duration-200 border-b-2 shrink-0",
+                "px-2 py-1 text-[10px] font-medium rounded-md transition-all duration-200 shrink-0",
                 activeTab === "INFO"
                   ? "border-primary text-foreground bg-primary/5"
                   : "border-transparent text-muted-foreground hover:text-foreground/70 hover:bg-muted/30"
@@ -287,12 +290,23 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
             >
               Info
             </button>
+            <button
+              onClick={() => setActiveTab("STATS")}
+              className={cn(
+                "px-2 py-1 text-[10px] font-medium rounded-md transition-all duration-200 shrink-0",
+                activeTab === "STATS"
+                  ? "border-primary text-foreground bg-primary/5"
+                  : "border-transparent text-muted-foreground hover:text-foreground/70 hover:bg-muted/30"
+              )}
+            >
+              Stats
+            </button>
             {TAB_FILES.map((tf) => (
               <button
                 key={tf.key}
                 onClick={() => setActiveTab(tf.key)}
                 className={cn(
-                  "px-2 py-1 text-[10px] font-medium rounded-t-md transition-all duration-200 border-b-2 shrink-0",
+                  "px-2 py-1 text-[10px] font-medium rounded-md transition-all duration-200 shrink-0",
                   activeTab === tf.key
                     ? "border-primary text-foreground bg-primary/5"
                     : "border-transparent text-muted-foreground hover:text-foreground/70 hover:bg-muted/30"
@@ -323,6 +337,12 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
                 identity={identity}
                 onStateChange={setFooterState}
               />
+            </div>
+          )}
+
+          {activeTab === "STATS" && (
+            <div className="flex-1 min-h-0 overflow-y-auto customScrollbar2 px-3 py-3">
+              <AgentStatsTab agentId={currentAgentId} />
             </div>
           )}
 

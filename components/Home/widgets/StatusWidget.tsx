@@ -664,7 +664,7 @@ const StatusWidgetContent = memo((props: CustomProps) => {
         )}
       >
         {/* Compact tab bar — no title, just tabs + controls */}
-        <div className="flex items-center gap-0.5 px-3 pt-2 pb-0 shrink-0 -mb-px">
+        <div className="flex items-center gap-0.5 px-3 pt-2 pb-2 shrink-0 -mb-px">
           {props.isEditMode && (
             <div className="cursor-move h-6 w-6 flex items-center justify-center shrink-0 mr-1">
               <GripVertical className="w-3 h-3 text-muted-foreground" />
@@ -673,7 +673,7 @@ const StatusWidgetContent = memo((props: CustomProps) => {
           <button
             onClick={() => setActiveTab("agents")}
             className={cn(
-              "px-2 py-1 text-[11px] font-medium transition-all duration-200 border-solid border-t-0 border-l-0 border-r-0 border-b-2 shrink-0",
+              "px-2 py-1 text-[11px] font-medium transition-all duration-200 rounded-md shrink-0",
               activeTab === "agents"
                 ? "border-primary text-foreground bg-primary/5"
                 : "border-transparent text-muted-foreground hover:text-foreground/70 hover:bg-muted/30"
@@ -685,7 +685,7 @@ const StatusWidgetContent = memo((props: CustomProps) => {
           <button
             onClick={() => setActiveTab("inbox")}
             className={cn(
-              "relative px-2 py-1 text-[11px] font-medium transition-all duration-200 border-solid border-t-0 border-l-0 border-r-0 border-b-2 shrink-0",
+              "relative px-2 py-1 text-[11px] font-medium transition-all duration-200 rounded-md shrink-0",
               activeTab === "inbox"
                 ? "border-primary text-foreground bg-primary/5"
                 : "border-transparent text-muted-foreground hover:text-foreground/70 hover:bg-muted/30"

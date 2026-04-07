@@ -289,7 +289,7 @@ export function InfoTab({
       <div>
         <label className="block text-sm font-medium mb-2">Avatar</label>
         <div className="flex items-start gap-4 mb-3">
-          <div className="relative group shrink-0">
+          <div className="relative shrink-0">
             <Avatar className="h-16 w-16">
               {ed.displayAvatarSrc && <AvatarImage src={ed.displayAvatarSrc} alt={ed.name} />}
               <AvatarFallback className="bg-primary/10 text-primary text-2xl">
@@ -299,7 +299,7 @@ export function InfoTab({
             <button
               type="button"
               onClick={() => ed.fileInputRef.current?.click()}
-              className="absolute inset-0 flex items-center justify-center rounded-md bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity"
+              className="absolute inset-0 flex items-center justify-center rounded-md bg-black/50 opacity-0 hover:opacity-100 transition-opacity"
             >
               <ImagePlus className="h-5 w-5 text-white" />
             </button>
