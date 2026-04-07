@@ -44,6 +44,7 @@ import { OPEN_AGENT_CHAT_EVENT } from "./StatusWidget";
 import { OPEN_AGENT_PANEL_EVENT } from "./AgentChatPanel";
 import type { BackendTab } from "./gateway-chat/GatewayChatHeader";
 import AgentStatsTab from "./AgentStatsTab";
+import { AnalysisTab } from "./AnalysisTab";
 
 /* ── Tab definitions ──────────────────────────────────────── */
 
@@ -55,7 +56,7 @@ const TAB_FILES = [
   { key: "HEARTBEAT", label: "Heartbeat", desc: "Periodic tasks & health checks" },
 ] as const;
 
-type WidgetTab = "CHAT" | "INFO" | "STATS" | (typeof TAB_FILES)[number]["key"];
+type WidgetTab = "CHAT" | "INFO" | "STATS" | "ANALYSIS" | (typeof TAB_FILES)[number]["key"];
 
 /* ── Widget content ────────────────────────────────────────── */
 
@@ -142,7 +143,7 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
     };
   }, [currentAgentId]);
 
-  const isEditorTab = activeTab !== "CHAT" && activeTab !== "STATS";
+  const isEditorTab = activeTab !== "CHAT" && activeTab !== "STATS" && activeTab !== "ANALYSIS";
   const showChatActions = activeTab === "CHAT";
   const showSaveButton = isEditorTab;
 
@@ -299,6 +300,17 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
             >
               Stats
             </button>
+            <button
+              onClick={() => setActiveTab("ANALYSIS")}
+              className={cn(
+                "px-2 py-1 text-[10px] font-medium rounded-md transition-all duration-200 shrink-0",
+                activeTab === "ANALYSIS"
+                  ? "border-primary text-foreground bg-primary/5"
+                  : "border-transparent text-muted-foreground hover:text-foreground/70 hover:bg-muted/30"
+              )}
+            >
+              Analysis
+            </button>
             {TAB_FILES.map((tf) => (
               <button
                 key={tf.key}
@@ -341,6 +353,12 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
           {activeTab === "STATS" && (
             <div className="flex-1 min-h-0 overflow-y-auto customScrollbar2 px-3 py-3">
               <AgentStatsTab agentId={currentAgentId} />
+            </div>
+          )}
+
+          {activeTab === "ANALYSIS" && (
+            <div className="flex-1 min-h-0 overflow-y-auto customScrollbar2">
+              <AnalysisTab defaultAgentId={currentAgentId} />
             </div>
           )}
 
