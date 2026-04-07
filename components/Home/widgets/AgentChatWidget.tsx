@@ -12,10 +12,18 @@ import {
   MessageSquare,
   Plus,
   RefreshCw,
+  MoreHorizontal,
+  Trash2,
 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { useFocusMode } from "./hooks/useFocusMode";
 import { useOpenClawContext } from "$/Providers/OpenClawProv";
@@ -30,6 +38,7 @@ import {
   type FooterSaveState,
 } from "$/components/Tool/Agents/AgentDetailDialog";
 import { resolveAgentFolder } from "$/lib/identity-md";
+import { DeleteAgentDialog } from "$/components/Tool/Agents/DeleteAgentDialog";
 import { PanelChatView, type PanelChatViewHandle } from "./AgentChatPanel";
 import SessionHistoryDropdown from "$/components/SessionHistoryDropdown";
 import { OPEN_AGENT_CHAT_EVENT } from "./StatusWidget";
@@ -66,6 +75,7 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
   const [footerState, setFooterState] = useState<FooterSaveState>({
     isDirty: false, saving: false, saved: false, save: null,
   });
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const chatRef = useRef<PanelChatViewHandle>(null);
 
   // Sync config on late hydration
@@ -86,6 +96,7 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
   const avatarText = isAvatarText(identity?.avatar) ? identity!.avatar! : undefined;
   const displayName = identity?.name || currentAgent.name;
   const folder = resolveAgentFolder(currentAgentId);
+  const isFirstAgent = agents[0] != null && currentAgentId === agents[0].id;
 
   // Listen for agent-click events from StatusWidget
   useEffect(() => {
@@ -214,6 +225,23 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
                   </Button>
                 </div>
               )}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="iconSm" className="h-6 w-6" title="More options">
+                    <MoreHorizontal className="w-3 h-3" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-44 z-[60]">
+                  <DropdownMenuItem
+                    className="text-destructive focus:text-destructive focus:bg-destructive/10 gap-2 text-xs"
+                    disabled={isFirstAgent}
+                    onSelect={() => setDeleteDialogOpen(true)}
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    Delete agent
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
               <Button variant="ghost" size="iconSm" onClick={onMaximize} className="h-6 w-6">
                 {isMaximized ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
               </Button>
@@ -299,6 +327,15 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
           )}
         </div>
       </Card>
+
+      <DeleteAgentDialog
+        open={deleteDialogOpen}
+        onOpenChange={setDeleteDialogOpen}
+        agentId={currentAgentId}
+        agentDisplayName={displayName}
+        isFirstAgent={isFirstAgent}
+        onSuccess={() => setSelectedAgentId(agents.find((a) => a.id !== currentAgentId)?.id)}
+      />
     </motion.div>
   );
 });
