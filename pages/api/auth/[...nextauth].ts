@@ -4,6 +4,7 @@ import CredentialsProvider from "next-auth/providers/credentials";
 import GoogleProvider from "next-auth/providers/google";
 import { setCookie, deleteCookie } from "cookies-next";
 import Jwt from "jsonwebtoken";
+import { signToken } from "$/lib/shared-auth";
 import { loginAuth, googleAuth } from "$/services/user";
 import logger from "$/lib/logger";
 
@@ -67,9 +68,10 @@ export const authOptions = (req: any, res: any) => {
             deleteCookie(`hypercho_user_token`, { req, res, path: "/" });
             if (userId) {
               // set the new id to the cookie
-              const newToken = Jwt.sign(
+              const newToken = signToken(
                 userId,
-                process.env.NEXTAUTH_SECRET!
+                process.env.NEXTAUTH_SECRET!,
+                channel?.tier || "free"
               );
               setCookie(`hypercho_user_token`, newToken, {
                 req,
@@ -143,9 +145,10 @@ export const authOptions = (req: any, res: any) => {
           }
           // User data was fetched from backend successfully
           const userData = anyUser.userData;
-          const newToken = Jwt.sign(
+          const newToken = signToken(
             userData._id,
-            process.env.NEXTAUTH_SECRET!
+            process.env.NEXTAUTH_SECRET!,
+            userData.channel?.tier || "free"
           );
           token.token = newToken;
           token.userId = userData._id;
@@ -173,9 +176,10 @@ export const authOptions = (req: any, res: any) => {
         // Handle Credentials sign-in
         if (user && account?.provider === "credentials") {
           // Create the JWT token here
-          const newToken = Jwt.sign(
+          const newToken = signToken(
             user.userId,
-            process.env.NEXTAUTH_SECRET!
+            process.env.NEXTAUTH_SECRET!,
+            (user as any).channel?.tier || "free"
           );
           token.token = newToken; // Add the token to the JWT
           token.userId = user.userId;
@@ -185,6 +189,27 @@ export const authOptions = (req: any, res: any) => {
           token.channel = user.channel;
           token.username = user.username;
           token.aboutme = user.aboutme;
+        }
+
+        // Auto-refresh the hub token when it's expired, about to expire,
+        // or uses the old string-payload format (no exp field at all).
+        if (token.token && token.userId) {
+          try {
+            const decoded = Jwt.decode(token.token) as any;
+            const exp = typeof decoded === "object" ? decoded?.exp : undefined;
+            const now = Math.floor(Date.now() / 1000);
+            const twoDays = 2 * 24 * 60 * 60;
+            // Refresh if: no exp (old format), expired, or within 2 days of expiring
+            if (!exp || exp < now || exp - now < twoDays) {
+              const tier = (typeof decoded === "object" ? decoded?.tier : undefined)
+                || token.channel?.tier || "free";
+              token.token = signToken(
+                token.userId,
+                process.env.NEXTAUTH_SECRET!,
+                tier
+              );
+            }
+          } catch { /* keep existing token */ }
         }
 
         return token;
