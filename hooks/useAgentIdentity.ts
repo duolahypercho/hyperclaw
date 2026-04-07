@@ -1,17 +1,10 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
-  gatewayConnection,
   getGatewayConnectionState,
   subscribeGatewayConnection,
 } from "$/lib/openclaw-gateway-ws";
-import {
-  isLocalAvatarFile,
-  readAvatarAsDataUri,
-  resolveAgentFolder,
-  parseIdentityField,
-} from "$/lib/identity-md";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
 
 export interface AgentIdentity {
@@ -92,57 +85,28 @@ async function fetchIdentity(agentId: string): Promise<AgentIdentity | null> {
   const existing = inflight.get(agentId);
   if (existing) return existing;
 
-  const promise = gatewayConnection.getAgentIdentity({ agentId }).then(async (result) => {
-    inflight.delete(agentId);
-    if (result) {
-      // If the avatar is a local filename (e.g. "avatar.png"), read it as a data URI.
-      // If the file doesn't exist, clear the avatar so the emoji fallback can kick in
-      // instead of showing the raw filename as text.
-      if (result.avatar && isLocalAvatarFile(result.avatar)) {
-        const dataUri = await readAvatarAsDataUri(agentId, result.avatar).catch(() => null);
-        result.avatar = dataUri ?? undefined;
-      }
-
-      // Relative gateway paths (e.g. /avatar/main) can't be reached through the hub relay —
-      // only WebSocket is proxied, not the gateway's HTTP endpoints. Treat as unresolved
-      // so the IDENTITY.md fallback reads the actual file through the connector.
-      const avatarIsRelativePath = result.avatar && result.avatar.startsWith("/");
-      const avatarResolved = !!result.avatar && !avatarIsRelativePath;
-
-      // If the gateway didn't return a usable avatar/emoji, try reading from IDENTITY.md via bridge
-      if (!avatarResolved || !result.emoji) {
-        try {
-          const folder = resolveAgentFolder(agentId);
-          const res = (await bridgeInvoke("get-openclaw-doc", {
-            relativePath: `${folder}/IDENTITY.md`,
-          })) as { success?: boolean; content?: string | null };
-          if (res?.success && typeof res.content === "string") {
-            if (!avatarResolved) {
-              const avatarVal = parseIdentityField(res.content, "Avatar");
-              if (avatarVal) {
-                if (isLocalAvatarFile(avatarVal)) {
-                  const dataUri = await readAvatarAsDataUri(agentId, avatarVal).catch(() => null);
-                  if (dataUri) result.avatar = dataUri;
-                } else if (/^https?:\/\//i.test(avatarVal) || /^data:/i.test(avatarVal)) {
-                  result.avatar = avatarVal;
-                }
-                // else: skip non-URL, non-file values (relative paths would still break)
-              }
-            }
-            if (!result.emoji) {
-              const emojiVal = parseIdentityField(res.content, "Emoji");
-              if (emojiVal) result.emoji = emojiVal;
-            }
-          }
-        } catch { /* non-fatal */ }
-      }
-
-      identityCache.set(agentId, result);
+  const promise = (async () => {
+    try {
+      const res = (await bridgeInvoke("get-agent-identity", { agentId })) as {
+        success?: boolean;
+        data?: { name?: string; avatarData?: string; emoji?: string; runtime?: string } | null;
+      };
+      if (!res?.success || !res.data) return null;
+      const identity: AgentIdentity = {
+        agentId,
+        name: res.data.name || undefined,
+        avatar: res.data.avatarData || undefined,
+        emoji: res.data.emoji || undefined,
+      };
+      identityCache.set(agentId, identity);
       saveToStorage();
-      notifyCacheUpdate(agentId, result);
+      notifyCacheUpdate(agentId, identity);
+      return identity;
+    } finally {
+      inflight.delete(agentId);
     }
-    return result;
-  });
+  })();
+
   inflight.set(agentId, promise);
   return promise;
 }
@@ -338,4 +302,17 @@ export function isAvatarText(avatar: string | undefined): boolean {
   const trimmed = avatar.trim();
   if (!trimmed) return false;
   return !isAvatarUrl(trimmed);
+}
+
+// Invalidate identity cache when IDENTITY.md changes (hub event relayed via gateway WS).
+if (typeof window !== "undefined") {
+  window.addEventListener("openclaw-gateway-event", (e: Event) => {
+    const detail = (e as CustomEvent).detail ?? {};
+    const { event, data } = detail;
+    if (event === "agent.file.changed" && data?.fileKey === "IDENTITY" && data?.agentId) {
+      identityCache.delete(data.agentId);
+      inflight.delete(data.agentId);
+      notifyCacheUpdate(data.agentId, { agentId: data.agentId });
+    }
+  });
 }
