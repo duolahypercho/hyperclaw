@@ -37,7 +37,6 @@ import {
   FileEditorTab,
   type FooterSaveState,
 } from "$/components/Tool/Agents/AgentDetailDialog";
-import { resolveAgentFolder } from "$/lib/identity-md";
 import { DeleteAgentDialog } from "$/components/Tool/Agents/DeleteAgentDialog";
 import { PanelChatView, type PanelChatViewHandle } from "./AgentChatPanel";
 import SessionHistoryDropdown from "$/components/SessionHistoryDropdown";
@@ -98,7 +97,6 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
   const avatarUrl = resolveAvatarUrl(identity?.avatar);
   const avatarText = isAvatarText(identity?.avatar) ? identity!.avatar! : undefined;
   const displayName = identity?.name || currentAgent.name;
-  const folder = resolveAgentFolder(currentAgentId);
   const isFirstAgent = agents[0] != null && currentAgentId === agents[0].id;
 
   // Listen for agent-click events from StatusWidget
@@ -354,7 +352,8 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
               >
                 <p className="text-xs text-muted-foreground mb-3">{tf.desc}</p>
                 <FileEditorTab
-                  relativePath={`${folder}/${tf.key}.md`}
+                  agentId={currentAgentId}
+                  fileKey={tf.key}
                   onStateChange={setFooterState}
                 />
               </div>

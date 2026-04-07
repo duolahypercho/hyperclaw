@@ -28,7 +28,6 @@ import {
   resolveAvatarUrl,
   isAvatarText,
 } from "$/hooks/useAgentIdentity";
-import { resolveAgentFolder } from "$/lib/identity-md";
 import {
   useAgentIdentityEditor,
   EMOJI_OPTIONS,
@@ -92,7 +91,6 @@ export function AgentDetailDialog({
   const avatarText = isAvatarText(identity?.avatar) ? identity!.avatar! : undefined;
   const displayName = identity?.name || agentName;
 
-  const folder = resolveAgentFolder(agentId, workspaceFolder);
   const isMain = agentId === "main";
 
   useEffect(() => {
@@ -173,7 +171,8 @@ export function AgentDetailDialog({
                 >
                   <p className="text-xs text-muted-foreground mb-3">{tf.desc}</p>
                   <FileEditorTab
-                    relativePath={`${folder}/${tf.key}.md`}
+                    agentId={agentId}
+                    fileKey={tf.key}
                     onStateChange={setFooterState}
                   />
                 </TabsContent>
@@ -514,10 +513,12 @@ export function InfoTab({
 /* ── File editor tab ──────────────────────────────────────── */
 
 export function FileEditorTab({
-  relativePath,
+  agentId,
+  fileKey,
   onStateChange,
 }: {
-  relativePath: string;
+  agentId: string;
+  fileKey: string;
   onStateChange: (state: FooterSaveState) => void;
 }) {
   const [content, setContent] = useState<string | null>(null);
@@ -536,13 +537,15 @@ export function FileEditorTab({
     setNotFound(false);
     (async () => {
       try {
-        const res = (await bridgeInvoke("get-openclaw-doc", {
-          relativePath,
-        })) as { success?: boolean; content?: string | null; error?: string };
+        const res = (await bridgeInvoke("get-agent-file", {
+          agentId,
+          fileKey,
+        })) as { success?: boolean; data?: { content: string; updatedAt: number } | null };
         if (cancelled) return;
-        if (res?.success && typeof res.content === "string") {
-          setContent(res.content);
-          setOriginalContent(res.content);
+        const fileContent = res?.data?.content;
+        if (res?.success && typeof fileContent === "string") {
+          setContent(fileContent);
+          setOriginalContent(fileContent);
         } else {
           setContent("");
           setOriginalContent(null);
@@ -558,7 +561,7 @@ export function FileEditorTab({
       if (!cancelled) setLoading(false);
     })();
     return () => { cancelled = true; };
-  }, [relativePath]);
+  }, [agentId, fileKey]);
 
   const isDirty = notFound ? (content ?? "") !== "" : content !== originalContent;
 
@@ -568,9 +571,9 @@ export function FileEditorTab({
     setSaveError(null);
     setSaveSuccess(false);
     try {
-      const res = (await bridgeInvoke("write-openclaw-doc", {
-        relativePath,
-        content,
+      const res = (await bridgeInvoke("save-agent-personality", {
+        agentId,
+        [fileKey.toLowerCase()]: content,
       })) as { success?: boolean; error?: string };
       if (res?.success) {
         setOriginalContent(content);
@@ -584,7 +587,7 @@ export function FileEditorTab({
       setSaveError(e instanceof Error ? e.message : "Save failed");
     }
     setSaving(false);
-  }, [relativePath, content]);
+  }, [agentId, fileKey, content]);
 
   // Sync footer state
   useEffect(() => {
@@ -621,13 +624,13 @@ export function FileEditorTab({
         onChange={(e) => setContent(e.target.value)}
         className="flex-1 min-h-[300px] text-xs font-mono leading-relaxed resize-none"
         spellCheck={false}
-        placeholder={`Start writing ${relativePath.split("/").pop()} content...`}
+        placeholder={`Start writing ${fileKey}.md content...`}
       />
       <div className="flex items-center justify-end">
         {saveError && (
           <span className="text-[10px] text-destructive mr-auto">{saveError}</span>
         )}
-        <span className="text-[10px] text-muted-foreground/60">{relativePath}</span>
+        <span className="text-[10px] text-muted-foreground/60">{fileKey}.md</span>
       </div>
     </div>
   );
