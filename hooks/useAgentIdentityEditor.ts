@@ -74,6 +74,10 @@ export interface AgentIdentityEditorState {
   setHbEvery: (v: string) => void;
   originalHbEvery: string;
 
+  /* Runtime */
+  runtime: string;
+  setRuntime: (v: string) => void;
+
   /* Department / org chart */
   department: string;
   setDepartment: (v: string) => void;
@@ -139,6 +143,8 @@ export function useAgentIdentityEditor(
   const [hbEvery, setHbEvery] = useState("");
   const [originalHbEvery, setOriginalHbEvery] = useState("");
 
+  const [runtime, setRuntime] = useState("");
+
   const [department, setDepartment] = useState("");
   const [originalDepartment, setOriginalDepartment] = useState("");
   const [departments, setDepartments] = useState<Array<{ id: string; name: string }>>([]);
@@ -165,6 +171,7 @@ export function useAgentIdentityEditor(
         setRole(parseIdentityField(content, "Role") || "");
         setDescription(parseIdentityDescription(content));
         setEmoji(parseIdentityField(content, "Emoji") || opts?.identityEmoji || "🤖");
+        setRuntime(parseIdentityField(content, "Runtime") || "");
         const avatarVal = parseIdentityField(content, "Avatar") || "";
         setAvatarPath(avatarVal);
         setAvatarPreview(null);
@@ -252,6 +259,7 @@ export function useAgentIdentityEditor(
     const origDesc = parseIdentityDescription(raw);
     const origEmoji = parseIdentityField(raw, "Emoji") || opts?.identityEmoji || "🤖";
     const origAvatar = parseIdentityField(raw, "Avatar") || "";
+    const origRuntime = parseIdentityField(raw, "Runtime") || "";
     return (
       name !== origName ||
       role !== origRole ||
@@ -262,7 +270,8 @@ export function useAgentIdentityEditor(
       model !== originalModel ||
       hbModel !== originalHbModel ||
       hbEvery !== originalHbEvery ||
-      department !== originalDepartment
+      department !== originalDepartment ||
+      runtime !== origRuntime
     );
   })();
 
@@ -274,6 +283,7 @@ export function useAgentIdentityEditor(
       let content = raw || "";
       content = updateIdentityField(content, "Name", name);
       if (role.trim()) content = updateIdentityField(content, "Role", role);
+      if (runtime.trim()) content = updateIdentityField(content, "Runtime", runtime);
       if (department.trim()) {
         const deptLabel = departments.find((d) => d.id === department)?.name || department;
         content = updateIdentityField(content, "Department", deptLabel);
@@ -355,7 +365,7 @@ export function useAgentIdentityEditor(
     raw, name, role, description, emoji, avatarPath, avatarPreview,
     loadedAvatarUri, identityPath, model, originalModel, agentId,
     hbModel, originalHbModel, hbEvery, originalHbEvery,
-    department, originalDepartment, orgNodeId, departments,
+    runtime, department, originalDepartment, orgNodeId, departments,
     opts?.identityName,
   ]);
 
@@ -418,6 +428,7 @@ export function useAgentIdentityEditor(
     originalHbModel,
     hbEvery, setHbEvery,
     originalHbEvery,
+    runtime, setRuntime,
     department, setDepartment,
     originalDepartment,
     departments,

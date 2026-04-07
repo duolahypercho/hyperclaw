@@ -36,3 +36,7 @@ export {
   AgentChatPanel,
   OPEN_AGENT_PANEL_EVENT,
 } from "./AgentChatPanel";
+export {
+  default as AgentChatWidget,
+  AgentChatCustomHeader,
+} from "./AgentChatWidget";

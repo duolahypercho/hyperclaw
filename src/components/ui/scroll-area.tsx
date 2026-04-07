@@ -14,7 +14,7 @@ const ScrollArea = forwardRef<
     className={cn("relative overflow-hidden", className)}
     {...props}
   >
-    <Viewport className="h-full w-full rounded-[inherit]">
+    <Viewport className="h-full w-full rounded-[inherit] overflow-x-hidden">
       {children}
     </Viewport>
     <ScrollBar />

@@ -278,7 +278,7 @@ const AgentExpandedRow = React.forwardRef<HTMLDivElement, {
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, height: 0 }}
       className={cn(
-        "flex items-start gap-2.5 px-2.5 py-2 rounded-md transition-colors cursor-pointer overflow-hidden",
+        "w-full min-w-0 flex items-start gap-2.5 px-2.5 py-2 rounded-md transition-colors cursor-pointer overflow-hidden",
         "hover:bg-muted/30",
         status.unreadCount > 0 && "bg-primary/5 border-l-2 border-primary",
         status.state === "error" && status.unreadCount === 0 && "bg-destructive/5 border-l-2 border-destructive"
@@ -328,12 +328,12 @@ const AgentExpandedRow = React.forwardRef<HTMLDivElement, {
 
         {/* Error or message preview */}
         {status.state === "error" && status.errorMessage ? (
-          <div className="flex items-center gap-1 text-[11px] text-destructive min-w-0">
+          <div className="flex items-center gap-1 text-[11px] text-destructive min-w-0 overflow-hidden">
             <AlertTriangle className="w-2.5 h-2.5 shrink-0" />
-            <span className="break-words line-clamp-2">{status.errorMessage}</span>
+            <span className="line-clamp-2 [overflow-wrap:anywhere]">{status.errorMessage}</span>
           </div>
         ) : status.lastMessage ? (
-          <p className="text-[11px] text-muted-foreground leading-relaxed break-words line-clamp-2">
+          <p className="text-[11px] text-muted-foreground leading-relaxed line-clamp-2 [overflow-wrap:anywhere] overflow-hidden">
             {status.lastMessage}
           </p>
         ) : null}
@@ -369,7 +369,7 @@ function AgentCollapsedRow({
 
   return (
     <div
-      className="flex items-center gap-2 px-2.5 py-1 overflow-hidden cursor-pointer hover:bg-muted/20 rounded-md transition-colors"
+      className="w-full min-w-0 flex items-center gap-2 px-2.5 py-1 overflow-hidden cursor-pointer hover:bg-muted/20 rounded-md transition-colors"
       onClick={() => onClick(status.agentId)}
     >
       <Avatar className="w-5 h-5">
@@ -655,11 +655,11 @@ const StatusWidgetContent = memo((props: CustomProps) => {
         scale: isFocusModeActive ? 0.98 : 1,
       }}
       transition={{ duration: 0.4, ease: "easeOut" }}
-      className="h-full w-full"
+      className="h-full w-full min-w-0 overflow-hidden"
     >
       <Card
         className={cn(
-          "group h-full w-full flex flex-col overflow-hidden bg-card/70 backdrop-blur-xl border border-border transition-all duration-300 rounded-md",
+          "group h-full w-full min-w-0 flex flex-col overflow-hidden bg-card/70 backdrop-blur-xl border border-border transition-all duration-300 rounded-md",
           isFocusModeActive && "border-transparent grayscale-[30%]"
         )}
       >
@@ -695,18 +695,6 @@ const StatusWidgetContent = memo((props: CustomProps) => {
               </span>
             )}
           </button>
-          <div className="flex items-center gap-1 ml-auto shrink-0">
-            <span
-              className={cn("w-1.5 h-1.5 rounded-full shrink-0", connected ? "bg-emerald-500" : "bg-muted-foreground/40")}
-              title={connected ? "Connected" : "Disconnected"}
-            />
-            <Button variant="ghost" size="iconSm" className="h-5 w-5" onClick={() => refresh()} disabled={loading}>
-              <RefreshCw className={cn("w-2.5 h-2.5", loading && "animate-spin")} />
-            </Button>
-            <Button variant="ghost" size="iconSm" onClick={props.onMaximize} className="h-5 w-5">
-              {props.isMaximized ? <Minimize2 className="w-2.5 h-2.5" /> : <Maximize2 className="w-2.5 h-2.5" />}
-            </Button>
-          </div>
         </div>
 
         <div className="flex-1 overflow-hidden flex flex-col min-h-0 px-2 pb-2">
@@ -813,8 +801,8 @@ const StatusWidgetContent = memo((props: CustomProps) => {
               <p className="text-xs text-muted-foreground text-center">No agents found</p>
             </div>
           ) : (
-            <ScrollArea className="flex-1 min-h-0">
-              <div className="space-y-0.5 pr-1">
+            <ScrollArea className="flex-1 min-h-0 w-full min-w-0">
+              <div className="space-y-0.5 pr-1 w-full min-w-0 overflow-hidden">
                 <AnimatePresence mode="popLayout">
                   {statuses.map((status) => (
                     <AgentExpandedRow

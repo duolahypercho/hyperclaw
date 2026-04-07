@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useCallback, useEffect, useRef, useMemo } from "react";
+import React, { useState, useCallback, useEffect, useRef, useMemo, useImperativeHandle, forwardRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   X,
@@ -191,17 +191,32 @@ export function AgentChatPanel({ open, agentId, sessionKey: initialSessionKey, o
 
 /* ── Chat View (inside panel) ────────────────────────────── */
 
-function PanelChatView({
-  agentId,
-  initialSessionKey,
-  backendTab,
-  onBackendTabChange,
-}: {
+export interface PanelChatViewHandle {
+  newChat: () => void;
+  reload: () => void;
+  sessions: Array<{ key: string; label?: string; updatedAt?: number }>;
+  sessionsLoading: boolean;
+  sessionsError: string | null;
+  selectedSessionKey: string | undefined;
+  onSessionChange: (key: string) => void;
+  fetchSessions: () => void;
+}
+
+interface PanelChatViewProps {
   agentId: string;
   initialSessionKey?: string;
   backendTab: BackendTab;
   onBackendTabChange: (tab: BackendTab) => void;
-}) {
+  showSubHeader?: boolean;
+}
+
+export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>(function PanelChatView({
+  agentId,
+  initialSessionKey,
+  backendTab,
+  onBackendTabChange,
+  showSubHeader = true,
+}, ref) {
   const { agents } = useOpenClawContext();
   const currentAgent = agents.find((a) => a.id === agentId) || {
     id: agentId,
@@ -502,6 +517,18 @@ function PanelChatView({
   }, [setChatSessionKey]);
 
   // Export
+  // Expose actions to parent via ref
+  useImperativeHandle(ref, () => ({
+    newChat: handleNewChat,
+    reload: () => { loadChatHistory(); },
+    sessions,
+    sessionsLoading,
+    sessionsError,
+    selectedSessionKey,
+    onSessionChange: handleSessionChange,
+    fetchSessions,
+  }), [handleNewChat, loadChatHistory, sessions, sessionsLoading, sessionsError, selectedSessionKey, handleSessionChange, fetchSessions]);
+
   const handleExport = useCallback(() => {
     exportChatAsMarkdown(mergedMessages, currentAgent.name);
   }, [mergedMessages, currentAgent.name]);
@@ -594,7 +621,7 @@ function PanelChatView({
   return (
     <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
       {/* Sub-header: backend tabs + session actions */}
-      <div className="shrink-0 flex items-center justify-between px-4 py-2 border-b border-border/30 bg-muted/10">
+      {showSubHeader && <div className="shrink-0 flex items-center justify-between px-4 py-2 border-b border-border/30 bg-muted/10">
         <div className="flex items-center gap-0.5">
           {BACKEND_TABS.map((tab) => (
             <button
@@ -631,7 +658,7 @@ function PanelChatView({
             onFetchSessions={fetchSessions}
           />
         </div>
-      </div>
+      </div>}
 
       {/* Messages area */}
       <div className="flex-1 min-h-0 flex flex-col relative overflow-hidden">
@@ -1011,6 +1038,6 @@ function PanelChatView({
       </div>
     </div>
   );
-}
+});
 
 export default AgentChatPanel;

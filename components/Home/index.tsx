@@ -12,6 +12,7 @@ import {
   ChannelDashboardWidget,
   IntelligenceWidget,
   AgentChatPanel,
+  AgentChatWidget,
   OPEN_AGENT_PANEL_EVENT,
 } from "$/components/Home/widgets";
 import { useOS } from "@OS/Provider/OSProv";
@@ -35,13 +36,13 @@ export const LAYOUT_PRESETS: LayoutPreset[] = [
     id: "default",
     name: "Default",
     description: "Agents, chat & tasks",
-    widgetIds: ["agent-status", "gateway-chat-1", "kanban"],
+    widgetIds: ["agent-status", "agent-chat", "kanban"],
   },
   {
     id: "focus",
     name: "Focus",
     description: "Full-screen chat with status sidebar",
-    widgetIds: ["agent-status", "gateway-chat-1"],
+    widgetIds: ["agent-status", "agent-chat"],
   },
   {
     id: "ops",
@@ -55,12 +56,12 @@ export const LAYOUT_PRESETS: LayoutPreset[] = [
 const PRESET_POSITIONS: Record<LayoutPresetId, Record<string, { w: number; h: number; x: number; y: number }>> = {
   default: {
     "agent-status":    { w: 6,  h: 10, x: 0,  y: 0 },
-    "gateway-chat-1":  { w: 18, h: 10, x: 6,  y: 0 },
+    "agent-chat":      { w: 18, h: 10, x: 6,  y: 0 },
     "kanban":          { w: 24, h: 8,  x: 0,  y: 10 },
   },
   focus: {
     "agent-status":    { w: 6,  h: 12, x: 0,  y: 0 },
-    "gateway-chat-1":  { w: 18, h: 12, x: 6,  y: 0 },
+    "agent-chat":      { w: 18, h: 12, x: 6,  y: 0 },
   },
   ops: {
     "agent-status":    { w: 6,  h: 7,  x: 0,  y: 0 },
@@ -73,6 +74,7 @@ const PRESET_POSITIONS: Record<LayoutPresetId, Record<string, { w: number; h: nu
 // Min sizes for all widgets
 const WIDGET_MIN_SIZES: Record<string, { minW: number; minH: number }> = {
   "agent-status":    { minW: 4, minH: 3 },
+  "agent-chat":      { minW: 6, minH: 4 },
   "gateway-chat-1":  { minW: 6, minH: 4 },
   "kanban":          { minW: 8, minH: 6 },
   "logs":            { minW: 6, minH: 3 },
@@ -113,6 +115,25 @@ export default function Home() {
     return "default";
   });
 
+  // Clear stale saved layout if preset widget IDs changed (e.g. gateway-chat-1 → agent-chat).
+  // This ensures the new widget shows up without requiring a manual preset switch.
+  useEffect(() => {
+    const savedLayout = dashboardState.get("dashboard-layout");
+    if (!savedLayout) return;
+    try {
+      const parsed = JSON.parse(savedLayout);
+      const lgLayout: Array<{ i: string }> = parsed?.lg || [];
+      const savedIds = new Set(lgLayout.map((item) => item.i));
+      const preset = LAYOUT_PRESETS.find((p) => p.id === activePresetId) || LAYOUT_PRESETS[0];
+      const hasMissing = preset.widgetIds.some((id) => !savedIds.has(id));
+      if (hasMissing) {
+        dashboardState.remove("dashboard-layout");
+        setResetKey((k) => k + 1);
+      }
+    } catch { /* ignore corrupt layout */ }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Force Dashboard remount when switching presets
   const [resetKey, setResetKey] = useState(0);
 
@@ -149,6 +170,14 @@ export default function Home() {
         icon: null,
         component: StatusWidget,
         defaultValue: { w: 6, h: 7, minW: 4, minH: 3, x: 0, y: 0 },
+      },
+      {
+        id: "agent-chat",
+        type: "agent-chat",
+        title: "Agent Chat",
+        icon: null,
+        component: AgentChatWidget,
+        defaultValue: { w: 18, h: 12, minW: 6, minH: 4, x: 6, y: 0 },
       },
       {
         id: "gateway-chat-1",

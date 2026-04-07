@@ -50,7 +50,7 @@ type TabKey = "INFO" | (typeof TAB_FILES)[number]["key"];
 /* ── Helpers ────────────────────────────────────────────────── */
 
 /** Footer state shared between child tabs and the dialog footer. */
-interface FooterSaveState {
+export interface FooterSaveState {
   isDirty: boolean;
   saving: boolean;
   saved: boolean;
@@ -247,7 +247,7 @@ export function AgentDetailDialog({
 
 /* ── Info Tab ─────────────────────────────────────────────── */
 
-function InfoTab({
+export function InfoTab({
   agentId,
   identity,
   workspaceFolder,
@@ -388,6 +388,29 @@ function InfoTab({
         </p>
       </div>
 
+      {/* ── Runtime ────────────────────────────── */}
+      <div>
+        <label className="block text-sm font-medium mb-1.5">Runtime</label>
+        <Select
+          value={ed.runtime || "__default__"}
+          onValueChange={(v) => ed.setRuntime(v === "__default__" ? "" : v)}
+        >
+          <SelectTrigger className="h-10">
+            <SelectValue placeholder="Select runtime" />
+          </SelectTrigger>
+          <SelectContent className="z-[102]">
+            <SelectItem value="__default__">-- Use Default --</SelectItem>
+            <SelectItem value="openclaw">OpenClaw</SelectItem>
+            <SelectItem value="hermes">Hermes</SelectItem>
+            <SelectItem value="codex">Codex</SelectItem>
+            <SelectItem value="claude-code">Claude Code</SelectItem>
+          </SelectContent>
+        </Select>
+        <p className="text-[10px] text-muted-foreground/60 mt-1">
+          AI runtime this agent uses to execute tasks.
+        </p>
+      </div>
+
       {/* ── Heartbeat ────────────────────────────── */}
       <div>
         <label className="block text-sm font-medium mb-1.5">Heartbeat</label>
@@ -492,7 +515,7 @@ function InfoTab({
 
 /* ── File editor tab ──────────────────────────────────────── */
 
-function FileEditorTab({
+export function FileEditorTab({
   relativePath,
   onStateChange,
 }: {

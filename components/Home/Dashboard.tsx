@@ -43,6 +43,7 @@ export type WidgetType =
   | "usage"
   | "gateway-chat"
   | "agent-status"
+  | "agent-chat"
   | "channel-dashboard"
   | "intelligence";
 
