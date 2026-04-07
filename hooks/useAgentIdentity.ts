@@ -310,9 +310,14 @@ if (typeof window !== "undefined") {
     const detail = (e as CustomEvent).detail ?? {};
     const { event, data } = detail;
     if (event === "agent.file.changed" && data?.fileKey === "IDENTITY" && data?.agentId) {
-      identityCache.delete(data.agentId);
-      inflight.delete(data.agentId);
-      notifyCacheUpdate(data.agentId, { agentId: data.agentId });
+      const agentId = data.agentId;
+      identityCache.delete(agentId);
+      inflight.delete(agentId);
+      // Re-fetch fresh identity immediately so the UI never goes blank.
+      // fetchIdentity calls notifyCacheUpdate internally on success.
+      fetchIdentity(agentId).then((result) => {
+        if (result) notifyCacheUpdate(agentId, result);
+      });
     }
   });
 }
