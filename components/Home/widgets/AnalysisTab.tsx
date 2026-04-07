@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import { useTokenUsage, type TokenUsageSummary } from "$/hooks/useTokenUsage";
 import { cn } from "@/lib/utils";
 import { Loader2 } from "lucide-react";
@@ -31,12 +31,14 @@ export function AnalysisTab({ defaultAgentId: _defaultAgentId }: Props) {
   const [groupBy, setGroupBy] = useState<"agent" | "runtime">("agent");
   const [rangeDays, setRangeDays] = useState(30);
 
-  const now = Date.now();
-  const from = now - rangeDays * 24 * 60 * 60 * 1000;
+  // Stable timestamps — recomputed only when rangeDays changes, preventing a
+  // re-fetch loop caused by Date.now() producing a new value on every render.
+  const to = useMemo(() => Date.now(), [rangeDays]);
+  const from = useMemo(() => to - rangeDays * 24 * 60 * 60 * 1000, [to, rangeDays]);
 
   const { data, loading, error, totalCost, totalInput, totalOutput } = useTokenUsage({
     from,
-    to: now,
+    to,
     groupBy,
   });
 
