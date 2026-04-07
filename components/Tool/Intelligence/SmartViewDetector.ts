@@ -41,5 +41,13 @@ export function detectSmartViews(columns: ColumnInfo[]): SmartViewDetection[] {
     views.push({ type: "timeline", label: "Timeline" });
   }
 
+  // Research: has topic + finding columns (matches the research table)
+  // Also matches opportunities table via title + ai_score + status
+  if (colNames.has("topic") && colNames.has("finding")) {
+    views.push({ type: "research", label: "Research" });
+  } else if (colNames.has("ai_score") && colNames.has("status") && colNames.has("title")) {
+    views.push({ type: "research", label: "Opportunities" });
+  }
+
   return views;
 }

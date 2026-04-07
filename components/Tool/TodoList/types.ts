@@ -26,6 +26,12 @@ export interface Task {
   assignedAgentId?: string;
   /** Optional URL to a linked document */
   linkedDocumentUrl?: string;
+  /** How this task was created */
+  originKind?: "manual" | "routine" | "ceo_heartbeat";
+  /** ID of the routine or heartbeat run that created this task */
+  originId?: string;
+  /** Group tasks by project/goal */
+  projectId?: string;
 }
 
 export interface TaskStatistics {
@@ -67,6 +73,9 @@ export interface TaskDetails {
   assignedAgent?: string;
   assignedAgentId?: string;
   linkedDocumentUrl?: string;
+  originKind?: "manual" | "routine" | "ceo_heartbeat";
+  originId?: string;
+  projectId?: string;
 }
 
 export interface List {

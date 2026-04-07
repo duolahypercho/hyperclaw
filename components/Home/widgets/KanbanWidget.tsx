@@ -29,6 +29,10 @@ import {
   Shield,
   Ban,
   Pencil,
+  Check,
+  RotateCcw,
+  AlertTriangle,
+  Zap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -137,7 +141,7 @@ const AGENT_EVENT_TYPES: EventType[] = ["agent_started", "agent_completed", "age
 let _eventSeq = 0;
 function makeEventId() { return `evt-${Date.now()}-${++_eventSeq}`; }
 
-type KanbanStatus = "pending" | "in_progress" | "blocked" | "completed" | "cancelled";
+type KanbanStatus = "pending" | "in_progress" | "in_review" | "blocked" | "completed" | "cancelled";
 
 interface MiniColumnConfig {
   id: KanbanStatus;
@@ -163,7 +167,7 @@ const COLUMNS: MiniColumnConfig[] = [
     dotClass: "bg-primary",
   },
   {
-    id: "blocked",
+    id: "in_review",
     label: "Review",
     icon: <Eye className="w-3 h-3" />,
     accentClass: "text-amber-500",
@@ -176,14 +180,16 @@ const COLUMNS: MiniColumnConfig[] = [
     accentClass: "text-emerald-500",
     dotClass: "bg-emerald-500",
   },
-  {
-    id: "cancelled",
-    label: "Cancelled",
-    icon: <Ban className="w-3 h-3" />,
-    accentClass: "text-rose-500",
-    dotClass: "bg-rose-500",
-  },
 ];
+
+/** How long (ms) a task must be in_progress before it's considered stalled */
+const STALE_THRESHOLD_MS = 60 * 60 * 1000; // 1 hour (2 heartbeat cycles at 30min)
+
+function isTaskStalled(task: Task): boolean {
+  if (task.status !== "in_progress") return false;
+  const updatedAt = task.updatedAt ? new Date(task.updatedAt).getTime() : 0;
+  return Date.now() - updatedAt > STALE_THRESHOLD_MS;
+}
 
 function isCompletedToday(task: Task): boolean {
   const at = task.finishedAt ?? task.updatedAt;
@@ -468,18 +474,19 @@ interface MiniKanbanCardProps {
 
 const MiniKanbanCard = React.forwardRef<HTMLDivElement, MiniKanbanCardProps>(
   ({ task, columnId, onStatusChange, onSelect, onEdit, onDelete, isDragging = false, disableLayout = false, mobileMode = false, onMoveStatus }, ref) => {
-    // Only allow: Backlog → In Progress, or Review → Done
+    // Only allow: Backlog → In Progress
     const nextCol = useMemo(() => {
       if (columnId === "pending") return COLUMNS[1]; // in_progress
-      if (columnId === "blocked") return COLUMNS[3]; // completed
       return null;
     }, [columnId]);
     const isAgentRunning = useIsTaskRunningCron(task._id);
+    const isReviewColumn = columnId === "in_review";
+    const stalled = columnId === "in_progress" && isTaskStalled(task);
 
     const hasMetaRow =
       task.createdAt || task.assignedAgent || task.assignedAgentId || task.linkedDocumentUrl;
 
-    const canDelete = columnId === "pending" || columnId === "blocked" || columnId === "cancelled";
+    const canDelete = columnId === "pending" || columnId === "in_review" || columnId === "cancelled";
 
     return (
       <ContextMenu>
@@ -494,7 +501,9 @@ const MiniKanbanCard = React.forwardRef<HTMLDivElement, MiniKanbanCardProps>(
           className={cn(
             "group relative rounded-md border border-solid border-border/50 bg-card/60 px-2 py-1.5 cursor-pointer transition-colors hover:border-border hover:bg-card/90",
             (task.status === "completed" || task.status === "cancelled") && "opacity-60",
-            isDragging && "opacity-50 scale-95"
+            isDragging && "opacity-50 scale-95",
+            isReviewColumn && "border-amber-500/40 bg-amber-500/5",
+            stalled && "border-orange-500/50 bg-orange-500/5"
           )}
           onClick={() => onSelect(task._id)}
         >
@@ -538,6 +547,15 @@ const MiniKanbanCard = React.forwardRef<HTMLDivElement, MiniKanbanCardProps>(
                       In progress
                     </Badge>
                   )}
+                  {stalled && (
+                    <Badge
+                      variant="outline"
+                      className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0 h-5 bg-orange-500/15 text-orange-600 dark:text-orange-400 border-orange-500/40 animate-pulse"
+                    >
+                      <AlertTriangle className="w-2.5 h-2.5 shrink-0" />
+                      Stalled
+                    </Badge>
+                  )}
                   {task.linkedDocumentUrl && (
                     <a
                       href={task.linkedDocumentUrl}
@@ -555,18 +573,50 @@ const MiniKanbanCard = React.forwardRef<HTMLDivElement, MiniKanbanCardProps>(
               )}
             </div>
             <div className="flex items-center gap-0.5 shrink-0 mt-0.5">
-              {nextCol && (
-                <Button
-                  variant="ghost"
-                  size="iconSm"
-                  className="h-4 w-4 opacity-0 group-hover:opacity-100 transition-opacity"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onStatusChange(task._id, nextCol.id);
-                  }}
-                >
-                  <ArrowRight className="w-2.5 h-2.5" />
-                </Button>
+              {isReviewColumn ? (
+                /* Approve / Reject for review cards — always visible */
+                <>
+                  <Button
+                    variant="ghost"
+                    size="iconSm"
+                    className="h-5 w-5 text-emerald-500 hover:text-emerald-400 hover:bg-emerald-500/10"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onStatusChange(task._id, "completed");
+                    }}
+                    title="Approve"
+                  >
+                    <Check className="w-3 h-3" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="iconSm"
+                    className="h-5 w-5 text-orange-500 hover:text-orange-400 hover:bg-orange-500/10"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onStatusChange(task._id, "in_progress");
+                    }}
+                    title="Return to agent"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                  </Button>
+                </>
+              ) : (
+                <>
+                  {nextCol && (
+                    <Button
+                      variant="ghost"
+                      size="iconSm"
+                      className="h-4 w-4 opacity-0 group-hover:opacity-100 transition-opacity"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onStatusChange(task._id, nextCol.id);
+                      }}
+                    >
+                      <ArrowRight className="w-2.5 h-2.5" />
+                    </Button>
+                  )}
+                </>
               )}
               {canDelete && (
                 <Button
@@ -682,9 +732,15 @@ const MiniKanbanColumn = memo<MiniKanbanColumnProps>(({
         <span className="text-xs font-medium text-foreground truncate">
           {column.label}
         </span>
-        <span className="text-[11px] text-muted-foreground ml-auto font-normal">
-          {tasks.length}
-        </span>
+        {column.id === "in_review" && tasks.length > 0 ? (
+          <span className="ml-auto text-[10px] font-medium bg-amber-500 text-white rounded-full px-1.5 min-w-[18px] text-center">
+            {tasks.length}
+          </span>
+        ) : (
+          <span className="text-[11px] text-muted-foreground ml-auto font-normal">
+            {tasks.length}
+          </span>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto customScrollbar2 p-1 space-y-1 min-h-[48px]">
@@ -1361,6 +1417,41 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
   const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
   const [addAgentOpen, setAddAgentOpen] = useState(false);
 
+  // CEO heartbeat banner
+  const [heartbeatBanner, setHeartbeatBanner] = useState<{
+    message: string;
+    created: number;
+    updated: number;
+    timestamp: number;
+  } | null>(null);
+
+  // Listen for CEO heartbeat results via gateway events
+  useEffect(() => {
+    const unsub = gatewayConnection.on("ceo.heartbeat", (payload: Record<string, unknown>) => {
+      const created = typeof payload.created === "number" ? payload.created : 0;
+      const updated = typeof payload.updated === "number" ? payload.updated : 0;
+      const notes = typeof payload.notes === "string" ? payload.notes : "";
+      const parts: string[] = [];
+      if (created > 0) parts.push(`created ${created} task${created > 1 ? "s" : ""}`);
+      if (updated > 0) parts.push(`updated ${updated}`);
+      if (notes) parts.push(notes);
+      setHeartbeatBanner({
+        message: parts.length > 0 ? `CEO ${parts.join(", ")}` : "CEO heartbeat: all clear",
+        created,
+        updated,
+        timestamp: Date.now(),
+      });
+    });
+    return unsub;
+  }, []);
+
+  // Auto-dismiss heartbeat banner after 30s
+  useEffect(() => {
+    if (!heartbeatBanner) return;
+    const timer = setTimeout(() => setHeartbeatBanner(null), 30_000);
+    return () => clearTimeout(timer);
+  }, [heartbeatBanner]);
+
   // Live feed — real-time domain events (like MissionControl)
   const [feedEvents, setFeedEvents] = useState<DomainEvent[]>([]);
   const prevTasksRef = useRef<Task[]>([]);
@@ -1626,6 +1717,7 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
     const g: Record<KanbanStatus, Task[]> = {
       pending: [],
       in_progress: [],
+      in_review: [],
       blocked: [],
       completed: [],
       cancelled: [],
@@ -1641,6 +1733,9 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
       const s = task.status as KanbanStatus;
       if (s === "completed") {
         if (isCompletedToday(task)) g.completed.push(task);
+      } else if (s === "blocked") {
+        // Map legacy "blocked" tasks to the review column
+        g.in_review.push(task);
       } else if (g[s]) {
         g[s].push(task);
       } else {
@@ -1652,7 +1747,9 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
 
   const handleMove = useCallback(
     (taskId: string, newStatus: KanbanStatus) => {
-      handleStatusChange(taskId, newStatus);
+      // Map the UI "in_review" column back to "blocked" for the provider
+      const providerStatus = newStatus === "in_review" ? "blocked" : newStatus;
+      handleStatusChange(taskId, providerStatus as Task["status"]);
     },
     [handleStatusChange]
   );
@@ -1843,14 +1940,33 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
           isFocusModeActive && "border-transparent grayscale-[30%]"
         )}
       >
-        <KanbanCustomHeader
-          {...props}
-          onOpenAddTask={openAddTask}
-          orgData={orgData}
-          selectedTeamId={selectedTeamId}
-          onSelectTeam={setSelectedTeamId}
-          taskCount={tasks.length}
-        />
+        {/* Compact inline bar */}
+        <div className="flex items-center gap-2 px-3 py-2 shrink-0">
+          {props.isEditMode && (
+            <div className="cursor-move h-6 w-6 flex items-center justify-center shrink-0">
+              <GripVertical className="w-3 h-3 text-muted-foreground" />
+            </div>
+          )}
+          {tasks.length > 0 && (
+            <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 font-normal">
+              {tasks.length} tasks
+            </Badge>
+          )}
+          <div className="flex items-center gap-1 ml-auto shrink-0">
+            <Button
+              variant="ghost"
+              size="iconSm"
+              className="h-5 w-5 text-primary"
+              onClick={openAddTask}
+              title="Add task"
+            >
+              <Plus className="w-3 h-3" />
+            </Button>
+            <Button variant="ghost" size="iconSm" onClick={props.onMaximize} className="h-5 w-5">
+              {props.isMaximized ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
+            </Button>
+          </div>
+        </div>
 
         {isMobile ? (
           /* ── Mobile tab view (from MissionQueue) ── */
@@ -1901,35 +2017,37 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
           </div>
         ) : (
           /* ── Desktop 3-panel: Agents | Kanban | Live Feed (team selector in header) ── */
-          <div className="flex-1 flex overflow-hidden min-h-0">
-            {/* Left: Team agents sidebar (always visible) */}
-            <TeamAgentsPanel
-              orgData={orgData}
-              agents={agents}
-              selectedTeamId={selectedTeamId}
-              taskCountByAgent={taskCountByAgent}
-              loading={orgLoading}
-              onEditAgent={handleEditAgent}
-              onAddAgent={openAddAgent}
-            />
+          <div className="flex-1 flex flex-col overflow-hidden min-h-0">
+            {/* CEO Heartbeat Banner */}
+            <AnimatePresence>
+              {heartbeatBanner && (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: "auto", opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={{ duration: 0.2 }}
+                  className="shrink-0 overflow-hidden"
+                >
+                  <div className="flex items-center gap-2 px-3 py-1.5 bg-amber-500/10 border-b border-amber-500/20">
+                    <Zap className="w-3 h-3 text-amber-500 shrink-0" />
+                    <span className="text-[11px] text-foreground flex-1 truncate">
+                      {heartbeatBanner.message}
+                    </span>
+                    <span className="text-[9px] text-muted-foreground shrink-0">
+                      {new Date(heartbeatBanner.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                    </span>
+                    <button
+                      onClick={() => setHeartbeatBanner(null)}
+                      className="p-0.5 hover:bg-card rounded transition-colors shrink-0"
+                    >
+                      <X className="w-2.5 h-2.5 text-muted-foreground" />
+                    </button>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
-            {/* Agent detail dialog — only mount when actually editing */}
-            {editingAgentId && (
-              <AgentDetailDialog
-                open
-                onOpenChange={closeAgentDetail}
-                agentId={editingAgentId}
-                agentName={
-                  orgData?.nodes.find((n) => n.agentId === editingAgentId)?.name ??
-                  agents.find((a) => a.id === editingAgentId)?.name ??
-                  editingAgentId
-                }
-                workspaceFolder={agents.find((a) => a.id === editingAgentId)?.workspaceFolder}
-                onDeleted={() => { setEditingAgentId(null); fetchAgents(); refreshOrgChart(); }}
-              />
-            )}
-
-            {/* Center: Kanban columns with DnD */}
+            {/* Kanban columns with DnD */}
             <div className="flex-1 flex gap-1.5 p-2 pt-1 overflow-x-auto overflow-y-hidden min-w-0">
               {COLUMNS.map((col) => (
                 <MiniKanbanColumn
@@ -1950,9 +2068,6 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
                 />
               ))}
             </div>
-
-            {/* Right: Live Feed Panel */}
-            <LiveFeedPanel events={feedEvents} selectedTeamAgentNames={selectedTeamAgentNames} />
           </div>
         )}
 

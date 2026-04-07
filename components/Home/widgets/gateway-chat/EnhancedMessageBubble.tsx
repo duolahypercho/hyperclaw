@@ -1,7 +1,6 @@
 "use client";
 
 import React, { memo } from "react";
-import { Reply } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { GatewayChatMessage } from "@OS/AI/core/hook/use-gateway-chat";
@@ -29,7 +28,10 @@ export function shouldShowAvatarLocal(messages: GatewayChatMessage[], index: num
   const prevMsg = messages[index - 1];
   const currMsg = messages[index];
   if (!prevMsg || !currMsg) return true;
-  return prevMsg.role !== currMsg.role;
+  // Group assistant, toolResult, and tool_result as the same "side"
+  // so consecutive tool calls / results don't each show an avatar.
+  const side = (role: string) => (role === "user" ? "user" : "assistant");
+  return side(prevMsg.role) !== side(currMsg.role);
 }
 
 export function shouldShowMessageActionsLocal(message: GatewayChatMessage, isLoading: boolean): boolean {
@@ -57,6 +59,7 @@ export const EnhancedMessageBubble = memo(
     onCopy,
     onReply,
     isLoading = false,
+    isLastAssistantMessage = false,
     botPic,
     userPic,
     assistantAvatar,
@@ -67,6 +70,7 @@ export const EnhancedMessageBubble = memo(
     onCopy?: (message: GatewayChatMessage) => void;
     onReply?: (message: GatewayChatMessage) => void;
     isLoading?: boolean;
+    isLastAssistantMessage?: boolean;
     botPic?: string;
     userPic?: { src?: string; fallback: string; alt?: string };
     assistantAvatar?: { src?: string; fallback: string; alt?: string };
@@ -338,42 +342,29 @@ export const EnhancedMessageBubble = memo(
                 {renderContent()}
               </div>
 
-              {/* Message actions - show on hover */}
-              {message.content?.trim() && (
-                <div className={cn(
-                  "flex items-center gap-1 mt-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200",
-                  isUser ? "mr-3 justify-end" : "ml-3"
-                )}>
-                  {shouldShowMessageActionsLocal(message, isLoading) && (
-                    <Button
-                      variant="ghost"
-                      size="iconSm"
-                      onClick={() => onCopy?.(message)}
-                      className="h-6 w-6"
-                    >
-                      <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        width="12"
-                        height="12"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      >
-                        <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
-                        <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
-                      </svg>
-                    </Button>
-                  )}
+              {/* Copy button — only on the last assistant message before each user turn, and the final assistant message */}
+              {isLastAssistantMessage && !isUser && !isLoading && message.content?.trim() && (
+                <div className={cn("flex items-center gap-1 mt-1 ml-3")}>
                   <Button
                     variant="ghost"
                     size="iconSm"
-                    onClick={() => onReply?.(message)}
+                    onClick={() => onCopy?.(message)}
                     className="h-6 w-6"
                   >
-                    <Reply className="w-3 h-3" />
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="12"
+                      height="12"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
+                      <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+                    </svg>
                   </Button>
                 </div>
               )}
@@ -405,6 +396,7 @@ export const EnhancedMessageBubble = memo(
       prevProps.message.content === nextProps.message.content &&
       prevProps.message.role === nextProps.message.role &&
       prevProps.isLoading === nextProps.isLoading &&
+      prevProps.isLastAssistantMessage === nextProps.isLastAssistantMessage &&
       prevProps.showAvatar === nextProps.showAvatar &&
       prevProps.userPic?.src === nextProps.userPic?.src
     );

@@ -1,14 +1,16 @@
 import Jwt from "jsonwebtoken";
 
 /**
- * Sign a JWT token as a raw userId string.
- * All services in the Hyperclaw/Hypercho ecosystem use this same format.
+ * Sign a JWT with standardized { sub: userId, tier } claims.
+ * Compatible across Hyperclaw_app, UserManager, and Hub.
+ * 30-day expiration matches the NextAuth session maxAge.
  */
 export function signToken(
   userId: string,
-  secret: string
+  secret: string,
+  tier = "free"
 ): string {
-  return Jwt.sign(userId, secret);
+  return Jwt.sign({ sub: userId, tier }, secret, { expiresIn: "30d" });
 }
 
 /**

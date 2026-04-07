@@ -580,29 +580,27 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
         );
       }
 
-      if (typeof window !== "undefined" && window.electronAPI?.claudeCode?.listSessions) {
-        fetches.push(
-          bridgeInvoke("claude-code-list-sessions", {})
-            .then((r: any) => (r?.sessions || []).map((s: any) => ({
-              key: s.key || `claude:${s.id}`,
-              label: `[Claude] ${s.label || s.id?.slice(0, 8)}`,
-              updatedAt: s.updatedAt,
-            })))
-            .catch(() => [])
-        );
-      }
+      // Claude Code sessions (via connector relay)
+      fetches.push(
+        bridgeInvoke("claude-code-list-sessions", {})
+          .then((r: any) => (r?.sessions || []).map((s: any) => ({
+            key: s.key || `claude:${s.id}`,
+            label: `[Claude] ${s.label || s.id?.slice(0, 8)}`,
+            updatedAt: s.updatedAt,
+          })))
+          .catch(() => [])
+      );
 
-      if (typeof window !== "undefined" && window.electronAPI?.codex?.listSessions) {
-        fetches.push(
-          bridgeInvoke("codex-list-sessions", {})
-            .then((r: any) => (r?.sessions || []).map((s: any) => ({
-              key: s.key || `codex:${s.id}`,
-              label: `[Codex] ${s.label || s.id?.slice(0, 8)}`,
-              updatedAt: s.updatedAt,
-            })))
-            .catch(() => [])
-        );
-      }
+      // Codex sessions (via connector relay)
+      fetches.push(
+        bridgeInvoke("codex-list-sessions", {})
+          .then((r: any) => (r?.sessions || []).map((s: any) => ({
+            key: s.key || `codex:${s.id}`,
+            label: `[Codex] ${s.label || s.id?.slice(0, 8)}`,
+            updatedAt: s.updatedAt,
+          })))
+          .catch(() => [])
+      );
 
       const results = await Promise.all(fetches);
       const merged = results.flat().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));

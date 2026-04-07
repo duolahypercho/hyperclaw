@@ -9,6 +9,29 @@ import { getCachedToken } from "./auth-token-cache";
 const HUB_API_URL =
   process.env.NEXT_PUBLIC_HUB_API_URL || "https://hub.hypercho.com";
 
+// --- Auth-expired detection ---
+// When the hub returns 401, the JWT has expired. Set a flag so all retry
+// loops across the app (gateway WS reconnect, useOpenClaw polling) stop
+// hammering the server and instead surface a re-login prompt.
+let _authExpired = false;
+
+export function isAuthExpired(): boolean {
+  return _authExpired;
+}
+
+export function clearAuthExpired(): void {
+  _authExpired = false;
+}
+
+function handleAuthExpired(): void {
+  if (_authExpired) return; // already fired
+  _authExpired = true;
+  console.warn("[hub-direct] JWT expired — hub returned 401. Please re-login.");
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("hyperclaw:auth-expired"));
+  }
+}
+
 function getHubUrl(path: string): string {
   return `${HUB_API_URL}${path}`;
 }
@@ -59,7 +82,10 @@ export async function getActiveDeviceId(
         "Content-Type": "application/json",
       },
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      if (res.status === 401 || res.status === 403) handleAuthExpired();
+      return null;
+    }
     const devices = await res.json();
     if (!Array.isArray(devices) || devices.length === 0) return null;
 
@@ -209,31 +235,41 @@ async function ensureGatewayConnected(): Promise<boolean> {
 export async function hubCommand(
   body: Record<string, unknown>
 ): Promise<unknown> {
-  // Try local connector bridge first (direct HTTP, no Hub relay needed)
-  try {
-    const localRes = await fetch("http://127.0.0.1:18790/bridge", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (localRes.ok) {
-      const data = await localRes.json();
+  // Streaming actions (claude-code-send, codex-send) skip the local bridge
+  // because they can run for minutes and need the WS path for streaming events.
+  const action = body.action as string | undefined;
+  const isStreaming = action === "claude-code-send" || action === "codex-send";
 
-      return data;
+  // Try local connector bridge first (direct HTTP, no Hub relay needed)
+  if (!isStreaming) {
+    try {
+      const localRes = await fetch("http://127.0.0.1:18790/bridge", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (localRes.ok) {
+        const data = await localRes.json();
+
+        return data;
+      }
+    } catch {
+      // Local bridge not available, try gateway WS
     }
-  } catch {
-    // Local bridge not available, try gateway WS
   }
 
   // Try gateway WebSocket (routes through Hub relay)
+  // Streaming actions need a longer timeout (5 min) since Claude Code can run for minutes
+  const wsTimeout = isStreaming ? 5 * 60 * 1000 : undefined;
+
   try {
     const { gatewayConnection } = await import("$/lib/openclaw-gateway-ws");
 
     // Already connected — use WS immediately
     if (gatewayConnection.connected && gatewayConnection.hubMode) {
 
-      const res = await gatewayConnection.request("bridge", body);
+      const res = await gatewayConnection.request("bridge", body, wsTimeout);
       return unwrapHubResponse(res);
     }
 
@@ -241,7 +277,7 @@ export async function hubCommand(
     const ready = await ensureGatewayConnected();
     if (ready && gatewayConnection.connected && gatewayConnection.hubMode) {
 
-      const res = await gatewayConnection.request("bridge", body);
+      const res = await gatewayConnection.request("bridge", body, wsTimeout);
       return unwrapHubResponse(res);
     }
   } catch {
@@ -269,6 +305,11 @@ export async function hubCommand(
     headers: buildHubHeaders(token),
     body: JSON.stringify(body),
   });
+
+  if (res.status === 401 || res.status === 403) {
+    handleAuthExpired();
+    return { success: false, error: "Session expired — please re-login" };
+  }
 
   const text = await res.text();
   let parsed: unknown;

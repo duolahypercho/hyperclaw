@@ -108,28 +108,17 @@ const Login = () => {
       setPassed(true);
       router.push("/dashboard");
     }
-    //if the user's mail doesn't exsist
-    else if (error === "This user doesn't exist") {
+    //if the email or password is incorrect
+    else if (error === "Invalid email or password") {
       setError(true);
-      setErrorMessage("Mail doesn't exist");
-      setErrorMail("Mail doesn't exist");
-      const timeout = setTimeout(() => {
-        setError(false);
-      }, 5000);
-      return () => clearTimeout(timeout);
-    }
-    //if the users mail exist but the password isnt correct
-    else if (error === "Incorrect Password") {
-      setError(true);
-      setErrorMessage("Incorrect Password");
-      setErrorPassword("Incorrect Password");
+      setErrorMessage("Invalid email or password");
       const timeout = setTimeout(() => {
         setError(false);
       }, 5000);
       return () => clearTimeout(timeout);
     } else {
       setError(true);
-      setErrorMessage("Something went wrong , Try again");
+      setErrorMessage("Something went wrong, try again");
       const timeout = setTimeout(() => {
         setError(false);
       }, 5000);

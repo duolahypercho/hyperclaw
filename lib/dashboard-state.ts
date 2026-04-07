@@ -23,6 +23,8 @@ const cache: Record<string, string> = {};
 let hydrated = false;
 /** true when hydrate() actually got data from the backend */
 let hydratedWithData = false;
+/** true when backend persistence is unavailable (browser mode, no Electron store) */
+let backendUnavailable = false;
 let pendingEntries: Record<string, string> = {};
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
 let flushInFlight: Promise<boolean> | null = null;
@@ -63,6 +65,7 @@ function readLocalBackup(key: string): string | null {
 
 /** Save to backend with retry (1 retry after 2s). */
 async function persistToBackend(entries: Record<string, string>): Promise<boolean> {
+  if (backendUnavailable) return false;
   const keys = Object.keys(entries);
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
@@ -71,8 +74,13 @@ async function persistToBackend(entries: Record<string, string>): Promise<boolea
         error?: string;
       };
       if (res?.success) {
-        // saved successfully
         return true;
+      }
+      // If the store itself is unavailable (browser mode, no Electron),
+      // stop retrying — localStorage backup is handling persistence.
+      if (res?.error && /store not available/i.test(res.error)) {
+        backendUnavailable = true;
+        return false;
       }
       console.warn("[dashboard-state] save-app-state returned:", res?.error || "no success flag", "keys:", keys);
     } catch (err) {
@@ -190,7 +198,12 @@ export const dashboardState = {
         if (count > 0) hydratedWithData = true;
         // hydrated from backend
       } else {
-        console.warn("[dashboard-state] hydrate backend returned:", res?.error || "empty/no success");
+        const errMsg = res?.error || "empty/no success";
+        if (/store not available/i.test(errMsg)) {
+          backendUnavailable = true;
+        } else {
+          console.warn("[dashboard-state] hydrate backend returned:", errMsg);
+        }
       }
     } catch (err) {
       console.warn("[dashboard-state] hydrate from backend failed:", err);
@@ -198,7 +211,6 @@ export const dashboardState = {
 
     // If backend returned nothing, try localStorage backup
     if (!hydratedWithData) {
-      console.warn("[dashboard-state] backend had no data, trying localStorage backup");
       let count = 0;
       for (const key of ALL_KEYS) {
         const val = readLocalBackup(key);
@@ -237,6 +249,7 @@ export const dashboardState = {
         }
         if (count > 0) {
           hydratedWithData = true;
+          backendUnavailable = false; // backend is now reachable
           console.log("[dashboard-state] rehydrated", count, "keys from backend");
           return true;
         }

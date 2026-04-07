@@ -159,7 +159,7 @@ export const GroupedToolActions: React.FC<{
                   const msgId = toolMsg.id || "";
 
                   return (
-                    <React.Fragment key={msgId || `tool-${msgIdx}`}>
+                    <React.Fragment key={`${msgId}-${msgIdx}`}>
                       {allToolCalls.map((tc: any, tcIdx: number) => {
                         const tcId = tc.id || tc.function?.name || "";
                         const state = toolStates?.get(tcId);

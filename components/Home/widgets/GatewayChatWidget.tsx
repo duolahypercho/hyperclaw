@@ -36,6 +36,8 @@ import { createMergeToolCalls } from "./gateway-chat/mergeToolCallsWithResults";
 import { exportChatAsMarkdown } from "./gateway-chat/exportChat";
 import { SlashCommandMenu } from "./gateway-chat/SlashCommandMenu";
 import { SLASH_COMMANDS, type SlashCommand } from "./gateway-chat/slashCommands";
+import { useRuntimeModels } from "@OS/AI/core/hook/use-runtime-models";
+import { OPEN_AGENT_CHAT_EVENT } from "./StatusWidget";
 
 export { GatewayChatCustomHeader };
 
@@ -71,6 +73,9 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
   // Backend tab state — determines which runtime's agents are shown
   const [activeTab, setActiveTab] = useState<BackendTab>(configActiveTab || "openclaw");
 
+  // Dynamic model list for the active runtime
+  const { models: runtimeModels, loading: runtimeModelsLoading } = useRuntimeModels(activeTab);
+
   // Filter agents by active tab
   const tabAgents = useMemo(() => {
     return agents.filter((a) => {
@@ -81,7 +86,7 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
 
 
   // Sessions state - initialize with configSessionKey if provided
-  const [sessions, setSessions] = useState<Array<{ key: string; label?: string; updatedAt?: number }>>([]);
+  const [sessions, setSessions] = useState<Array<{ key: string; label?: string; updatedAt?: number; projectPath?: string }>>([]);
   const [selectedSessionKey, setSelectedSessionKey] = useState<string | undefined>(
     configSessionKey
   );
@@ -173,6 +178,34 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
   }, [userHasSelectedAgent, selectedAgentId, configAgentId, agents]);
 
   const currentAgent = agents.find(a => a.id === currentAgentId) || { id: "main", name: "General Assistant", icon: "🤖", coverPhoto: "" };
+
+  // Listen for agent-click events from StatusWidget — switch agent and load most recent session
+  useEffect(() => {
+    const handler = async (e: Event) => {
+      const agentId = (e as CustomEvent).detail?.agentId as string | undefined;
+      const sessionKey = (e as CustomEvent).detail?.sessionKey as string | undefined;
+      if (!agentId) return;
+
+      setSelectedAgentId(agentId);
+      setUserHasSelectedAgent(true);
+      setActiveTab("openclaw");
+
+      if (sessionKey) {
+        setSelectedSessionKey(sessionKey);
+      } else {
+        // Load the most recent session for this agent
+        try {
+          const result = await gatewayConnection.listSessions(agentId, 1);
+          const first = result.sessions?.[0];
+          setSelectedSessionKey(first?.key ?? undefined);
+        } catch {
+          setSelectedSessionKey(undefined);
+        }
+      }
+    };
+    window.addEventListener(OPEN_AGENT_CHAT_EVENT, handler);
+    return () => window.removeEventListener(OPEN_AGENT_CHAT_EVENT, handler);
+  }, []);
 
   // Generate session key - use selected session or create new one
   // When no session is selected, use the agent's main session to load existing chat history
@@ -267,13 +300,9 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
   const prevSessionKeyRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
-    if (!initialLoadDoneRef.current) return; // initial load handles first fetch
+    if (!initialLoadDoneRef.current) return;
     if (!sessionKey || sessionKey === prevSessionKeyRef.current) return;
     prevSessionKeyRef.current = sessionKey;
-    // Always attempt to load — each hook handles unavailability gracefully:
-    //   - Gateway: returns early if WS not connected
-    //   - Claude Code / Codex: loads from disk via Electron IPC
-    //   - Hermes: loads from IPC or localStorage fallback
     loadChatHistory();
   }, [loadChatHistory, sessionKey]);
 
@@ -301,25 +330,22 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
           }));
         }
       } else if (activeTab === "claude-code") {
-        // Claude Code sessions (Electron only)
-        if (typeof window !== "undefined" && window.electronAPI?.claudeCode?.listSessions) {
-          const r = await bridgeInvoke("claude-code-list-sessions", {}).catch(() => ({ sessions: [] })) as any;
-          result = (r?.sessions || []).map((s: any) => ({
-            key: s.key || `claude:${s.id}`,
-            label: s.label || s.id?.slice(0, 8),
-            updatedAt: s.updatedAt,
-          }));
-        }
+        // Claude Code sessions — relay through hub/connector
+        const r = await bridgeInvoke("claude-code-list-sessions", {}).catch(() => ({ sessions: [] })) as any;
+        result = (r?.sessions || []).map((s: any) => ({
+          key: s.key || `claude:${s.id}`,
+          label: s.label || s.id?.slice(0, 8),
+          updatedAt: s.updatedAt,
+          projectPath: s.projectPath,
+        }));
       } else if (activeTab === "codex") {
-        // Codex sessions (Electron only)
-        if (typeof window !== "undefined" && window.electronAPI?.codex?.listSessions) {
-          const r = await bridgeInvoke("codex-list-sessions", {}).catch(() => ({ sessions: [] })) as any;
-          result = (r?.sessions || []).map((s: any) => ({
-            key: s.key || `codex:${s.id}`,
-            label: s.label || s.id?.slice(0, 8),
-            updatedAt: s.updatedAt,
-          }));
-        }
+        // Codex sessions (via connector relay)
+        const r = await bridgeInvoke("codex-list-sessions", {}).catch(() => ({ sessions: [] })) as any;
+        result = (r?.sessions || []).map((s: any) => ({
+          key: s.key || `codex:${s.id}`,
+          label: s.label || s.id?.slice(0, 8),
+          updatedAt: s.updatedAt,
+        }));
       }
 
       result.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
@@ -885,8 +911,6 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
           isConnected={isConnected}
           activeTab={activeTab}
           onTabChange={handleTabChange}
-          currentModel={currentModel || ""}
-          onModelChange={setCurrentModel}
         />
 
         <div className="flex flex-col w-full flex-1 p-0 overflow-hidden">
@@ -961,10 +985,32 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
                       {(() => {
                         const nodes: React.ReactNode[] = [];
 
-                        // Helper: does this assistant message contain tool calls?
+                        // Helper: does this message contain tool calls or tool results?
+                        // Groups assistant+toolCall and toolResult messages together.
                         const msgHasToolCalls = (m: GatewayChatMessage) =>
-                          m.role === "assistant" &&
-                          ((m as any).toolCalls?.length > 0 || (m as any).contentBlocks?.some((b: any) => b.type === "toolCall"));
+                          (m.role === "assistant" &&
+                            ((m as any).toolCalls?.length > 0 || (m as any).contentBlocks?.some((b: any) => b.type === "toolCall"))) ||
+                          m.role === "toolResult" ||
+                          (m as any).toolResults?.length > 0;
+
+                        // Build set of assistant message indices that should show the copy button:
+                        // 1. The very last assistant message with text content
+                        // 2. The last assistant message before each user message (the "final answer" before user replies)
+                        const copyButtonIndices = new Set<number>();
+                        let lastAssistantWithText = -1;
+                        for (let i = 0; i < mergedMessages.length; i++) {
+                          const m = mergedMessages[i];
+                          if (m.role === "assistant" && m.content?.trim()) {
+                            lastAssistantWithText = i;
+                          } else if (m.role === "user" && lastAssistantWithText >= 0) {
+                            copyButtonIndices.add(lastAssistantWithText);
+                            lastAssistantWithText = -1;
+                          }
+                        }
+                        // Also add the very last assistant message (the current final response)
+                        if (lastAssistantWithText >= 0) {
+                          copyButtonIndices.add(lastAssistantWithText);
+                        }
 
                         for (let index = 0; index < mergedMessages.length; index++) {
                           const message = mergedMessages[index];
@@ -1052,7 +1098,7 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
                           // Regular message (user text, assistant text, etc.)
                           nodes.push(
                             <EnhancedMessageBubble
-                              key={message.id || index}
+                              key={`${message.id}-${index}`}
                               message={message}
                               isUser={message.role === "user"}
                               showAvatar={shouldShowAvatarCallback(index)}
@@ -1064,6 +1110,7 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
                                 message.role === "assistant" &&
                                 !message.content.trim()
                               }
+                              isLastAssistantMessage={!isLoading && copyButtonIndices.has(index)}
                               botPic={agentAvatarUrl}
                               userPic={userAvatar}
                               assistantAvatar={assistantAvatar}
@@ -1294,6 +1341,12 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
                   inputRef={inputHandleRef}
                   tokenUsage={tokenUsage}
                   contextLimit={contextLimit}
+                  {...(activeTab !== "openclaw" ? {
+                    runtimeModels,
+                    runtimeModelsLoading,
+                    currentModel: currentModel || "",
+                    onModelChange: setCurrentModel,
+                  } : {})}
                 />
               </div>
             </div>

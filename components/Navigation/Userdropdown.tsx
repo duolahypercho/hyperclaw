@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useUser } from "$/Providers/UserProv";
 import { useOpenClawContext } from "$/Providers/OpenClawProv";
+import { useDevices } from "$/hooks/useDevices";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   DropdownMenu,
@@ -30,6 +31,7 @@ import {
 const Userdropdown = () => {
   const { userInfo, membership, logout } = useUser();
   const { gatewayHealthy, gatewayHealthError, refreshAll } = useOpenClawContext();
+  const { hasOnlineDevice, loading: devicesLoading } = useDevices();
   const [reconnecting, setReconnecting] = useState(false);
   const [restartingGateway, setRestartingGateway] = useState(false);
   const { runDoctorFix, isRunning: fixingOpenClaw } = useDoctorTerminal();
@@ -119,21 +121,17 @@ const Userdropdown = () => {
     }
   };
 
-  // OpenClaw gateway health: true = green, false = red, null = unknown/loading (amber)
-  const healthDot =
-    gatewayHealthy === true ? (
-      "bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.6)]"
-    ) : gatewayHealthy === false ? (
-      "bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.6)]"
-    ) : (
-      "bg-amber-500/80 animate-pulse"
-    );
-  const healthLabel =
-    gatewayHealthy === true
-      ? "OpenClaw gateway connected"
-      : gatewayHealthy === false
-        ? "OpenClaw gateway disconnected"
-        : "OpenClaw status checking...";
+  // Connector health: online = green, offline = red, loading = amber
+  const healthDot = devicesLoading
+    ? "bg-amber-500/80 animate-pulse"
+    : hasOnlineDevice
+      ? "bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.6)]"
+      : "bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.6)]";
+  const healthLabel = devicesLoading
+    ? "Connector status checking..."
+    : hasOnlineDevice
+      ? "Connector online"
+      : "Connector offline";
 
   return (
     <>

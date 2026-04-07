@@ -1,6 +1,6 @@
 {
   "name": "hyperclaw",
-  "version": "0.2.11",
+  "version": "0.2.12",
   "private": true,
   "description": "OpenClaw plugin that bridges agent tools to the HyperClaw desktop cockpit",
   "type": "module",

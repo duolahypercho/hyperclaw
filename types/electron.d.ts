@@ -48,6 +48,7 @@ export interface OpenClawRegistryAgent {
   role?: string;
   lastActive?: string;
   backend?: "openclaw" | "hermes" | "claude-code" | "codex";
+  runtime?: "openclaw" | "hermes" | "claude-code" | "codex";
 }
 
 export interface OpenClawAgentListResult {
@@ -62,6 +63,7 @@ export interface OpenClawCronJobJson {
   name: string;
   enabled: boolean;
   agentId?: string;
+  runtime?: "openclaw" | "hermes";
   schedule?: {
     kind: string;
     expr?: string;
@@ -179,12 +181,82 @@ export interface HyperClawTask {
   id: string;
   title: string;
   description?: string;
-  priority: "low" | "medium" | "high";
-  status: "pending" | "in_progress" | "completed" | "cancelled";
+  priority: "low" | "medium" | "high" | "urgent";
+  status: "backlog" | "pending" | "in_progress" | "in_review" | "completed" | "blocked" | "cancelled";
   agent?: string;
+  assigneeAgentId?: string;
+  parentTaskId?: string;
+  originKind?: "manual" | "routine" | "ceo_heartbeat";
+  originId?: string;
+  projectId?: string;
   createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  cancelledAt?: string;
   updatedAt: string;
   metadata?: Record<string, unknown>;
+}
+
+/** Structured mutations returned by CEO heartbeat runs */
+export interface CEOHeartbeatResult {
+  createTasks?: Array<{
+    title: string;
+    description?: string;
+    priority?: HyperClawTask["priority"];
+    assigneeAgentId?: string;
+    projectId?: string;
+  }>;
+  updateTasks?: Array<{
+    id: string;
+    status?: HyperClawTask["status"];
+    priority?: HyperClawTask["priority"];
+    assigneeAgentId?: string;
+  }>;
+  notes?: string;
+}
+
+/** Configuration for the CEO heartbeat loop */
+export interface CEOHeartbeatConfig {
+  enabled: boolean;
+  intervalMs: number;
+  runtime: "openclaw" | "hermes" | "claw-code" | "codex";
+  agentId: string;
+  maxTasksPerBeat: number;
+  goals: string[];
+}
+
+/** A cron job that spawns tasks on each trigger (paperclip "routine") */
+export interface HyperClawRoutine {
+  id: string;
+  name: string;
+  description?: string;
+  assigneeAgentId: string;
+  taskTemplate: {
+    title: string;
+    description?: string;
+    priority: HyperClawTask["priority"];
+    projectId?: string;
+  };
+  schedule: { kind: "cron" | "every"; expr?: string; tz?: string; everyMs?: number };
+  concurrencyPolicy: "skip_if_active" | "allow_parallel";
+  status: "active" | "inactive";
+  lastFiredAt?: string;
+  nextRunAt?: string;
+}
+
+/** Tracks an individual agent execution run (like paperclip heartbeatRuns) */
+export interface HeartbeatRun {
+  id: string;
+  agentId: string;
+  taskId?: string;
+  status: "queued" | "running" | "succeeded" | "failed" | "timed_out" | "cancelled";
+  invocationSource: "task_assignment" | "routine" | "ceo_heartbeat" | "manual";
+  startedAt?: string;
+  finishedAt?: string;
+  durationMs?: number;
+  resultJson?: Record<string, unknown>;
+  errorCode?: string;
+  logRef?: string;
 }
 
 export interface BridgeEvent {
@@ -264,59 +336,11 @@ declare global {
         requestScreen: () => Promise<boolean>;
       };
       openClaw: OpenClawAPI;
-      codex: {
-        status: () => Promise<{ available: boolean; version?: string; error?: string }>;
-        send: (params: {
-          message: string;
-          sessionId?: string;
-          sessionKey?: string;
-          model?: string;
-        }) => Promise<{
-          success: boolean;
-          error?: string;
-          sessionId?: string;
-          messages?: Array<{
-            id: string;
-            role: string;
-            content: string;
-            timestamp?: number;
-            toolCalls?: Array<{ id: string; name?: string; arguments?: string; function?: { name: string; arguments: string } }>;
-            toolResults?: Array<{ toolCallId: string; toolName: string; content: string; isError?: boolean }>;
-          }>;
-        }>;
-        abort: (params: { sessionKey: string }) => Promise<{ success: boolean; error?: string }>;
-        listSessions: () => Promise<{ sessions: Array<{ id: string; key: string; label: string; updatedAt: number }>; error?: string }>;
-        loadHistory: (params: { sessionId: string }) => Promise<{ messages: Array<{ id: string; role: string; content: string; timestamp?: number; toolCalls?: Array<{ id: string; name?: string; arguments?: string }>; toolResults?: Array<{ toolCallId: string; toolName: string; content: string; isError?: boolean }> }>; sessionId?: string; error?: string }>;
-      };
-      claudeCode: {
-        status: () => Promise<{ available: boolean; version?: string; error?: string }>;
-        send: (params: {
-          message: string;
-          sessionId?: string;
-          sessionKey?: string;
-          model?: string;
-          allowedTools?: string[];
-        }) => Promise<{
-          success: boolean;
-          error?: string;
-          sessionId?: string;
-          messages?: Array<{
-            id: string;
-            role: string;
-            content: string;
-            timestamp?: number;
-            thinking?: string;
-            toolCalls?: Array<{ id: string; name?: string; arguments?: string; function?: { name: string; arguments: string } }>;
-            toolResults?: Array<{ toolCallId: string; toolName: string; content: string; isError?: boolean }>;
-          }>;
-        }>;
-        abort: (params: { sessionKey: string }) => Promise<{ success: boolean; error?: string }>;
-        listSessions: () => Promise<{ sessions: Array<{ id: string; key: string; label: string; updatedAt: number }>; error?: string }>;
-        loadHistory: (params: { sessionId: string }) => Promise<{ messages: Array<{ id: string; role: string; content: string; timestamp?: number; thinking?: string; toolCalls?: Array<{ id: string; name?: string; arguments?: string }>; toolResults?: Array<{ toolCallId: string; toolName: string; content: string; isError?: boolean }> }>; sessionId?: string; error?: string }>;
-      };
+      // Claude Code & Codex: routed through Hub → Connector relay (no local IPC)
       hermes: {
         listSessions: () => Promise<{ sessions: Array<{ id: string; key: string; label: string; updatedAt: number }>; error?: string }>;
         loadHistory: (params: { sessionId: string }) => Promise<{ messages: Array<{ id: string; role: string; content: string; timestamp?: number; thinking?: string; toolCalls?: Array<{ id: string; name?: string; arguments?: string }>; toolResults?: Array<{ toolCallId: string; toolName: string; content: string; isError?: boolean }> }>; sessionId?: string; error?: string }>;
+        listModels: () => Promise<{ models: Array<{ id: string; label: string }> | null }>;
       };
       hyperClawBridge: HyperClawBridgeAPI;
       noteFS: any;

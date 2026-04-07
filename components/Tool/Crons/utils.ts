@@ -31,6 +31,15 @@ export interface CronAddParams {
   model?: string;
   thinking?: string;
   agent?: string;
+  /** When set, each cron trigger creates a new task instead of (or in addition to) running a prompt */
+  spawnTask?: {
+    templateTitle: string;
+    templateDescription?: string;
+    priority?: "low" | "medium" | "high" | "urgent";
+    listId?: string;
+    autoAssignAgent?: string;
+    concurrencyPolicy?: "skip_if_active" | "allow_parallel";
+  };
 }
 
 /** Params for editing a cron job (patch). */
@@ -172,6 +181,29 @@ export function mapBridgeCronsToJobs(bridgeCrons: BridgeCron[]): OpenClawCronJob
 }
 
 export async function fetchCronsFromBridge(): Promise<OpenClawCronJobJson[]> {
+  // Try unified store first (get-all-crons reads from SQLite)
+  try {
+    const unified = await bridgeInvoke("get-all-crons");
+    if (Array.isArray(unified) && unified.length > 0) {
+      const first = unified[0] as Record<string, unknown>;
+      // If response has rawJson, it's from the unified store — parse each job's raw JSON
+      if ("rawJson" in first && typeof first.rawJson === "string") {
+        return unified.map((item: Record<string, unknown>) => {
+          try {
+            const raw = JSON.parse(item.rawJson as string) as OpenClawCronJobJson;
+            return { ...raw, runtime: (item.runtime as OpenClawCronJobJson["runtime"]) ?? "openclaw" };
+          } catch {
+            return { id: item.id as string, name: item.name as string, enabled: Boolean(item.enabled), runtime: (item.runtime as OpenClawCronJobJson["runtime"]) ?? "openclaw" };
+          }
+        });
+      }
+      // Fallback: response is already in BridgeCron format (get-all-crons fell through to get-crons)
+      return mapBridgeCronsToJobs(unified as BridgeCron[]);
+    }
+  } catch {
+    // Fall through to legacy get-crons
+  }
+
   const data = await bridgeInvoke("get-crons");
   if (!Array.isArray(data)) return [];
   return mapBridgeCronsToJobs(data as BridgeCron[]);

@@ -176,6 +176,10 @@ export const InputContainer: React.FC<InputContainerProps> = ({
   onStopGeneration,
   tokenUsage,
   contextLimit,
+  runtimeModels,
+  runtimeModelsLoading,
+  currentModel: externalCurrentModel,
+  onModelChange: externalOnModelChange,
 }) => {
   const [inputValue, setInputValue] = useState("");
   const [isComposing, setIsComposing] = useState(false);
@@ -217,9 +221,18 @@ export const InputContainer: React.FC<InputContainerProps> = ({
 
   // Models from centralized context
   const { models: contextModels } = useOpenClawContext();
-  const availableModels = contextModels;
-  const [currentModel, setCurrentModel] = useState<string>("");
+  const [internalCurrentModel, setInternalCurrentModel] = useState<string>("");
   const [isLoadingModels, setIsLoadingModels] = useState(false);
+
+  // When runtimeModels are provided (provider tabs), use those; otherwise use OpenClaw models
+  const hasRuntimeModels = runtimeModels && runtimeModels.length > 0;
+  const availableModels = hasRuntimeModels
+    ? runtimeModels.map(m => ({ id: m.id, label: m.label, provider: undefined as string | undefined }))
+    : contextModels;
+
+  // Use external model state when provided (provider tabs), otherwise internal state (OpenClaw)
+  const currentModel = externalCurrentModel !== undefined ? externalCurrentModel : internalCurrentModel;
+  const setCurrentModel = externalOnModelChange || setInternalCurrentModel;
   const isControlled = controlledValue !== undefined;
   const currentValue = isControlled ? controlledValue : inputValue;
   const baseSetValue = isControlled ? controlledOnChange : setInputValue;
@@ -365,6 +378,11 @@ export const InputContainer: React.FC<InputContainerProps> = ({
 
   // Handle model change
   const handleModelChange = async (modelId: string) => {
+    // For runtime models (provider tabs), just update the external state — no gateway patch needed
+    if (hasRuntimeModels) {
+      setCurrentModel(modelId);
+      return;
+    }
     if (!sessionKey) return;
     try {
       const client = gatewayConnection;
@@ -1047,7 +1065,7 @@ export const InputContainer: React.FC<InputContainerProps> = ({
         className="flex flex-row items-end justify-between w-full"
       >
         <div className="flex flex-row items-end gap-0">
-          {showActions && (isLoadingModels ? (
+          {showActions && ((isLoadingModels || runtimeModelsLoading) ? (
             <div className="flex items-center gap-1.5 h-[30px] px-2">
               <div className="w-3 h-3 rounded-sm bg-muted-foreground/20 animate-pulse" />
               <div className="w-[80px] h-3 rounded bg-muted-foreground/20 animate-pulse" />
@@ -1066,7 +1084,11 @@ export const InputContainer: React.FC<InputContainerProps> = ({
                     <Cpu className="w-3 h-3" />
                   )}
                   <span className="max-w-[100px] truncate">
-                    {currentModel ? currentModel.split('/').pop() || currentModel : "Default Model"}
+                    {currentModel
+                      ? (availableModels.find(m => m.id === currentModel) as any)?.label
+                        || currentModel.split('/').pop()
+                        || currentModel
+                      : "Default Model"}
                   </span>
                   <ChevronDown
                     className={cn(
@@ -1082,29 +1104,27 @@ export const InputContainer: React.FC<InputContainerProps> = ({
                 side="top"
               >
                 <div className="flex flex-col gap-0.5">
-                  {availableModels.map((model) => (
-                    <Button
-                      key={model.id}
-                      variant="ghost"
-                      size="sm"
-                      className={cn(
-                        "w-full justify-between h-fit py-1.5 px-2 text-xs font-normal hover:bg-primary/10 transition-colors gap-2",
-                        currentModel === model.id && "bg-primary/10 text-primary"
-                      )}
-                      onClick={() => {
-                        handleModelChange(model.id);
-                        setIsPopoverOpen(false);
-                      }}
-                    >
-                      <div className="flex items-center gap-2 min-w-0">
-                        <Cpu className="w-3 h-3 flex-shrink-0" />
-                        <span className="truncate">{model.id.split('/').pop() || model.id}</span>
-                      </div>
-                      {currentModel === model.id && (
-                        <Check className="w-3 h-3 flex-shrink-0" />
-                      )}
-                    </Button>
-                  ))}
+                  {availableModels.map((model) => {
+                    const isSelected = currentModel === model.id;
+                    return (
+                      <Button
+                        key={model.id}
+                        variant="ghost"
+                        size="sm"
+                        className={cn(
+                          "w-full justify-start h-fit py-1.5 px-2 text-xs font-normal hover:bg-primary/10 transition-all duration-150 gap-2 rounded-md",
+                          isSelected && "bg-primary/10 text-primary font-medium"
+                        )}
+                        onClick={() => {
+                          handleModelChange(model.id);
+                          setIsPopoverOpen(false);
+                        }}
+                      >
+                        <Cpu className={cn("w-3 h-3 flex-shrink-0", isSelected && "text-primary")} />
+                        <span className="truncate">{(model as any).label || model.id.split('/').pop() || model.id}</span>
+                      </Button>
+                    );
+                  })}
                 </div>
               </PopoverContent>
             </Popover>
@@ -1145,6 +1165,7 @@ export const InputContainer: React.FC<InputContainerProps> = ({
     availableModels,
     currentModel,
     isLoadingModels,
+    runtimeModelsLoading,
     handleModelChange,
     setIsPopoverOpen,
     showEmojiPicker,

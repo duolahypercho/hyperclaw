@@ -56,9 +56,9 @@ export function useCodexChat(
     }
   }
 
-  // Check if Codex is available on mount (Electron only)
+  // Check if Codex is available via hub/connector relay
   useEffect(() => {
-    if (typeof window === "undefined" || !window.electronAPI?.codex) {
+    if (typeof window === "undefined") {
       setIsConnected(false);
       return;
     }
@@ -77,7 +77,6 @@ export function useCodexChat(
       } catch {
         if (!cancelled) {
           setIsConnected(false);
-          setError("Codex not available");
         }
       }
     })();

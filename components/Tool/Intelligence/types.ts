@@ -18,7 +18,7 @@ export interface IntelSchema {
   fts5_available?: boolean;
 }
 
-export type SmartViewType = "grid" | "pipeline" | "chart" | "timeline";
+export type SmartViewType = "grid" | "pipeline" | "chart" | "timeline" | "research";
 
 export interface SmartViewDetection {
   type: SmartViewType;

@@ -177,7 +177,14 @@ export function AllJobsView() {
                     className="flex-1 min-w-0 text-left rounded-md -m-1 p-1 hover:bg-muted/40 transition-colors focus:outline-none focus:ring-1 focus:ring-ring"
                     title={job.id ? `${job.name}\nID: ${job.id}\nClick for run history` : job.name}
                   >
-                    <div className="text-sm font-medium truncate">{job.name}</div>
+                    <div className="text-sm font-medium truncate flex items-center gap-1.5">
+                      {job.name}
+                      {job.runtime && job.runtime !== "openclaw" && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground font-normal shrink-0">
+                          {job.runtime}
+                        </span>
+                      )}
+                    </div>
                     <div className="text-xs text-muted-foreground truncate mt-0.5">
                       {job.schedule?.expr || "—"}
                     </div>

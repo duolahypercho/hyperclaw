@@ -71,25 +71,87 @@ interface DashboardProps {
   onResetLayout?: () => void;
 }
 
-// Default layout configuration
+// Breakpoint column counts — must match the ResponsiveGridLayout config
+const BREAKPOINT_COLS: Record<string, number> = { lg: 24, md: 20, sm: 12, xs: 8 };
+
+// Generate a layout for the lg (24-col) breakpoint using each widget's defaultValue
 const generateDefaultLayout = (widgets: Widget[]): Layout[] => {
   return widgets.map((widget, index) => ({
     i: widget.id,
     x:
       widget.defaultValue.x !== undefined
         ? widget.defaultValue.x
-        : (index % 2) * 12, // Use custom x, fallback to auto-positioning
+        : (index % 2) * 12,
     y:
       widget.defaultValue.y !== undefined
         ? widget.defaultValue.y
-        : Math.floor(index / 2) * 8, // Use custom y, fallback to auto-positioning
+        : Math.floor(index / 2) * 8,
     w: widget.defaultValue.w,
     h: widget.defaultValue.h,
     minW: widget.defaultValue.minW,
     minH: widget.defaultValue.minH,
-    isResizable: widget.isResizable !== false, // Default to true unless explicitly set to false
+    isResizable: widget.isResizable !== false,
   }));
 };
+
+// Generate a responsive layout for a given column count by stacking widgets
+// that don't fit side-by-side at the target width.
+const generateResponsiveLayout = (widgets: Widget[], cols: number): Layout[] => {
+  // For narrow screens (<=12 cols): stack everything full-width
+  if (cols <= 12) {
+    let currentY = 0;
+    return widgets.map((widget) => {
+      const w = Math.min(widget.defaultValue.w, cols);
+      const minW = Math.min(widget.defaultValue.minW, cols);
+      const item: Layout = {
+        i: widget.id,
+        x: 0,
+        y: currentY,
+        w: cols, // full width
+        h: widget.defaultValue.h,
+        minW,
+        minH: widget.defaultValue.minH,
+        isResizable: widget.isResizable !== false,
+      };
+      currentY += widget.defaultValue.h;
+      return item;
+    });
+  }
+
+  // For medium screens (e.g. 20 cols): scale positions proportionally from the
+  // 24-col layout, then clamp so nothing overflows.
+  const lgCols = BREAKPOINT_COLS.lg;
+  const scale = cols / lgCols;
+  return widgets.map((widget, index) => {
+    const origX = widget.defaultValue.x ?? (index % 2) * 12;
+    const origW = widget.defaultValue.w;
+    let w = Math.max(Math.round(origW * scale), widget.defaultValue.minW);
+    let x = Math.round(origX * scale);
+    // Clamp to fit within column count
+    if (x + w > cols) {
+      x = Math.max(0, cols - w);
+    }
+    if (w > cols) w = cols;
+    return {
+      i: widget.id,
+      x,
+      y: widget.defaultValue.y ?? Math.floor(index / 2) * 8,
+      w,
+      h: widget.defaultValue.h,
+      minW: Math.min(widget.defaultValue.minW, cols),
+      minH: widget.defaultValue.minH,
+      isResizable: widget.isResizable !== false,
+    };
+  });
+};
+
+// Generate layouts for all breakpoints
+const generateAllLayouts = (widgets: Widget[]): { [key: string]: Layout[] } => ({
+  lg: generateDefaultLayout(widgets),
+  md: generateResponsiveLayout(widgets, BREAKPOINT_COLS.md),
+  sm: generateResponsiveLayout(widgets, BREAKPOINT_COLS.sm),
+  xs: generateResponsiveLayout(widgets, BREAKPOINT_COLS.xs),
+});
 
 // Widget wrapper component — memoized to skip re-renders during drag
 const WidgetWrapper = React.memo<CustomProps>(
@@ -238,12 +300,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
     try {
       const parsedLayout = JSON.parse(savedJson);
       const mergedLayouts: { [key: string]: Layout[] } = {};
-      const defaultLayouts = {
-        lg: generateDefaultLayout(widgets),
-        md: generateDefaultLayout(widgets),
-        sm: generateDefaultLayout(widgets),
-        xs: generateDefaultLayout(widgets),
-      };
+      const defaultLayouts = generateAllLayouts(widgets);
       Object.keys(defaultLayouts).forEach((breakpoint) => {
         const saved = parsedLayout[breakpoint] || [];
         const defaults = defaultLayouts[breakpoint as keyof typeof defaultLayouts];
@@ -266,12 +323,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       const merged = mergeLayoutWithDefaults(savedLayout);
       if (merged) return merged;
     }
-    return {
-      lg: generateDefaultLayout(widgets),
-      md: generateDefaultLayout(widgets),
-      sm: generateDefaultLayout(widgets),
-      xs: generateDefaultLayout(widgets),
-    };
+    return generateAllLayouts(widgets);
   });
 
   // Refs for stable callback access (avoids re-creating handlers on every render)
@@ -435,9 +487,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
       if (newWidgets.length === 0) return prevLayouts;
 
       const updatedLayouts: { [key: string]: Layout[] } = {};
+      const newAllLayouts = generateAllLayouts(newWidgets);
       Object.keys(prevLayouts).forEach((breakpoint) => {
         const existingLayouts = prevLayouts[breakpoint];
-        const newLayouts = generateDefaultLayout(newWidgets);
+        const newLayouts = newAllLayouts[breakpoint] || generateDefaultLayout(newWidgets);
         const maxY = Math.max(...existingLayouts.map((l) => l.y + l.h), 0);
         const adjustedNewLayouts = newLayouts.map((layout, index) => ({
           ...layout,

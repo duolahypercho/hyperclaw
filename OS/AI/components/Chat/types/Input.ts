@@ -119,4 +119,13 @@ export interface InputContainerProps {
   // Context window usage
   tokenUsage?: number;
   contextLimit?: number;
+
+  // Runtime model selection (for provider tabs like Claude Code, Codex, Hermes)
+  /** Dynamic models fetched by useRuntimeModels — overrides OpenClaw models when provided */
+  runtimeModels?: { id: string; label: string }[];
+  runtimeModelsLoading?: boolean;
+  /** Currently selected model (from parent) — when provided, InputContainer uses this instead of internal state */
+  currentModel?: string;
+  /** Callback when user changes model via the selector */
+  onModelChange?: (modelId: string) => void;
 }

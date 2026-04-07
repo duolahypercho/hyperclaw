@@ -40,6 +40,7 @@ interface DashboardHeaderProps {
   }>;
   isEditMode: boolean;
   onToggleEditMode: () => void;
+  onCancelEditMode?: () => void;
   onAddChatWidget?: () => void;
   onAddAnnounceWidget?: () => void;
 }
@@ -51,6 +52,7 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
   availableWidgets,
   isEditMode,
   onToggleEditMode,
+  onCancelEditMode,
   onAddChatWidget,
   onAddAnnounceWidget,
 }) => {
@@ -67,7 +69,7 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
           stiffness: 400,
           damping: 30,
         }}
-        className="fixed top-0 left-0 right-0 z-[60] h-12 flex shrink-0 items-center gap-2 border-b border-t-0 border-border/50 border-solid border-l-0 border-r-0 bg-background/70 backdrop-blur-xl shadow-lg"
+        className="relative z-[60] h-12 flex shrink-0 items-center gap-2 border-b border-t-0 border-border/50 border-solid border-l-0 border-r-0 bg-background/70 backdrop-blur-xl shadow-lg"
       >
         <div className="relative flex w-full h-full items-center px-3">
           {/* Center - Title or Edit Mode Text */}
@@ -295,7 +297,16 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
                 </Dialog>
               </>
             )}
-            {/* Edit Layout Toggle */}
+            {/* Cancel + Save buttons in edit mode */}
+            {isEditMode && onCancelEditMode && (
+              <Button
+                variant="outline"
+                onClick={onCancelEditMode}
+                className="gap-2 text-xs h-fit border-border/50 hover:bg-muted/50"
+              >
+                <span className="font-medium">Cancel</span>
+              </Button>
+            )}
             <Button
               variant={isEditMode ? "default" : "outline"}
               onClick={onToggleEditMode}
@@ -309,7 +320,7 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
               {isEditMode ? (
                 <>
                   <Lock className="w-3 h-3" />
-                  <span className="font-medium">Lock Layout</span>
+                  <span className="font-medium">Save Layout</span>
                 </>
               ) : (
                 <>

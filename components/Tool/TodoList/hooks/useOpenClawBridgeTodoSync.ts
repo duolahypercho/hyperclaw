@@ -22,10 +22,13 @@ function toObjectIdHex(id: string): string {
 }
 
 const BRIDGE_STATUS_TO_TODO: Record<HyperClawTask["status"], Task["status"]> = {
+  backlog: "pending",
   pending: "pending",
   in_progress: "in_progress",
+  in_review: "in_progress",
   completed: "completed",
-  cancelled: "completed",
+  blocked: "blocked",
+  cancelled: "cancelled",
 };
 
 const OBJECT_ID_RE = /^[0-9a-f]{24}$/i;

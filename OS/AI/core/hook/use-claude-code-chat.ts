@@ -12,7 +12,11 @@ import type {
 
 /**
  * useClaudeCodeChat — drop-in replacement for useGatewayChat that routes
- * messages through Claude Code CLI instead of the OpenClaw gateway.
+ * messages through the Hub → Connector relay to the Claude Code CLI.
+ *
+ * Streaming: The connector sends partial JSONL events as hub "event" messages
+ * with type "claude-code-stream". This hook listens for those events on the
+ * gateway WebSocket to render streaming text in real-time.
  *
  * Returns the same UseGatewayChatReturn interface so the GatewayChat UI
  * component can use either hook transparently.
@@ -25,7 +29,6 @@ export interface UseClaudeCodeChatOptions {
 }
 
 // Map HyperClaw session keys → Claude Code session IDs for resume
-// Persisted to sessionStorage so sessions survive page reloads
 const SESSION_MAP_STORAGE_KEY = "claude-code-session-id-map";
 
 function hydrateSessionIdMap(): Map<string, string> {
@@ -85,19 +88,165 @@ export function useClaudeCodeChat(
     }
   }
 
-  // Stable model setter that also updates the ref (avoids stale closure in sendMessage)
   const handleSetModel = useCallback((m: string) => {
     modelRef.current = m;
     setModel(m);
   }, []);
 
-  // Abort controller for in-flight requests
   const abortRef = useRef<AbortController | null>(null);
+  const isLoadingRef = useRef(false);
+  // Keep ref in sync with state for use in event listeners (avoid stale closures)
+  isLoadingRef.current = isLoading;
 
-  // Check if Claude Code is available on mount (Electron only)
+  // Track the current requestId for streaming event correlation
+  const activeRequestIdRef = useRef<string | null>(null);
+
+  // Listen for streaming events from the gateway WebSocket
   useEffect(() => {
-    // Skip in browser mode — no Electron IPC available
-    if (typeof window === "undefined" || !window.electronAPI?.claudeCode) {
+    if (typeof window === "undefined") return;
+
+    const handleStreamEvent = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (!detail) return;
+
+      const { sessionKey: evtSessionKey, event } = detail;
+
+      // Only process events for our active session
+      if (evtSessionKey && evtSessionKey !== sessionKeyRef.current) return;
+
+      // Only process while we're actively loading (waiting for response)
+      if (!isLoadingRef.current) return;
+
+      if (!event) return;
+      const eventType = event.type as string;
+
+      // Handle assistant text streaming
+      if (eventType === "assistant") {
+        const msg = event.message as Record<string, unknown> | undefined;
+        if (!msg) return;
+        const contentBlocks = msg.content as Array<Record<string, unknown>> | undefined;
+        if (!contentBlocks) return;
+
+        let textContent = "";
+        let thinking = "";
+
+        for (const block of contentBlocks) {
+          const blockType = block.type as string;
+          if (blockType === "text") {
+            textContent += (block.text as string) || "";
+          } else if (blockType === "thinking") {
+            thinking = (block.thinking as string) || "";
+          }
+        }
+
+        if (textContent.trim()) {
+          // Update or create streaming assistant message
+          setMessages((prev) => {
+            const streamId = `stream-active`;
+            const existingIdx = prev.findIndex((m) => m.id === streamId);
+            if (existingIdx !== -1) {
+              const updated = [...prev];
+              updated[existingIdx] = {
+                ...updated[existingIdx],
+                content: textContent,
+                ...(thinking && { thinking }),
+              };
+              return updated;
+            }
+            return [
+              ...prev,
+              {
+                id: streamId,
+                role: "assistant" as ChatMessageRole,
+                content: textContent,
+                timestamp: Date.now(),
+                ...(thinking && { thinking }),
+              },
+            ];
+          });
+        }
+      }
+    };
+
+    window.addEventListener("claude-code-stream", handleStreamEvent);
+    return () => {
+      window.removeEventListener("claude-code-stream", handleStreamEvent);
+    };
+  }, []);
+
+  // Listen for session file updates (two-way relay from interactive terminal)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const handleSessionUpdate = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (!detail) return;
+
+      const { sessionKey: evtSessionKey, message } = detail as {
+        sessionId?: string;
+        sessionKey?: string;
+        message?: {
+          id: string;
+          role: string;
+          content: string;
+          timestamp: number;
+          thinking?: string;
+          toolCalls?: GatewayChatMessage["toolCalls"];
+        };
+      };
+
+      // Only process updates for our current session
+      if (evtSessionKey && evtSessionKey !== sessionKeyRef.current) return;
+      if (!message || !message.id) return;
+
+      // Skip while sending — the send flow (streaming events + final response)
+      // handles everything. The file watcher is only for terminal → dashboard sync.
+      if (isLoadingRef.current) return;
+
+      // Add the message if we don't already have it.
+      // Dedup by ID AND by content+role (the locally-added user message has
+      // a different ID than the JSONL uuid, so also check content match).
+      setMessages((prev) => {
+        if (prev.some((m) => m.id === message.id)) return prev;
+        // Content-based dedup for user messages (local add vs file watcher)
+        if (
+          message.role === "user" &&
+          prev.some(
+            (m) =>
+              m.role === "user" &&
+              m.content.trim() === (message.content || "").trim() &&
+              Math.abs((m.timestamp || 0) - (message.timestamp || 0)) < 30000
+          )
+        ) {
+          return prev;
+        }
+        // Skip toolResult messages from file watcher (they're grouped into tool calls)
+        if (message.role === "toolResult" || message.role === "tool_result") {
+          return prev;
+        }
+        return [
+          ...prev,
+          {
+            id: message.id,
+            role: message.role as ChatMessageRole,
+            content: message.content || "",
+            timestamp: message.timestamp || Date.now(),
+            ...(message.thinking && { thinking: message.thinking }),
+            ...(message.toolCalls && { toolCalls: message.toolCalls }),
+          },
+        ];
+      });
+    };
+
+    window.addEventListener("claude-code-session-update", handleSessionUpdate);
+    return () => {
+      window.removeEventListener("claude-code-session-update", handleSessionUpdate);
+    };
+  }, []);
+
+  // Check if Claude Code is reachable via hub/connector relay
+  useEffect(() => {
+    if (typeof window === "undefined") {
       setIsConnected(false);
       return;
     }
@@ -115,8 +264,13 @@ export function useClaudeCodeChat(
         }
       } catch {
         if (!cancelled) {
-          setIsConnected(false);
-          setError("Claude Code not available");
+          // Connector might not support status yet — try session list as fallback
+          try {
+            await bridgeInvoke("claude-code-list-sessions", { limit: 1 });
+            if (!cancelled) setIsConnected(true);
+          } catch {
+            if (!cancelled) setIsConnected(false);
+          }
         }
       }
     })();
@@ -155,6 +309,10 @@ export function useClaudeCodeChat(
       const currentSessionKey = sessionKeyRef.current;
       const claudeSessionId = sessionIdMap.get(currentSessionKey);
 
+      // Generate a unique requestId for streaming event correlation
+      const requestId = `cc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      activeRequestIdRef.current = requestId;
+
       try {
         const result = (await bridgeInvoke("claude-code-send", {
           message: content.trim(),
@@ -186,7 +344,7 @@ export function useClaudeCodeChat(
           persistSessionIdMap(sessionIdMap);
         }
 
-        // Add assistant messages from the response
+        // Replace streaming placeholder with final messages
         if (result.messages && result.messages.length > 0) {
           const newMessages: GatewayChatMessage[] = result.messages.map((m) => ({
             id: m.id || uuidv4(),
@@ -198,7 +356,15 @@ export function useClaudeCodeChat(
             ...(m.toolResults && { toolResults: m.toolResults }),
           }));
 
-          setMessages((prev) => [...prev, ...newMessages]);
+          setMessages((prev) => {
+            // Remove streaming placeholder
+            const filtered = prev.filter(
+              (m) => m.id !== "stream-active"
+            );
+            return [...filtered, ...newMessages];
+          });
+        } else {
+          // No final messages but streaming may have added content — keep it
         }
       } catch (err) {
         const errorMessage =
@@ -206,16 +372,23 @@ export function useClaudeCodeChat(
         console.error("[useClaudeCodeChat] Send error:", err);
         setError(errorMessage);
 
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: uuidv4(),
-            role: "assistant" as ChatMessageRole,
-            content: `Error: ${errorMessage}`,
-            timestamp: Date.now(),
-          },
-        ]);
+        setMessages((prev) => {
+          // Remove streaming placeholder
+          const filtered = prev.filter(
+            (m) => m.id !== "stream-active"
+          );
+          return [
+            ...filtered,
+            {
+              id: uuidv4(),
+              role: "assistant" as ChatMessageRole,
+              content: `Error: ${errorMessage}`,
+              timestamp: Date.now(),
+            },
+          ];
+        });
       } finally {
+        activeRequestIdRef.current = null;
         setIsLoading(false);
       }
     },
@@ -227,19 +400,23 @@ export function useClaudeCodeChat(
       abortRef.current.abort();
       abortRef.current = null;
     }
-    // Tell Electron to kill the Claude Code subprocess
     try {
       await bridgeInvoke("claude-code-abort", { sessionKey: sessionKeyRef.current });
     } catch {
       // Ignore abort errors
     }
+    activeRequestIdRef.current = null;
     setIsLoading(false);
   }, []);
 
   const loadChatHistory = useCallback(async () => {
     const key = sessionKeyRef.current;
-    // Extract session ID: keys are "claude:<sessionId>" or raw session IDs
-    const sessionId = sessionIdMap.get(key) || key.replace(/^claude:/, "");
+    let sessionId = sessionIdMap.get(key);
+    if (!sessionId) {
+      if (key.startsWith("claude:")) {
+        sessionId = key.slice(7);
+      }
+    }
     if (!sessionId || sessionId === "default") return;
 
     try {
@@ -274,6 +451,15 @@ export function useClaudeCodeChat(
         }));
         setMessages(parsed);
       }
+
+      // Start watching the session file for live updates from terminal
+      const watchSessionId = result?.sessionId || sessionId;
+      if (watchSessionId) {
+        bridgeInvoke("claude-code-watch", {
+          sessionId: watchSessionId,
+          sessionKey: key,
+        }).catch(() => {});
+      }
     } catch (err) {
       console.error("[useClaudeCodeChat] Failed to load history:", err);
       setError(
@@ -289,7 +475,6 @@ export function useClaudeCodeChat(
   const clearChat = useCallback(() => {
     setMessages([]);
     setError(null);
-    // Remove session mapping so next message starts a fresh session
     sessionIdMap.delete(sessionKeyRef.current);
     persistSessionIdMap(sessionIdMap);
   }, []);
@@ -309,13 +494,15 @@ export function useClaudeCodeChat(
     setIsConnected(false);
   }, []);
 
-  // Kill any in-flight Claude Code process when the hook unmounts
+  // Stop file watcher on unmount — but do NOT abort the Claude Code process.
+  // The connector keeps running the CLI in the background; switching tabs
+  // shouldn't kill work in progress. The user can reload history when they
+  // come back. Only the explicit stop button (stopGeneration) aborts.
   useEffect(() => {
     return () => {
-      if (typeof window !== "undefined" && window.electronAPI?.claudeCode) {
-        bridgeInvoke("claude-code-abort", {
-          sessionKey: sessionKeyRef.current,
-        }).catch(() => {});
+      const sid = sessionIdMap.get(sessionKeyRef.current);
+      if (sid) {
+        bridgeInvoke("claude-code-unwatch", { sessionId: sid }).catch(() => {});
       }
     };
   }, []);

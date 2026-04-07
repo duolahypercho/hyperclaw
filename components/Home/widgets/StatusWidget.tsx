@@ -12,9 +12,13 @@ import {
   Loader2,
   MessageSquare,
   AlertTriangle,
-  ChevronDown,
-  ChevronRight,
   EyeOff,
+  Inbox,
+  Check,
+  X as XIcon,
+  HelpCircle,
+  Zap,
+  Info,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -36,7 +40,7 @@ import {
   isAvatarText,
   type AgentIdentity,
 } from "$/hooks/useAgentIdentity";
-import { useFloatingChatOS } from "@OS/Provider/OSProv";
+import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
 
 // ── Custom event for cross-widget communication ──
 // StatusWidget dispatches this; GatewayChatWidget listens.
@@ -68,6 +72,27 @@ interface AgentStatus {
   sessionCount: number;
   errorMessage?: string;
 }
+
+// ── Inbox types ──
+
+type StatusTab = "agents" | "inbox";
+
+interface InboxItem {
+  id: number;
+  agent_id: string;
+  kind: "approval" | "question" | "error" | "info";
+  title: string;
+  body?: string;
+  status: "pending" | "approved" | "rejected" | "dismissed";
+  created_at: number;
+}
+
+const INBOX_KIND_ICONS: Record<string, React.ReactNode> = {
+  approval: <Zap className="w-3 h-3 text-amber-500" />,
+  question: <HelpCircle className="w-3 h-3 text-blue-500" />,
+  error: <AlertTriangle className="w-3 h-3 text-destructive" />,
+  info: <Info className="w-3 h-3 text-muted-foreground" />,
+};
 
 // ── Quiet hours: hide agents with no activity within this window ──
 const QUIET_HOURS = 48;
@@ -366,10 +391,54 @@ const StatusWidgetContent = memo((props: CustomProps) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [connected, setConnected] = useState(() => getGatewayConnectionState().connected);
-  const [showHidden, setShowHidden] = useState(false);
-  const [idleExpanded, setIdleExpanded] = useState(false);
   const activeRunsRef = useRef<Map<string, { agentId: string; ts: number }>>(new Map());
   const isMounted = useRef(true);
+
+  // ── Inbox ──
+  const [activeTab, setActiveTab] = useState<StatusTab>("agents");
+  const [inboxItems, setInboxItems] = useState<InboxItem[]>([]);
+  const [inboxLoading, setInboxLoading] = useState(false);
+
+  const pendingInboxCount = useMemo(
+    () => inboxItems.filter((i) => i.status === "pending").length,
+    [inboxItems]
+  );
+
+  const fetchInbox = useCallback(async () => {
+    setInboxLoading(true);
+    try {
+      const result = await bridgeInvoke("intel-query", {
+        sql: "SELECT * FROM inbox_items ORDER BY created_at DESC LIMIT 50",
+      });
+      const rows = (result as { rows?: InboxItem[] })?.rows || [];
+      if (isMounted.current) setInboxItems(rows);
+    } catch { /* table may not exist yet */ }
+    finally { if (isMounted.current) setInboxLoading(false); }
+  }, []);
+
+  const resolveInboxItem = useCallback(async (itemId: number, resolution: "approved" | "rejected" | "dismissed") => {
+    try {
+      await bridgeInvoke("intel-update", {
+        table: "inbox_items",
+        data: { status: resolution, resolved_at: Date.now() },
+        where: { id: itemId },
+      });
+      setInboxItems((prev) =>
+        prev.map((item) => item.id === itemId ? { ...item, status: resolution } : item)
+      );
+    } catch { /* ignore */ }
+  }, []);
+
+  // Fetch inbox on tab switch + poll every 60s for badge count
+  useEffect(() => {
+    if (activeTab === "inbox") fetchInbox();
+  }, [activeTab, fetchInbox]);
+
+  useEffect(() => {
+    fetchInbox();
+    const timer = setInterval(() => fetchInbox(), 60_000);
+    return () => clearInterval(timer);
+  }, [fetchInbox]);
 
   // Track connection state
   useEffect(() => {
@@ -564,58 +633,19 @@ const StatusWidgetContent = memo((props: CustomProps) => {
   const agentIds = useMemo(() => agents.map((a) => a.id), [agents]);
   const identities = useAgentIdentities(agentIds);
 
-  // Floating chat
-  const { openChat } = useFloatingChatOS();
-
-  // Click handler: mark as read + open floating chat popout
+  // Click handler: mark as read + switch chat widget to this agent
   const handleAgentClick = useCallback((agentId: string) => {
     setLastSeen(agentId, Date.now());
     setStatuses((prev) =>
       prev.map((s) => (s.agentId === agentId ? { ...s, unreadCount: 0 } : s))
     );
-    openChat(agentId);
-  }, [openChat]);
-
-  // ── Partition into visible groups ──
-  const quietCutoff = Date.now() - QUIET_HOURS * 60 * 60 * 1000;
-
-  // "Active" = running, error, or has unread — always shown expanded
-  const activeStatuses = useMemo(
-    () => statuses.filter((s) => s.state === "running" || s.state === "error" || s.unreadCount > 0),
-    [statuses]
-  );
-
-  // "Recent idle" = idle, no unread, had activity within QUIET_HOURS — shown collapsed
-  const recentIdleStatuses = useMemo(
-    () =>
-      statuses.filter(
-        (s) =>
-          s.state === "idle" &&
-          s.unreadCount === 0 &&
-          s.lastActivity &&
-          s.lastActivity > quietCutoff
-      ),
-    [statuses, quietCutoff]
-  );
-
-  // "Hidden" = idle, no unread, no activity within QUIET_HOURS
-  const hiddenStatuses = useMemo(
-    () =>
-      statuses.filter(
-        (s) =>
-          s.state === "idle" &&
-          s.unreadCount === 0 &&
-          (!s.lastActivity || s.lastActivity <= quietCutoff)
-      ),
-    [statuses, quietCutoff]
-  );
+    dispatchOpenAgentChat(agentId);
+  }, []);
 
   const unreadTotal = useMemo(
     () => statuses.reduce((sum, s) => sum + s.unreadCount, 0),
     [statuses]
   );
-
-  const visibleCount = activeStatuses.length + recentIdleStatuses.length;
 
   return (
     <motion.div
@@ -632,20 +662,133 @@ const StatusWidgetContent = memo((props: CustomProps) => {
           isFocusModeActive && "border-transparent grayscale-[30%]"
         )}
       >
-        <StatusCustomHeader
-          {...props}
-          agentCount={visibleCount}
-          hiddenCount={hiddenStatuses.length}
-          unreadTotal={unreadTotal}
-          onRefresh={refresh}
-          refreshing={loading}
-          connected={connected}
-          showHidden={showHidden}
-          onToggleHidden={() => setShowHidden((v) => !v)}
-        />
+        {/* Compact tab bar — no title, just tabs + controls */}
+        <div className="flex items-center gap-0.5 px-3 py-2 shrink-0">
+          {props.isEditMode && (
+            <div className="cursor-move h-6 w-6 flex items-center justify-center shrink-0 mr-1">
+              <GripVertical className="w-3 h-3 text-muted-foreground" />
+            </div>
+          )}
+          <button
+            onClick={() => setActiveTab("agents")}
+            className={cn(
+              "px-2 py-1 rounded text-[11px] font-medium transition-colors",
+              activeTab === "agents" ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-muted/30"
+            )}
+          >
+            <Activity className="w-3 h-3 inline mr-1" />
+            Agents
+          </button>
+          <button
+            onClick={() => setActiveTab("inbox")}
+            className={cn(
+              "relative px-2 py-1 rounded text-[11px] font-medium transition-colors",
+              activeTab === "inbox" ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-muted/30"
+            )}
+          >
+            <Inbox className="w-3 h-3 inline mr-1" />
+            Inbox
+            {pendingInboxCount > 0 && (
+              <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-primary text-primary-foreground text-[9px] font-bold flex items-center justify-center">
+                {pendingInboxCount}
+              </span>
+            )}
+          </button>
+          <div className="flex items-center gap-1 ml-auto shrink-0">
+            <span
+              className={cn("w-1.5 h-1.5 rounded-full shrink-0", connected ? "bg-emerald-500" : "bg-muted-foreground/40")}
+              title={connected ? "Connected" : "Disconnected"}
+            />
+            <Button variant="ghost" size="iconSm" className="h-5 w-5" onClick={() => refresh()} disabled={loading}>
+              <RefreshCw className={cn("w-2.5 h-2.5", loading && "animate-spin")} />
+            </Button>
+            <Button variant="ghost" size="iconSm" onClick={props.onMaximize} className="h-5 w-5">
+              {props.isMaximized ? <Minimize2 className="w-2.5 h-2.5" /> : <Maximize2 className="w-2.5 h-2.5" />}
+            </Button>
+          </div>
+        </div>
 
         <div className="flex-1 overflow-hidden flex flex-col min-h-0 px-2 pb-2">
-          {loading && statuses.length === 0 ? (
+          {activeTab === "inbox" ? (
+            <ScrollArea className="flex-1 min-h-0">
+              {inboxLoading ? (
+                <div className="flex items-center justify-center py-6 gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                  <span className="text-xs text-muted-foreground">Loading...</span>
+                </div>
+              ) : inboxItems.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-8 gap-2">
+                  <Inbox className="w-6 h-6 text-muted-foreground/30" />
+                  <p className="text-xs text-muted-foreground/60">Inbox is clear</p>
+                  <p className="text-[10px] text-muted-foreground/40">Agent requests will appear here</p>
+                </div>
+              ) : (
+                <div className="space-y-1 pr-1">
+                  {inboxItems.map((item) => (
+                    <div
+                      key={item.id}
+                      className={cn(
+                        "p-2.5 rounded-md border transition-all",
+                        item.status === "pending" ? "border-border/50 bg-card/50" : "border-border/20 bg-muted/20 opacity-60"
+                      )}
+                    >
+                      <div className="flex items-start gap-2">
+                        <div className="shrink-0 mt-0.5">{INBOX_KIND_ICONS[item.kind] || INBOX_KIND_ICONS.info}</div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs font-medium text-foreground truncate">{item.title}</span>
+                            <span className="text-[9px] text-muted-foreground/40 shrink-0">{timeAgo(item.created_at)}</span>
+                          </div>
+                          {item.body && (
+                            <p className="text-[11px] text-muted-foreground leading-relaxed mt-0.5 line-clamp-2">{item.body}</p>
+                          )}
+                          {item.status === "pending" && (
+                            <div className="flex items-center gap-1 mt-1.5">
+                              {item.kind === "approval" && (
+                                <>
+                                  <button
+                                    onClick={() => resolveInboxItem(item.id, "approved")}
+                                    className="flex items-center gap-0.5 px-2 py-0.5 rounded text-[10px] font-medium bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20 transition-colors"
+                                  >
+                                    <Check className="w-2.5 h-2.5" />Approve
+                                  </button>
+                                  <button
+                                    onClick={() => resolveInboxItem(item.id, "rejected")}
+                                    className="flex items-center gap-0.5 px-2 py-0.5 rounded text-[10px] font-medium bg-red-500/10 text-red-500 hover:bg-red-500/20 transition-colors"
+                                  >
+                                    <XIcon className="w-2.5 h-2.5" />Reject
+                                  </button>
+                                </>
+                              )}
+                              <button
+                                onClick={() => resolveInboxItem(item.id, "dismissed")}
+                                className="flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] text-muted-foreground hover:bg-muted/30 transition-colors ml-auto"
+                              >
+                                Dismiss
+                              </button>
+                            </div>
+                          )}
+                          {item.status !== "pending" && (
+                            <Badge
+                              variant="outline"
+                              className={cn(
+                                "mt-1 h-4 px-1.5 text-[9px]",
+                                item.status === "approved" && "text-emerald-600 border-emerald-500/30",
+                                item.status === "rejected" && "text-red-500 border-red-500/30",
+                                item.status === "dismissed" && "text-muted-foreground border-border/30"
+                              )}
+                            >
+                              {item.status}
+                            </Badge>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </ScrollArea>
+          ) : loading && statuses.length === 0 ? (
             <div className="flex-1 flex items-center justify-center gap-2 py-6">
               <Loader2 className="w-5 h-5 animate-spin text-primary" />
               <span className="text-sm text-muted-foreground">Loading agents...</span>
@@ -653,40 +796,26 @@ const StatusWidgetContent = memo((props: CustomProps) => {
           ) : error && statuses.length === 0 ? (
             <div className="flex-1 flex flex-col items-center justify-center gap-2 py-6">
               <AlertTriangle className="w-6 h-6 text-destructive/60" />
-              <p className="text-xs text-destructive text-center max-w-[200px]">
-                {error}
-              </p>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-6 text-xs mt-1"
-                onClick={() => refresh()}
-                disabled={loading}
-              >
-                <RefreshCw className={cn("w-3 h-3 mr-1", loading && "animate-spin")} />
-                Retry
+              <p className="text-xs text-destructive text-center max-w-[200px]">{error}</p>
+              <Button variant="outline" size="sm" className="h-6 text-xs mt-1" onClick={() => refresh()} disabled={loading}>
+                <RefreshCw className={cn("w-3 h-3 mr-1", loading && "animate-spin")} />Retry
               </Button>
             </div>
           ) : !connected ? (
             <div className="flex-1 flex flex-col items-center justify-center gap-2 py-6">
               <Activity className="w-6 h-6 text-muted-foreground/40" />
-              <p className="text-xs text-muted-foreground text-center">
-                Not connected to gateway
-              </p>
+              <p className="text-xs text-muted-foreground text-center">Not connected to gateway</p>
             </div>
           ) : statuses.length === 0 ? (
             <div className="flex-1 flex flex-col items-center justify-center gap-2 py-6">
               <Activity className="w-6 h-6 text-muted-foreground/40" />
-              <p className="text-xs text-muted-foreground text-center">
-                No agents found
-              </p>
+              <p className="text-xs text-muted-foreground text-center">No agents found</p>
             </div>
           ) : (
             <ScrollArea className="flex-1 min-h-0">
               <div className="space-y-0.5 pr-1">
-                {/* Active agents — always expanded */}
                 <AnimatePresence mode="popLayout">
-                  {activeStatuses.map((status) => (
+                  {statuses.map((status) => (
                     <AgentExpandedRow
                       key={status.agentId}
                       status={status}
@@ -695,65 +824,6 @@ const StatusWidgetContent = memo((props: CustomProps) => {
                     />
                   ))}
                 </AnimatePresence>
-
-                {/* Recent idle — collapsed with expand toggle */}
-                {recentIdleStatuses.length > 0 && (
-                  <div className="pt-1">
-                    <button
-                      type="button"
-                      className="flex items-center gap-1.5 px-2.5 py-1 w-full text-left hover:bg-muted/20 rounded-md transition-colors"
-                      onClick={() => setIdleExpanded((v) => !v)}
-                    >
-                      {idleExpanded ? (
-                        <ChevronDown className="w-3 h-3 text-muted-foreground/60" />
-                      ) : (
-                        <ChevronRight className="w-3 h-3 text-muted-foreground/60" />
-                      )}
-                      <span className="text-[10px] text-muted-foreground/60 uppercase tracking-wide font-medium">
-                        Recent ({recentIdleStatuses.length})
-                      </span>
-                    </button>
-
-                    {idleExpanded ? (
-                      <AnimatePresence mode="popLayout">
-                        {recentIdleStatuses.map((status) => (
-                          <AgentExpandedRow
-                            key={status.agentId}
-                            status={status}
-                            identity={identities.get(status.agentId)}
-                            onClick={handleAgentClick}
-                          />
-                        ))}
-                      </AnimatePresence>
-                    ) : (
-                      recentIdleStatuses.map((status) => (
-                        <AgentCollapsedRow
-                          key={status.agentId}
-                          status={status}
-                          identity={identities.get(status.agentId)}
-                          onClick={handleAgentClick}
-                        />
-                      ))
-                    )}
-                  </div>
-                )}
-
-                {/* Hidden (quiet) agents — behind eye toggle */}
-                {showHidden && hiddenStatuses.length > 0 && (
-                  <div className="pt-1 border-t border-border/30 mt-1">
-                    <p className="text-[10px] text-muted-foreground/40 uppercase tracking-wide font-medium px-2.5 py-1">
-                      Inactive ({hiddenStatuses.length})
-                    </p>
-                    {hiddenStatuses.map((status) => (
-                      <AgentCollapsedRow
-                        key={status.agentId}
-                        status={status}
-                        identity={identities.get(status.agentId)}
-                        onClick={handleAgentClick}
-                      />
-                    ))}
-                  </div>
-                )}
               </div>
             </ScrollArea>
           )}

@@ -6,10 +6,11 @@ import { DataGrid } from "./DataGrid";
 import { PipelineView } from "./PipelineView";
 import { ChartView } from "./ChartView";
 import { TimelineView } from "./TimelineView";
+import { ResearchView } from "./ResearchView";
 import { SqlConsole } from "./SqlConsole";
 
 import { detectSmartViews } from "./SmartViewDetector";
-import { Database, Download, LayoutGrid, KanbanSquare, BarChart3, Clock3 } from "lucide-react";
+import { Database, Download, LayoutGrid, KanbanSquare, BarChart3, Clock3, Lightbulb } from "lucide-react";
 import type { SmartViewType } from "./types";
 
 export function IntelligenceView() {
@@ -72,6 +73,8 @@ export function IntelligenceView() {
                   <BarChart3 className="h-3 w-3" />
                 ) : sv.type === "timeline" ? (
                   <Clock3 className="h-3 w-3" />
+                ) : sv.type === "research" ? (
+                  <Lightbulb className="h-3 w-3" />
                 ) : (
                   <LayoutGrid className="h-3 w-3" />
                 )
@@ -111,6 +114,7 @@ export function IntelligenceView() {
           />
         )}
         {activeView === "timeline" && <TimelineView />}
+        {activeView === "research" && <ResearchView />}
       </div>
 
       {/* SQL Console */}

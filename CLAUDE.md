@@ -1,5 +1,13 @@
 # HyperClaw App
 
+## Architecture: No Direct Electron IPC for AI Runtimes
+
+All AI runtime communication (Claude Code, Codex, Hermes) routes through the Hub → Connector relay. The Electron main process does NOT spawn CLI processes. The connector daemon handles all CLI spawning locally and streams results back through WebSocket.
+
+- `bridgeInvoke("claude-code-send", {...})` → Hub → Connector → `claude -p ...`
+- Streaming events: `claude-code-stream` CustomEvents on the gateway WS
+- Never add `ipcMain.handle("claude-code:*")` or `ipcMain.handle("codex:*")` to electron/main.js
+
 ## Skill routing
 
 When the user's request matches an available skill, ALWAYS invoke it using the Skill

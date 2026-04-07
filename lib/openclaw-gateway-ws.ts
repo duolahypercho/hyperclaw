@@ -224,11 +224,34 @@ export const gatewayConnection = {
   handleMessage(msg: Record<string, unknown>) {
     const msgType = msg.type as string;
 
-    const event = msg.event as string | undefined;
+    // Extract event name from top-level or nested payload (connector protocol)
+    let event = msg.event as string | undefined;
+    const payload = msg.payload as Record<string, unknown> | undefined;
+    if (!event && payload && typeof payload.event === "string") {
+      event = payload.event;
+      msg.event = event;
+    }
 
     // Normalize "evt" → "event" (hub may forward connector events with either type)
     if (msgType === "evt") {
       msg.type = "event";
+    }
+
+    // Handle streaming events from connector (claude-code-stream, codex-stream,
+    // claude-code-session-update). Dispatch as DOM CustomEvent for React hooks.
+    if (
+      (msgType === "event" || msgType === "evt") &&
+      event &&
+      (event === "claude-code-stream" ||
+       event === "codex-stream" ||
+       event === "claude-code-session-update")
+    ) {
+      const data = payload?.data as Record<string, unknown> | undefined;
+      if (data && typeof window !== "undefined") {
+        window.dispatchEvent(
+          new CustomEvent(event, { detail: data })
+        );
+      }
     }
 
     // Handle pong (keepalive response from hub or gateway)
@@ -766,9 +789,27 @@ export const gatewayConnection = {
     return req;
   },
 
-  /** List available models */
+  /** List available models (deduped + cached) */
+  _modelsInflight: null as Promise<{ models: Array<{ id: string; provider: string; displayName?: string }> }> | null,
+  _modelsCache: null as { data: { models: Array<{ id: string; provider: string; displayName?: string }> }; ts: number } | null,
+  _modelsCacheTTL: 15_000, // 15s — models change rarely
   listModels(): Promise<{ models: Array<{ id: string; provider: string; displayName?: string }> }> {
-    return this.request("models.list", {});
+    if (this._modelsCache && Date.now() - this._modelsCache.ts < this._modelsCacheTTL) {
+      return Promise.resolve(this._modelsCache.data);
+    }
+    if (this._modelsInflight) {
+      return this._modelsInflight;
+    }
+    const req = this.request<{ models: Array<{ id: string; provider: string; displayName?: string }> }>("models.list", {})
+      .then((result) => {
+        this._modelsCache = { data: result, ts: Date.now() };
+        return result;
+      })
+      .finally(() => {
+        this._modelsInflight = null;
+      });
+    this._modelsInflight = req;
+    return req;
   },
 
   /** Get session details (including model) */
@@ -1005,6 +1046,15 @@ export const gatewayConnection = {
     const hubDeviceId = this.hubDeviceId;
     this.reconnectTimer = setTimeout(async () => {
       this.reconnectTimer = null;
+      // Stop reconnecting when the JWT has expired — retries would just
+      // spam 401s. The user needs to re-login to get a fresh token.
+      try {
+        const { isAuthExpired: _authCheck } = await import("$/lib/hub-direct");
+        if (_authCheck()) {
+          console.warn("[GatewayWS] Auth expired — stopping reconnect loop");
+          return;
+        }
+      } catch { /* hub-direct not available */ }
       // In hub mode, re-fetch the active device before reconnecting — the
       // device may have changed while we were disconnected.
       if (hubMode) {
@@ -1153,17 +1203,21 @@ export async function probeGatewayHealth(timeoutMs = 12000): Promise<{ healthy: 
   if (!gatewayConnection.connected) {
     return { healthy: false, error: "WebSocket not connected" };
   }
+  // Use listModels() which deduplicates and caches — avoids firing a separate
+  // models.list request when refreshAll already calls listModels in parallel.
   // Retry once on timeout — the relay chain (dashboard → hub → connector → device)
   // can be slow under load, causing false-negative health readings that make the
   // status banner flap. A single retry eliminates most transient timeouts.
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      await gatewayConnection.request("models.list", {}, timeoutMs);
+      await gatewayConnection.listModels();
       return { healthy: true };
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Gateway not reachable";
       if (attempt === 0 && msg.includes("timed out")) {
-        continue; // retry once on timeout
+        // Invalidate the cached inflight promise so the retry gets a fresh request
+        gatewayConnection._modelsInflight = null;
+        continue;
       }
       return { healthy: false, error: msg };
     }
@@ -1181,6 +1235,12 @@ export function subscribeGatewayConnection(cb: () => void): () => void {
 
 /** Get gateway config — always returns hub connection info (no direct local gateway). */
 export async function getGatewayConfig(): Promise<{ gatewayUrl: string; token: string | null; hubMode?: boolean; hubDeviceId?: string }> {
+  // Short-circuit when auth is expired — avoid spamming 401 requests
+  try {
+    const { isAuthExpired } = await import("$/lib/hub-direct");
+    if (isAuthExpired()) return { gatewayUrl: "", token: null };
+  } catch { /* ok */ }
+
   let hubUrl: string | null = null;
   let token: string | null = null;
 

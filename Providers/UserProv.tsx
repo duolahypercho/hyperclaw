@@ -10,7 +10,7 @@ import {
 } from "react";
 import { useSession } from "next-auth/react";
 import { setCachedToken, clearCachedToken } from "$/lib/auth-token-cache";
-import { clearTokenCache } from "$/lib/hub-direct";
+import { clearTokenCache, clearAuthExpired } from "$/lib/hub-direct";
 import {
   getUserInfo,
   getUserMembership,
@@ -103,6 +103,8 @@ export const UserProvider = ({ children }: { children: ReactNode }) => {
       if (sessionData?.user?.userId) {
         // Cache the token for axios interceptors
         setCachedToken(sessionData.user.token);
+        // Clear auth-expired flag so hub retry loops resume with the fresh token
+        clearAuthExpired();
 
         // Fetch user info and membership in parallel
         const [userInfoRes, membershipRes] = await Promise.allSettled([

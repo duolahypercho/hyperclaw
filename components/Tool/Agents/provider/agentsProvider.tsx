@@ -9,11 +9,13 @@ import React, {
   useMemo,
   useRef,
 } from "react";
-import { Bot, FileText, Plus, RefreshCw, Save, Loader2, Trash2, Sparkles, Brain, UserRound, Users, Wrench, Heart, Crown } from "lucide-react";
+import { Bot, FileText, Plus, RefreshCw, Save, Loader2, Trash2, Sparkles, Brain, UserRound, Users, Wrench, Heart, Crown, Zap } from "lucide-react";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
 import { dashboardState } from "$/lib/dashboard-state";
 import { useOpenClawContext } from "$/Providers/OpenClawProv";
 import { gatewayConnection } from "$/lib/openclaw-gateway-ws";
+import { cronAdd } from "$/components/Tool/Crons/utils";
+import type { CEOHeartbeatConfig } from "$/types/electron";
 import { AppSchema } from "@OS/Layout/types";
 import type { SidebarSection, SidebarItem } from "@OS/Layout/Sidebar/SidebarSchema";
 import { AgentSidebarSelect } from "../AgentSidebarSelect";
@@ -28,6 +30,8 @@ export interface Agent {
   lastActive?: string;
   /** Folder name under OPENCLAW_HOME for this agent's workspace (from getTeam workspace path). */
   workspaceFolder?: string;
+  /** Which runtime this agent belongs to: openclaw, hermes, claude-code, codex */
+  runtime?: "openclaw" | "hermes" | "claude-code" | "codex";
 }
 
 export interface AgentFileEntry {
@@ -138,6 +142,8 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
   const selectedPathRef = useRef<string | null>(null);
   const [ceoAgentId, setCeoAgentId] = useState<string | null>(null);
   const [deployingCeo, setDeployingCeo] = useState(false);
+  const [wakingCeo, setWakingCeo] = useState(false);
+  const [lastHeartbeat, setLastHeartbeat] = useState<string | null>(null);
 
   // Load CEO agent ID from dashboard state
   useEffect(() => {
@@ -235,6 +241,32 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
       // Mark as CEO
       dashboardState.set("hyperclaw-ceo-id", name, { flush: true });
       setCeoAgentId(name);
+
+      // Create recurring heartbeat cron (every 30 min)
+      const heartbeatConfig: CEOHeartbeatConfig = {
+        enabled: true,
+        intervalMs: 30 * 60 * 1000,
+        runtime: "openclaw",
+        agentId: name,
+        maxTasksPerBeat: 5,
+        goals: [],
+      };
+      dashboardState.set("ceo-heartbeat-config", JSON.stringify(heartbeatConfig), { flush: true });
+
+      try {
+        await cronAdd({
+          name: "CEO Heartbeat",
+          cron: "*/30 * * * *",
+          session: "isolated",
+          agent: name,
+          message: "Run your heartbeat cycle. Read HEARTBEAT.md and follow the checklist. Return a JSON block with your mutations.",
+          announce: true,
+          channel: "announce",
+        });
+      } catch (cronErr) {
+        console.error("[Orchestrator] Heartbeat cron creation failed:", cronErr);
+      }
+
       await refreshAfterMutation();
     } catch (err) {
       console.error("[Orchestrator] Deploy failed:", err);
@@ -242,6 +274,35 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
       setDeployingCeo(false);
     }
   }, [ceoAgentId, deployingCeo, addOptimisticAgent, refreshAfterMutation]);
+
+  // Wake CEO: trigger an immediate heartbeat cycle
+  const handleWakeCeo = useCallback(async () => {
+    if (!ceoAgentId || wakingCeo) return;
+    setWakingCeo(true);
+    try {
+      const result = (await bridgeInvoke("cron-run-agent", {
+        agentId: ceoAgentId,
+        message: "Run your heartbeat cycle now. Read HEARTBEAT.md and follow the checklist. Return a JSON block with your mutations.",
+        session: "isolated",
+      })) as { success?: boolean; error?: string };
+
+      if (!result?.success) {
+        // Fallback: try spawning via agent spawner
+        const { spawnAgentForTask } = await import("$/lib/useAgentSpawner");
+        await spawnAgentForTask({
+          taskId: `ceo-heartbeat-${Date.now()}`,
+          agentId: ceoAgentId,
+          taskTitle: "CEO Heartbeat (manual)",
+          taskDescription: "Run your heartbeat cycle. Read HEARTBEAT.md and follow the checklist.",
+        });
+      }
+      setLastHeartbeat(new Date().toISOString());
+    } catch (err) {
+      console.error("[CEO] Wake failed:", err);
+    } finally {
+      setWakingCeo(false);
+    }
+  }, [ceoAgentId, wakingCeo]);
 
   const initialLoadDone = useRef(false);
   useEffect(() => {
@@ -423,7 +484,16 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
               onClick: handleDeployOrchestrator,
               disabled: deployingCeo,
               className: "text-amber-500 hover:text-amber-400",
-            }] : []),
+            }] : [{
+              id: "wake-ceo",
+              label: wakingCeo ? "Waking…" : "Wake CEO",
+              icon: wakingCeo
+                ? <Loader2 className="h-4 w-4 animate-spin" />
+                : <Zap className="h-4 w-4 text-yellow-500" />,
+              onClick: handleWakeCeo,
+              disabled: wakingCeo,
+              className: "text-yellow-500 hover:text-yellow-400",
+            }]),
             {
               id: "add-agent",
               label: "Add agent",
@@ -483,6 +553,8 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
       ceoAgentId,
       deployingCeo,
       handleDeployOrchestrator,
+      wakingCeo,
+      handleWakeCeo,
     ]
   );
 

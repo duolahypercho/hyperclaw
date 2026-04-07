@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
-import { hubCommand, getUserToken } from "$/lib/hub-direct";
+import { hubCommand, getUserToken, isAuthExpired } from "$/lib/hub-direct";
 import {
   getRunningJobIds,
   removeRunningJobIds,
@@ -419,6 +419,7 @@ export function useOpenClaw(autoRefreshMs = 0) {
   }, []);
 
   const refreshAll = useCallback(async () => {
+    if (isAuthExpired()) return;
     if (refreshInProgressRef.current || globalRefreshInProgress) return;
     if (Date.now() - lastRefreshEndAt < REFRESH_COOLDOWN_MS) return;
     refreshInProgressRef.current = true;
@@ -518,9 +519,9 @@ export function useOpenClaw(autoRefreshMs = 0) {
     let attempt = 0;
 
     const tryRefresh = async () => {
-      if (cancelled) return;
+      if (cancelled || isAuthExpired()) return;
       const token = await getUserToken();
-      if (cancelled) return;
+      if (cancelled || isAuthExpired()) return;
       if (token) {
         refreshAll().catch((err) => {
           console.warn("[useOpenClaw] initial refresh failed:", err);
@@ -554,14 +555,12 @@ export function useOpenClaw(autoRefreshMs = 0) {
 
     let attempts = 0;
     const tryConnect = async () => {
-      if (cancelled) return;
+      if (cancelled || isAuthExpired()) return;
       if (getGatewayConnectionState().connected) return;
 
       const token = await getUserToken();
-      if (cancelled) return;
+      if (cancelled || isAuthExpired()) return;
       if (!token) {
-        // Token not cached yet (UserProvider hasn't set it). Retry with
-        // increasing backoff up to ~10s, covering the typical session load time.
         attempts++;
         if (!cancelled && attempts < 10) {
           timer = setTimeout(tryConnect, Math.min(1000 * attempts, 5000));
@@ -571,7 +570,7 @@ export function useOpenClaw(autoRefreshMs = 0) {
 
       try {
         const config = await getGatewayConfig();
-        if (cancelled || !config.gatewayUrl) return;
+        if (cancelled || isAuthExpired() || !config.gatewayUrl) return;
 
         connectGatewayWs(config.gatewayUrl, {
           token: config.token,
@@ -579,8 +578,7 @@ export function useOpenClaw(autoRefreshMs = 0) {
           hubDeviceId: config.hubDeviceId,
         });
       } catch {
-        // Retry after delay if connection setup failed
-        if (!cancelled) {
+        if (!cancelled && !isAuthExpired()) {
           timer = setTimeout(tryConnect, 5000);
         }
       }
@@ -694,6 +692,7 @@ export function useOpenClaw(autoRefreshMs = 0) {
       const startRefresh = () => {
         if (!intervalRef.current) {
           intervalRef.current = setInterval(() => {
+            if (isAuthExpired()) return;
             refreshAll().catch((err) => console.warn("[useOpenClaw] interval refresh failed:", err));
           }, autoRefreshMs);
         }

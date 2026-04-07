@@ -193,7 +193,7 @@ export const IntelligenceCustomHeader: React.FC<CustomProps> = ({
 
 const IntelligenceWidgetContent = memo((props: CustomProps) => {
   const { isFocusModeActive } = useFocusMode();
-  const { schema, rows, loading, tableLoading, error, selectedTable, selectTable, refreshSchema } = useIntel();
+  const { schema, rows, loading, tableLoading, error, selectedTable, selectTable, refreshSchema, refreshTable } = useIntel();
 
   const selectedMeta = selectedTable ? schema?.tables[selectedTable] : null;
   const columns = selectedMeta?.columns ?? [];
@@ -215,7 +215,79 @@ const IntelligenceWidgetContent = memo((props: CustomProps) => {
           isFocusModeActive && "border-transparent grayscale-[30%]"
         )}
       >
-        <IntelligenceCustomHeader {...props} />
+        {/* Compact inline bar — table selector + controls */}
+        <div className="flex items-center gap-2 px-3 py-2 shrink-0">
+          {props.isEditMode && (
+            <div className="cursor-move h-6 w-6 flex items-center justify-center shrink-0">
+              <GripVertical className="w-3 h-3 text-muted-foreground" />
+            </div>
+          )}
+          {schema && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-6 gap-1.5 text-[11px] px-2 min-w-0 max-w-[180px]"
+                >
+                  <Table2 className="w-3 h-3 shrink-0" />
+                  <span className="truncate">{selectedTable || "Select table"}</span>
+                  <ChevronsUpDown className="w-2.5 h-2.5 shrink-0 text-muted-foreground" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-52 max-h-64 overflow-y-auto">
+                <DropdownMenuLabel className="text-[10px] text-muted-foreground">
+                  Tables
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                {Object.entries(schema.tables)
+                  .filter(([name]) => !name.startsWith("_"))
+                  .sort(([, a], [, b]) => b.row_count - a.row_count)
+                  .map(([name, meta]) => {
+                    const freshness = meta.freshness ? getFreshnessLabel(meta.freshness.newest) : null;
+                    return (
+                      <DropdownMenuItem
+                        key={name}
+                        onClick={() => selectTable(name)}
+                        className={cn(
+                          "text-xs gap-2",
+                          selectedTable === name && "bg-primary/10"
+                        )}
+                      >
+                        <Table2 className="w-3 h-3 shrink-0 text-muted-foreground" />
+                        <span className="truncate flex-1">{name}</span>
+                        <span className="text-[10px] text-muted-foreground tabular-nums shrink-0">
+                          {formatRowCount(meta.row_count)}
+                        </span>
+                        {freshness && (
+                          <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", freshnessDotColor(freshness))} />
+                        )}
+                      </DropdownMenuItem>
+                    );
+                  })}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+          {selectedTable && schema?.tables[selectedTable] && (
+            <span className="text-[10px] text-muted-foreground tabular-nums">
+              {formatRowCount(schema.tables[selectedTable].row_count)} rows
+            </span>
+          )}
+          <div className="flex items-center gap-1 ml-auto shrink-0">
+            <Button
+              variant="ghost"
+              size="iconSm"
+              className="h-5 w-5"
+              onClick={() => selectedTable ? refreshTable() : refreshSchema()}
+              disabled={loading || tableLoading}
+            >
+              <RefreshCw className={cn("w-2.5 h-2.5", (loading || tableLoading) && "animate-spin")} />
+            </Button>
+            <Button variant="ghost" size="iconSm" onClick={props.onMaximize} className="h-5 w-5">
+              {props.isMaximized ? <Minimize2 className="w-2.5 h-2.5" /> : <Maximize2 className="w-2.5 h-2.5" />}
+            </Button>
+          </div>
+        </div>
 
         <div className="flex-1 overflow-hidden flex flex-col min-h-0 px-2 pb-2">
           {isInitialLoading ? (

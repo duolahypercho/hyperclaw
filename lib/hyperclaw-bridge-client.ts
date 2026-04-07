@@ -2,58 +2,14 @@
  * Single entry point for all bridge calls.
  *
  * All commands route through Hub API → Connector (cross-device compatible).
+ * Claude Code, Codex, and other runtime actions are handled by the connector
+ * daemon — no Electron IPC needed.
  */
 import { hubCommand } from "$/lib/hub-direct";
 
 export type BridgeBody = Record<string, unknown>;
 
 export async function bridgeInvoke(action: string, body: BridgeBody = {}): Promise<unknown> {
-  // Route Claude Code actions through dedicated Electron IPC when available
-  if (
-    typeof window !== "undefined" &&
-    window.electronAPI?.claudeCode &&
-    action.startsWith("claude-code-")
-  ) {
-    const cc = window.electronAPI.claudeCode;
-    switch (action) {
-      case "claude-code-status":
-        return cc.status();
-      case "claude-code-send":
-        return cc.send(body as Parameters<typeof cc.send>[0]);
-      case "claude-code-abort":
-        return cc.abort(body as Parameters<typeof cc.abort>[0]);
-      case "claude-code-list-sessions":
-        return cc.listSessions();
-      case "claude-code-load-history":
-        return cc.loadHistory(body as Parameters<typeof cc.loadHistory>[0]);
-      default:
-        break;
-    }
-  }
-
-  // Route Codex actions through dedicated Electron IPC when available
-  if (
-    typeof window !== "undefined" &&
-    window.electronAPI?.codex &&
-    action.startsWith("codex-")
-  ) {
-    const cx = window.electronAPI.codex;
-    switch (action) {
-      case "codex-status":
-        return cx.status();
-      case "codex-send":
-        return cx.send(body as Parameters<typeof cx.send>[0]);
-      case "codex-abort":
-        return cx.abort(body as Parameters<typeof cx.abort>[0]);
-      case "codex-list-sessions":
-        return cx.listSessions();
-      case "codex-load-history":
-        return cx.loadHistory(body as Parameters<typeof cx.loadHistory>[0]);
-      default:
-        break;
-    }
-  }
-
   // Route Hermes actions through dedicated Electron IPC when available
   if (
     typeof window !== "undefined" &&
@@ -71,7 +27,14 @@ export async function bridgeInvoke(action: string, body: BridgeBody = {}): Promi
     }
   }
 
+  // Streaming actions (claude-code-send, codex-send) always use hubCommand
+  // for the WS path with proper timeout + streaming event support.
+  // The Electron bridge uses a 60s REST timeout which is too short.
+  const isStreaming =
+    action === "claude-code-send" || action === "codex-send";
+
   if (
+    !isStreaming &&
     typeof window !== "undefined" &&
     window.electronAPI?.hyperClawBridge?.invoke
   ) {
@@ -103,4 +66,37 @@ export async function saveLocalUsage(usageData: LocalUsageData): Promise<{ succe
 
 export async function loadLocalUsage(): Promise<{ success: boolean; data: LocalUsageData | null; error?: string }> {
   return await bridgeInvoke("load-local-usage", {}) as { success: boolean; data: LocalUsageData | null; error?: string };
+}
+
+// Agent event storage helpers
+
+export interface AgentEvent {
+  id: number;
+  agentId: string;
+  runId?: string;
+  sessionKey?: string;
+  eventType: string;
+  status: string;
+  data?: Record<string, unknown>;
+  createdAt: number;
+}
+
+export async function getAgentEvents(agentId?: string, limit = 50): Promise<AgentEvent[]> {
+  const result = await bridgeInvoke("get-agent-events", {
+    ...(agentId ? { agentId } : {}),
+    limit,
+  }) as { events?: AgentEvent[] } | AgentEvent[];
+  if (Array.isArray(result)) return result;
+  return (result as { events?: AgentEvent[] })?.events ?? [];
+}
+
+export async function addAgentEvent(event: {
+  agentId: string;
+  eventType: string;
+  status?: string;
+  runId?: string;
+  sessionKey?: string;
+  data?: Record<string, unknown>;
+}): Promise<{ success: boolean; id?: number }> {
+  return await bridgeInvoke("add-agent-event", event) as { success: boolean; id?: number };
 }
