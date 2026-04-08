@@ -16,7 +16,7 @@ import { useClaudeCodeChat } from "@OS/AI/core/hook/use-claude-code-chat";
 import { useCodexChat } from "@OS/AI/core/hook/use-codex-chat";
 import { useAIProviderSafe } from "$/Providers/AIProviderProv";
 import { useUser } from "$/Providers/UserProv";
-import { useOpenClawContext } from "$/Providers/OpenClawProv";
+import { useHyperclawContext } from "$/Providers/HyperclawProv";
 import ReactMarkdown, { Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -440,7 +440,7 @@ interface FloatingChatViewerProps {
 }
 
 export function FloatingChatViewer({ agentId, sessionKey: providedSessionKey, taskContext, onClose, onNewMessage }: FloatingChatViewerProps) {
-  const { agents } = useOpenClawContext();
+  const { agents } = useHyperclawContext();
   const { userInfo } = useUser();
   const { handleStatusChange: todoStatusChange } = useTodoList();
 

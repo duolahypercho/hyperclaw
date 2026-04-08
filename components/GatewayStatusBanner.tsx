@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { WifiOff, RefreshCw } from "lucide-react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/router";
-import { useOpenClawContext } from "$/Providers/OpenClawProv";
+import { useHyperclawContext } from "$/Providers/HyperclawProv";
 
 /** Routes where the gateway banner should be hidden */
 const HIDDEN_ROUTES = ["/auth/", "/onboarding", "/landing", "/reset"];
@@ -18,7 +18,7 @@ const HIDDEN_ROUTES = ["/auth/", "/onboarding", "/landing", "/reset"];
  */
 export function GatewayStatusBanner() {
   const { data: session } = useSession();
-  const { gatewayHealthy, fetchGatewayHealth } = useOpenClawContext();
+  const { gatewayHealthy, fetchGatewayHealth } = useHyperclawContext();
   const router = useRouter();
   const [reconnecting, setReconnecting] = useState(false);
 

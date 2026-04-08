@@ -34,7 +34,7 @@ import { cn } from "@/lib/utils";
 import { useToast } from "@/components/ui/use-toast";
 import { v4 as uuidv4 } from "uuid";
 import { gatewayConnection, subscribeGatewayConnection } from "$/lib/openclaw-gateway-ws";
-import { useOpenClawContext } from "$/Providers/OpenClawProv";
+import { useHyperclawContext } from "$/Providers/HyperclawProv";
 import { readOpenClawConfig, getAgentModel } from "$/lib/identity-md";
 import {
   AttachmentPreview,
@@ -220,7 +220,7 @@ export const InputContainer: React.FC<InputContainerProps> = ({
   const [pdfPreviewContent, setPdfPreviewContent] = useState<Blob | null>(null);
 
   // Models from centralized context
-  const { models: contextModels } = useOpenClawContext();
+  const { models: contextModels } = useHyperclawContext();
   const [internalCurrentModel, setInternalCurrentModel] = useState<string>("");
   const [isLoadingModels, setIsLoadingModels] = useState(false);
 

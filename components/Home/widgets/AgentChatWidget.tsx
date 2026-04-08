@@ -1,6 +1,6 @@
 "use client";
 
-import React, { memo, useState, useCallback, useEffect, useRef } from "react";
+import React, { memo, useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { motion } from "framer-motion";
 import { CustomProps } from "$/components/Home/widgets/types/widgets";
 import {
@@ -14,6 +14,8 @@ import {
   RefreshCw,
   MoreHorizontal,
   Trash2,
+  ChevronDown,
+  ArrowLeft,
 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -26,44 +28,231 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { useFocusMode } from "./hooks/useFocusMode";
-import { useOpenClawContext } from "$/Providers/OpenClawProv";
+import { useHyperclawContext } from "$/Providers/HyperclawProv";
 import {
   useAgentIdentity,
   resolveAvatarUrl,
-  isAvatarText,
+  resolveAvatarText,
 } from "$/hooks/useAgentIdentity";
+import { ClaudeCodeIcon, CodexIcon, HermesIcon } from "$/components/Onboarding/RuntimeIcons";
 import {
   InfoTab,
   FileEditorTab,
   type FooterSaveState,
 } from "$/components/Tool/Agents/AgentDetailDialog";
 import { DeleteAgentDialog } from "$/components/Tool/Agents/DeleteAgentDialog";
+import { AddAgentDialog } from "$/components/Tool/Agents/AddAgentDialog";
 import { PanelChatView, type PanelChatViewHandle } from "./AgentChatPanel";
 import SessionHistoryDropdown from "$/components/SessionHistoryDropdown";
-import { OPEN_AGENT_CHAT_EVENT } from "./StatusWidget";
+import { OPEN_AGENT_CHAT_EVENT, AGENT_READ_EVENT } from "./StatusWidget";
 import { OPEN_AGENT_PANEL_EVENT } from "./AgentChatPanel";
 import type { BackendTab } from "./gateway-chat/GatewayChatHeader";
 import AgentStatsTab from "./AgentStatsTab";
-import { AnalysisTab } from "./AnalysisTab";
+import { CronsProvider, useCrons } from "$/components/Tool/Crons/provider/cronsProvider";
+import { CronJobDetailDialog } from "$/components/Tool/Crons/CronJobDetailDialog";
+import { getJobPalette, getJobNextRunDate, getStatusColor } from "$/components/Tool/Crons/utils";
+import { formatDistanceToNow } from "date-fns";
+import type { OpenClawCronJobJson } from "$/types/electron";
+
+/* ── Helpers ──────────────────────────────────────────────── */
+
+function relTime(ts: number): string {
+  const d = Date.now() - ts;
+  if (d < 60_000) return "now";
+  if (d < 3_600_000) return `${Math.floor(d / 60_000)}m ago`;
+  if (d < 86_400_000) return `${Math.floor(d / 3_600_000)}h ago`;
+  return `${Math.floor(d / 86_400_000)}d ago`;
+}
+
+type Session = { key: string; label?: string; updatedAt?: number };
+
+/* ── Agent Inbox ──────────────────────────────────────────── */
+
+interface AgentInboxViewProps {
+  sessions: Session[];
+  loading: boolean;
+  lastSeenTs: number;
+  onSelect: (key: string) => void;
+}
+
+function AgentInboxView({ sessions, loading, lastSeenTs, onSelect }: AgentInboxViewProps) {
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center flex-1">
+        <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+  if (sessions.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center flex-1 gap-2 text-muted-foreground">
+        <MessageSquare className="w-7 h-7 opacity-30" />
+        <p className="text-xs">No sessions yet</p>
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col overflow-y-auto customScrollbar2 flex-1">
+      {sessions.map((s) => {
+        const isUnread = lastSeenTs > 0 && (s.updatedAt || 0) > lastSeenTs;
+        return (
+          <button
+            key={s.key}
+            onClick={() => onSelect(s.key)}
+            className="flex items-center gap-2.5 px-3 py-2.5 text-left hover:bg-muted/30 transition-colors border-b border-border/20 last:border-0"
+          >
+            <span
+              className={cn(
+                "w-1.5 h-1.5 rounded-full shrink-0 mt-px",
+                isUnread ? "bg-primary" : "bg-transparent"
+              )}
+            />
+            <div className="flex-1 min-w-0">
+              <p
+                className={cn(
+                  "text-xs truncate",
+                  isUnread ? "font-semibold text-foreground" : "font-normal text-muted-foreground"
+                )}
+              >
+                {s.label || s.key}
+              </p>
+              {s.updatedAt && (
+                <p className="text-[10px] text-muted-foreground/50 mt-0.5">
+                  {relTime(s.updatedAt)}
+                </p>
+              )}
+            </div>
+            {isUnread && (
+              <span className="shrink-0 text-[9px] font-semibold text-primary bg-primary/10 px-1.5 py-0.5 rounded-full">
+                NEW
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 /* ── Tab definitions ──────────────────────────────────────── */
 
 const TAB_FILES = [
-  { key: "SOUL", label: "Soul", desc: "Personality & behavior" },
-  { key: "USER", label: "User", desc: "Context about the human" },
-  { key: "AGENTS", label: "Agent", desc: "Team awareness" },
-  { key: "TOOLS", label: "Tools", desc: "Tools & MCP servers" },
-  { key: "HEARTBEAT", label: "Heartbeat", desc: "Periodic tasks & health checks" },
+  { key: "SOUL",      label: "Soul",      desc: "Personality & behavior" },
+  { key: "IDENTITY",  label: "Identity",  desc: "Agent identity — name, emoji, avatar" },
+  { key: "USER",      label: "User",      desc: "Context about the human" },
+  { key: "AGENTS",    label: "Agents",    desc: "Team awareness" },
+  { key: "TOOLS",     label: "Tools",     desc: "Tools & MCP servers" },
+  { key: "HEARTBEAT", label: "Heartbeat", desc: "Periodic tasks & work schedule" },
+  { key: "MEMORY",    label: "Memory",    desc: "Persistent memory" },
 ] as const;
 
-type WidgetTab = "CHAT" | "INFO" | "STATS" | "ANALYSIS" | (typeof TAB_FILES)[number]["key"];
+type FileTabKey = (typeof TAB_FILES)[number]["key"];
+type WidgetTab = "CHAT" | "INFO" | "STATS" | "FILES" | "CRONS";
+
+/* ── Agent Crons Tab ──────────────────────────────────────── */
+
+function AgentCronsView({ agentId }: { agentId: string }) {
+  const { jobsForList, parsedCronJobs, bridgeLoading, runningJobIds } = useCrons();
+  const [selectedJob, setSelectedJob] = useState<OpenClawCronJobJson | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
+
+  const agentJobs = useMemo(() => {
+    const filtered = jobsForList.filter((j) => j.agentId === agentId);
+    const running: OpenClawCronJobJson[] = [];
+    const rest: OpenClawCronJobJson[] = [];
+    for (const j of filtered) {
+      if (runningJobIds.includes(j.id)) running.push(j);
+      else rest.push(j);
+    }
+    rest.sort((a, b) => (b.state?.lastRunAtMs ?? 0) - (a.state?.lastRunAtMs ?? 0));
+    return [...running, ...rest];
+  }, [jobsForList, agentId, runningJobIds]);
+
+  if (bridgeLoading && jobsForList.length === 0) {
+    return (
+      <div className="flex items-center justify-center flex-1 gap-2 py-6">
+        <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (agentJobs.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center flex-1 gap-2 text-muted-foreground py-6">
+        <MessageSquare className="w-7 h-7 opacity-30" />
+        <p className="text-xs">No cron jobs for this agent</p>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <div className="flex-1 min-h-0 overflow-y-auto customScrollbar2">
+        <div className="space-y-1 px-2 py-2">
+          {agentJobs.map((job, i) => {
+            const nextRun = getJobNextRunDate(job, parsedCronJobs);
+            const nextRunStr = nextRun ? formatDistanceToNow(nextRun, { addSuffix: true }) : "—";
+            const lastRunMs = job.state?.lastRunAtMs;
+            const lastRunStr = lastRunMs ? formatDistanceToNow(new Date(lastRunMs), { addSuffix: true }) : "—";
+            const isRunning = runningJobIds.includes(job.id);
+            const status = isRunning ? "running" : (job.state?.lastStatus ?? "idle");
+            const palette = getJobPalette(job.id);
+            return (
+              <motion.div
+                key={job.id}
+                initial={{ opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: i * 0.02 }}
+                role="button"
+                tabIndex={0}
+                onClick={() => { setSelectedJob(job); setDetailOpen(true); }}
+                onKeyDown={(e: React.KeyboardEvent<HTMLDivElement>) => {
+                  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelectedJob(job); setDetailOpen(true); }
+                }}
+                className={cn(
+                  "flex items-center gap-2 px-2 py-1.5 rounded-md border-l-2 transition-colors cursor-pointer",
+                  palette.border,
+                  "hover:bg-muted/20",
+                  !job.enabled && "opacity-50",
+                  isRunning && "bg-primary/5"
+                )}
+              >
+                <div className={cn("w-1.5 h-1.5 rounded-full shrink-0", isRunning ? "bg-amber-500" : getStatusColor(status))} />
+                {isRunning && <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin text-primary" />}
+                <div className="flex-1 min-w-0 overflow-hidden">
+                  <p className="text-xs font-normal text-foreground truncate" title={job.name}>{job.name}</p>
+                  <p className="text-[10px] text-muted-foreground truncate">
+                    {isRunning ? "In progress…" : `Next ${nextRunStr} · Last ${lastRunStr}`}
+                  </p>
+                </div>
+              </motion.div>
+            );
+          })}
+        </div>
+      </div>
+      <CronJobDetailDialog
+        job={selectedJob}
+        open={detailOpen}
+        onOpenChange={(open) => { setDetailOpen(open); if (!open) setSelectedJob(null); }}
+      />
+    </>
+  );
+}
+
+function AgentCronsTab({ agentId }: { agentId: string }) {
+  return (
+    <CronsProvider>
+      <AgentCronsView agentId={agentId} />
+    </CronsProvider>
+  );
+}
 
 /* ── Widget content ────────────────────────────────────────── */
 
 const AgentChatWidgetContent = memo((props: CustomProps) => {
   const { widget, isEditMode, isMaximized, onMaximize, onConfigChange } = props;
   const { isFocusModeActive } = useFocusMode();
-  const { agents } = useOpenClawContext();
+  const { agents } = useHyperclawContext();
 
   // Persisted config
   const config = widget.config as Record<string, unknown> | undefined;
@@ -73,13 +262,24 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
   const [selectedAgentId, setSelectedAgentId] = useState<string | undefined>(configAgentId);
   const [backendTab, setBackendTab] = useState<BackendTab>("openclaw");
   const [activeTab, setActiveTab] = useState<WidgetTab>("CHAT");
+  const [selectedFileKey, setSelectedFileKey] = useState<FileTabKey>("SOUL");
   const [footerState, setFooterState] = useState<FooterSaveState>({
     isDirty: false, saving: false, saved: false, save: null,
   });
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const [addAgentOpen, setAddAgentOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deleteState, setDeleteState] = useState<"idle" | "deleting" | "deleted">("idle");
   const chatRef = useRef<PanelChatViewHandle>(null);
+  // Keyed by "agentId:backendTab" — avoids refetching when re-opening the same agent
+  const sessionsCacheRef = useRef<Map<string, Session[]>>(new Map());
+
+  // Inbox state
+  const [chatView, setChatView] = useState<"inbox" | "chat">("chat");
+  const [inboxSessions, setInboxSessions] = useState<Session[]>([]);
+  const [inboxLoading, setInboxLoading] = useState(false);
+  const [inboxLastSeenTs, setInboxLastSeenTs] = useState(0);
+  const [activeSessionLabel, setActiveSessionLabel] = useState<string | undefined>();
 
   // Sync config on late hydration
   useEffect(() => {
@@ -95,18 +295,62 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
 
   // Agent identity
   const identity = useAgentIdentity(currentAgentId);
-  const avatarUrl = resolveAvatarUrl(identity?.avatar);
-  const avatarText = isAvatarText(identity?.avatar) ? identity!.avatar! : undefined;
+  const resolvedAvatarUrl = resolveAvatarUrl(identity?.avatar);
+  // Only use img for custom uploads (PNG/JPG/HTTP); SVG data URIs are the seed defaults.
+  const avatarUrl = resolvedAvatarUrl && !resolvedAvatarUrl.startsWith("data:image/svg+xml") ? resolvedAvatarUrl : undefined;
+  const avatarText = resolveAvatarText(identity?.avatar);
+  const RuntimeIcon = identity?.runtime === "claude-code" ? ClaudeCodeIcon
+    : identity?.runtime === "codex" ? CodexIcon
+    : identity?.runtime === "hermes" ? HermesIcon
+    : null;
   const displayName = identity?.name || currentAgent.name;
   const isFirstAgent = agents[0] != null && currentAgentId === agents[0].id;
 
   // Listen for agent-click events from StatusWidget
   useEffect(() => {
     const handler = (e: Event) => {
-      const agentId = (e as CustomEvent).detail?.agentId as string | undefined;
-      if (!agentId) return;
+      const detail = (e as CustomEvent).detail as {
+        agentId?: string;
+        sessionKey?: string;
+        sessionCount?: number;
+        unreadCount?: number;
+        lastSeenTs?: number;
+        runtime?: string;
+      };
+      if (!detail?.agentId) return;
+      const { agentId, sessionKey, lastSeenTs = 0, runtime } = detail;
+
+      // Set the correct backend tab immediately so fetchSessions queries the right endpoint
+      if (runtime === "claude-code") setBackendTab("claude-code");
+      else if (runtime === "codex") setBackendTab("codex");
+      else if (runtime === "hermes") setBackendTab("hermes");
+      else setBackendTab("openclaw");
+
       setSelectedAgentId(agentId);
       setActiveTab("CHAT");
+      setInboxLastSeenTs(lastSeenTs);
+      setActiveSessionLabel(undefined);
+
+      // Check cache first so we never show a spinner for a previously loaded agent
+      const tabForRuntime = runtime === "claude-code" ? "claude-code"
+        : runtime === "codex" ? "codex"
+        : runtime === "hermes" ? "hermes"
+        : "openclaw";
+      const cacheKey = `${agentId}:${tabForRuntime}`;
+      const cached = sessionsCacheRef.current.get(cacheKey);
+
+      if (cached) {
+        setInboxSessions(cached);
+        setInboxLoading(false);
+        {
+          setChatView("inbox");
+        }
+      } else {
+        // First open — show spinner while PanelChatView fetches
+        setInboxSessions([]);
+        setChatView("inbox");
+        setInboxLoading(true);
+      }
     };
     window.addEventListener(OPEN_AGENT_CHAT_EVENT, handler);
     window.addEventListener(OPEN_AGENT_PANEL_EVENT, handler);
@@ -143,7 +387,7 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
     };
   }, [currentAgentId]);
 
-  const isEditorTab = activeTab !== "CHAT" && activeTab !== "STATS" && activeTab !== "ANALYSIS";
+  const isEditorTab = activeTab === "INFO" || activeTab === "FILES";
   const showChatActions = activeTab === "CHAT";
   const showSaveButton = isEditorTab;
 
@@ -168,20 +412,35 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
           {/* Top row: agent info + maximize */}
           <div className="flex items-center justify-between px-3 pt-2 pb-1">
             <div className="flex items-center gap-2.5 min-w-0">
-              {isEditMode && (
+              {/* Back button — shown when drilling into a session from inbox */}
+              {chatView === "chat" && activeTab === "CHAT" && inboxSessions.length > 1 ? (
+                <button
+                  onClick={() => { setChatView("inbox"); setActiveSessionLabel(undefined); }}
+                  className="h-7 w-7 flex items-center justify-center shrink-0 rounded hover:bg-muted/40 transition-colors"
+                  title="Back to sessions"
+                >
+                  <ArrowLeft className="w-3.5 h-3.5 text-muted-foreground" />
+                </button>
+              ) : isEditMode ? (
                 <div className="cursor-move h-7 w-7 flex items-center justify-center shrink-0">
                   <GripVertical className="w-3.5 h-3.5 text-muted-foreground" />
                 </div>
-              )}
-              <Avatar className="h-8 w-8 shrink-0">
+              ) : null}
+              <Avatar key={currentAgentId} className="h-8 w-8 shrink-0">
                 {avatarUrl && <AvatarImage src={avatarUrl} alt={displayName} />}
                 <AvatarFallback className="bg-primary/10 text-primary text-sm">
-                  {avatarText || identity?.emoji || "🤖"}
+                  {RuntimeIcon && !avatarUrl
+                    ? <RuntimeIcon className="w-5 h-5" />
+                    : (avatarText || identity?.emoji || "🤖")
+                  }
                 </AvatarFallback>
               </Avatar>
               <div className="min-w-0">
                 <div className="flex items-center gap-1.5">
-                  <h3 className="text-xs font-semibold truncate">{displayName}</h3>
+                  {/* Show session label when drilled in, otherwise agent name */}
+                  <h3 className="text-xs font-semibold truncate">
+                    {activeSessionLabel && chatView === "chat" ? activeSessionLabel : displayName}
+                  </h3>
                   {deleteState === "deleting" && (
                     <span className="flex items-center gap-1 text-[10px] text-destructive shrink-0">
                       <Loader2 className="w-2.5 h-2.5 animate-spin" />
@@ -192,28 +451,37 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
                     <span className="text-[10px] text-destructive shrink-0">Deleted</span>
                   )}
                 </div>
-                <p className="text-[10px] text-muted-foreground truncate">{currentAgentId}</p>
+                <p className="text-[10px] text-muted-foreground truncate">
+                  {activeSessionLabel && chatView === "chat" ? displayName : currentAgentId}
+                </p>
               </div>
             </div>
             <div className="flex items-center gap-1 shrink-0">
               {/* Chat actions — only on Chat tab */}
               {showChatActions && (
                 <>
-                  <Button variant="ghost" size="iconSm" className="h-6 w-6" onClick={() => chatRef.current?.reload()} title="Reload chat">
-                    <RefreshCw className="w-3 h-3" />
-                  </Button>
-                  <Button variant="ghost" size="iconSm" className="h-6 w-6" onClick={() => chatRef.current?.newChat()} title="New chat">
-                    <Plus className="w-3 h-3" />
-                  </Button>
-                  <SessionHistoryDropdown
-                    sessions={chatRef.current?.sessions || []}
-                    isLoading={chatRef.current?.sessionsLoading || false}
-                    error={chatRef.current?.sessionsError || null}
-                    currentSessionKey={chatRef.current?.selectedSessionKey}
-                    onLoadSession={(key) => chatRef.current?.onSessionChange(key)}
-                    onNewChat={() => chatRef.current?.newChat()}
-                    onFetchSessions={() => chatRef.current?.fetchSessions()}
-                  />
+                  {chatView === "chat" && (
+                    <>
+                      <Button variant="ghost" size="iconSm" className="h-6 w-6" onClick={() => chatRef.current?.reload()} title="Reload chat">
+                        <RefreshCw className="w-3 h-3" />
+                      </Button>
+                      <Button variant="ghost" size="iconSm" className="h-6 w-6" onClick={() => chatRef.current?.newChat()} title="New chat">
+                        <Plus className="w-3 h-3" />
+                      </Button>
+                    </>
+                  )}
+                  {/* Session history only shown in chat view (inbox replaces it for multi-session) */}
+                  {chatView === "chat" && inboxSessions.length <= 1 && (
+                    <SessionHistoryDropdown
+                      sessions={chatRef.current?.sessions || []}
+                      isLoading={chatRef.current?.sessionsLoading || false}
+                      error={chatRef.current?.sessionsError || null}
+                      currentSessionKey={chatRef.current?.selectedSessionKey}
+                      onLoadSession={(key) => chatRef.current?.onSessionChange(key)}
+                      onNewChat={() => chatRef.current?.newChat()}
+                      onFetchSessions={() => chatRef.current?.fetchSessions()}
+                    />
+                  )}
                 </>
               )}
               {/* Save button — only on editor tabs when dirty */}
@@ -247,7 +515,18 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
                     <MoreHorizontal className="w-3 h-3" />
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-44 z-[60]">
+                <DropdownMenuContent align="end" className="w-48 z-[60]">
+                  <DropdownMenuItem
+                    className="gap-2 text-xs"
+                    onSelect={(e) => {
+                      e.preventDefault();
+                      setMoreMenuOpen(false);
+                      setAddAgentOpen(true);
+                    }}
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    Add agent
+                  </DropdownMenuItem>
                   <DropdownMenuItem
                     className="text-destructive focus:text-destructive focus:bg-destructive/10 gap-2 text-xs"
                     disabled={isFirstAgent}
@@ -266,7 +545,7 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
           </div>
 
           {/* Tab row */}
-          <div className="flex items-center gap-0.5 px-3 pb-0 -mb-px overflow-x-auto">
+          <div className="flex items-center gap-0.5 px-3 pb-1 -mb-px overflow-x-auto">
             <button
               onClick={() => setActiveTab("CHAT")}
               className={cn(
@@ -301,44 +580,76 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
               Stats
             </button>
             <button
-              onClick={() => setActiveTab("ANALYSIS")}
+              onClick={() => setActiveTab("CRONS")}
               className={cn(
                 "px-2 py-1 text-[10px] font-medium rounded-md transition-all duration-200 shrink-0",
-                activeTab === "ANALYSIS"
+                activeTab === "CRONS"
                   ? "border-primary text-foreground bg-primary/5"
                   : "border-transparent text-muted-foreground hover:text-foreground/70 hover:bg-muted/30"
               )}
             >
-              Analysis
+              Crons
             </button>
-            {TAB_FILES.map((tf) => (
-              <button
-                key={tf.key}
-                onClick={() => setActiveTab(tf.key)}
-                className={cn(
-                  "px-2 py-1 text-[10px] font-medium rounded-md transition-all duration-200 shrink-0",
-                  activeTab === tf.key
-                    ? "border-primary text-foreground bg-primary/5"
-                    : "border-transparent text-muted-foreground hover:text-foreground/70 hover:bg-muted/30"
-                )}
-              >
-                {tf.label}
-              </button>
-            ))}
+            <button
+              onClick={() => setActiveTab("FILES")}
+              className={cn(
+                "px-2 py-1 text-[10px] font-medium rounded-md transition-all duration-200 shrink-0 flex items-center gap-1",
+                activeTab === "FILES"
+                  ? "border-primary text-foreground bg-primary/5"
+                  : "border-transparent text-muted-foreground hover:text-foreground/70 hover:bg-muted/30"
+              )}
+            >
+              {activeTab === "FILES"
+                ? TAB_FILES.find((t) => t.key === selectedFileKey)?.label ?? "Files"
+                : "Files"}
+              <ChevronDown className="w-2.5 h-2.5 opacity-60" />
+            </button>
           </div>
         </div>
 
         {/* ── Content area ── */}
         <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-          {activeTab === "CHAT" && (
+
+          {/* Inbox — only rendered while on CHAT tab in inbox view */}
+          {activeTab === "CHAT" && chatView === "inbox" && (
+            <AgentInboxView
+              sessions={inboxSessions}
+              loading={inboxLoading}
+              lastSeenTs={inboxLastSeenTs}
+              onSelect={(key) => {
+                const session = inboxSessions.find((s) => s.key === key);
+                setActiveSessionLabel(session?.label || key);
+                setInboxLastSeenTs(Date.now());
+                setChatView("chat");
+                chatRef.current?.onSessionChange(key);
+                // Tell StatusWidget the user actually read this agent — clears the badge
+                window.dispatchEvent(
+                  new CustomEvent(AGENT_READ_EVENT, { detail: { agentId: currentAgentId } })
+                );
+              }}
+            />
+          )}
+
+          {/* PanelChatView — always mounted so chat history and ref survive tab switches.
+              Hidden via CSS when not on the CHAT tab or when inbox is in front. */}
+          <div className={cn(
+            "flex-1 min-h-0 flex flex-col",
+            (activeTab !== "CHAT" || chatView === "inbox") && "hidden"
+          )}>
             <PanelChatView
               ref={chatRef}
               agentId={currentAgentId}
               backendTab={backendTab}
               onBackendTabChange={setBackendTab}
               showSubHeader={false}
+              onSessionsUpdate={(sessions) => {
+                setInboxSessions(sessions);
+                setInboxLoading(false);
+                // Persist to cache so subsequent opens are instant
+                sessionsCacheRef.current.set(`${currentAgentId}:${backendTab}`, sessions);
+              }}
             />
-          )}
+          </div>
 
           {activeTab === "INFO" && (
             <div className="flex-1 min-h-0 overflow-y-auto customScrollbar2 px-4 py-4">
@@ -356,29 +667,66 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
             </div>
           )}
 
-          {activeTab === "ANALYSIS" && (
-            <div className="flex-1 min-h-0 overflow-y-auto customScrollbar2">
-              <AnalysisTab defaultAgentId={currentAgentId} />
+          {activeTab === "FILES" && (
+            <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+              {/* File selector bar */}
+              <div className="shrink-0 flex items-center gap-2 px-3 py-2 border-b border-border/30">
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-6 gap-1 text-[10px] font-medium px-2"
+                    >
+                      {TAB_FILES.find((t) => t.key === selectedFileKey)?.label}
+                      <ChevronDown className="w-3 h-3" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-52 z-[60]">
+                    {TAB_FILES.map((tf) => (
+                      <DropdownMenuItem
+                        key={tf.key}
+                        className="flex flex-col items-start gap-0.5 py-2"
+                        onSelect={() => setSelectedFileKey(tf.key)}
+                      >
+                        <span className={cn("text-xs font-medium", tf.key === selectedFileKey && "text-primary")}>
+                          {tf.label}
+                        </span>
+                        <span className="text-[10px] text-muted-foreground">{tf.desc}</span>
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                <span className="text-[10px] text-muted-foreground truncate">
+                  {TAB_FILES.find((t) => t.key === selectedFileKey)?.desc}
+                </span>
+              </div>
+              {/* Editor */}
+              <div className="flex-1 min-h-0 flex flex-col px-4 py-3">
+                <FileEditorTab
+                  key={`${currentAgentId}-${selectedFileKey}`}
+                  agentId={currentAgentId}
+                  fileKey={selectedFileKey}
+                  onStateChange={setFooterState}
+                  className="flex-1 min-h-0"
+                />
+              </div>
+            </div>
+          )}
+          {activeTab === "CRONS" && (
+            <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+              <AgentCronsTab agentId={currentAgentId} />
             </div>
           )}
 
-          {TAB_FILES.map((tf) =>
-            activeTab === tf.key ? (
-              <div
-                key={tf.key}
-                className="flex-1 min-h-0 flex flex-col overflow-y-auto customScrollbar2 px-4 py-4"
-              >
-                <p className="text-xs text-muted-foreground mb-3">{tf.desc}</p>
-                <FileEditorTab
-                  agentId={currentAgentId}
-                  fileKey={tf.key}
-                  onStateChange={setFooterState}
-                />
-              </div>
-            ) : null
-          )}
         </div>
       </Card>
+
+      <AddAgentDialog
+        open={addAgentOpen}
+        onOpenChange={setAddAgentOpen}
+        onSuccess={(id) => setSelectedAgentId(id)}
+      />
 
       <DeleteAgentDialog
         open={deleteDialogOpen}

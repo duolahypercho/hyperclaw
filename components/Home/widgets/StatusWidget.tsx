@@ -19,6 +19,10 @@ import {
   HelpCircle,
   Zap,
   Info,
+  Plus,
+  Users,
+  FolderOpen,
+  ChevronDown,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -27,7 +31,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { useFocusMode } from "./hooks/useFocusMode";
-import { useOpenClawContext } from "$/Providers/OpenClawProv";
+import { useHyperclawContext } from "$/Providers/HyperclawProv";
 import {
   gatewayConnection,
   getGatewayConnectionState,
@@ -37,15 +41,35 @@ import {
 import {
   useAgentIdentities,
   resolveAvatarUrl,
-  isAvatarText,
+  resolveAvatarText,
   type AgentIdentity,
 } from "$/hooks/useAgentIdentity";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
 import { OPEN_AGENT_PANEL_EVENT } from "./AgentChatPanel";
+import { AddAgentDialog } from "$/components/Tool/Agents/AddAgentDialog";
+import { ProjectsProvider, useProjects } from "$/components/Tool/Projects/provider/projectsProvider";
+import { CreateProjectDialog } from "$/components/Tool/Projects/CreateProjectDialog";
+import { ClaudeCodeIcon, CodexIcon, HermesIcon } from "$/components/Onboarding/RuntimeIcons";
+
+// Returns the branded React SVG icon for known runtimes, null otherwise.
+function getRuntimeIcon(runtime?: string): React.ComponentType<{ className?: string }> | null {
+  if (runtime === "claude-code") return ClaudeCodeIcon;
+  if (runtime === "codex") return CodexIcon;
+  if (runtime === "hermes") return HermesIcon;
+  return null;
+}
+
+// True if avatar is a user-uploaded image (PNG/JPG/HTTP) vs. the SVG seed or empty.
+function isCustomImageAvatar(avatarUrl: string | undefined): boolean {
+  if (!avatarUrl) return false;
+  return !avatarUrl.startsWith("data:image/svg+xml");
+}
 
 // ── Custom event for cross-widget communication ──
 // StatusWidget dispatches this; GatewayChatWidget listens.
 export const OPEN_AGENT_CHAT_EVENT = "open-agent-chat";
+// Dispatched by AgentChatWidget when the user actually opens a session — this is when we clear unread
+export const AGENT_READ_EVENT = "agent-read";
 
 export function dispatchOpenAgentChat(agentId: string, sessionKey?: string) {
   window.dispatchEvent(
@@ -53,9 +77,13 @@ export function dispatchOpenAgentChat(agentId: string, sessionKey?: string) {
   );
 }
 
-export function dispatchOpenAgentPanel(agentId: string, sessionKey?: string) {
+export function dispatchOpenAgentPanel(
+  agentId: string,
+  sessionKey?: string,
+  meta?: { sessionCount?: number; unreadCount?: number; lastSeenTs?: number; runtime?: string }
+) {
   window.dispatchEvent(
-    new CustomEvent(OPEN_AGENT_PANEL_EVENT, { detail: { agentId, sessionKey } })
+    new CustomEvent(OPEN_AGENT_PANEL_EVENT, { detail: { agentId, sessionKey, ...meta } })
   );
 }
 
@@ -65,6 +93,7 @@ interface Agent {
   id: string;
   name: string;
   status: string;
+  runtime?: string;
   role?: string;
   lastActive?: string;
 }
@@ -75,14 +104,16 @@ interface AgentStatus {
   state: "idle" | "running" | "error";
   lastActivity?: number;
   unreadCount: number;
-  lastMessage?: string;
+  recentMessages: string[];
   sessionCount: number;
+  lastSeenTs: number;
   errorMessage?: string;
+  runtime?: string;
 }
 
 // ── Inbox types ──
 
-type StatusTab = "agents" | "inbox";
+type StatusTab = "agents" | "inbox" | "projects";
 
 interface InboxItem {
   id: number;
@@ -108,21 +139,45 @@ const QUIET_HOURS = 48;
 
 const LAST_SEEN_KEY = "hyperclaw.agent-status.last-seen";
 
-function getLastSeenMap(): Record<string, number> {
+interface LastSeenEntry {
+  ts: number;
+  msgText?: string; // text of the last message the user saw
+}
+
+function getLastSeenMap(): Record<string, LastSeenEntry> {
   try {
     const raw = localStorage.getItem(LAST_SEEN_KEY);
-    return raw ? JSON.parse(raw) : {};
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    // Migrate old format (plain number) to new format
+    const out: Record<string, LastSeenEntry> = {};
+    for (const [id, v] of Object.entries(parsed)) {
+      out[id] = typeof v === "number" ? { ts: v } : (v as LastSeenEntry);
+    }
+    return out;
   } catch {
     return {};
   }
 }
 
-function setLastSeen(agentId: string, ts: number) {
+function setLastSeenLocal(agentId: string, ts: number, msgText?: string) {
   const map = getLastSeenMap();
-  map[agentId] = ts;
+  map[agentId] = { ts, msgText };
   try {
     localStorage.setItem(LAST_SEEN_KEY, JSON.stringify(map));
   } catch { /* ignore */ }
+}
+
+// Fetch last-seen entries from SQLite via bridge; falls back to localStorage when offline.
+async function fetchLastSeenFromBridge(agentIds: string[]): Promise<Record<string, LastSeenEntry>> {
+  try {
+    const result = await bridgeInvoke("get-agent-last-seen", { agentIds }) as {
+      success: boolean;
+      data: Record<string, { ts: number; msgText?: string }>;
+    };
+    if (result?.success && result.data) return result.data;
+  } catch { /* connector offline — fall through */ }
+  return getLastSeenMap();
 }
 
 // ── Relative time formatter ──
@@ -142,12 +197,24 @@ function timeAgo(ts: number): string {
   return new Date(ts).toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
+// ── Absolute time formatter for inbox items ──
+
+function formatAbsTime(ts: number): string {
+  const d = new Date(ts);
+  const now = new Date();
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (d.toDateString() === now.toDateString()) return time;
+  return `${d.toLocaleDateString([], { month: "short", day: "numeric" })} · ${time}`;
+}
+
 // ── Extract last assistant text from history messages (skip tool-only) ──
 
-function extractLastAssistantText(
-  messages: Array<{ role?: string; content?: unknown }>
-): string | undefined {
-  for (let i = messages.length - 1; i >= 0; i--) {
+function extractRecentAssistantTexts(
+  messages: Array<{ role?: string; content?: unknown }>,
+  n = 3
+): string[] {
+  const results: string[] = [];
+  for (let i = messages.length - 1; i >= 0 && results.length < n; i--) {
     const msg = messages[i];
     if (msg.role !== "assistant") continue;
 
@@ -164,10 +231,10 @@ function extractLastAssistantText(
     }
 
     if (text && text.length > 0) {
-      return text.slice(0, 120);
+      results.unshift(text.slice(0, 120)); // newest last → unshift keeps chronological order
     }
   }
-  return undefined;
+  return results;
 }
 
 // ── Custom header ──
@@ -265,9 +332,12 @@ const AgentExpandedRow = React.forwardRef<HTMLDivElement, {
   status: AgentStatus;
   identity?: AgentIdentity;
   onClick: (agentId: string) => void;
-}>(function AgentExpandedRow({ status, identity, onClick }, ref) {
-  const avatarUrl = resolveAvatarUrl(identity?.avatar);
-  const avatarText = isAvatarText(identity?.avatar) ? identity!.avatar! : undefined;
+  isActive?: boolean;
+}>(function AgentExpandedRow({ status, identity, onClick, isActive }, ref) {
+  const resolvedAvatarUrl = resolveAvatarUrl(identity?.avatar);
+  const avatarUrl = isCustomImageAvatar(resolvedAvatarUrl) ? resolvedAvatarUrl : undefined;
+  const avatarText = resolveAvatarText(identity?.avatar);
+  const RuntimeIcon = getRuntimeIcon(identity?.runtime || status.runtime);
   const displayName = identity?.name || status.name || status.agentId;
 
   return (
@@ -278,26 +348,26 @@ const AgentExpandedRow = React.forwardRef<HTMLDivElement, {
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, height: 0 }}
       className={cn(
-        "w-full min-w-0 flex items-start gap-2.5 px-2.5 py-2 rounded-md transition-colors cursor-pointer overflow-hidden",
-        "hover:bg-muted/30",
-        status.unreadCount > 0 && "bg-primary/5 border-l-2 border-primary",
-        status.state === "error" && status.unreadCount === 0 && "bg-destructive/5 border-l-2 border-destructive"
+        "w-full min-w-0 flex items-start gap-2.5 px-2.5 py-2 rounded-none transition-colors cursor-pointer overflow-hidden",
+        isActive ? "bg-muted/50" : "hover:bg-muted/30"
       )}
       onClick={() => onClick(status.agentId)}
     >
-      {/* Avatar with optional pulse */}
+      {/* Avatar with unread badge */}
       <div className="shrink-0 mt-0.5 relative">
         <Avatar className="w-7 h-7">
           {avatarUrl && <AvatarImage src={avatarUrl} alt={displayName} />}
-          <AvatarFallback className="bg-primary/10 text-primary text-[10px]">
-            {avatarText || identity?.emoji || displayName.slice(0, 2).toUpperCase()}
+          <AvatarFallback className="bg-primary/10 text-primary text-[11px] select-none">
+            {RuntimeIcon && !avatarUrl
+              ? <RuntimeIcon className="w-4 h-4" />
+              : <span className="leading-[0]">{avatarText || identity?.emoji || displayName.slice(0, 2).toUpperCase()}</span>
+            }
           </AvatarFallback>
         </Avatar>
-        {status.state === "running" && (
-          <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-emerald-500 border-2 border-card animate-pulse" />
-        )}
-        {status.state === "error" && (
-          <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-destructive border-2 border-card" />
+        {status.unreadCount > 0 && (
+          <span className="absolute -top-0.5 -right-0.5 min-w-[14px] h-3.5 px-0.5 rounded-full bg-red-500 border border-card flex items-center justify-center text-[8px] font-bold text-white leading-none">
+            {status.unreadCount >= 99 ? "99+" : status.unreadCount}
+          </span>
         )}
       </div>
 
@@ -308,43 +378,48 @@ const AgentExpandedRow = React.forwardRef<HTMLDivElement, {
           <span className="text-xs font-medium text-foreground truncate">
             {displayName}
           </span>
+          {status.runtime && status.runtime !== "openclaw" && (
+            <span className="text-[9px] text-muted-foreground/50 shrink-0 border border-border/30 rounded px-1 py-px leading-none">
+              {status.runtime}
+            </span>
+          )}
           {status.state === "running" && (
-            <span className="text-[10px] text-emerald-500 shrink-0">Generating...</span>
+            <span className="text-[10px] text-emerald-500 shrink-0">Running...</span>
           )}
           {status.lastActivity && status.state !== "running" && (
             <span className="text-[10px] text-muted-foreground/50 shrink-0">
               {timeAgo(status.lastActivity)}
             </span>
           )}
-          {status.unreadCount > 0 && (
-            <Badge
-              variant="default"
-              className="h-3.5 px-1 text-[9px] font-medium bg-primary text-primary-foreground ml-auto shrink-0"
-            >
-              new
-            </Badge>
-          )}
         </div>
 
-        {/* Error or message preview */}
-        {status.state === "error" && status.errorMessage ? (
+        {/* Error state */}
+        {status.state === "error" && status.errorMessage && (
           <div className="flex items-center gap-1 text-[11px] text-destructive min-w-0 overflow-hidden">
             <AlertTriangle className="w-2.5 h-2.5 shrink-0" />
-            <span className="line-clamp-2 [overflow-wrap:anywhere]">{status.errorMessage}</span>
-          </div>
-        ) : status.lastMessage ? (
-          <p className="text-[11px] text-muted-foreground leading-relaxed line-clamp-2 [overflow-wrap:anywhere] overflow-hidden">
-            {status.lastMessage}
-          </p>
-        ) : null}
-
-        {/* Session count */}
-        {status.sessionCount > 0 && (
-          <div className="flex items-center gap-0.5 text-[10px] text-muted-foreground/40">
-            <MessageSquare className="w-2.5 h-2.5" />
-            {status.sessionCount} session{status.sessionCount !== 1 ? "s" : ""}
+            <span className="line-clamp-1 [overflow-wrap:anywhere]">{status.errorMessage}</span>
           </div>
         )}
+
+        {/* Recent messages — always visible; opacity reflects read state */}
+        {status.state !== "error" && status.recentMessages.length > 0 && (
+          <div className="flex flex-col gap-0.5 mt-0.5">
+            {status.recentMessages.slice(0, 3).map((msg, i) => (
+              <p
+                key={i}
+                className={cn(
+                  "text-[11px] line-clamp-1 [overflow-wrap:anywhere] overflow-hidden transition-opacity",
+                  status.unreadCount > 0
+                    ? "text-muted-foreground/80"
+                    : "text-muted-foreground/40"
+                )}
+              >
+                {msg}
+              </p>
+            ))}
+          </div>
+        )}
+
       </div>
     </motion.div>
   );
@@ -363,8 +438,10 @@ function AgentCollapsedRow({
   identity?: AgentIdentity;
   onClick: (agentId: string) => void;
 }) {
-  const avatarUrl = resolveAvatarUrl(identity?.avatar);
-  const avatarText = isAvatarText(identity?.avatar) ? identity!.avatar! : undefined;
+  const resolvedAvatarUrl = resolveAvatarUrl(identity?.avatar);
+  const avatarUrl = isCustomImageAvatar(resolvedAvatarUrl) ? resolvedAvatarUrl : undefined;
+  const avatarText = resolveAvatarText(identity?.avatar);
+  const RuntimeIcon = getRuntimeIcon(identity?.runtime || status.runtime);
   const displayName = identity?.name || status.name || status.agentId;
 
   return (
@@ -375,7 +452,10 @@ function AgentCollapsedRow({
       <Avatar className="w-5 h-5">
         {avatarUrl && <AvatarImage src={avatarUrl} alt={displayName} />}
         <AvatarFallback className="bg-muted text-muted-foreground text-[8px]">
-          {avatarText || identity?.emoji || displayName.slice(0, 2).toUpperCase()}
+          {RuntimeIcon && !avatarUrl
+            ? <RuntimeIcon className="w-3 h-3" />
+            : (avatarText || identity?.emoji || displayName.slice(0, 2).toUpperCase())
+          }
         </AvatarFallback>
       </Avatar>
       <span className="text-[11px] text-muted-foreground truncate">{displayName}</span>
@@ -388,11 +468,86 @@ function AgentCollapsedRow({
   );
 }
 
+// ── Project row (collapsible, shows members when expanded) ──
+
+const STATUS_PROJECT_DOTS: Record<string, string> = {
+  active: "bg-emerald-500",
+  completed: "bg-blue-500",
+  archived: "bg-muted-foreground/40",
+};
+
+function ProjectRow({ project }: { project: import("$/components/Tool/Projects/provider/projectsProvider").Project }) {
+  const { agents } = useHyperclawContext();
+  const { selectProject } = useProjects();
+  const [expanded, setExpanded] = useState(false);
+  const members = project.members ?? [];
+
+  const handleExpand = useCallback(() => {
+    const next = !expanded;
+    setExpanded(next);
+    if (next && members.length === 0) selectProject(project.id);
+  }, [expanded, members.length, project.id, selectProject]);
+
+  return (
+    <div>
+      <button
+        onClick={handleExpand}
+        className="w-full flex items-center gap-2 px-2.5 py-2 hover:bg-muted/30 rounded-md transition-colors"
+      >
+        <span className="text-base shrink-0">{project.emoji}</span>
+        <div className="flex-1 min-w-0 text-left">
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs font-medium text-foreground truncate">{project.name}</span>
+            <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", STATUS_PROJECT_DOTS[project.status] ?? "bg-muted-foreground/40")} />
+          </div>
+          {project.description && (
+            <p className="text-[10px] text-muted-foreground truncate mt-0.5">{project.description}</p>
+          )}
+        </div>
+        <div className="flex items-center gap-1 shrink-0 text-muted-foreground/50">
+          <span className="text-[10px]">{members.length}</span>
+          <Users className="w-2.5 h-2.5" />
+          <ChevronDown className={cn("w-3 h-3 transition-transform duration-200", expanded && "rotate-180")} />
+        </div>
+      </button>
+
+      <AnimatePresence>
+        {expanded && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="overflow-hidden"
+          >
+            {members.length === 0 ? (
+              <p className="px-9 py-1.5 text-[10px] text-muted-foreground/40">No members yet</p>
+            ) : (
+              <div className="px-2 pb-1 space-y-0.5">
+                {members.map((m) => {
+                  const agent = agents.find((a) => a.id === m.agentId);
+                  return (
+                    <div key={m.agentId} className="flex items-center gap-2 px-2 py-1 rounded">
+                      <span className="text-sm shrink-0">{agent?.emoji ?? "🤖"}</span>
+                      <span className="text-[11px] text-muted-foreground truncate flex-1">{agent?.name ?? m.agentId}</span>
+                      <span className="text-[9px] text-muted-foreground/40 capitalize shrink-0">{m.role}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
 // ── Main widget content ──
 
 const StatusWidgetContent = memo((props: CustomProps) => {
   const { isFocusModeActive } = useFocusMode();
-  const { agents: openClawAgents } = useOpenClawContext();
+  const { agents: openClawAgents } = useHyperclawContext();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [statuses, setStatuses] = useState<AgentStatus[]>([]);
   const [loading, setLoading] = useState(true);
@@ -401,8 +556,14 @@ const StatusWidgetContent = memo((props: CustomProps) => {
   const activeRunsRef = useRef<Map<string, { agentId: string; ts: number }>>(new Map());
   const isMounted = useRef(true);
 
+  // ── Projects ──
+  const { projects, loading: projectsLoading } = useProjects();
+  const [createProjectOpen, setCreateProjectOpen] = useState(false);
+
   // ── Inbox ──
   const [activeTab, setActiveTab] = useState<StatusTab>("agents");
+  const [activeAgentId, setActiveAgentId] = useState<string | null>(null);
+  const [addAgentOpen, setAddAgentOpen] = useState(false);
   const [inboxItems, setInboxItems] = useState<InboxItem[]>([]);
   const [inboxLoading, setInboxLoading] = useState(false);
 
@@ -457,29 +618,52 @@ const StatusWidgetContent = memo((props: CustomProps) => {
     return openClawAgentsRef.current as Agent[];
   }, []);
 
-  // Fetch session data for a single agent
+  // Fetch session/activity data for a single agent.
+  // OpenClaw agents use the gateway; all other runtimes use the bridge (SQLite-backed).
   const fetchAgentSessions = useCallback(
-    async (agentId: string): Promise<{ sessionCount: number; lastActivity?: number; lastMessage?: string }> => {
-      if (!gatewayConnection.isConnected()) return { sessionCount: 0 };
+    async (agent: Agent): Promise<{ sessionCount: number; lastActivity?: number; recentMessages: string[] }> => {
+      const runtime = agent.runtime || "openclaw";
+
+      // Non-OpenClaw runtimes: read actual session history from disk via bridge
+      if (runtime !== "openclaw") {
+        try {
+          const result = await bridgeInvoke("get-runtime-sessions", { agentId: agent.id, limit: 6 }) as {
+            success?: boolean;
+            data?: { sessionCount?: number; lastActiveMs?: number; recentMessages?: Array<{ role: string; content: string; timestamp: number }> };
+          };
+          if (result?.success && result.data) {
+            const msgs = (result.data.recentMessages || []).map((m) => m.content).filter(Boolean);
+            return {
+              sessionCount: result.data.sessionCount || 0,
+              lastActivity: result.data.lastActiveMs || undefined,
+              recentMessages: msgs,
+            };
+          }
+        } catch { /* ignore */ }
+        return { sessionCount: 0, recentMessages: [] };
+      }
+
+      // OpenClaw: fetch live sessions from gateway
+      if (!gatewayConnection.isConnected()) return { sessionCount: 0, recentMessages: [] };
       try {
-        const result = await gatewayConnection.listSessions(agentId, 10);
+        const result = await gatewayConnection.listSessions(agent.id, 10);
         const sessions = result.sessions || [];
         const lastActivity = sessions.length > 0
           ? Math.max(...sessions.map((s) => s.updatedAt || 0))
           : undefined;
 
-        let lastMessage: string | undefined;
+        let recentMessages: string[] = [];
         if (sessions.length > 0) {
           try {
-            const history = await gatewayConnection.getChatHistory(sessions[0].key, 10);
+            const history = await gatewayConnection.getChatHistory(sessions[0].key, 20);
             const messages = (history.messages || []) as Array<{ role?: string; content?: unknown }>;
-            lastMessage = extractLastAssistantText(messages);
+            recentMessages = extractRecentAssistantTexts(messages, 10);
           } catch { /* ignore */ }
         }
 
-        return { sessionCount: sessions.length, lastActivity, lastMessage };
+        return { sessionCount: sessions.length, lastActivity, recentMessages };
       } catch {
-        return { sessionCount: 0 };
+        return { sessionCount: 0, recentMessages: [] };
       }
     },
     []
@@ -495,10 +679,10 @@ const StatusWidgetContent = memo((props: CustomProps) => {
       if (!isMounted.current) return;
       setAgents(agentList);
 
-      const lastSeenMap = getLastSeenMap();
+      const lastSeenMap = await fetchLastSeenFromBridge(agentList.map((a) => a.id));
 
       const sessionInfos = await Promise.all(
-        agentList.map((a) => fetchAgentSessions(a.id))
+        agentList.map((a) => fetchAgentSessions(a))
       );
       if (!isMounted.current) return;
 
@@ -507,9 +691,23 @@ const StatusWidgetContent = memo((props: CustomProps) => {
         const activeRun = Array.from(activeRunsRef.current.values()).find(
           (r) => r.agentId === agent.id
         );
-        const lastSeen = lastSeenMap[agent.id] || 0;
+        const entry = lastSeenMap[agent.id];
+        const lastSeen = entry?.ts || 0;
+        const lastSeenMsg = entry?.msgText;
         const lastActivity = info.lastActivity || 0;
-        const unreadCount = lastActivity > lastSeen && lastActivity > 0 ? 1 : 0;
+        const latestMsg = info.recentMessages[info.recentMessages.length - 1];
+        // Unread if: there's been activity AND either the timestamp is newer
+        // OR the latest message text differs from what was last seen.
+        // Text comparison survives page reloads and ignores metadata-only updates.
+        const hasNewActivity = lastActivity > lastSeen && lastActivity > 0;
+        const hasNewMessage = !!latestMsg && latestMsg !== lastSeenMsg;
+        // recentMessages is newest-first; find where the last-seen message sits
+        // and count everything before it (those are newer, unread).
+        let unreadCount = 0;
+        if (hasNewActivity && hasNewMessage) {
+          const seenIdx = lastSeenMsg ? info.recentMessages.indexOf(lastSeenMsg) : -1;
+          unreadCount = seenIdx === -1 ? (info.recentMessages.length || 1) : Math.max(1, seenIdx);
+        }
 
         return {
           agentId: agent.id,
@@ -517,8 +715,10 @@ const StatusWidgetContent = memo((props: CustomProps) => {
           state: activeRun ? "running" as const : "idle" as const,
           lastActivity: lastActivity || undefined,
           unreadCount,
-          lastMessage: info.lastMessage,
+          recentMessages: info.recentMessages,
           sessionCount: info.sessionCount,
+          lastSeenTs: lastSeen,
+          runtime: agent.runtime,
         };
       });
 
@@ -604,6 +804,20 @@ const StatusWidgetContent = memo((props: CustomProps) => {
                 : s
             )
           );
+          // Fetch fresh messages once the session is written (~600ms is enough for connector)
+          setTimeout(() => {
+            fetchAgentSessions({ id: agentId, name: agentId, status: "", runtime: "openclaw" }).then((info) => {
+              if (!isMounted.current) return;
+              // Only update if we actually got messages — keeps existing preview while waiting
+              if (info.recentMessages.length > 0) {
+                setStatuses((prev) =>
+                  prev.map((s) =>
+                    s.agentId === agentId ? { ...s, recentMessages: info.recentMessages } : s
+                  )
+                );
+              }
+            }).catch(() => { /* ignore */ });
+          }, 600);
         }
       } else if (state === "error") {
         activeRunsRef.current.delete(runId);
@@ -634,19 +848,40 @@ const StatusWidgetContent = memo((props: CustomProps) => {
   const agentIds = useMemo(() => agents.map((a) => a.id), [agents]);
   const identities = useAgentIdentities(agentIds);
 
-  // Click handler: mark as read + open the agent chat panel
+  // Keep a ref so handleAgentClick can read latest statuses without stale closure
+  const statusesRef = useRef<AgentStatus[]>([]);
+  useEffect(() => { statusesRef.current = statuses; }, [statuses]);
+
+  // Click handler: open the agent panel (unread is NOT cleared here — cleared when session is opened)
   const handleAgentClick = useCallback((agentId: string) => {
-    setLastSeen(agentId, Date.now());
-    setStatuses((prev) =>
-      prev.map((s) => (s.agentId === agentId ? { ...s, unreadCount: 0 } : s))
-    );
-    dispatchOpenAgentPanel(agentId);
+    const current = statusesRef.current.find((s) => s.agentId === agentId);
+    const sessionCount = current?.sessionCount ?? 0;
+    const unreadCount = current?.unreadCount ?? 0;
+    const lastSeenTs = current?.lastSeenTs ?? 0;
+    const runtime = current?.runtime;
+
+    setActiveAgentId(agentId);
+    dispatchOpenAgentPanel(agentId, undefined, { sessionCount, unreadCount, lastSeenTs, runtime });
   }, []);
 
-  const unreadTotal = useMemo(
-    () => statuses.reduce((sum, s) => sum + s.unreadCount, 0),
-    [statuses]
-  );
+  // Clear unread only when AgentChatWidget confirms a session was actually opened
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const agentId = (e as CustomEvent<{ agentId: string }>).detail?.agentId;
+      if (!agentId) return;
+      setStatuses((prev) => {
+        const status = prev.find((s) => s.agentId === agentId);
+        const lastMsg = status?.recentMessages[status.recentMessages.length - 1];
+        const ts = Date.now();
+        bridgeInvoke("set-agent-last-seen", { agentId, ts, msgText: lastMsg || "" }).catch(() => {
+          setLastSeenLocal(agentId, ts, lastMsg);
+        });
+        return prev.map((s) => s.agentId === agentId ? { ...s, unreadCount: 0 } : s);
+      });
+    };
+    window.addEventListener(AGENT_READ_EVENT, handler);
+    return () => window.removeEventListener(AGENT_READ_EVENT, handler);
+  }, []);
 
   return (
     <motion.div
@@ -664,45 +899,94 @@ const StatusWidgetContent = memo((props: CustomProps) => {
         )}
       >
         {/* Compact tab bar — no title, just tabs + controls */}
-        <div className="flex items-center gap-0.5 px-3 pt-2 pb-2 shrink-0 -mb-px">
-          {props.isEditMode && (
-            <div className="cursor-move h-6 w-6 flex items-center justify-center shrink-0 mr-1">
-              <GripVertical className="w-3 h-3 text-muted-foreground" />
-            </div>
-          )}
-          <button
-            onClick={() => setActiveTab("agents")}
-            className={cn(
-              "px-2 py-1 text-[11px] font-medium transition-all duration-200 rounded-md shrink-0",
-              activeTab === "agents"
-                ? "border-primary text-foreground bg-primary/5"
-                : "border-transparent text-muted-foreground hover:text-foreground/70 hover:bg-muted/30"
+        <div className="flex items-center justify-between px-3 pt-2 pb-2 shrink-0 -mb-px">
+          <div className="flex items-center gap-0.5">
+            {props.isEditMode && (
+              <div className="cursor-move h-6 w-6 flex items-center justify-center shrink-0 mr-1">
+                <GripVertical className="w-3 h-3 text-muted-foreground" />
+              </div>
             )}
-          >
-            <Activity className="w-3 h-3 inline mr-1" />
-            Agents
-          </button>
-          <button
-            onClick={() => setActiveTab("inbox")}
-            className={cn(
-              "relative px-2 py-1 text-[11px] font-medium transition-all duration-200 rounded-md shrink-0",
-              activeTab === "inbox"
-                ? "border-primary text-foreground bg-primary/5"
-                : "border-transparent text-muted-foreground hover:text-foreground/70 hover:bg-muted/30"
-            )}
-          >
-            <Inbox className="w-3 h-3 inline mr-1" />
-            Inbox
-            {pendingInboxCount > 0 && (
-              <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-primary text-primary-foreground text-[9px] font-bold flex items-center justify-center">
-                {pendingInboxCount}
-              </span>
-            )}
-          </button>
+            <button
+              onClick={() => setActiveTab("agents")}
+              className={cn(
+                "px-2 py-1 text-[11px] font-medium transition-all duration-200 rounded-md shrink-0",
+                activeTab === "agents"
+                  ? "text-foreground bg-muted/60"
+                  : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
+              )}
+            >
+              <Users className="w-3 h-3 inline mr-1" />
+              Agents
+            </button>
+            <button
+              onClick={() => setActiveTab("projects")}
+              className={cn(
+                "px-2 py-1 text-[11px] font-medium transition-all duration-200 rounded-md shrink-0",
+                activeTab === "projects"
+                  ? "text-foreground bg-muted/60"
+                  : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
+              )}
+            >
+              <FolderOpen className="w-3 h-3 inline mr-1" />
+              Projects
+            </button>
+            <button
+              onClick={() => setActiveTab("inbox")}
+              className={cn(
+                "px-2 py-1 text-[11px] font-medium transition-all duration-200 rounded-md shrink-0",
+                activeTab === "inbox"
+                  ? "text-foreground bg-muted/60"
+                  : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
+              )}
+            >
+              <Inbox className="w-3 h-3 inline mr-1" />
+              Inbox
+            </button>
+          </div>
         </div>
 
-        <div className="flex-1 overflow-hidden flex flex-col min-h-0 px-2 pb-2">
-          {activeTab === "inbox" ? (
+        <div className="flex-1 overflow-hidden flex flex-col min-h-0 px-0 pb-2">
+          {activeTab === "projects" ? (
+            <div className="flex flex-col h-full min-h-0">
+              <div className="flex items-center justify-between px-2 pb-2 shrink-0">
+                <span className="text-[10px] text-muted-foreground">
+                  {projects.length} project{projects.length !== 1 ? "s" : ""}
+                </span>
+                <button
+                  onClick={() => setCreateProjectOpen(true)}
+                  className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-colors"
+                >
+                  <Plus className="w-3 h-3" />
+                  New
+                </button>
+              </div>
+              <ScrollArea className="flex-1 min-h-0">
+                {projectsLoading ? (
+                  <div className="flex items-center justify-center py-6">
+                    <Loader2 className="w-4 h-4 animate-spin text-muted-foreground/50" />
+                  </div>
+                ) : projects.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-8 gap-2">
+                    <FolderOpen className="w-6 h-6 text-muted-foreground/30" />
+                    <p className="text-xs text-muted-foreground/60">No projects yet</p>
+                    <button
+                      onClick={() => setCreateProjectOpen(true)}
+                      className="text-[11px] text-primary hover:underline"
+                    >
+                      Create your first project
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-0.5 pr-1">
+                    {projects.map((p) => (
+                      <ProjectRow key={p.id} project={p} />
+                    ))}
+                  </div>
+                )}
+              </ScrollArea>
+              <CreateProjectDialog open={createProjectOpen} onOpenChange={setCreateProjectOpen} />
+            </div>
+          ) : activeTab === "inbox" ? (
             <ScrollArea className="flex-1 min-h-0">
               {inboxLoading ? (
                 <div className="flex items-center justify-center py-6 gap-2">
@@ -730,7 +1014,7 @@ const StatusWidgetContent = memo((props: CustomProps) => {
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-1.5">
                             <span className="text-xs font-medium text-foreground truncate">{item.title}</span>
-                            <span className="text-[9px] text-muted-foreground/40 shrink-0">{timeAgo(item.created_at)}</span>
+                            <span className="text-[9px] text-muted-foreground/40 shrink-0">{formatAbsTime(item.created_at)}</span>
                           </div>
                           {item.body && (
                             <p className="text-[11px] text-muted-foreground leading-relaxed mt-0.5 line-clamp-2">{item.body}</p>
@@ -781,47 +1065,62 @@ const StatusWidgetContent = memo((props: CustomProps) => {
                 </div>
               )}
             </ScrollArea>
-          ) : loading && statuses.length === 0 ? (
-            <div className="flex-1 flex items-center justify-center gap-2 py-6">
-              <Loader2 className="w-5 h-5 animate-spin text-primary" />
-              <span className="text-sm text-muted-foreground">Loading agents...</span>
-            </div>
-          ) : error && statuses.length === 0 ? (
-            <div className="flex-1 flex flex-col items-center justify-center gap-2 py-6">
-              <AlertTriangle className="w-6 h-6 text-destructive/60" />
-              <p className="text-xs text-destructive text-center max-w-[200px]">{error}</p>
-              <Button variant="outline" size="sm" className="h-6 text-xs mt-1" onClick={() => refresh()} disabled={loading}>
-                <RefreshCw className={cn("w-3 h-3 mr-1", loading && "animate-spin")} />Retry
-              </Button>
-            </div>
-          ) : !connected ? (
-            <div className="flex-1 flex flex-col items-center justify-center gap-2 py-6">
-              <Activity className="w-6 h-6 text-muted-foreground/40" />
-              <p className="text-xs text-muted-foreground text-center">Not connected to gateway</p>
-            </div>
-          ) : statuses.length === 0 ? (
-            <div className="flex-1 flex flex-col items-center justify-center gap-2 py-6">
-              <Activity className="w-6 h-6 text-muted-foreground/40" />
-              <p className="text-xs text-muted-foreground text-center">No agents found</p>
-            </div>
           ) : (
-            <ScrollArea className="flex-1 min-h-0 w-full min-w-0">
-              <div className="space-y-0.5 pr-1 w-full min-w-0 overflow-hidden">
-                <AnimatePresence mode="popLayout">
-                  {statuses.map((status) => (
-                    <AgentExpandedRow
-                      key={status.agentId}
-                      status={status}
-                      identity={identities.get(status.agentId)}
-                      onClick={handleAgentClick}
-                    />
-                  ))}
-                </AnimatePresence>
+            <div className="flex flex-col flex-1 min-h-0">
+              {/* Agents sub-header */}
+              <div className="flex items-center justify-between px-2 pb-2 shrink-0">
+                <span className="text-[10px] text-muted-foreground">
+                  {statuses.length} agent{statuses.length !== 1 ? "s" : ""}
+                </span>
+                <button
+                  onClick={() => setAddAgentOpen(true)}
+                  className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-colors"
+                >
+                  <Plus className="w-3 h-3" />
+                  New
+                </button>
               </div>
-            </ScrollArea>
+              {loading && statuses.length === 0 ? (
+                <div className="flex-1 flex items-center justify-center gap-2 py-6">
+                  <Loader2 className="w-5 h-5 animate-spin text-primary" />
+                  <span className="text-sm text-muted-foreground">Loading agents...</span>
+                </div>
+              ) : error && statuses.length === 0 ? (
+                <div className="flex-1 flex flex-col items-center justify-center gap-2 py-6">
+                  <AlertTriangle className="w-6 h-6 text-destructive/60" />
+                  <p className="text-xs text-destructive text-center max-w-[200px]">{error}</p>
+                  <Button variant="outline" size="sm" className="h-6 text-xs mt-1" onClick={() => refresh()} disabled={loading}>
+                    <RefreshCw className={cn("w-3 h-3 mr-1", loading && "animate-spin")} />Retry
+                  </Button>
+                </div>
+              ) : statuses.length === 0 ? (
+                <div className="flex-1 flex flex-col items-center justify-center gap-2 py-6">
+                  <Activity className="w-6 h-6 text-muted-foreground/40" />
+                  <p className="text-xs text-muted-foreground text-center">No employees yet</p>
+                </div>
+              ) : (
+                <ScrollArea className="flex-1 min-h-0 w-full min-w-0">
+                  <div className="space-y-0.5 pr-1 w-full min-w-0 overflow-hidden">
+                    <AnimatePresence mode="popLayout">
+                      {statuses.map((status) => (
+                        <AgentExpandedRow
+                          key={status.agentId}
+                          status={status}
+                          identity={identities.get(status.agentId)}
+                          onClick={handleAgentClick}
+                          isActive={activeAgentId === status.agentId}
+                        />
+                      ))}
+                    </AnimatePresence>
+                  </div>
+                </ScrollArea>
+              )}
+            </div>
           )}
         </div>
       </Card>
+
+      <AddAgentDialog open={addAgentOpen} onOpenChange={setAddAgentOpen} />
     </motion.div>
   );
 });
@@ -829,7 +1128,11 @@ const StatusWidgetContent = memo((props: CustomProps) => {
 StatusWidgetContent.displayName = "StatusWidgetContent";
 
 const StatusWidget = memo((props: CustomProps) => {
-  return <StatusWidgetContent {...props} />;
+  return (
+    <ProjectsProvider>
+      <StatusWidgetContent {...props} />
+    </ProjectsProvider>
+  );
 });
 
 StatusWidget.displayName = "StatusWidget";

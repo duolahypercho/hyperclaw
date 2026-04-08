@@ -6,7 +6,7 @@ import { GripVertical, Plus } from "lucide-react";
 import { CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { useOpenClawContext } from "$/Providers/OpenClawProv";
+import { useHyperclawContext } from "$/Providers/HyperclawProv";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   DropdownMenu,
@@ -84,7 +84,7 @@ export const GatewayChatCustomHeader: React.FC<GatewayChatHeaderProps> = ({
   onModelChange,
 }) => {
   // Get OpenClaw agents and gateway health from provider
-  const { agents, gatewayHealthy } = useOpenClawContext();
+  const { agents, gatewayHealthy } = useHyperclawContext();
 
   // Filter agents by active tab
   const filteredAgents = useMemo(() => {
@@ -103,7 +103,7 @@ export const GatewayChatCustomHeader: React.FC<GatewayChatHeaderProps> = ({
       ? filteredAgents.find(a => a.id === configAgentId)
       : filteredAgents[0];
 
-  const { loading: agentsLoading, fetchAgents } = useOpenClawContext();
+  const { loading: agentsLoading, fetchAgents } = useHyperclawContext();
   const agent = selectedAgent || { id: "main", name: "General Assistant", status: "active" };
   const headerIdentity = useAgentIdentity(currentAgentId || agent.id);
   const headerAvatarUrl = resolveAvatarUrl(headerIdentity?.avatar);

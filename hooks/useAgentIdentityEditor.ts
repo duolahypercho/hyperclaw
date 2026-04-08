@@ -115,6 +115,8 @@ export function useAgentIdentityEditor(
     identityAvatarUrl?: string | undefined;
     /** Workspace folder override */
     workspaceFolder?: string;
+    /** Agent runtime — if non-OpenClaw, saves go to SQLite bridge, not IDENTITY.md */
+    agentRuntime?: string;
   },
 ): AgentIdentityEditorState {
   const folder = resolveAgentFolder(agentId, opts?.workspaceFolder);
@@ -177,7 +179,12 @@ export function useAgentIdentityEditor(
         setAvatarPreview(null);
         if (isLocalAvatarFile(avatarVal)) {
           readAvatarAsDataUri(agentId, avatarVal).then((uri) => {
-            if (!cancelled && uri) setLoadedAvatarUri(uri);
+            if (!cancelled && uri) {
+              setLoadedAvatarUri(uri);
+              // Push into the shared identity cache so StatusWidget / header
+              // show the avatar without waiting for a separate bridge fetch.
+              patchIdentityCache(agentId, { avatar: uri });
+            }
           });
         } else {
           setLoadedAvatarUri(null);
@@ -276,10 +283,32 @@ export function useAgentIdentityEditor(
   })();
 
   /* ── Batch save ─────────────────────────────────── */
+  const isRuntimeAgent = !!(opts?.agentRuntime && opts.agentRuntime !== "openclaw");
+
   const save = useCallback(async (): Promise<boolean> => {
     setSaving(true);
     setSaved(false);
     try {
+      // Non-OpenClaw runtime agents (claude-code, codex, hermes) don't have
+      // IDENTITY.md in the OpenClaw workspace. Save directly to SQLite instead.
+      if (isRuntimeAgent) {
+        const avatarData = avatarPreview || loadedAvatarUri || undefined;
+        const res = (await bridgeInvoke("update-agent-identity", {
+          agentId,
+          name,
+          emoji,
+          ...(avatarData ? { avatarData } : {}),
+        })) as { success?: boolean };
+        if (!res?.success) { setSaving(false); return false; }
+        patchIdentityCache(agentId, { name, emoji, ...(avatarData ? { avatar: avatarData } : {}) });
+        if (avatarPreview) setLoadedAvatarUri(avatarPreview);
+        setAvatarPreview(null);
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2000);
+        setSaving(false);
+        return true;
+      }
+
       let content = raw || "";
       content = updateIdentityField(content, "Name", name);
       if (role.trim()) content = updateIdentityField(content, "Role", role);
@@ -362,7 +391,7 @@ export function useAgentIdentityEditor(
       return false;
     }
   }, [
-    raw, name, role, description, emoji, avatarPath, avatarPreview,
+    isRuntimeAgent, raw, name, role, description, emoji, avatarPath, avatarPreview,
     loadedAvatarUri, identityPath, model, originalModel, agentId,
     hbModel, originalHbModel, hbEvery, originalHbEvery,
     runtime, department, originalDepartment, orgNodeId, departments,

@@ -42,7 +42,7 @@ import { Task } from "./types";
 import { useTodoList } from "./provider/todolistProvider";
 import { useIsTaskRunningCron } from "./hooks/useIsTaskRunningCron";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
-import { useOpenClawContext } from "$/Providers/OpenClawProv";
+import { useHyperclawContext } from "$/Providers/HyperclawProv";
 import { useAgentIdentities, resolveAvatarUrl, isAvatarText } from "$/hooks/useAgentIdentity";
 import { AddAgentDialog } from "$/components/Tool/Agents/AddAgentDialog";
 
@@ -1087,7 +1087,7 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({
     handleDeleteTask,
     handleToggleStar,
   } = useTodoList();
-  const { agents: openClawAgents } = useOpenClawContext();
+  const { agents: openClawAgents } = useHyperclawContext();
 
   // HTML5 drag-and-drop state (from MissionQueue)
   const [draggedTask, setDraggedTask] = useState<Task | null>(null);

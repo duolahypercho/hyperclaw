@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useUser } from "$/Providers/UserProv";
-import { useOpenClawContext } from "$/Providers/OpenClawProv";
+import { useHyperclawContext } from "$/Providers/HyperclawProv";
 import { useDevices } from "$/hooks/useDevices";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
@@ -30,7 +30,7 @@ import {
 
 const Userdropdown = () => {
   const { userInfo, membership, logout } = useUser();
-  const { gatewayHealthy, gatewayHealthError, refreshAll } = useOpenClawContext();
+  const { gatewayHealthy, gatewayHealthError, refreshAll } = useHyperclawContext();
   const { hasOnlineDevice, loading: devicesLoading } = useDevices();
   const [reconnecting, setReconnecting] = useState(false);
   const [restartingGateway, setRestartingGateway] = useState(false);

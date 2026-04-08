@@ -22,7 +22,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useCronsActions } from "./provider/cronsProvider";
-import { useOpenClawContext } from "$/Providers/OpenClawProv";
+import { useHyperclawContext } from "$/Providers/HyperclawProv";
 import { fetchCronById } from "./utils";
 import type { OpenClawCronJobJson } from "$/types/electron";
 
@@ -73,7 +73,7 @@ function getJobThinking(job: OpenClawCronJobJson): string {
 
 export function EditCronDialog({ open, onOpenChange, job, onSuccess }: EditCronDialogProps) {
   const { cronEdit } = useCronsActions();
-  const { agents: openClawAgents, models: openClawModels } = useOpenClawContext();
+  const { agents: openClawAgents, models: openClawModels } = useHyperclawContext();
   const [fullJob, setFullJob] = useState<OpenClawCronJobJson | null>(null);
   const [fullJobLoading, setFullJobLoading] = useState(false);
   const [name, setName] = useState("");

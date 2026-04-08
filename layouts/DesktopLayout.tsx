@@ -1,6 +1,6 @@
 import React, { useEffect, memo, useRef, useState, useCallback } from "react";
 import { useOS, useCopanionChatOS } from "@OS/Provider/OSProv";
-import { useOpenClawContext } from "$/Providers/OpenClawProv";
+import { useHyperclawContext } from "$/Providers/HyperclawProv";
 import DocsAppLayout from "$/components/Tool/Docs/DocsAppLayout";
 import FloatingChatAppLayout from "$/components/Tool/FloatingChat/FloatingChatAppLayout";
 import Navbar from "$/components/navbar";
@@ -34,7 +34,7 @@ const MemoizedChildren = memo(
 MemoizedChildren.displayName = "MemoizedChildren";
 
 const DesktopLayout = ({ children }: any) => {
-  const { dashboardReady } = useOpenClawContext();
+  const { dashboardReady } = useHyperclawContext();
   const { showState } = useCopanionChatOS();
   const router = useRouter();
   const [isDashboard, setIsDashboard] = useState(false);

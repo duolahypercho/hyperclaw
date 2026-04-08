@@ -35,7 +35,7 @@ import { useUnifiedToolState } from "@OS/AI/components/hooks/useUnifiedToolState
 import { toolRegistry, UnifiedToolState } from "@OS/AI/components/ToolRegistry";
 import { Collapsible } from "@/components/ui/collapsible";
 import { ChevronRight, Check } from "lucide-react";
-import { useOpenClawContext } from "$/Providers/OpenClawProv";
+import { useHyperclawContext } from "$/Providers/HyperclawProv";
 import HermesIcon from "@OS/assets/hermes";
 import {
   DropdownMenu,
@@ -489,7 +489,7 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
 }) => {
   const { userInfo } = useUser();
   const { personality } = useAssistant();
-  const { agents } = useOpenClawContext();
+  const { agents } = useHyperclawContext();
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState<string | undefined>(agentIdProp);

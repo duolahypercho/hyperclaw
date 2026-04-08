@@ -44,7 +44,7 @@ import {
 } from "@/components/ui/context-menu";
 import { useTodoList } from "$/components/Tool/TodoList/provider/todolistProvider";
 import { useIsTaskRunningCron } from "$/components/Tool/TodoList/hooks/useIsTaskRunningCron";
-import { useOpenClawContext } from "$/Providers/OpenClawProv";
+import { useHyperclawContext } from "$/Providers/HyperclawProv";
 import { useOS } from "@OS/Provider/OSProv";
 import { Task } from "$/components/Tool/TodoList/types";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
@@ -1342,7 +1342,7 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
   const { isFocusModeActive } = useFocusMode();
   const { tasks, handleStatusChange, handleSelectTask, handleDeleteTask } =
     useTodoList();
-  const { agents: openClawAgents, fetchAgents } = useOpenClawContext();
+  const { agents: openClawAgents, fetchAgents } = useHyperclawContext();
   const { openChat } = useFloatingChatOS();
 
   const [addTaskOpen, setAddTaskOpen] = useState(false);
@@ -1357,9 +1357,9 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
   const [mobileTab, setMobileTab] = useState<KanbanStatus>("pending");
   const [statusMoveTask, setStatusMoveTask] = useState<Task | null>(null);
 
-  // Agents from OpenClawProvider (already fetched on 30s interval)
+  // Agents from HyperclawProvider (all runtimes, fetched on sync events)
   const agents = useMemo<BridgeAgent[]>(
-    () => (openClawAgents ?? []).map((a) => ({ ...a, workspaceFolder: undefined })),
+    () => (openClawAgents ?? []).map((a) => ({ ...a, status: a.status ?? "idle", workspaceFolder: undefined })),
     [openClawAgents]
   );
 

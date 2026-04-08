@@ -17,6 +17,104 @@ const https = require("https");
 const http = require("http");
 
 const isDev = process.env.NODE_ENV === "development";
+const { spawn } = require("child_process");
+
+// ─── Connector Process Manager ──────────────────────────────────────────────
+// The hyperclaw-connector binary is bundled inside the Electron app and managed
+// automatically. Users never need to install or run it separately.
+
+let connectorProcess = null;
+let connectorStopped = false; // set true on app quit to prevent restart loops
+
+/**
+ * Return the path to the bundled connector binary for the current platform/arch.
+ * In packaged builds: <app>/Contents/Resources/connector/<binary>
+ * In dev: electron/resources/connector/<binary>
+ */
+function getConnectorBinaryPath() {
+  const plat = process.platform; // darwin | linux | win32
+  const arch = process.arch;     // arm64 | x64
+
+  let name;
+  if (plat === "darwin") {
+    name = arch === "arm64"
+      ? "hyperclaw-connector-darwin-arm64"
+      : "hyperclaw-connector-darwin-x64";
+  } else if (plat === "linux") {
+    name = "hyperclaw-connector-linux";
+  } else if (plat === "win32") {
+    name = "hyperclaw-connector-win.exe";
+  } else {
+    return null;
+  }
+
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, "connector", name);
+  }
+  // Dev mode: binary lives next to this script in resources/connector/
+  return path.join(__dirname, "resources", "connector", name);
+}
+
+/**
+ * Start the connector daemon. Restarts automatically on crash (unless we quit).
+ * The connector reads its config from ~/.hyperclaw/.env (or flags).
+ * On first run with no DEVICE_TOKEN it will do auto-setup (login + create device).
+ */
+function startConnector(attempt = 0) {
+  if (connectorStopped) return;
+
+  const binPath = getConnectorBinaryPath();
+  if (!binPath || !fs.existsSync(binPath)) {
+    console.warn(`[connector] Binary not found at: ${binPath} — skipping auto-start`);
+    return;
+  }
+
+  // Inherit env so the connector picks up PATH, HOME, etc.
+  // The connector reads ~/.hyperclaw/.env for HUB_URL / DEVICE_TOKEN.
+  connectorProcess = spawn(binPath, [], {
+    detached: false,
+    stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env },
+  });
+
+  const pid = connectorProcess.pid;
+  console.log(`[connector] Started (pid ${pid}, attempt ${attempt + 1})`);
+
+  connectorProcess.stdout.on("data", (data) => {
+    const lines = data.toString().trim().split("\n");
+    lines.forEach((l) => console.log(`[connector] ${l}`));
+  });
+  connectorProcess.stderr.on("data", (data) => {
+    const lines = data.toString().trim().split("\n");
+    lines.forEach((l) => console.error(`[connector:err] ${l}`));
+  });
+
+  connectorProcess.on("exit", (code, signal) => {
+    connectorProcess = null;
+    if (connectorStopped) return;
+    // Exponential backoff: 1s, 2s, 4s, 8s, 16s, max 30s
+    const delay = Math.min(Math.pow(2, attempt) * 1000, 30000);
+    console.warn(`[connector] Exited (code=${code} signal=${signal}), restarting in ${delay}ms...`);
+    setTimeout(() => startConnector(attempt + 1), delay);
+  });
+
+  connectorProcess.on("error", (err) => {
+    console.error(`[connector] Failed to start: ${err.message}`);
+  });
+}
+
+/**
+ * Gracefully stop the connector (called on app quit).
+ */
+function stopConnector() {
+  connectorStopped = true;
+  if (connectorProcess) {
+    try {
+      connectorProcess.kill("SIGTERM");
+    } catch (_) {}
+    connectorProcess = null;
+  }
+}
 
 // Log crashes so we can debug "opens then closes" (run from Terminal to see output)
 function logCrash(label, err) {
@@ -1772,6 +1870,9 @@ app.whenReady().then(() => {
 
   // Permissions are now handled in the onboarding wizard (GuidedStepPermissions)
 
+  // Start the bundled connector daemon (manages itself, restarts on crash)
+  startConnector();
+
   createTray();
   createWindow();
 
@@ -1785,6 +1886,7 @@ app.whenReady().then(() => {
 
 app.on("before-quit", () => {
   appIsQuiting = true;
+  stopConnector();
   if (tray) tray.destroy();
   globalShortcut.unregisterAll(); // Unregister all global shortcuts including voice hotkey
 });

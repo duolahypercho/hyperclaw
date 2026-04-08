@@ -14,7 +14,7 @@ import { useAIProviderSafe } from "$/Providers/AIProviderProv";
 import { gatewayConnection } from "$/lib/openclaw-gateway-ws";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
 import { useUser } from "$/Providers/UserProv";
-import { useOpenClawContext } from "$/Providers/OpenClawProv";
+import { useHyperclawContext } from "$/Providers/HyperclawProv";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import CopanionIcon from "@OS/assets/copanion";
 import { getMediaUrl } from "$/utils";
@@ -47,7 +47,7 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
   const { isFocusModeActive } = useFocusMode();
 
   // Get OpenClaw agents from provider
-  const { agents, loading: agentsLoading } = useOpenClawContext();
+  const { agents, loading: agentsLoading } = useHyperclawContext();
 
   // Get agent config from widget config (persisted to SQLite via dashboardState)
   const config = widget.config as Record<string, unknown> | undefined;

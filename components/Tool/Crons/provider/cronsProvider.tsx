@@ -17,7 +17,7 @@ import React, {
 } from "react";
 import { format, startOfWeek, endOfWeek } from "date-fns";
 import { Plus, RefreshCw } from "lucide-react";
-import { useOpenClawContext } from "$/Providers";
+import { useHyperclawContext } from "$/Providers";
 import { useOS } from "@OS/Provider/OSProv";
 import { AppSchema } from "@OS/Layout/types";
 import type { OpenClawCronJobJson } from "$/types/electron";
@@ -93,7 +93,7 @@ export function CronsProvider({ children }: { children: ReactNode }) {
     fetchCronListJson,
     cronEnable,
     cronDisable,
-  } = useOpenClawContext();
+  } = useHyperclawContext();
 
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(new Date());
   const [togglingId, setTogglingId] = useState<string | null>(null);

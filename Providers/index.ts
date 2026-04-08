@@ -11,6 +11,12 @@ export {
   useOpenClawContext as useOpenClawContext,
 } from "./OpenClawProv";
 export {
+  HyperclawProvider as HyperclawProvider,
+  useHyperclawContext as useHyperclawContext,
+  type HyperclawAgent,
+  type HyperclawContextValue,
+} from "./HyperclawProv";
+export {
   AIProviderProvider as AIProviderProvider,
   useAIProvider as useAIProvider,
   useAIProviderSafe as useAIProviderSafe,

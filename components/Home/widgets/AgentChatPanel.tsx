@@ -23,7 +23,7 @@ import { useCodexChat } from "@OS/AI/core/hook/use-codex-chat";
 import { gatewayConnection } from "$/lib/openclaw-gateway-ws";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
 import { useUser } from "$/Providers/UserProv";
-import { useOpenClawContext } from "$/Providers/OpenClawProv";
+import { useHyperclawContext } from "$/Providers/HyperclawProv";
 import CopanionIcon from "@OS/assets/copanion";
 import { getMediaUrl } from "$/utils";
 import {
@@ -84,7 +84,7 @@ export function AgentChatPanel({ open, agentId, sessionKey: initialSessionKey, o
     if (open) setActiveTab("chat");
   }, [open, agentId]);
 
-  const { agents } = useOpenClawContext();
+  const { agents } = useHyperclawContext();
   const currentAgent = agents.find((a) => a.id === agentId) || {
     id: agentId,
     name: agentId === "main" ? "General Assistant" : agentId,
@@ -208,16 +208,18 @@ interface PanelChatViewProps {
   backendTab: BackendTab;
   onBackendTabChange: (tab: BackendTab) => void;
   showSubHeader?: boolean;
+  onSessionsUpdate?: (sessions: Array<{ key: string; label?: string; updatedAt?: number }>) => void;
 }
 
 export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>(function PanelChatView({
   agentId,
   initialSessionKey,
   backendTab,
+  onSessionsUpdate,
   onBackendTabChange,
   showSubHeader = true,
 }, ref) {
-  const { agents } = useOpenClawContext();
+  const { agents } = useHyperclawContext();
   const currentAgent = agents.find((a) => a.id === agentId) || {
     id: agentId,
     name: agentId,
@@ -326,13 +328,16 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
     });
   }, [agentId, setChatSessionKey, loadChatHistory]);
 
-  // Reload on session change
+  // Reload on session change — reset initialReady so skeleton shows while loading
   const prevSessionRef = useRef(sessionKey);
   useEffect(() => {
     if (!initialLoadDoneRef.current) return;
     if (sessionKey === prevSessionRef.current) return;
     prevSessionRef.current = sessionKey;
-    loadChatHistory();
+    setInitialReady(false);
+    loadChatHistory()
+      .catch(() => {})
+      .finally(() => setInitialReady(true));
   }, [sessionKey, loadChatHistory]);
 
   // Fetch sessions
@@ -370,6 +375,7 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
       }
       result.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
       setSessions(result);
+      onSessionsUpdate?.(result);
     } catch {
       setSessionsError("Failed to load sessions");
     } finally {

@@ -6,7 +6,7 @@ import { AgentInfoPanel } from "./AgentInfoPanel";
 import { useClaw3DAgents } from "./claw3d/useClaw3DAgents";
 import type { AgentInfo } from "./claw3d/useClaw3DAgents";
 import { usePixelOffice } from "./provider/pixelOfficeProvider";
-import { useOpenClawContext } from "$/Providers/OpenClawProv";
+import { useHyperclawContext } from "$/Providers/HyperclawProv";
 import { ErrorBoundary } from "$/components/ErrorBoundary";
 
 // Dynamic import to avoid SSR issues with Three.js
@@ -54,7 +54,7 @@ export function FullOfficeView(props: FullOfficeViewProps = {}) {
     lastSeenByAgentId,
   } = useClaw3DAgents();
   const { refresh } = usePixelOffice();
-  const openClaw = useOpenClawContext();
+  const openClaw = useHyperclawContext();
 
   // --- Agent interaction state ---
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);

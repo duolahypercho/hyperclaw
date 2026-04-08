@@ -12,7 +12,7 @@ import React, {
 import { Bot, FileText, Plus, RefreshCw, Save, Loader2, Trash2, Sparkles, Brain, UserRound, Users, Wrench, Heart, Crown, Zap } from "lucide-react";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
 import { dashboardState } from "$/lib/dashboard-state";
-import { useOpenClawContext } from "$/Providers/OpenClawProv";
+import { useHyperclawContext } from "$/Providers/HyperclawProv";
 import { gatewayConnection } from "$/lib/openclaw-gateway-ws";
 import { cronAdd } from "$/components/Tool/Crons/utils";
 import type { CEOHeartbeatConfig } from "$/types/electron";
@@ -124,7 +124,7 @@ const FILE_ICONS: Record<string, typeof FileText> = {
 };
 
 export function AgentsProvider({ children }: { children: React.ReactNode }) {
-  const { agents: openClawAgents, fetchAgents } = useOpenClawContext();
+  const { agents: openClawAgents, fetchAgents } = useHyperclawContext();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [agentFiles, setAgentFiles] = useState<AgentFileEntry[]>([]);
   const [workspaceLabels, setWorkspaceLabels] = useState<Record<string, string>>({});

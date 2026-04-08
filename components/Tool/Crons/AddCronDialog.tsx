@@ -3,15 +3,15 @@
 import React, { useState, useCallback, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Loader2, Calendar, Clock, Bot } from "lucide-react";
-import { useOpenClawContext } from "$/Providers/OpenClawProv";
+import { useHyperclawContext } from "$/Providers/HyperclawProv";
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from "@/components/ui/dialog";
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+  SheetFooter,
+} from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -60,7 +60,7 @@ const AGENT_NONE = "__none__";
 
 export function AddCronDialog({ open, onOpenChange, onSuccess }: AddCronDialogProps) {
   const { cronAdd } = useCronsActions();
-  const { agents: openClawAgents } = useOpenClawContext();
+  const { agents: openClawAgents } = useHyperclawContext();
   const [name, setName] = useState("");
   const [scheduleType, setScheduleType] = useState<ScheduleType>("recurring");
   const [atPreset, setAtPreset] = useState<string>("15m");
@@ -153,33 +153,40 @@ export function AddCronDialog({ open, onOpenChange, onSuccess }: AddCronDialogPr
   };
 
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="sm:max-w-[480px] gap-0 sm:rounded-xl p-0 overflow-hidden z-[101]" overlayClassName="z-[100]">
-        <DialogHeader className="px-6 pt-6 pb-4 space-y-1.5 border-b border-border/40">
-          <DialogTitle className="text-base font-semibold flex items-center gap-2">
-            <Calendar className="w-4 h-4 text-primary" />
-            Add cron job
-          </DialogTitle>
-          <DialogDescription className="text-xs text-muted-foreground">
-            Create a one-shot reminder or a recurring OpenClaw cron job.
-          </DialogDescription>
-        </DialogHeader>
-        <form onSubmit={handleSubmit} className="flex flex-col">
-          <div className="px-6 py-4 space-y-4 max-h-[60vh] overflow-y-auto customScrollbar2">
+    <Sheet open={open} onOpenChange={handleOpenChange}>
+      <SheetContent side="right" className="w-[420px] sm:w-[420px] flex flex-col gap-0 p-0">
+        <SheetHeader className="px-6 pt-6 pb-4 border-b border-border">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
+              <Calendar className="w-5 h-5" />
+            </div>
+            <div>
+              <SheetTitle>New Cron Job</SheetTitle>
+              <SheetDescription className="mt-0.5">
+                Schedule a one-shot or recurring task
+              </SheetDescription>
+            </div>
+          </div>
+        </SheetHeader>
+
+        <form onSubmit={handleSubmit} className="flex-1 min-h-0 flex flex-col">
+          <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
             <AnimatePresence mode="wait">
               {error && (
                 <motion.p
                   initial={{ opacity: 0, y: -4 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0 }}
-                  className="text-xs text-destructive bg-destructive/10 rounded-md px-3 py-2"
+                  className="text-sm text-destructive bg-destructive/10 px-3 py-2 rounded-lg"
                 >
                   {error}
                 </motion.p>
               )}
             </AnimatePresence>
+
+            {/* Name */}
             <div className="space-y-2">
-              <Label htmlFor="add-cron-name" className="text-xs font-medium">
+              <Label htmlFor="add-cron-name" className="text-xs uppercase tracking-wider text-muted-foreground">
                 Name
               </Label>
               <Input
@@ -187,19 +194,17 @@ export function AddCronDialog({ open, onOpenChange, onSuccess }: AddCronDialogPr
                 placeholder="e.g. Morning status"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                className="h-9 text-sm bg-muted/30 border-border/60"
               />
             </div>
+
+            {/* Schedule type */}
             <div className="space-y-2">
-              <Label className="text-xs font-medium">Schedule type</Label>
-              <Select
-                value={scheduleType}
-                onValueChange={(v) => setScheduleType(v as ScheduleType)}
-              >
-                <SelectTrigger className="h-9 bg-muted/30 border-border/60">
+              <Label className="text-xs uppercase tracking-wider text-muted-foreground">Schedule type</Label>
+              <Select value={scheduleType} onValueChange={(v) => setScheduleType(v as ScheduleType)}>
+                <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent className="z-[102]">
+                <SelectContent>
                   <SelectItem value="one-shot">One-shot (run once)</SelectItem>
                   <SelectItem value="recurring">Recurring</SelectItem>
                 </SelectContent>
@@ -207,123 +212,114 @@ export function AddCronDialog({ open, onOpenChange, onSuccess }: AddCronDialogPr
             </div>
 
             <AnimatePresence mode="wait">
-            {scheduleType === "one-shot" && (
-              <motion.div
-                key="one-shot"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.12 }}
-                className="space-y-2"
-              >
-                <Label className="text-xs font-medium flex items-center gap-1.5">
-                  <Clock className="w-3.5 h-3.5 text-muted-foreground" />
-                  When to run
-                </Label>
-                <Select value={atPreset} onValueChange={setAtPreset}>
-                  <SelectTrigger className="h-9 bg-muted/30 border-border/60">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent className="z-[102]">
-                    {ONE_SHOT_PRESETS.map((p) => (
-                      <SelectItem key={p.value} value={p.value}>
-                        {p.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {atPreset === "custom" && (
-                  <Input
-                    placeholder="e.g. 20m, 1h, or 2026-01-12T18:00:00Z"
-                    value={atCustom}
-                    onChange={(e) => setAtCustom(e.target.value)}
-                    className="h-9 text-sm font-mono bg-muted/30 border-border/60 mt-1"
-                  />
-                )}
-              </motion.div>
-            )}
-
-            {scheduleType === "recurring" && (
-              <motion.div
-                key="recurring"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.12 }}
-                className="space-y-3"
-              >
-                <div className="space-y-2">
-                  <Label className="text-xs font-medium flex items-center gap-1.5">
-                    <Calendar className="w-3.5 h-3.5 text-muted-foreground" />
-                    Repeat
+              {scheduleType === "one-shot" && (
+                <motion.div
+                  key="one-shot"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.12 }}
+                  className="space-y-2"
+                >
+                  <Label className="text-xs uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5" />
+                    When to run
                   </Label>
-                  <Select value={cronPreset} onValueChange={setCronPreset}>
-                    <SelectTrigger className="h-9 bg-muted/30 border-border/60">
+                  <Select value={atPreset} onValueChange={setAtPreset}>
+                    <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
-                    <SelectContent className="z-[102]">
-                      {CRON_PRESETS.map((p) => (
-                        <SelectItem key={p.value} value={p.value}>
-                          <span className="flex flex-col items-start gap-0.5">
-                            <span>{p.label}</span> 
-                          </span>
-                        </SelectItem>
+                    <SelectContent>
+                      {ONE_SHOT_PRESETS.map((p) => (
+                        <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
-                </div>
-                {cronPreset === "custom" && (
-                  <div className="space-y-1.5 pl-1 border-l-2 border-border/50">
-                    <Label htmlFor="add-cron-custom" className="text-xs text-muted-foreground">
-                      Cron expression (min hour day month weekday)
-                    </Label>
+                  {atPreset === "custom" && (
                     <Input
-                      id="add-cron-custom"
-                      placeholder="e.g. 0 7 * * *"
-                      value={cronCustom}
-                      onChange={(e) => setCronCustom(e.target.value)}
-                      className="h-9 text-sm font-mono bg-muted/30 border-border/60"
+                      placeholder="e.g. 20m, 1h, or 2026-01-12T18:00:00Z"
+                      value={atCustom}
+                      onChange={(e) => setAtCustom(e.target.value)}
+                      className="font-mono"
                     />
+                  )}
+                </motion.div>
+              )}
+
+              {scheduleType === "recurring" && (
+                <motion.div
+                  key="recurring"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.12 }}
+                  className="space-y-3"
+                >
+                  <div className="space-y-2">
+                    <Label className="text-xs uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                      <Calendar className="w-3.5 h-3.5" />
+                      Repeat
+                    </Label>
+                    <Select value={cronPreset} onValueChange={setCronPreset}>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {CRON_PRESETS.map((p) => (
+                          <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
-                )}
-              </motion.div>
-            )}
+                  {cronPreset === "custom" && (
+                    <div className="space-y-1.5 pl-3 border-l-2 border-border/50">
+                      <Label htmlFor="add-cron-custom" className="text-xs text-muted-foreground">
+                        Cron expression (min hour day month weekday)
+                      </Label>
+                      <Input
+                        id="add-cron-custom"
+                        placeholder="e.g. 0 7 * * *"
+                        value={cronCustom}
+                        onChange={(e) => setCronCustom(e.target.value)}
+                        className="font-mono"
+                      />
+                    </div>
+                  )}
+                </motion.div>
+              )}
             </AnimatePresence>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {/* Session + Agent */}
+            <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label className="text-xs font-medium">Session</Label>
+                <Label className="text-xs uppercase tracking-wider text-muted-foreground">Session</Label>
                 <Select value={session} onValueChange={(v) => setSession(v as "main" | "isolated")}>
-                  <SelectTrigger className="h-9 bg-muted/30 border-border/60">
+                  <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
-                  <SelectContent className="z-[102]">
-                    <SelectItem value="main">Main (system event)</SelectItem>
-                    <SelectItem value="isolated">Isolated (AI prompt)</SelectItem>
+                  <SelectContent>
+                    <SelectItem value="main">Main</SelectItem>
+                    <SelectItem value="isolated">Isolated</SelectItem>
                   </SelectContent>
                 </Select>
                 <p className="text-[10px] text-muted-foreground">
-                  {session === "main"
-                    ? "Runs in the main session. Use a system event (reminder / notification style)."
-                    : "Runs in an isolated session. Use a message as the AI prompt."}
+                  {session === "main" ? "System event style." : "Isolated AI prompt."}
                 </p>
               </div>
               <div className="space-y-2">
-                <Label className="text-xs font-medium">Agent</Label>
+                <Label className="text-xs uppercase tracking-wider text-muted-foreground">Agent</Label>
                 <Select
                   value={agent || AGENT_NONE}
                   onValueChange={(v) => setAgent(v === AGENT_NONE ? "" : v)}
                   disabled={agentsLoading}
                 >
-                  <SelectTrigger className="h-9 bg-muted/30 border-border/60">
-                    <SelectValue placeholder={agentsLoading ? "Loading agents…" : "Select agent…"} />
+                  <SelectTrigger>
+                    <SelectValue placeholder={agentsLoading ? "Loading…" : "Select…"} />
                   </SelectTrigger>
-                  <SelectContent className="z-[102]">
-                    <SelectItem value={AGENT_NONE} className="text-xs text-muted-foreground">
-                      None
-                    </SelectItem>
+                  <SelectContent>
+                    <SelectItem value={AGENT_NONE} className="text-muted-foreground">None</SelectItem>
                     {agentOptions.map((opt) => (
-                      <SelectItem key={opt.id} value={opt.id} className="text-xs">
+                      <SelectItem key={opt.id} value={opt.id}>
                         <span className="flex items-center gap-2">
                           <Bot className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                           {opt.name}
@@ -335,8 +331,9 @@ export function AddCronDialog({ open, onOpenChange, onSuccess }: AddCronDialogPr
               </div>
             </div>
 
+            {/* Prompt / system event */}
             <div className="space-y-2">
-              <Label htmlFor="add-cron-prompt" className="text-xs font-medium flex items-center gap-1.5">
+              <Label htmlFor="add-cron-prompt" className="text-xs uppercase tracking-wider text-muted-foreground">
                 {session === "main" ? "System event" : "Message (prompt)"}
               </Label>
               <Textarea
@@ -348,34 +345,43 @@ export function AddCronDialog({ open, onOpenChange, onSuccess }: AddCronDialogPr
                 }
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
-                className="h-9 text-sm bg-muted/30 border-border/60"
+                rows={3}
+                className="resize-none"
               />
             </div>
-            <div className="flex flex-wrap gap-4 pt-1">
-              <label className="flex items-center gap-2 cursor-pointer text-xs text-muted-foreground hover:text-foreground">
-                <input
-                  type="checkbox"
-                  checked={deleteAfterRun}
-                  onChange={(e) => setDeleteAfterRun(e.target.checked)}
-                  className="rounded border-border"
-                />
-                Delete after run
-              </label>
-            </div>
+
+            {/* Delete after run */}
+            <label className="flex items-center gap-2 cursor-pointer text-xs text-muted-foreground hover:text-foreground">
+              <input
+                type="checkbox"
+                checked={deleteAfterRun}
+                onChange={(e) => setDeleteAfterRun(e.target.checked)}
+                className="rounded border-border"
+              />
+              Delete after run
+            </label>
           </div>
-          <DialogFooter className="px-6 py-4 border-t border-border/40 gap-2">
-            <Button type="button" variant="ghost" size="sm" onClick={() => handleOpenChange(false)}>
+
+          <SheetFooter className="px-6 py-4 border-t border-border flex flex-row gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => handleOpenChange(false)}
+              className="text-muted-foreground"
+            >
               Cancel
             </Button>
-            <Button type="submit" size="sm" disabled={submitting} className="gap-2">
-              {submitting ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : null}
+            <Button
+              type="submit"
+              disabled={submitting || !name.trim()}
+              className="flex-1"
+            >
+              {submitting && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
               {submitting ? "Adding…" : "Add cron job"}
             </Button>
-          </DialogFooter>
+          </SheetFooter>
         </form>
-      </DialogContent>
-    </Dialog>
+      </SheetContent>
+    </Sheet>
   );
 }

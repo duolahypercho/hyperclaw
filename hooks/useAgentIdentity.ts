@@ -12,6 +12,7 @@ export interface AgentIdentity {
   name?: string;
   avatar?: string;
   emoji?: string;
+  runtime?: string;
 }
 
 // Module-level cache shared across all hook instances.
@@ -29,7 +30,14 @@ function loadFromStorage(): void {
     if (!raw) return;
     const entries = JSON.parse(raw) as Record<string, AgentIdentity>;
     for (const [id, identity] of Object.entries(entries)) {
-      if (!identityCache.has(id)) identityCache.set(id, identity);
+      if (!identityCache.has(id)) {
+        // Skip entries with empty avatar — they'll be re-fetched fresh.
+        // An empty cached avatar would otherwise block the reconnect re-fetch
+        // from running (since the ID would appear "cached").
+        const clean: AgentIdentity = { ...identity };
+        if (!clean.avatar) delete clean.avatar;
+        identityCache.set(id, clean);
+      }
     }
   } catch { /* ignore corrupt data */ }
 }
@@ -92,11 +100,15 @@ async function fetchIdentity(agentId: string): Promise<AgentIdentity | null> {
         data?: { name?: string; avatarData?: string; emoji?: string; runtime?: string } | null;
       };
       if (!res?.success || !res.data) return null;
+      // Preserve cached fields that DB doesn't have (e.g. file-based avatar converted
+      // to a data URI by the editor, which isn't written back to SQLite avatar_data).
+      const cached = identityCache.get(agentId);
       const identity: AgentIdentity = {
         agentId,
-        name: res.data.name || undefined,
-        avatar: res.data.avatarData || undefined,
-        emoji: res.data.emoji || undefined,
+        name: res.data.name || cached?.name || undefined,
+        avatar: res.data.avatarData || cached?.avatar || undefined,
+        emoji: res.data.emoji || cached?.emoji || undefined,
+        runtime: res.data.runtime || cached?.runtime || undefined,
       };
       identityCache.set(agentId, identity);
       saveToStorage();
@@ -129,19 +141,15 @@ export function useAgentIdentity(agentId: string | undefined): AgentIdentity | n
       return;
     }
 
-    // Return cached immediately
+    // Show cached data immediately (avoids blank flicker), but always
+    // kick off a fresh fetch in the background so stale localStorage entries
+    // (e.g. emoji missing before DB migration fix) get corrected.
     const cached = identityCache.get(agentId);
-    if (cached) {
-      setIdentity(cached);
-      return;
-    }
+    if (cached) setIdentity(cached);
+    else setIdentity(null);
 
-    // Clear stale identity from previous agent while we fetch
-    setIdentity(null);
-
-    const { connected } = getGatewayConnectionState();
-    if (!connected) return;
-
+    // bridgeInvoke goes through hub→connector, not OpenClaw — always fetch.
+    // inflight map deduplicates concurrent requests for the same agentId.
     fetchIdentity(agentId).then((result) => {
       if (lastAgentIdRef.current === agentId && result) {
         setIdentity(result);
@@ -150,8 +158,6 @@ export function useAgentIdentity(agentId: string | undefined): AgentIdentity | n
   }, [agentId]);
 
   // Subscribe to cache updates from OTHER hook instances or late fetches.
-  // This is the key fix: when the message-body hook fetches the identity,
-  // the header hook (same agentId) gets notified and updates its state.
   useEffect(() => {
     const listener: CacheListener = (updatedAgentId, updatedIdentity) => {
       if (updatedAgentId === lastAgentIdRef.current) {
@@ -162,18 +168,9 @@ export function useAgentIdentity(agentId: string | undefined): AgentIdentity | n
     return () => { cacheListeners.delete(listener); };
   }, []);
 
-  // Re-fetch when gateway reconnects (or if it was already connected but the
-  // first effect missed it due to mount timing).
+  // Re-fetch when gateway reconnects (clears the in-memory cache, so re-fetch
+  // ensures we pick up any identity changes that happened while offline).
   useEffect(() => {
-    // Immediate check: if gateway is already connected and we have no identity,
-    // the first effect may have skipped the fetch due to a timing gap.
-    const { connected } = getGatewayConnectionState();
-    if (connected && lastAgentIdRef.current && !identityCache.has(lastAgentIdRef.current)) {
-      fetchIdentity(lastAgentIdRef.current).then((result) => {
-        if (result && lastAgentIdRef.current) setIdentity(result);
-      });
-    }
-
     return subscribeGatewayConnection(() => {
       const { connected: isConnected } = getGatewayConnectionState();
       if (isConnected && lastAgentIdRef.current) {
@@ -205,25 +202,17 @@ export function useAgentIdentities(agentIds: string[]): Map<string, AgentIdentit
       return;
     }
 
-    // Build initial map from cache
+    // Show cached data immediately for instant render, then always re-fetch
+    // all agents in background so stale localStorage entries get corrected.
     const initial = new Map<string, AgentIdentity>();
-    const uncached: string[] = [];
     for (const id of agentIds) {
       const cached = identityCache.get(id);
-      if (cached) {
-        initial.set(id, cached);
-      } else {
-        uncached.push(id);
-      }
+      if (cached) initial.set(id, cached);
     }
     setIdentities(initial);
 
-    if (uncached.length === 0) return;
-
-    const { connected } = getGatewayConnectionState();
-    if (!connected) return;
-
-    Promise.all(uncached.map((id) => fetchIdentity(id))).then((results) => {
+    // Always fetch all — inflight map deduplicates concurrent requests.
+    Promise.all(agentIds.map((id) => fetchIdentity(id))).then((results) => {
       if (prevIdsRef.current !== key) return; // stale
       setIdentities((prev) => {
         const next = new Map(prev);
@@ -248,6 +237,25 @@ export function useAgentIdentities(agentIds: string[]): Map<string, AgentIdentit
     };
     cacheListeners.add(listener);
     return () => { cacheListeners.delete(listener); };
+  }, [agentIds]);
+
+  // Re-fetch ALL identities when the gateway connects (or reconnects).
+  // The main fetch effect only runs when agentIds changes, so if the gateway
+  // was offline at that point, or the connector restarted with new data (e.g.
+  // an avatar file that was missing before), those identities need a fresh fetch.
+  // We intentionally re-fetch even cached entries because the module-level
+  // reconnect handler reloads localStorage as a baseline — stale cache entries
+  // (e.g. avatar: "") would otherwise block re-fetching indefinitely.
+  useEffect(() => {
+    const agentIdsRef = { current: agentIds };
+    agentIdsRef.current = agentIds;
+    return subscribeGatewayConnection(() => {
+      const { connected: isConnected } = getGatewayConnectionState();
+      if (!isConnected) return;
+      if (agentIdsRef.current.length === 0) return;
+      // fetchIdentity calls notifyCacheUpdate on success → cache listener handles state update
+      Promise.all(agentIdsRef.current.map(id => fetchIdentity(id)));
+    });
   }, [agentIds]);
 
   return identities;
@@ -302,6 +310,19 @@ export function isAvatarText(avatar: string | undefined): boolean {
   const trimmed = avatar.trim();
   if (!trimmed) return false;
   return !isAvatarUrl(trimmed);
+}
+
+/**
+ * Extract a short displayable text (emoji or ≤2-char initials) from an avatar value.
+ * Returns undefined for filenames (e.g. "clio.png"), paths, or anything that looks
+ * like a filename rather than an emoji/initials — those should fall back to identity.emoji.
+ */
+export function resolveAvatarText(avatar: string | undefined): string | undefined {
+  if (!isAvatarText(avatar)) return undefined;
+  const v = avatar!.trim();
+  // Exclude filenames and paths
+  if (v.includes(".") || v.includes("/")) return undefined;
+  return v;
 }
 
 // Invalidate identity cache when IDENTITY.md changes (hub event relayed via gateway WS).

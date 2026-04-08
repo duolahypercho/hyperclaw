@@ -28,6 +28,7 @@ import {
   resolveAvatarUrl,
   isAvatarText,
 } from "$/hooks/useAgentIdentity";
+import { ClaudeCodeIcon, CodexIcon, HermesIcon } from "$/components/Onboarding/RuntimeIcons";
 import {
   useAgentIdentityEditor,
   EMOJI_OPTIONS,
@@ -37,11 +38,13 @@ import { DeleteAgentDialog } from "./DeleteAgentDialog";
 /* ── Constants ─────────────────────────────────────────────── */
 
 const TAB_FILES = [
-  { key: "SOUL", label: "SOUL", desc: "Personality & behavior" },
-  { key: "USER", label: "USER", desc: "Context about the human" },
-  { key: "AGENTS", label: "AGENTS", desc: "Team awareness" },
-  { key: "TOOLS", label: "TOOLS", desc: "Tools & MCP servers" },
+  { key: "SOUL",      label: "SOUL",      desc: "Personality & behavior" },
+  { key: "IDENTITY",  label: "IDENTITY",  desc: "Agent identity — name, emoji, avatar" },
+  { key: "USER",      label: "USER",      desc: "Context about the human" },
+  { key: "AGENTS",    label: "AGENTS",    desc: "Team awareness" },
+  { key: "TOOLS",     label: "TOOLS",     desc: "Tools & MCP servers" },
   { key: "HEARTBEAT", label: "HEARTBEAT", desc: "Periodic tasks & health checks" },
+  { key: "MEMORY",    label: "MEMORY",    desc: "Persistent memory" },
 ] as const;
 
 type TabKey = "INFO" | (typeof TAB_FILES)[number]["key"];
@@ -87,8 +90,13 @@ export function AgentDetailDialog({
   });
 
   const identity = useAgentIdentity(agentId);
-  const avatarUrl = resolveAvatarUrl(identity?.avatar);
+  const resolvedAvatarUrl = resolveAvatarUrl(identity?.avatar);
+  const avatarUrl = resolvedAvatarUrl && !resolvedAvatarUrl.startsWith("data:image/svg+xml") ? resolvedAvatarUrl : undefined;
   const avatarText = isAvatarText(identity?.avatar) ? identity!.avatar! : undefined;
+  const DialogRuntimeIcon = identity?.runtime === "claude-code" ? ClaudeCodeIcon
+    : identity?.runtime === "codex" ? CodexIcon
+    : identity?.runtime === "hermes" ? HermesIcon
+    : null;
   const displayName = identity?.name || agentName;
 
   const isMain = agentId === "main";
@@ -115,7 +123,10 @@ export function AgentDetailDialog({
               <Avatar className="h-10 w-10 shrink-0">
                 {avatarUrl && <AvatarImage src={avatarUrl} alt={displayName} />}
                 <AvatarFallback className="bg-primary/10 text-primary text-lg">
-                  {avatarText || identity?.emoji || "🤖"}
+                  {DialogRuntimeIcon && !avatarUrl
+                    ? <DialogRuntimeIcon className="w-6 h-6" />
+                    : (avatarText || identity?.emoji || "🤖")
+                  }
                 </AvatarFallback>
               </Avatar>
               <div className="min-w-0">
@@ -262,6 +273,7 @@ export function InfoTab({
     identityEmoji: identity?.emoji,
     identityAvatarUrl: resolveAvatarUrl(identity?.avatar),
     workspaceFolder,
+    agentRuntime: identity?.runtime,
   });
 
   // Sync footer state
@@ -282,6 +294,18 @@ export function InfoTab({
     );
   }
 
+  // Skip SVG seeds (simple geometric shapes) — show branded runtime icon instead.
+  const infoAvatarSrc = ed.displayAvatarSrc && !ed.displayAvatarSrc.startsWith("data:image/svg+xml")
+    ? ed.displayAvatarSrc
+    : undefined;
+  const runtime = identity?.runtime || ed.runtime;
+  const InfoRuntimeIcon = !infoAvatarSrc
+    ? (runtime === "claude-code" ? ClaudeCodeIcon
+      : runtime === "codex" ? CodexIcon
+      : runtime === "hermes" ? HermesIcon
+      : null)
+    : null;
+
   return (
     <div className="space-y-5">
       {/* ── Avatar ─────────────────────────────── */}
@@ -290,9 +314,12 @@ export function InfoTab({
         <div className="flex items-start gap-4 mb-3">
           <div className="relative shrink-0">
             <Avatar className="h-16 w-16">
-              {ed.displayAvatarSrc && <AvatarImage src={ed.displayAvatarSrc} alt={ed.name} />}
+              {infoAvatarSrc && <AvatarImage src={infoAvatarSrc} alt={ed.name} />}
               <AvatarFallback className="bg-primary/10 text-primary text-2xl">
-                {ed.emoji || "🤖"}
+                {InfoRuntimeIcon
+                  ? <InfoRuntimeIcon className="w-9 h-9" />
+                  : (ed.emoji || "🤖")
+                }
               </AvatarFallback>
             </Avatar>
             <button
@@ -516,10 +543,12 @@ export function FileEditorTab({
   agentId,
   fileKey,
   onStateChange,
+  className,
 }: {
   agentId: string;
   fileKey: string;
   onStateChange: (state: FooterSaveState) => void;
+  className?: string;
 }) {
   const [content, setContent] = useState<string | null>(null);
   const [originalContent, setOriginalContent] = useState<string | null>(null);
@@ -613,7 +642,7 @@ export function FileEditorTab({
   }
 
   return (
-    <div className="flex flex-col flex-1 min-h-0 gap-2" onKeyDown={handleKeyDown}>
+    <div className={cn("flex flex-col gap-2", className)} onKeyDown={handleKeyDown}>
       {notFound && (
         <p className="text-xs text-amber-500/80 italic">
           This file doesn&apos;t exist yet. Start typing to create it.
@@ -622,7 +651,10 @@ export function FileEditorTab({
       <Textarea
         value={content ?? ""}
         onChange={(e) => setContent(e.target.value)}
-        className="flex-1 min-h-[300px] text-xs font-mono leading-relaxed resize-none"
+        className={cn(
+          "w-full text-xs font-mono leading-relaxed resize-none",
+          className ? "flex-1 min-h-[120px]" : "min-h-[300px]"
+        )}
         spellCheck={false}
         placeholder={`Start writing ${fileKey}.md content...`}
       />

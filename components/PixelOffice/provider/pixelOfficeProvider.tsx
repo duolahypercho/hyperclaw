@@ -4,7 +4,7 @@ import React, { createContext, useContext, useCallback, useEffect, useMemo, useR
 import { LayoutGrid } from "lucide-react";
 import type { AppSchema } from "@OS/Layout/types";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
-import { useOpenClawContext } from "$/Providers/OpenClawProv";
+import { useHyperclawContext } from "$/Providers/HyperclawProv";
 import { buildAgentsFromTeam, type AgentConfig, type AgentStatus, type RoomLabels } from "../types";
 
 /** How often to refetch employee status (lightweight). */
@@ -192,7 +192,7 @@ function mergeEmployeeStatus(
 }
 
 export function PixelOfficeProvider({ children }: { children: React.ReactNode }) {
-  const { agents: openClawAgents } = useOpenClawContext();
+  const { agents: openClawAgents } = useHyperclawContext();
   const [officeData, setOfficeData] = useState<OfficeData>(EMPTY_OFFICE_DATA);
   const [loading, setLoading] = useState(true);
   const lastTeamSourceRef = useRef<{ teamForBuild: { id: string; name: string; status?: string }[] } | null>(null);

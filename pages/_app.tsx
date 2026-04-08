@@ -5,7 +5,7 @@ import {
   ServiceProvider,
   UserProvider,
   ThemeProvider,
-  OpenClawProvider,
+  HyperclawProvider,
 } from "$/Providers";
 import { AIProviderProvider } from "$/Providers/AIProviderProv";
 import { SessionProvider } from "next-auth/react";
@@ -40,7 +40,7 @@ function MyApp({ Component, pageProps, router }: any) {
       >
         <ThemeProvider attribute="class" enableSystem disableTransitionOnChange>
           <UserProvider>
-          <OpenClawProvider>
+          <HyperclawProvider>
           <AIProviderProvider>
           <OSProvider>
             <GuidanceProvider>
@@ -59,7 +59,7 @@ function MyApp({ Component, pageProps, router }: any) {
             </GuidanceProvider>
           </OSProvider>
           </AIProviderProvider>
-          </OpenClawProvider>
+          </HyperclawProvider>
           </UserProvider>
         </ThemeProvider>
       </SessionProvider>

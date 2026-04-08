@@ -9,7 +9,7 @@ import React, {
 } from "react";
 import { Network, RefreshCw, Loader2, Plus } from "lucide-react";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
-import { useOpenClawContext } from "$/Providers/OpenClawProv";
+import { useHyperclawContext } from "$/Providers/HyperclawProv";
 import { syncToIdentityMd, saveAgentName } from "$/lib/identity-md";
 import { AppSchema } from "@OS/Layout/types";
 import type { SidebarSection, SidebarItem } from "@OS/Layout/Sidebar/SidebarSchema";
@@ -273,7 +273,7 @@ async function syncTeamFieldsToIdentity(nodes: OrgNode[], departments: OrgDepart
 }
 
 export function OrgChartProvider({ children }: { children: React.ReactNode }) {
-  const { agents: openClawAgents, fetchAgents } = useOpenClawContext();
+  const { agents: openClawAgents, fetchAgents } = useHyperclawContext();
   const [orgData, setOrgData] = useState<OrgChartData | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);

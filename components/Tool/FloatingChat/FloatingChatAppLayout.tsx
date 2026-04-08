@@ -3,12 +3,12 @@ import { X, MessageSquare } from "lucide-react";
 import AppLayout from "$/layouts/AppLayout";
 import { FloatingChatViewer } from "./FloatingChatViewer";
 import { useFloatingChatOS } from "@OS/Provider/OSProv";
-import { useOpenClawContext } from "$/Providers/OpenClawProv";
+import { useHyperclawContext } from "$/Providers/HyperclawProv";
 import { cn } from "@/lib/utils";
 
 const FloatingChatAppLayout = memo(() => {
   const { instances, closeChat } = useFloatingChatOS();
-  const { agents } = useOpenClawContext();
+  const { agents } = useHyperclawContext();
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [unreadTabs, setUnreadTabs] = useState<Set<string>>(new Set());
   const prevInstanceIdsRef = useRef<Set<string>>(new Set());
