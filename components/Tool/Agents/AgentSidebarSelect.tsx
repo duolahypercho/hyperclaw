@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { Bot } from "lucide-react";
+import { Bot, Loader2 } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -70,15 +70,26 @@ export function AgentSidebarSelect() {
           </SelectValue>
         </SelectTrigger>
         <SelectContent>
-          {agents.map((agent) => (
-            <SelectItem key={agent.id} value={agent.id} className="text-xs">
-              <span className="flex items-center gap-2">
-                <AgentIcon agentId={agent.id} identities={identities} />
-                <span className="truncate">{identities.get(agent.id)?.name || agent.name}</span>
-                <span className="text-muted-foreground/60 text-[10px] shrink-0">{agent.id}</span>
-              </span>
-            </SelectItem>
-          ))}
+          {agents.map((agent) => {
+            const isHiring = agent.status === "hiring";
+            return (
+              <SelectItem key={agent.id} value={agent.id} className="text-xs" disabled={isHiring}>
+                <span className="flex items-center gap-2">
+                  {isHiring
+                    ? <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground shrink-0" />
+                    : <AgentIcon agentId={agent.id} identities={identities} />
+                  }
+                  <span className={isHiring ? "truncate text-muted-foreground" : "truncate"}>
+                    {identities.get(agent.id)?.name || agent.name}
+                  </span>
+                  {isHiring
+                    ? <span className="text-[10px] text-amber-500/80 shrink-0 border border-amber-500/30 rounded px-1 py-px leading-none">Hiring…</span>
+                    : <span className="text-muted-foreground/60 text-[10px] shrink-0">{agent.id}</span>
+                  }
+                </span>
+              </SelectItem>
+            );
+          })}
         </SelectContent>
       </Select>
       {selectedAgentId && (

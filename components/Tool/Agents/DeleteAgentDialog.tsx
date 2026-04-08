@@ -34,7 +34,6 @@ export function DeleteAgentDialog({
   onDeleteStart,
   isFirstAgent = false,
 }: DeleteAgentDialogProps) {
-  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Don't show dialog for the first agent; close if it becomes first (e.g. after refresh).
@@ -50,27 +49,25 @@ export function DeleteAgentDialog({
     [onOpenChange]
   );
 
-  const handleConfirm = useCallback(async () => {
-    setError(null);
-    setSubmitting(true);
+  const handleConfirm = useCallback(() => {
+    // Close the dialog immediately — don't block the UI on the delete operation.
+    window.dispatchEvent(new CustomEvent("agent.deleting", { detail: { agentId } }));
     onDeleteStart?.();
-    try {
-      const result = (await bridgeInvoke("delete-agent", { agentId })) as {
-        success?: boolean;
-        error?: string;
-      };
-      if (result?.success) {
-        onSuccess?.();
-        handleOpenChange(false);
-      } else {
-        setError(result?.error ?? "Failed to delete agent");
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to delete agent");
-    } finally {
-      setSubmitting(false);
-    }
-  }, [agentId, onSuccess, handleOpenChange]);
+    handleOpenChange(false);
+
+    // Fire bridge call in the background.
+    bridgeInvoke("delete-agent", { agentId })
+      .then((result) => {
+        const r = result as { success?: boolean; error?: string };
+        if (r?.success) {
+          window.dispatchEvent(new CustomEvent("agent.deleted", { detail: { agentId } }));
+          onSuccess?.();
+        }
+      })
+      .catch(() => {
+        // Silently ignore; the connector will log the failure.
+      });
+  }, [agentId, onSuccess, onDeleteStart, handleOpenChange]);
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -104,7 +101,6 @@ export function DeleteAgentDialog({
             variant="ghost"
             size="sm"
             onClick={() => handleOpenChange(false)}
-            disabled={submitting}
           >
             Cancel
           </Button>
@@ -113,9 +109,8 @@ export function DeleteAgentDialog({
             variant="destructive"
             size="sm"
             onClick={handleConfirm}
-            disabled={submitting}
           >
-            {submitting ? "Deleting…" : "Delete agent"}
+            Delete agent
           </Button>
         </DialogFooter>
       </DialogContent>

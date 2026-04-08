@@ -3,13 +3,13 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Loader2, Pencil, Bot } from "lucide-react";
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from "@/components/ui/dialog";
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+  SheetFooter,
+} from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -174,20 +174,24 @@ export function EditCronDialog({ open, onOpenChange, job, onSuccess }: EditCronD
   if (!job) return null;
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[420px] gap-0 sm:rounded-xl p-0 overflow-hidden z-[101]" overlayClassName="z-[100]">
-        <DialogHeader className="px-6 pt-6 pb-4 space-y-1.5 border-b border-border/40">
-          <DialogTitle className="text-base font-semibold flex items-center gap-2">
-            <Pencil className="w-4 h-4 text-primary" />
-            Edit cron job
-          </DialogTitle>
-          <DialogDescription className="text-xs text-muted-foreground">
-            {job.name}
-            {fullJobLoading ? " — Loading…" : ""}
-          </DialogDescription>
-        </DialogHeader>
-        <form onSubmit={handleSubmit} className="flex flex-col">
-          <div className="px-6 py-4 space-y-4">
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent side="right" className="w-[420px] sm:w-[420px] flex flex-col gap-0 p-0">
+        <SheetHeader className="px-6 pt-6 pb-4 border-b border-border">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
+              <Pencil className="w-5 h-5" />
+            </div>
+            <div>
+              <SheetTitle>Edit Cron Job</SheetTitle>
+              <SheetDescription className="mt-0.5">
+                {job.name}{fullJobLoading ? " — Loading…" : ""}
+              </SheetDescription>
+            </div>
+          </div>
+        </SheetHeader>
+
+        <form onSubmit={handleSubmit} className="flex-1 min-h-0 flex flex-col">
+          <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
             {fullJobLoading && (
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 <Loader2 className="w-4 h-4 animate-spin shrink-0" />
@@ -195,12 +199,12 @@ export function EditCronDialog({ open, onOpenChange, job, onSuccess }: EditCronD
               </div>
             )}
             {error && (
-              <p className="text-xs text-destructive bg-destructive/10 rounded-md px-3 py-2">
-                {error}
-              </p>
+              <p className="text-sm text-destructive bg-destructive/10 px-3 py-2 rounded-lg">{error}</p>
             )}
+
+            {/* Title */}
             <div className="space-y-2">
-              <Label htmlFor="edit-cron-name" className="text-xs font-medium">
+              <Label htmlFor="edit-cron-name" className="text-xs uppercase tracking-wider text-muted-foreground">
                 Title
               </Label>
               <Input
@@ -208,54 +212,41 @@ export function EditCronDialog({ open, onOpenChange, job, onSuccess }: EditCronD
                 placeholder="Job name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                className="text-sm bg-muted/30 border-border/60"
                 disabled={fullJobLoading}
               />
             </div>
+
+            {/* Model */}
             <div className="space-y-2">
-              <Label className="text-xs font-medium">Model</Label>
-              <Select
-                value={model || MODEL_UNCHANGED}
-                onValueChange={(v) => setModel(v)}
-                disabled={modelsLoading || fullJobLoading}
-              >
-                <SelectTrigger className="h-9 bg-muted/30 border-border/60">
+              <Label className="text-xs uppercase tracking-wider text-muted-foreground">Model</Label>
+              <Select value={model || MODEL_UNCHANGED} onValueChange={setModel} disabled={modelsLoading || fullJobLoading}>
+                <SelectTrigger>
                   <SelectValue placeholder={modelsLoading ? "Loading models…" : "Leave unchanged"} />
                 </SelectTrigger>
-                <SelectContent className="z-[102]">
-                  <SelectItem value={MODEL_UNCHANGED} className="text-xs text-muted-foreground">
-                    Leave unchanged
-                  </SelectItem>
+                <SelectContent>
+                  <SelectItem value={MODEL_UNCHANGED} className="text-muted-foreground">Leave unchanged</SelectItem>
                   {modelOptions.map((opt) => (
-                    <SelectItem key={opt.id} value={opt.id} className="text-xs">
-                      {opt.name}
-                    </SelectItem>
+                    <SelectItem key={opt.id} value={opt.id}>{opt.name}</SelectItem>
                   ))}
                   {(() => {
                     const payloadModel = jobForForm ? getJobModel(jobForForm) : MODEL_UNCHANGED;
-                    if (
-                      payloadModel &&
-                      payloadModel !== MODEL_UNCHANGED &&
-                      !modelOptions.some((o) => o.id === payloadModel)
-                    ) {
-                      return (
-                        <SelectItem key={payloadModel} value={payloadModel} className="text-xs">
-                          {payloadModel}
-                        </SelectItem>
-                      );
+                    if (payloadModel && payloadModel !== MODEL_UNCHANGED && !modelOptions.some((o) => o.id === payloadModel)) {
+                      return <SelectItem key={payloadModel} value={payloadModel}>{payloadModel}</SelectItem>;
                     }
                     return null;
                   })()}
                 </SelectContent>
               </Select>
             </div>
+
+            {/* Thinking */}
             <div className="space-y-2">
-              <Label className="text-xs font-medium">Thinking</Label>
+              <Label className="text-xs uppercase tracking-wider text-muted-foreground">Thinking</Label>
               <Select value={thinking} onValueChange={setThinking} disabled={fullJobLoading}>
-                <SelectTrigger className="h-9 bg-muted/30 border-border/60">
+                <SelectTrigger>
                   <SelectValue placeholder="Leave unchanged" />
                 </SelectTrigger>
-                <SelectContent className="z-[102]">
+                <SelectContent>
                   <SelectItem value={THINKING_UNCHANGED}>Leave unchanged</SelectItem>
                   <SelectItem value="low">low</SelectItem>
                   <SelectItem value="medium">medium</SelectItem>
@@ -263,43 +254,43 @@ export function EditCronDialog({ open, onOpenChange, job, onSuccess }: EditCronD
                 </SelectContent>
               </Select>
             </div>
+
+            {/* Agent */}
             <div className="space-y-2">
-              <Label className="text-xs font-medium">Agent</Label>
+              <Label className="text-xs uppercase tracking-wider text-muted-foreground">Agent</Label>
               <Select
                 value={agent || AGENT_NONE}
                 onValueChange={(v) => setAgent(v === AGENT_NONE ? "" : v)}
                 disabled={agentsLoading || fullJobLoading}
               >
-                <SelectTrigger className="h-9 bg-muted/30 border-border/60">
+                <SelectTrigger>
                   <SelectValue placeholder={agentsLoading ? "Loading agents…" : "Select agent…"} />
                 </SelectTrigger>
-                <SelectContent className="z-[102]">
-                  <SelectItem value={AGENT_NONE} className="text-xs text-muted-foreground">
-                    None
-                  </SelectItem>
+                <SelectContent>
+                  <SelectItem value={AGENT_NONE} className="text-muted-foreground">None</SelectItem>
                   {agentOptions.map((opt) => (
-                    <SelectItem key={opt.id} value={opt.id} className="text-xs">
+                    <SelectItem key={opt.id} value={opt.id}>
                       <span className="flex items-center gap-2">
                         <Bot className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                         {opt.name}
                       </span>
                     </SelectItem>
                   ))}
-                  {jobForForm?.agentId &&
-                    !agentOptions.some((o) => o.id === jobForForm.agentId) && (
-                      <SelectItem value={jobForForm.agentId} className="text-xs">
-                        <span className="flex items-center gap-2">
-                          <Bot className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                          {jobForForm.agentId}
-                        </span>
-                      </SelectItem>
-                    )}
+                  {jobForForm?.agentId && !agentOptions.some((o) => o.id === jobForForm.agentId) && (
+                    <SelectItem value={jobForForm.agentId}>
+                      <span className="flex items-center gap-2">
+                        <Bot className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                        {jobForForm.agentId}
+                      </span>
+                    </SelectItem>
+                  )}
                 </SelectContent>
               </Select>
             </div>
 
+            {/* Prompt */}
             <div className="space-y-2">
-              <Label htmlFor="edit-cron-message" className="text-xs font-medium">
+              <Label htmlFor="edit-cron-message" className="text-xs uppercase tracking-wider text-muted-foreground">
                 Prompt
               </Label>
               <Textarea
@@ -307,12 +298,14 @@ export function EditCronDialog({ open, onOpenChange, job, onSuccess }: EditCronD
                 placeholder="Updated prompt"
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
-                className="min-h-[120px] max-h-[280px] resize-y text-sm bg-muted/30 border-border/60"
                 rows={5}
+                className="resize-y"
                 disabled={fullJobLoading}
               />
             </div>
-            <label className="flex items-center gap-2 cursor-pointer text-xs text-muted-foreground">
+
+            {/* Exact schedule */}
+            <label className="flex items-center gap-2 cursor-pointer text-xs text-muted-foreground hover:text-foreground">
               <input
                 type="checkbox"
                 checked={exact}
@@ -322,17 +315,18 @@ export function EditCronDialog({ open, onOpenChange, job, onSuccess }: EditCronD
               Force exact schedule (no stagger)
             </label>
           </div>
-          <DialogFooter className="px-6 py-4 border-t border-border/40 gap-2">
-            <Button type="button" variant="ghost" size="sm" onClick={() => onOpenChange(false)}>
+
+          <SheetFooter className="px-6 py-4 border-t border-border flex flex-row gap-2">
+            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)} className="text-muted-foreground">
               Cancel
             </Button>
-            <Button type="submit" size="sm" disabled={submitting || fullJobLoading} className="gap-2">
-              {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-              {submitting ? "Saving…" : "Save"}
+            <Button type="submit" disabled={submitting || fullJobLoading} className="flex-1">
+              {submitting && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+              {submitting ? "Saving…" : "Save changes"}
             </Button>
-          </DialogFooter>
+          </SheetFooter>
         </form>
-      </DialogContent>
-    </Dialog>
+      </SheetContent>
+    </Sheet>
   );
 }

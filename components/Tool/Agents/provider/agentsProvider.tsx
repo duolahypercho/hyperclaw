@@ -66,6 +66,8 @@ interface AgentsContextValue {
   addOptimisticAgent: (name: string) => void;
   /** Refresh with retry delay for post-mutation sync */
   refreshAfterMutation: () => Promise<void>;
+  /** Agent IDs that have a background delete in flight */
+  deletingAgentIds: Set<string>;
 }
 
 const AgentsContext = createContext<AgentsContextValue | undefined>(undefined);
@@ -139,6 +141,7 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [addAgentDialogOpen, setAddAgentDialogOpen] = useState(false);
   const [deleteAgentDialogOpen, setDeleteAgentDialogOpen] = useState(false);
+  const [deletingAgentIds, setDeletingAgentIds] = useState<Set<string>>(new Set());
   const selectedPathRef = useRef<string | null>(null);
   const [ceoAgentId, setCeoAgentId] = useState<string | null>(null);
   const [deployingCeo, setDeployingCeo] = useState(false);
@@ -203,7 +206,7 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
     const optimistic: Agent = {
       id: normalizedId,
       name,
-      status: "idle",
+      status: "hiring",
       role: "",
     };
     setAgents((prev) => {
@@ -581,6 +584,7 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
       ceoAgentId,
       addOptimisticAgent,
       refreshAfterMutation,
+      deletingAgentIds,
     }),
     [
       agents,
@@ -602,6 +606,7 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
       ceoAgentId,
       addOptimisticAgent,
       refreshAfterMutation,
+      deletingAgentIds,
     ]
   );
 
@@ -621,7 +626,17 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
         onOpenChange={setDeleteAgentDialogOpen}
         agentId={selectedAgentId}
         agentDisplayName={workspaceLabels[selectedAgentId] ?? selectedAgentId}
-        onSuccess={() => refresh()}
+        onDeleteStart={() => {
+          setDeletingAgentIds((prev) => new Set([...prev, selectedAgentId]));
+        }}
+        onSuccess={() => {
+          setDeletingAgentIds((prev) => {
+            const next = new Set(prev);
+            next.delete(selectedAgentId);
+            return next;
+          });
+          refresh();
+        }}
         isFirstAgent={
           agents[0] != null && selectedAgentId === agents[0].id
         }

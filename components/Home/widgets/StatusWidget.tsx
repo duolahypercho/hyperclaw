@@ -333,7 +333,9 @@ const AgentExpandedRow = React.forwardRef<HTMLDivElement, {
   identity?: AgentIdentity;
   onClick: (agentId: string) => void;
   isActive?: boolean;
-}>(function AgentExpandedRow({ status, identity, onClick, isActive }, ref) {
+  isHiring?: boolean;
+  isDeleting?: boolean;
+}>(function AgentExpandedRow({ status, identity, onClick, isActive, isHiring, isDeleting }, ref) {
   const resolvedAvatarUrl = resolveAvatarUrl(identity?.avatar);
   const avatarUrl = isCustomImageAvatar(resolvedAvatarUrl) ? resolvedAvatarUrl : undefined;
   const avatarText = resolveAvatarText(identity?.avatar);
@@ -348,10 +350,11 @@ const AgentExpandedRow = React.forwardRef<HTMLDivElement, {
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, height: 0 }}
       className={cn(
-        "w-full min-w-0 flex items-start gap-2.5 px-2.5 py-2 rounded-none transition-colors cursor-pointer overflow-hidden",
-        isActive ? "bg-muted/50" : "hover:bg-muted/30"
+        "w-full min-w-0 flex items-start gap-2.5 px-2.5 py-2 rounded-none transition-colors overflow-hidden",
+        isHiring || isDeleting ? "opacity-60 cursor-not-allowed pointer-events-none" : "cursor-pointer",
+        !isHiring && !isDeleting && (isActive ? "bg-muted/50" : "hover:bg-muted/30")
       )}
-      onClick={() => onClick(status.agentId)}
+      onClick={() => !isHiring && !isDeleting && onClick(status.agentId)}
     >
       {/* Avatar with unread badge */}
       <div className="shrink-0 mt-0.5 relative">
@@ -378,18 +381,32 @@ const AgentExpandedRow = React.forwardRef<HTMLDivElement, {
           <span className="text-xs font-medium text-foreground truncate">
             {displayName}
           </span>
-          {status.runtime && status.runtime !== "openclaw" && (
-            <span className="text-[9px] text-muted-foreground/50 shrink-0 border border-border/30 rounded px-1 py-px leading-none">
-              {status.runtime}
+          {isHiring ? (
+            <span className="text-[10px] text-amber-500/80 shrink-0 border border-amber-500/30 rounded px-1 py-px leading-none flex items-center gap-1">
+              <Loader2 className="w-2.5 h-2.5 animate-spin inline-block" />
+              Hiring…
             </span>
-          )}
-          {status.state === "running" && (
-            <span className="text-[10px] text-emerald-500 shrink-0">Running...</span>
-          )}
-          {status.lastActivity && status.state !== "running" && (
-            <span className="text-[10px] text-muted-foreground/50 shrink-0">
-              {timeAgo(status.lastActivity)}
+          ) : isDeleting ? (
+            <span className="text-[10px] text-red-400/80 shrink-0 border border-red-400/30 rounded px-1 py-px leading-none flex items-center gap-1">
+              <Loader2 className="w-2.5 h-2.5 animate-spin inline-block" />
+              Firing…
             </span>
+          ) : (
+            <>
+              {status.runtime && status.runtime !== "openclaw" && (
+                <span className="text-[9px] text-muted-foreground/50 shrink-0 border border-border/30 rounded px-1 py-px leading-none">
+                  {status.runtime}
+                </span>
+              )}
+              {status.state === "running" && (
+                <span className="text-[10px] text-emerald-500 shrink-0">Running...</span>
+              )}
+              {status.lastActivity && status.state !== "running" && (
+                <span className="text-[10px] text-muted-foreground/50 shrink-0">
+                  {timeAgo(status.lastActivity)}
+                </span>
+              )}
+            </>
           )}
         </div>
 
@@ -404,7 +421,7 @@ const AgentExpandedRow = React.forwardRef<HTMLDivElement, {
         {/* Recent messages — always visible; opacity reflects read state */}
         {status.state !== "error" && status.recentMessages.length > 0 && (
           <div className="flex flex-col gap-0.5 mt-0.5">
-            {status.recentMessages.slice(0, 3).map((msg, i) => (
+            {status.recentMessages.slice(0, 2).map((msg, i) => (
               <p
                 key={i}
                 className={cn(
@@ -433,10 +450,12 @@ function AgentCollapsedRow({
   status,
   identity,
   onClick,
+  isHiring,
 }: {
   status: AgentStatus;
   identity?: AgentIdentity;
   onClick: (agentId: string) => void;
+  isHiring?: boolean;
 }) {
   const resolvedAvatarUrl = resolveAvatarUrl(identity?.avatar);
   const avatarUrl = isCustomImageAvatar(resolvedAvatarUrl) ? resolvedAvatarUrl : undefined;
@@ -446,24 +465,33 @@ function AgentCollapsedRow({
 
   return (
     <div
-      className="w-full min-w-0 flex items-center gap-2 px-2.5 py-1 overflow-hidden cursor-pointer hover:bg-muted/20 rounded-md transition-colors"
-      onClick={() => onClick(status.agentId)}
+      className={cn(
+        "w-full min-w-0 flex items-center gap-2 px-2.5 py-1 overflow-hidden rounded-md transition-colors",
+        isHiring ? "opacity-60 cursor-not-allowed pointer-events-none" : "cursor-pointer hover:bg-muted/20"
+      )}
+      onClick={() => !isHiring && onClick(status.agentId)}
     >
       <Avatar className="w-5 h-5">
         {avatarUrl && <AvatarImage src={avatarUrl} alt={displayName} />}
         <AvatarFallback className="bg-muted text-muted-foreground text-[8px]">
-          {RuntimeIcon && !avatarUrl
-            ? <RuntimeIcon className="w-3 h-3" />
-            : (avatarText || identity?.emoji || displayName.slice(0, 2).toUpperCase())
+          {isHiring
+            ? <Loader2 className="w-3 h-3 animate-spin" />
+            : RuntimeIcon && !avatarUrl
+              ? <RuntimeIcon className="w-3 h-3" />
+              : (avatarText || identity?.emoji || displayName.slice(0, 2).toUpperCase())
           }
         </AvatarFallback>
       </Avatar>
       <span className="text-[11px] text-muted-foreground truncate">{displayName}</span>
-      {status.lastActivity && (
+      {isHiring ? (
+        <span className="text-[10px] text-amber-500/80 ml-auto shrink-0 border border-amber-500/30 rounded px-1 py-px leading-none">
+          Hiring…
+        </span>
+      ) : status.lastActivity ? (
         <span className="text-[10px] text-muted-foreground/40 ml-auto shrink-0">
           {timeAgo(status.lastActivity)}
         </span>
-      )}
+      ) : null}
     </div>
   );
 }
@@ -564,6 +592,8 @@ const StatusWidgetContent = memo((props: CustomProps) => {
   const [activeTab, setActiveTab] = useState<StatusTab>("agents");
   const [activeAgentId, setActiveAgentId] = useState<string | null>(null);
   const [addAgentOpen, setAddAgentOpen] = useState(false);
+  const [hiringAgentIds, setHiringAgentIds] = useState<Set<string>>(new Set());
+  const [deletingAgentIds, setDeletingAgentIds] = useState<Set<string>>(new Set());
   const [inboxItems, setInboxItems] = useState<InboxItem[]>([]);
   const [inboxLoading, setInboxLoading] = useState(false);
 
@@ -678,6 +708,13 @@ const StatusWidgetContent = memo((props: CustomProps) => {
       const agentList = await fetchAgents();
       if (!isMounted.current) return;
       setAgents(agentList);
+      // Clear hiring flags for agents now confirmed by the server
+      setHiringAgentIds((prev) => {
+        if (prev.size === 0) return prev;
+        const confirmedIds = new Set(agentList.map((a) => a.id));
+        const next = new Set([...prev].filter((id) => !confirmedIds.has(id)));
+        return next.size === prev.size ? prev : next;
+      });
 
       const lastSeenMap = await fetchLastSeenFromBridge(agentList.map((a) => a.id));
 
@@ -695,18 +732,20 @@ const StatusWidgetContent = memo((props: CustomProps) => {
         const lastSeen = entry?.ts || 0;
         const lastSeenMsg = entry?.msgText;
         const lastActivity = info.lastActivity || 0;
-        const latestMsg = info.recentMessages[info.recentMessages.length - 1];
+        const latestMsg = info.recentMessages[0]; // index 0 = newest (array is newest-first)
         // Unread if: there's been activity AND either the timestamp is newer
         // OR the latest message text differs from what was last seen.
         // Text comparison survives page reloads and ignores metadata-only updates.
         const hasNewActivity = lastActivity > lastSeen && lastActivity > 0;
         const hasNewMessage = !!latestMsg && latestMsg !== lastSeenMsg;
-        // recentMessages is newest-first; find where the last-seen message sits
-        // and count everything before it (those are newer, unread).
+        // recentMessages is newest-first. lastSeenMsg = recentMessages[0] at time of last save.
+        // seenIdx is where that message now sits — everything before it (lower index) is newer/unread.
+        // seenIdx === 0 means user has seen the very latest → 0 unread.
+        // seenIdx === -1 means last-seen message isn't in the window → count the whole window.
         let unreadCount = 0;
         if (hasNewActivity && hasNewMessage) {
           const seenIdx = lastSeenMsg ? info.recentMessages.indexOf(lastSeenMsg) : -1;
-          unreadCount = seenIdx === -1 ? (info.recentMessages.length || 1) : Math.max(1, seenIdx);
+          unreadCount = seenIdx === -1 ? (info.recentMessages.length || 1) : seenIdx;
         }
 
         return {
@@ -864,24 +903,64 @@ const StatusWidgetContent = memo((props: CustomProps) => {
     dispatchOpenAgentPanel(agentId, undefined, { sessionCount, unreadCount, lastSeenTs, runtime });
   }, []);
 
-  // Clear unread only when AgentChatWidget confirms a session was actually opened
+  // Decrement unread per session opened; persist + zero out when clearAll is true
   useEffect(() => {
     const handler = (e: Event) => {
-      const agentId = (e as CustomEvent<{ agentId: string }>).detail?.agentId;
+      const { agentId, clearAll } = (e as CustomEvent<{ agentId: string; clearAll?: boolean }>).detail ?? {};
       if (!agentId) return;
-      setStatuses((prev) => {
-        const status = prev.find((s) => s.agentId === agentId);
-        const lastMsg = status?.recentMessages[status.recentMessages.length - 1];
-        const ts = Date.now();
-        bridgeInvoke("set-agent-last-seen", { agentId, ts, msgText: lastMsg || "" }).catch(() => {
-          setLastSeenLocal(agentId, ts, lastMsg);
-        });
-        return prev.map((s) => s.agentId === agentId ? { ...s, unreadCount: 0 } : s);
-      });
+      setStatuses((prev) => prev.map((s) => {
+        if (s.agentId !== agentId) return s;
+        if (clearAll) {
+          const lastMsg = s.recentMessages[0]; // newest message
+          const ts = Date.now();
+          bridgeInvoke("set-agent-last-seen", { agentId, ts, msgText: lastMsg || "" }).catch(() => {
+            setLastSeenLocal(agentId, ts, lastMsg);
+          });
+          return { ...s, unreadCount: 0 };
+        }
+        return { ...s, unreadCount: Math.max(0, s.unreadCount - 1) };
+      }));
     };
     window.addEventListener(AGENT_READ_EVENT, handler);
     return () => window.removeEventListener(AGENT_READ_EVENT, handler);
   }, []);
+
+  // Track agents being deleted (background bridge call in flight)
+  useEffect(() => {
+    const onDeleting = (e: Event) => {
+      const { agentId } = (e as CustomEvent<{ agentId: string }>).detail ?? {};
+      if (!agentId) return;
+      setDeletingAgentIds((prev) => new Set([...prev, agentId]));
+      // Auto-select the first agent that isn't the one being deleted
+      setActiveAgentId((prev) => {
+        if (prev !== agentId) return prev;
+        const next = statusesRef.current.find((s) => s.agentId !== agentId);
+        if (next) {
+          dispatchOpenAgentPanel(next.agentId, undefined, {
+            sessionCount: next.sessionCount,
+            unreadCount: next.unreadCount,
+            lastSeenTs: next.lastSeenTs,
+            runtime: next.runtime,
+          });
+          return next.agentId;
+        }
+        return null;
+      });
+    };
+    const onDeleted = (e: Event) => {
+      const { agentId } = (e as CustomEvent<{ agentId: string }>).detail ?? {};
+      if (!agentId) return;
+      setDeletingAgentIds((prev) => { const n = new Set(prev); n.delete(agentId); return n; });
+      setStatuses((prev) => prev.filter((s) => s.agentId !== agentId));
+      refresh();
+    };
+    window.addEventListener("agent.deleting", onDeleting);
+    window.addEventListener("agent.deleted", onDeleted);
+    return () => {
+      window.removeEventListener("agent.deleting", onDeleting);
+      window.removeEventListener("agent.deleted", onDeleted);
+    };
+  }, [refresh]);
 
   return (
     <motion.div
@@ -1109,6 +1188,8 @@ const StatusWidgetContent = memo((props: CustomProps) => {
                           identity={identities.get(status.agentId)}
                           onClick={handleAgentClick}
                           isActive={activeAgentId === status.agentId}
+                          isHiring={hiringAgentIds.has(status.agentId)}
+                          isDeleting={deletingAgentIds.has(status.agentId)}
                         />
                       ))}
                     </AnimatePresence>
@@ -1120,7 +1201,30 @@ const StatusWidgetContent = memo((props: CustomProps) => {
         </div>
       </Card>
 
-      <AddAgentDialog open={addAgentOpen} onOpenChange={setAddAgentOpen} />
+      <AddAgentDialog
+        open={addAgentOpen}
+        onOpenChange={setAddAgentOpen}
+        onSuccess={(agentId, runtime) => {
+          setHiringAgentIds((prev) => new Set([...prev, agentId]));
+          // Inject optimistic status entry immediately so it appears before server refresh
+          setStatuses((prev) => {
+            if (prev.some((s) => s.agentId === agentId)) return prev;
+            return [...prev, {
+              agentId,
+              name: agentId,
+              state: "idle",
+              unreadCount: 0,
+              recentMessages: [],
+              sessionCount: 0,
+              lastSeenTs: 0,
+              runtime: runtime ?? "openclaw",
+            }];
+          });
+          // Refresh immediately then again after connector catches up
+          refresh();
+          setTimeout(() => refresh(), 1500);
+        }}
+      />
     </motion.div>
   );
 });

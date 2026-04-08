@@ -30,6 +30,7 @@ import {
   saveAgentModel,
   resolveAgentFolder,
 } from "$/lib/identity-md";
+import { patchIdentityCache } from "$/hooks/useAgentIdentity";
 import { OpenClawIcon, ClaudeCodeIcon, CodexIcon, HermesIcon } from "$/components/Onboarding/RuntimeIcons";
 
 /* ── Runtime definitions ─────────────────────────────────────────── */
@@ -232,6 +233,13 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess }: AddAgentDialog
       }
 
       if (result?.success) {
+        // Populate identity cache immediately so avatar/emoji renders before
+        // the connector's file watcher has a chance to process IDENTITY.md.
+        patchIdentityCache(id, {
+          name,
+          emoji: activeEmoji,
+          runtime: selectedRuntime,
+        });
         window.dispatchEvent(new CustomEvent("agent.file.changed"));
         onSuccess?.(id, selectedRuntime);
         handleOpenChange(false);

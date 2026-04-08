@@ -30,6 +30,7 @@ export interface AddCronDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSuccess?: () => void;
+  defaultAgent?: string;
 }
 
 type ScheduleType = "one-shot" | "recurring";
@@ -58,7 +59,7 @@ interface AgentOption {
 
 const AGENT_NONE = "__none__";
 
-export function AddCronDialog({ open, onOpenChange, onSuccess }: AddCronDialogProps) {
+export function AddCronDialog({ open, onOpenChange, onSuccess, defaultAgent }: AddCronDialogProps) {
   const { cronAdd } = useCronsActions();
   const { agents: openClawAgents } = useHyperclawContext();
   const [name, setName] = useState("");
@@ -72,7 +73,7 @@ export function AddCronDialog({ open, onOpenChange, onSuccess }: AddCronDialogPr
   const [deleteAfterRun, setDeleteAfterRun] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [agent, setAgent] = useState("");
+  const [agent, setAgent] = useState(defaultAgent ?? "");
   const [agentOptions, setAgentOptions] = useState<AgentOption[]>([]);
   const [agentsLoading, setAgentsLoading] = useState(false);
 
@@ -90,8 +91,8 @@ export function AddCronDialog({ open, onOpenChange, onSuccess }: AddCronDialogPr
     setPrompt("");
     setDeleteAfterRun(false);
     setError(null);
-    setAgent("");
-  }, []);
+    setAgent(defaultAgent ?? "");
+  }, [defaultAgent]);
 
   // Sync agents from context
   useEffect(() => {

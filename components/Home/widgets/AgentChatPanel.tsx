@@ -194,7 +194,7 @@ export function AgentChatPanel({ open, agentId, sessionKey: initialSessionKey, o
 export interface PanelChatViewHandle {
   newChat: () => void;
   reload: () => void;
-  sessions: Array<{ key: string; label?: string; updatedAt?: number }>;
+  sessions: Array<{ key: string; label?: string; updatedAt?: number; status?: string; trigger?: string; preview?: string }>;
   sessionsLoading: boolean;
   sessionsError: string | null;
   selectedSessionKey: string | undefined;
@@ -208,7 +208,7 @@ interface PanelChatViewProps {
   backendTab: BackendTab;
   onBackendTabChange: (tab: BackendTab) => void;
   showSubHeader?: boolean;
-  onSessionsUpdate?: (sessions: Array<{ key: string; label?: string; updatedAt?: number }>) => void;
+  onSessionsUpdate?: (sessions: Array<{ key: string; label?: string; updatedAt?: number; status?: string; trigger?: string; preview?: string }>) => void;
 }
 
 export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>(function PanelChatView({
@@ -228,7 +228,7 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
   };
 
   // Sessions
-  const [sessions, setSessions] = useState<Array<{ key: string; label?: string; updatedAt?: number }>>([]);
+  const [sessions, setSessions] = useState<Array<{ key: string; label?: string; updatedAt?: number; status?: string; trigger?: string; preview?: string }>>([]);
   const [selectedSessionKey, setSelectedSessionKey] = useState<string | undefined>(initialSessionKey);
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const [sessionsError, setSessionsError] = useState<string | null>(null);
@@ -345,11 +345,16 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
     setSessionsLoading(true);
     setSessionsError(null);
     try {
-      let result: Array<{ key: string; label?: string; updatedAt?: number }> = [];
+      let result: Array<{ key: string; label?: string; updatedAt?: number; status?: string; trigger?: string }> = [];
       if (backendTab === "openclaw") {
         if (gatewayConnection.isConnected()) {
           const r = await gatewayConnection.listSessions(agentId, 50).catch(() => ({ sessions: [] as any[] }));
-          result = (r.sessions || []).map((s: any) => ({ ...s, label: s.label || s.key }));
+          result = (r.sessions || []).map((s: any) => ({
+            ...s,
+            label: s.label || s.key,
+            trigger: s.kind || s.trigger,
+            preview: s.preview || s.lastMessage,
+          }));
         }
       } else if (backendTab === "claude-code") {
         const r = await bridgeInvoke("claude-code-list-sessions", {}).catch(() => ({ sessions: [] })) as any;
@@ -357,6 +362,9 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
           key: s.key || `claude:${s.id}`,
           label: s.label || s.id?.slice(0, 8),
           updatedAt: s.updatedAt,
+          status: s.status,
+          trigger: s.kind || s.trigger,
+          preview: s.preview,
         }));
       } else if (backendTab === "codex") {
         const r = await bridgeInvoke("codex-list-sessions", {}).catch(() => ({ sessions: [] })) as any;
@@ -364,6 +372,9 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
           key: s.key || `codex:${s.id}`,
           label: s.label || s.id?.slice(0, 8),
           updatedAt: s.updatedAt,
+          status: s.status,
+          trigger: s.kind || s.trigger,
+          preview: s.preview,
         }));
       } else if (backendTab === "hermes") {
         const r = await bridgeInvoke("hermes-list-sessions", {}).catch(() => ({ sessions: [] })) as any;
@@ -371,6 +382,9 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
           key: s.key || `hermes:${s.id}`,
           label: s.label || s.id?.slice(0, 16),
           updatedAt: s.updatedAt,
+          status: s.status,
+          trigger: s.kind || s.trigger,
+          preview: s.preview,
         }));
       }
       result.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
