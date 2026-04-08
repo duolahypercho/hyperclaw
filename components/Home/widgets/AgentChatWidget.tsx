@@ -31,6 +31,8 @@ import {
 import { cn } from "@/lib/utils";
 import { useFocusMode } from "./hooks/useFocusMode";
 import { useHyperclawContext } from "$/Providers/HyperclawProv";
+import { gatewayConnection } from "$/lib/openclaw-gateway-ws";
+import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
 import {
   useAgentIdentity,
   resolveAvatarUrl,
@@ -65,6 +67,21 @@ function relTime(ts: number): string {
   if (d < 3_600_000) return `${Math.floor(d / 60_000)}m ago`;
   if (d < 86_400_000) return `${Math.floor(d / 3_600_000)}h ago`;
   return `${Math.floor(d / 86_400_000)}d ago`;
+}
+
+/** Pull the last assistant text out of a messages array */
+function extractLastAssistantText(messages: Array<{ role?: string; content?: unknown }>): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.role !== "assistant") continue;
+    const content = msg.content;
+    if (typeof content === "string" && content.trim()) return content.trim().slice(0, 200);
+    if (Array.isArray(content)) {
+      const block = content.find((b: unknown) => (b as { type?: string })?.type === "text") as { text?: string } | undefined;
+      if (block?.text?.trim()) return block.text.trim().slice(0, 200);
+    }
+  }
+  return undefined;
 }
 
 type Session = { key: string; label?: string; updatedAt?: number; status?: string; trigger?: string; preview?: string };
@@ -103,7 +120,8 @@ function AgentInboxView({ sessions, loading, lastSeenTs, readSessions, onSelect 
         const isWaiting = s.status === "waiting";
         const isSuccess = s.status === "completed" || s.status === "success" || s.status === "done";
         const isError = s.status === "error" || s.status === "failed" || s.status === "aborted";
-        const title = s.label || s.key;
+        const title = s.label || s.key.split(":").pop() || s.key;
+        const preview = s.preview;
         return (
           <button
             key={s.key}
@@ -132,11 +150,11 @@ function AgentInboxView({ sessions, loading, lastSeenTs, readSessions, onSelect 
             </div>
 
             <div className="flex-1 min-w-0">
-              {/* Title row: label + status tag + time ago + NEW */}
+              {/* Title row: session timestamp + status tags + time ago + NEW */}
               <div className="flex items-baseline gap-1.5 min-w-0">
                 <p className={cn(
-                  "text-xs truncate min-w-0 flex-1",
-                  isUnread ? "font-semibold text-foreground" : "font-medium text-foreground/70"
+                  "text-[11px] truncate min-w-0 flex-1",
+                  isUnread ? "font-semibold text-foreground" : "font-medium text-foreground/60"
                 )}>
                   {title}
                 </p>
@@ -161,13 +179,13 @@ function AgentInboxView({ sessions, loading, lastSeenTs, readSessions, onSelect 
                   </span>
                 )}
               </div>
-              {/* Latest message preview — max 2 lines */}
-              {s.preview && (
+              {/* Latest message preview — wraps to 2 lines, always visible when text exists */}
+              {preview && (
                 <p className={cn(
                   "text-[11px] line-clamp-2 [overflow-wrap:anywhere] mt-0.5",
-                  isUnread ? "text-muted-foreground/80" : "text-muted-foreground/40"
+                  isUnread ? "text-muted-foreground/80" : "text-muted-foreground/50"
                 )}>
-                  {s.preview}
+                  {preview}
                 </p>
               )}
             </div>
@@ -367,11 +385,55 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
   const [activeSessionLabel, setActiveSessionLabel] = useState<string | undefined>();
   // Per-session read tracking — only sessions in this set show as read in the inbox
   const [readSessions, setReadSessions] = useState<Set<string>>(new Set());
+  // Cache of last-assistant-message per session key, fetched lazily when inbox opens
+  const [inboxPreviews, setInboxPreviews] = useState<Map<string, string>>(new Map());
+  const previewFetchedForRef = useRef<Set<string>>(new Set());
 
   // Sync config on late hydration
   useEffect(() => {
     if (configAgentId && !selectedAgentId) setSelectedAgentId(configAgentId);
   }, [configAgentId, selectedAgentId]);
+
+  // Lazily fetch last assistant message for each inbox session
+  useEffect(() => {
+    if (inboxSessions.length === 0) return;
+    const unfetched = inboxSessions.filter((s) => !previewFetchedForRef.current.has(s.key));
+    if (unfetched.length === 0) return;
+    unfetched.forEach((s) => previewFetchedForRef.current.add(s.key));
+
+    Promise.all(
+      unfetched.map(async (s): Promise<[string, string] | null> => {
+        try {
+          let messages: Array<{ role?: string; content?: unknown }> = [];
+          if (backendTab === "openclaw") {
+            const r = await gatewayConnection.getChatHistory(s.key, 20);
+            messages = (r.messages || []) as typeof messages;
+          } else if (backendTab === "claude-code") {
+            const r = await bridgeInvoke("claude-code-load-history", { sessionKey: s.key }) as any;
+            messages = r?.messages || [];
+          } else if (backendTab === "codex") {
+            const r = await bridgeInvoke("codex-load-history", { sessionKey: s.key }) as any;
+            messages = r?.messages || [];
+          } else if (backendTab === "hermes") {
+            const r = await bridgeInvoke("hermes-load-history", { sessionKey: s.key }) as any;
+            messages = r?.messages || [];
+          }
+          const text = extractLastAssistantText(messages);
+          return text ? [s.key, text] : null;
+        } catch {
+          return null;
+        }
+      })
+    ).then((results) => {
+      const updates: Array<[string, string]> = results.filter(Boolean) as Array<[string, string]>;
+      if (updates.length === 0) return;
+      setInboxPreviews((prev) => {
+        const next = new Map(prev);
+        for (const [key, text] of updates) next.set(key, text);
+        return next;
+      });
+    });
+  }, [inboxSessions, backendTab]);
 
   // Resolve agent
   const currentAgentId = selectedAgentId || configAgentId || agents[0]?.id || "main";
@@ -701,7 +763,10 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
           {/* Inbox — only rendered while on CHAT tab in inbox view */}
           {activeTab === "CHAT" && chatView === "inbox" && (
             <AgentInboxView
-              sessions={inboxSessions}
+              sessions={inboxSessions.map((s) => ({
+                ...s,
+                preview: s.preview ?? inboxPreviews.get(s.key),
+              }))}
               loading={inboxLoading}
               lastSeenTs={inboxLastSeenTs}
               readSessions={readSessions}

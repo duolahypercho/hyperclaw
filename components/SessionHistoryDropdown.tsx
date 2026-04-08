@@ -5,6 +5,9 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   History,
   MessageSquare,
+  Check,
+  X,
+  Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -16,6 +19,8 @@ interface SessionItem {
   label?: string;
   createdAt?: number;
   updatedAt?: number;
+  status?: string;
+  preview?: string;
 }
 
 interface SessionHistoryDropdownProps {
@@ -149,44 +154,67 @@ function ChatSessionsContent({
                   <h4 className="text-xs font-medium text-muted-foreground mb-2 px-2">
                     {timeGroup}
                   </h4>
-                  {groupSessions.map((session) => (
-                    <motion.div
-                      key={session.key}
-                      whileTap={{ scale: 0.98 }}
-                      className={cn(
-                        "p-2 rounded-lg cursor-pointer transition-colors",
-                        session.key === currentSessionKey
-                          ? "bg-primary/10 border border-primary/30"
-                          : "hover:bg-muted/80"
-                      )}
-                      onClick={() => {
-                        onLoadSession(session.key);
-                        onClose();
-                      }}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2 flex-1 min-w-0">
-                          <MessageSquare className={cn(
-                            "w-3.5 h-3.5 flex-shrink-0",
-                            session.key === currentSessionKey
-                              ? "text-primary"
-                              : "text-muted-foreground"
-                          )} />
+                  {groupSessions.map((session) => {
+                    const isActive = session.status === "active";
+                    const isWaiting = session.status === "waiting";
+                    const isSuccess = session.status === "completed" || session.status === "success" || session.status === "done";
+                    const isError = session.status === "error" || session.status === "failed" || session.status === "aborted";
+                    const title = session.label || getSessionName(session) || "Untitled Session";
+                    return (
+                      <motion.div
+                        key={session.key}
+                        whileTap={{ scale: 0.98 }}
+                        className={cn(
+                          "px-2 py-2 rounded-lg cursor-pointer transition-colors",
+                          session.key === currentSessionKey
+                            ? "bg-primary/10 border border-primary/30"
+                            : "hover:bg-muted/80"
+                        )}
+                        onClick={() => {
+                          onLoadSession(session.key);
+                          onClose();
+                        }}
+                      >
+                        {/* Title row: status icon + label + time */}
+                        <div className="flex items-center gap-2">
+                          <div className="shrink-0 w-3 flex items-center justify-center">
+                            {isActive ? (
+                              <span className="relative flex w-2 h-2">
+                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                                <span className="relative inline-flex rounded-full w-2 h-2 bg-emerald-500" />
+                              </span>
+                            ) : isWaiting ? (
+                              <span className="w-2 h-2 rounded-full bg-amber-400" />
+                            ) : isSuccess ? (
+                              <Check className="w-3 h-3 text-emerald-500" />
+                            ) : isError ? (
+                              <X className="w-3 h-3 text-destructive" />
+                            ) : (
+                              <MessageSquare className={cn(
+                                "w-3 h-3",
+                                session.key === currentSessionKey ? "text-primary" : "text-muted-foreground/50"
+                              )} />
+                            )}
+                          </div>
                           <p className={cn(
-                            "text-xs font-medium flex-1 min-w-0 overflow-hidden whitespace-nowrap text-ellipsis",
-                            session.key === currentSessionKey && "text-primary"
+                            "text-xs font-medium flex-1 min-w-0 truncate",
+                            session.key === currentSessionKey ? "text-primary" : "text-foreground/80"
                           )}>
-                            {session.label ||
-                              getSessionName(session) ||
-                              "Untitled Session"}
+                            {title}
                           </p>
+                          <span className="text-[10px] text-muted-foreground flex-shrink-0">
+                            {formatDate(session.updatedAt)}
+                          </span>
                         </div>
-                        <span className="text-xs text-muted-foreground flex-shrink-0">
-                          {formatDate(session.updatedAt)}
-                        </span>
-                      </div>
-                    </motion.div>
-                  ))}
+                        {/* Message preview — max 2 lines */}
+                        {session.preview && (
+                          <p className="text-[11px] text-muted-foreground/60 line-clamp-2 [overflow-wrap:anywhere] mt-1 pl-5">
+                            {session.preview}
+                          </p>
+                        )}
+                      </motion.div>
+                    );
+                  })}
                 </div>
               )
             )}
