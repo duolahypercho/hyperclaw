@@ -397,6 +397,16 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
     }
   }, [agentId, backendTab]);
 
+  // Re-fetch sessions when the backend tab switches (e.g. openclaw → claude-code)
+  // without the agent changing. Guard against firing on mount.
+  const prevBackendTabRef = useRef(backendTab);
+  useEffect(() => {
+    if (!initialLoadDoneRef.current) return;
+    if (prevBackendTabRef.current === backendTab) return;
+    prevBackendTabRef.current = backendTab;
+    fetchSessions();
+  }, [backendTab, fetchSessions]);
+
   // Merge tool calls
   const mergeToolCalls = useMemo(() => createMergeToolCalls(), []);
   const mergedMessages = useMemo(() => mergeToolCalls(messages), [mergeToolCalls, messages]);

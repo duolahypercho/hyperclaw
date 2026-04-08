@@ -247,7 +247,7 @@ export async function hubCommand(
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(15_000),
+        signal: AbortSignal.timeout(1_500),
       });
       if (localRes.ok) {
         const data = await localRes.json();

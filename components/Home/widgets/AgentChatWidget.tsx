@@ -395,10 +395,11 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
   // Persisted config
   const config = widget.config as Record<string, unknown> | undefined;
   const configAgentId = config?.agentId as string | undefined;
+  const configBackendTab = config?.backendTab as BackendTab | undefined;
 
   // Local state
   const [selectedAgentId, setSelectedAgentId] = useState<string | undefined>(configAgentId);
-  const [backendTab, setBackendTab] = useState<BackendTab>("openclaw");
+  const [backendTab, setBackendTab] = useState<BackendTab>(configBackendTab ?? "openclaw");
   const [activeTab, setActiveTab] = useState<WidgetTab>("CHAT");
   const [selectedFileKey, setSelectedFileKey] = useState<FileTabKey>("SOUL");
   const [footerState, setFooterState] = useState<FooterSaveState>({
@@ -505,6 +506,11 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
     : null;
   const displayName = identity?.name || currentAgent.name;
   const isFirstAgent = agents[0] != null && currentAgentId === agents[0].id;
+  // Protect built-in runtime agents — these are single-instance and shouldn't be deletable.
+  const isProtectedAgent = isFirstAgent
+    || identity?.runtime === "claude-code"
+    || identity?.runtime === "hermes"
+    || identity?.runtime === "codex";
 
   // Listen for agent-click events from StatusWidget
   useEffect(() => {
@@ -544,14 +550,14 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
       if (cached) {
         setInboxSessions(cached);
         setInboxLoading(false);
-        {
-          setChatView("inbox");
-        }
+        setChatView("inbox");
       } else {
         // First open — show spinner while PanelChatView fetches
         setInboxSessions([]);
         setChatView("inbox");
         setInboxLoading(true);
+        // Kick off the fetch after React commits the new backendTab/agentId
+        setTimeout(() => chatRef.current?.fetchSessions(), 0);
       }
     };
     window.addEventListener(OPEN_AGENT_CHAT_EVENT, handler);
@@ -577,17 +583,17 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
     if (!persistMountedRef.current) { persistMountedRef.current = true; return; }
     if (persistTimerRef.current) clearTimeout(persistTimerRef.current);
     persistTimerRef.current = setTimeout(() => {
-      onConfigChangeRef.current?.({ agentId: currentAgentId });
+      onConfigChangeRef.current?.({ agentId: currentAgentId, backendTab });
       persistTimerRef.current = null;
     }, 500);
     return () => {
       if (persistTimerRef.current) {
         clearTimeout(persistTimerRef.current);
         persistTimerRef.current = null;
-        onConfigChangeRef.current?.({ agentId: currentAgentId });
+        onConfigChangeRef.current?.({ agentId: currentAgentId, backendTab });
       }
     };
-  }, [currentAgentId]);
+  }, [currentAgentId, backendTab]);
 
   const isEditorTab = activeTab === "INFO" || activeTab === "FILES";
   const showChatActions = activeTab === "CHAT";
@@ -605,8 +611,7 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
       <Card
         className={cn(
           "group h-full w-full flex flex-col overflow-hidden bg-card/70 backdrop-blur-xl border border-border transition-all duration-300 rounded-md",
-          isFocusModeActive && "border-transparent grayscale-[30%]",
-          deleteState !== "idle" && "border-destructive/30"
+          isFocusModeActive && "border-transparent grayscale-[30%]"
         )}
       >
         {/* ── Header: avatar + tabs + actions ── */}
@@ -643,15 +648,6 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
                   <h3 className="text-xs font-semibold truncate">
                     {activeSessionLabel && chatView === "chat" ? activeSessionLabel : displayName}
                   </h3>
-                  {deleteState === "deleting" && (
-                    <span className="flex items-center gap-1 text-[10px] text-destructive shrink-0">
-                      <Loader2 className="w-2.5 h-2.5 animate-spin" />
-                      Deleting…
-                    </span>
-                  )}
-                  {deleteState === "deleted" && (
-                    <span className="text-[10px] text-destructive shrink-0">Deleted</span>
-                  )}
                 </div>
                 <p className="text-[10px] text-muted-foreground truncate">
                   {activeSessionLabel && chatView === "chat" ? displayName : currentAgentId}
@@ -723,15 +719,23 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
                     onSelect={(e) => {
                       e.preventDefault();
                       setMoreMenuOpen(false);
-                      setAddAgentOpen(true);
+                      // Mark all inbox sessions as read and clear the unread badge
+                      const allKeys = new Set(inboxSessions.map((s) => s.key));
+                      setReadSessions(allKeys);
+                      setInboxUnreadCount(0);
+                      window.dispatchEvent(
+                        new CustomEvent(AGENT_READ_EVENT, {
+                          detail: { agentId: currentAgentId, clearAll: true },
+                        })
+                      );
                     }}
                   >
-                    <Plus className="w-3.5 h-3.5" />
-                    Add agent
+                    <Check className="w-3.5 h-3.5" />
+                    Mark all as read
                   </DropdownMenuItem>
                   <DropdownMenuItem
                     className="text-destructive focus:text-destructive focus:bg-destructive/10 gap-2 text-xs"
-                    disabled={isFirstAgent}
+                    disabled={isProtectedAgent}
                     onSelect={(e) => {
                       e.preventDefault();
                       setMoreMenuOpen(false);
@@ -768,7 +772,7 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
                   : "border-transparent text-muted-foreground hover:text-foreground/70 hover:bg-muted/30"
               )}
             >
-              Info
+              Config
             </button>
             <button
               onClick={() => setActiveTab("STATS")}
@@ -779,7 +783,7 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
                   : "border-transparent text-muted-foreground hover:text-foreground/70 hover:bg-muted/30"
               )}
             >
-              Stats
+              Usage
             </button>
             <button
               onClick={() => setActiveTab("CRONS")}
@@ -790,7 +794,7 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
                   : "border-transparent text-muted-foreground hover:text-foreground/70 hover:bg-muted/30"
               )}
             >
-              Crons
+              Runs
             </button>
             <button
               onClick={() => setActiveTab("FILES")}
@@ -802,8 +806,8 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
               )}
             >
               {activeTab === "FILES"
-                ? TAB_FILES.find((t) => t.key === selectedFileKey)?.label ?? "Files"
-                : "Files"}
+                ? TAB_FILES.find((t) => t.key === selectedFileKey)?.label ?? "Instructions"
+                : "Instructions"}
               <ChevronDown className="w-2.5 h-2.5 opacity-60" />
             </button>
           </div>
@@ -955,15 +959,15 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
         onOpenChange={setDeleteDialogOpen}
         agentId={currentAgentId}
         agentDisplayName={displayName}
-        isFirstAgent={isFirstAgent}
-        onDeleteStart={() => setDeleteState("deleting")}
+        isFirstAgent={isProtectedAgent}
+        onDeleteStart={() => {
+          // Switch to next agent immediately — no red/deleting state shown here.
+          // StatusWidget shows the Firing… badge for that.
+          const next = agents.find((a) => a.id !== currentAgentId);
+          setSelectedAgentId(next?.id);
+        }}
         onSuccess={() => {
-          setDeleteState("deleted");
-          // Brief pause so user sees "Deleted" status before switching agents
-          setTimeout(() => {
-            setDeleteState("idle");
-            setSelectedAgentId(agents.find((a) => a.id !== currentAgentId)?.id);
-          }, 1200);
+          setDeleteState("idle");
         }}
       />
     </motion.div>

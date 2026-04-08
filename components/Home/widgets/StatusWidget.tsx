@@ -591,9 +591,16 @@ const StatusWidgetContent = memo((props: CustomProps) => {
   // ── Inbox ──
   const [activeTab, setActiveTab] = useState<StatusTab>("agents");
   const [activeAgentId, setActiveAgentId] = useState<string | null>(null);
+  const activeAgentIdRef = useRef<string | null>(null);
+  useEffect(() => { activeAgentIdRef.current = activeAgentId; }, [activeAgentId]);
   const [addAgentOpen, setAddAgentOpen] = useState(false);
   const [hiringAgentIds, setHiringAgentIds] = useState<Set<string>>(new Set());
   const [deletingAgentIds, setDeletingAgentIds] = useState<Set<string>>(new Set());
+  // Refs kept in sync so refresh() can read without stale closures
+  const hiringAgentIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => { hiringAgentIdsRef.current = hiringAgentIds; }, [hiringAgentIds]);
+  const deletingAgentIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => { deletingAgentIdsRef.current = deletingAgentIds; }, [deletingAgentIds]);
   const [inboxItems, setInboxItems] = useState<InboxItem[]>([]);
   const [inboxLoading, setInboxLoading] = useState(false);
 
@@ -709,8 +716,11 @@ const StatusWidgetContent = memo((props: CustomProps) => {
     setLoading(true);
     setError(null);
     try {
-      const agentList = await fetchAgents();
+      const rawAgentList = await fetchAgents();
       if (!isMounted.current) return;
+      // Exclude agents whose deletion is in-flight so refresh() can't re-add them
+      // before the context catches up to the server-side removal.
+      const agentList = rawAgentList.filter((a) => !deletingAgentIdsRef.current.has(a.id));
       setAgents(agentList);
       // Clear hiring flags for agents now confirmed by the server
       setHiringAgentIds((prev) => {
@@ -720,11 +730,10 @@ const StatusWidgetContent = memo((props: CustomProps) => {
         return next.size === prev.size ? prev : next;
       });
 
-      const lastSeenMap = await fetchLastSeenFromBridge(agentList.map((a) => a.id));
-
-      const sessionInfos = await Promise.all(
-        agentList.map((a) => fetchAgentSessions(a))
-      );
+      const [lastSeenMap, sessionInfos] = await Promise.all([
+        fetchLastSeenFromBridge(agentList.map((a) => a.id)),
+        Promise.all(agentList.map((a) => fetchAgentSessions(a))),
+      ]);
       if (!isMounted.current) return;
 
       const newStatuses: AgentStatus[] = agentList.map((agent, i) => {
@@ -773,7 +782,16 @@ const StatusWidgetContent = memo((props: CustomProps) => {
         return (b.lastActivity || 0) - (a.lastActivity || 0);
       });
 
-      setStatuses(newStatuses);
+      // Preserve optimistic hiring entries that the server doesn't know about yet.
+      // Once the connector confirms and context updates, the server list will include
+      // them and the hiring flag will be cleared naturally.
+      setStatuses((prev) => {
+        const serverIds = new Set(newStatuses.map((s) => s.agentId));
+        const pendingHiring = prev.filter(
+          (s) => hiringAgentIdsRef.current.has(s.agentId) && !serverIds.has(s.agentId)
+        );
+        return [...newStatuses, ...pendingHiring];
+      });
     } catch { /* ignore */ } finally {
       if (isMounted.current) setLoading(false);
     }
@@ -887,8 +905,8 @@ const StatusWidgetContent = memo((props: CustomProps) => {
     return () => clearInterval(timer);
   }, []);
 
-  // Agent identities
-  const agentIds = useMemo(() => agents.map((a) => a.id), [agents]);
+  // Derive IDs from statuses (not agents) so optimistic hiring entries are included.
+  const agentIds = useMemo(() => statuses.map((s) => s.agentId), [statuses]);
   const identities = useAgentIdentities(agentIds);
 
   // Keep a ref so handleAgentClick can read latest statuses without stale closure
@@ -935,21 +953,22 @@ const StatusWidgetContent = memo((props: CustomProps) => {
       const { agentId } = (e as CustomEvent<{ agentId: string }>).detail ?? {};
       if (!agentId) return;
       setDeletingAgentIds((prev) => new Set([...prev, agentId]));
-      // Auto-select the first agent that isn't the one being deleted
-      setActiveAgentId((prev) => {
-        if (prev !== agentId) return prev;
+      // Auto-select the first agent that isn't the one being deleted.
+      // Read activeAgentId from a ref — never call side effects inside a state updater.
+      if (activeAgentIdRef.current === agentId) {
         const next = statusesRef.current.find((s) => s.agentId !== agentId);
         if (next) {
+          setActiveAgentId(next.agentId);
           dispatchOpenAgentPanel(next.agentId, undefined, {
             sessionCount: next.sessionCount,
             unreadCount: next.unreadCount,
             lastSeenTs: next.lastSeenTs,
             runtime: next.runtime,
           });
-          return next.agentId;
+        } else {
+          setActiveAgentId(null);
         }
-        return null;
-      });
+      }
     };
     const onDeleted = (e: Event) => {
       const { agentId } = (e as CustomEvent<{ agentId: string }>).detail ?? {};

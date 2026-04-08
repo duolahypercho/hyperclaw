@@ -462,6 +462,11 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
     () => {
       const firstAgentId = agents[0]?.id ?? null;
       const isFirstAgent = firstAgentId != null && selectedAgentId === firstAgentId;
+      const selectedAgent = agents.find((a) => a.id === selectedAgentId);
+      const isProtectedAgent = isFirstAgent
+        || selectedAgent?.runtime === "claude-code"
+        || selectedAgent?.runtime === "hermes"
+        || selectedAgent?.runtime === "codex";
       const breadcrumbs = [{ label: "Agents" }];
       if (selectedAgentName) breadcrumbs.push({ label: selectedAgentName });
       if (selectedFile) breadcrumbs.push({ label: selectedFile.name });
@@ -508,9 +513,9 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
               label: "Delete agent",
               icon: <Trash2 className="h-4 w-4" />,
               onClick: () => {
-                if (!isFirstAgent) setDeleteAgentDialogOpen(true);
+                if (!isProtectedAgent) setDeleteAgentDialogOpen(true);
               },
-              disabled: !selectedAgentId || isFirstAgent,
+              disabled: !selectedAgentId || isProtectedAgent,
               variant: "ghost",
               className: "text-muted-foreground hover:text-destructive",
             },
@@ -637,9 +642,13 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
           });
           refresh();
         }}
-        isFirstAgent={
-          agents[0] != null && selectedAgentId === agents[0].id
-        }
+        isFirstAgent={(() => {
+          const a = agents.find((ag) => ag.id === selectedAgentId);
+          return (agents[0] != null && selectedAgentId === agents[0].id)
+            || a?.runtime === "claude-code"
+            || a?.runtime === "hermes"
+            || a?.runtime === "codex";
+        })()}
       />
     </AgentsContext.Provider>
   );

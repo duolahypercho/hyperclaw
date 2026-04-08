@@ -219,6 +219,8 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess }: AddAgentDialog
           result = (await bridgeInvoke("setup-agent", {
             agentId: id,
             runtime: selectedRuntime,
+            name,
+            emoji: activeEmoji,
             identity: identityContent,
           })) as typeof result;
         }
