@@ -93,14 +93,44 @@ interface AgentInboxViewProps {
   loading: boolean;
   lastSeenTs: number;
   readSessions: Set<string>;
+  unreadCount: number;
+  previewLoadingKeys: Set<string>;
   onSelect: (key: string) => void;
 }
 
-function AgentInboxView({ sessions, loading, lastSeenTs, readSessions, onSelect }: AgentInboxViewProps) {
+function AgentInboxView({ sessions, loading, lastSeenTs, readSessions, unreadCount, previewLoadingKeys, onSelect }: AgentInboxViewProps) {
+  // Key of the most recently updated unread session — this one shows the numeric count badge
+  const latestUnreadKey = useMemo(() => {
+    let best: Session | null = null;
+    for (const s of sessions) {
+      const isUnread = !readSessions.has(s.key) && lastSeenTs > 0 && (s.updatedAt || 0) > lastSeenTs;
+      if (isUnread && (!best || (s.updatedAt || 0) > (best.updatedAt || 0))) best = s;
+    }
+    return best?.key ?? null;
+  }, [sessions, readSessions, lastSeenTs]);
   if (loading) {
     return (
-      <div className="flex items-center justify-center flex-1">
-        <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+      <div className="flex flex-col overflow-y-auto customScrollbar2 flex-1">
+        {Array.from({ length: 5 }).map((_, i) => (
+          <div key={i} className="flex items-start gap-2 px-3 py-2.5 border-b border-border/20 last:border-0">
+            {/* Status icon placeholder */}
+            <div className="shrink-0 w-3.5 flex items-center justify-center mt-0.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/10 animate-pulse" />
+            </div>
+            <div className="flex-1 min-w-0 space-y-1">
+              {/* Title row */}
+              <div className="flex items-baseline gap-1.5">
+                <div className="h-[11px] bg-muted-foreground/10 rounded animate-pulse flex-1" style={{ width: `${55 + (i % 3) * 15}%` }} />
+                <div className="h-[10px] bg-muted-foreground/10 rounded animate-pulse w-7 shrink-0" />
+              </div>
+              {/* Preview lines */}
+              <div className="space-y-1">
+                <div className="h-[11px] bg-muted-foreground/10 rounded animate-pulse w-4/5" />
+                <div className="h-[11px] bg-muted-foreground/10 rounded animate-pulse" style={{ width: `${40 + (i % 4) * 10}%` }} />
+              </div>
+            </div>
+          </div>
+        ))}
       </div>
     );
   }
@@ -175,18 +205,23 @@ function AgentInboxView({ sessions, loading, lastSeenTs, readSessions, onSelect 
                 )}
                 {isUnread && (
                   <span className="shrink-0 text-[9px] font-semibold text-primary bg-primary/10 px-1.5 py-0.5 rounded-full">
-                    NEW
+                    {s.key === latestUnreadKey && unreadCount > 1 ? unreadCount : "NEW"}
                   </span>
                 )}
               </div>
-              {/* Latest message preview — wraps to 2 lines, always visible when text exists */}
-              {preview && (
+              {/* Latest message preview — skeleton while loading, text when ready */}
+              {preview ? (
                 <p className={cn(
                   "text-[11px] line-clamp-2 [overflow-wrap:anywhere] mt-0.5",
                   isUnread ? "text-muted-foreground/80" : "text-muted-foreground/50"
                 )}>
                   {preview}
                 </p>
+              ) : previewLoadingKeys.has(s.key) && (
+                <div className="mt-0.5 space-y-1">
+                  <div className="h-[11px] bg-muted-foreground/10 rounded animate-pulse w-4/5" />
+                  <div className="h-[11px] bg-muted-foreground/10 rounded animate-pulse w-3/5" />
+                </div>
               )}
             </div>
           </button>
@@ -382,11 +417,13 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
   const [inboxSessions, setInboxSessions] = useState<Session[]>([]);
   const [inboxLoading, setInboxLoading] = useState(false);
   const [inboxLastSeenTs, setInboxLastSeenTs] = useState(0);
+  const [inboxUnreadCount, setInboxUnreadCount] = useState(0);
   const [activeSessionLabel, setActiveSessionLabel] = useState<string | undefined>();
   // Per-session read tracking — only sessions in this set show as read in the inbox
   const [readSessions, setReadSessions] = useState<Set<string>>(new Set());
   // Cache of last-assistant-message per session key, fetched lazily when inbox opens
   const [inboxPreviews, setInboxPreviews] = useState<Map<string, string>>(new Map());
+  const [previewLoadingKeys, setPreviewLoadingKeys] = useState<Set<string>>(new Set());
   const previewFetchedForRef = useRef<Set<string>>(new Set());
 
   // Sync config on late hydration
@@ -397,9 +434,16 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
   // Lazily fetch last assistant message for each inbox session
   useEffect(() => {
     if (inboxSessions.length === 0) return;
-    const unfetched = inboxSessions.filter((s) => !previewFetchedForRef.current.has(s.key));
+    const unfetched = inboxSessions.filter((s) => !previewFetchedForRef.current.has(s.key) && !s.preview);
     if (unfetched.length === 0) return;
     unfetched.forEach((s) => previewFetchedForRef.current.add(s.key));
+
+    // Mark these sessions as loading so the skeleton is shown immediately
+    setPreviewLoadingKeys((prev) => {
+      const next = new Set(prev);
+      unfetched.forEach((s) => next.add(s.key));
+      return next;
+    });
 
     Promise.all(
       unfetched.map(async (s): Promise<[string, string] | null> => {
@@ -426,10 +470,17 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
       })
     ).then((results) => {
       const updates: Array<[string, string]> = results.filter(Boolean) as Array<[string, string]>;
-      if (updates.length === 0) return;
-      setInboxPreviews((prev) => {
-        const next = new Map(prev);
-        for (const [key, text] of updates) next.set(key, text);
+      if (updates.length > 0) {
+        setInboxPreviews((prev) => {
+          const next = new Map(prev);
+          for (const [key, text] of updates) next.set(key, text);
+          return next;
+        });
+      }
+      // Clear loading state for all fetched sessions (resolved or not)
+      setPreviewLoadingKeys((prev) => {
+        const next = new Set(prev);
+        unfetched.forEach((s) => next.delete(s.key));
         return next;
       });
     });
@@ -467,7 +518,8 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
         runtime?: string;
       };
       if (!detail?.agentId) return;
-      const { agentId, sessionKey, lastSeenTs = 0, runtime } = detail;
+      const { agentId, sessionKey, lastSeenTs = 0, unreadCount = 0, runtime } = detail;
+      setInboxUnreadCount(unreadCount);
 
       // Set the correct backend tab immediately so fetchSessions queries the right endpoint
       if (runtime === "claude-code") setBackendTab("claude-code");
@@ -769,6 +821,8 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
               }))}
               loading={inboxLoading}
               lastSeenTs={inboxLastSeenTs}
+              unreadCount={inboxUnreadCount}
+              previewLoadingKeys={previewLoadingKeys}
               readSessions={readSessions}
               onSelect={(key) => {
                 const session = inboxSessions.find((s) => s.key === key);
@@ -786,6 +840,7 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
                   const anyStillUnread = inboxSessions.some(
                     (s) => !newRead.has(s.key) && inboxLastSeenTs > 0 && (s.updatedAt || 0) > inboxLastSeenTs
                   );
+                  if (!anyStillUnread) setInboxUnreadCount(0);
                   // Decrement badge immediately; persist + zero on the last unread
                   window.dispatchEvent(
                     new CustomEvent(AGENT_READ_EVENT, {

@@ -657,12 +657,16 @@ const StatusWidgetContent = memo((props: CustomProps) => {
       // Non-OpenClaw runtimes: read actual session history from disk via bridge
       if (runtime !== "openclaw") {
         try {
-          const result = await bridgeInvoke("get-runtime-sessions", { agentId: agent.id, limit: 6 }) as {
+          const result = await bridgeInvoke("get-runtime-sessions", { agentId: agent.id, limit: 20 }) as {
             success?: boolean;
             data?: { sessionCount?: number; lastActiveMs?: number; recentMessages?: Array<{ role: string; content: string; timestamp: number }> };
           };
           if (result?.success && result.data) {
-            const msgs = (result.data.recentMessages || []).map((m) => m.content).filter(Boolean);
+            // Only count assistant messages — same behaviour as OpenClaw path
+            const msgs = (result.data.recentMessages || [])
+              .filter((m) => m.role === "assistant")
+              .map((m) => m.content)
+              .filter(Boolean);
             return {
               sessionCount: result.data.sessionCount || 0,
               lastActivity: result.data.lastActiveMs || undefined,
@@ -962,6 +966,51 @@ const StatusWidgetContent = memo((props: CustomProps) => {
     };
   }, [refresh]);
 
+  // Track agents being hired (background bridge call in flight)
+  useEffect(() => {
+    const onHiring = (e: Event) => {
+      const { agentId, name, emoji, runtime } = (e as CustomEvent<{
+        agentId: string; name: string; emoji: string; runtime: string;
+      }>).detail ?? {};
+      if (!agentId) return;
+      setHiringAgentIds((prev) => new Set([...prev, agentId]));
+      setStatuses((prev) => {
+        if (prev.some((s) => s.agentId === agentId)) return prev;
+        return [...prev, {
+          agentId,
+          name: name || agentId,
+          state: "idle",
+          unreadCount: 0,
+          recentMessages: [],
+          sessionCount: 0,
+          lastSeenTs: 0,
+          runtime: runtime ?? "openclaw",
+        }];
+      });
+    };
+    const onHired = (e: Event) => {
+      const { agentId } = (e as CustomEvent<{ agentId: string }>).detail ?? {};
+      if (!agentId) return;
+      setHiringAgentIds((prev) => { const n = new Set(prev); n.delete(agentId); return n; });
+      refresh();
+      setTimeout(() => refresh(), 1500);
+    };
+    const onHireFailed = (e: Event) => {
+      const { agentId } = (e as CustomEvent<{ agentId: string }>).detail ?? {};
+      if (!agentId) return;
+      setHiringAgentIds((prev) => { const n = new Set(prev); n.delete(agentId); return n; });
+      setStatuses((prev) => prev.filter((s) => s.agentId !== agentId));
+    };
+    window.addEventListener("agent.hiring", onHiring);
+    window.addEventListener("agent.hired", onHired);
+    window.addEventListener("agent.hire.failed", onHireFailed);
+    return () => {
+      window.removeEventListener("agent.hiring", onHiring);
+      window.removeEventListener("agent.hired", onHired);
+      window.removeEventListener("agent.hire.failed", onHireFailed);
+    };
+  }, [refresh]);
+
   return (
     <motion.div
       animate={{
@@ -1204,26 +1253,6 @@ const StatusWidgetContent = memo((props: CustomProps) => {
       <AddAgentDialog
         open={addAgentOpen}
         onOpenChange={setAddAgentOpen}
-        onSuccess={(agentId, runtime) => {
-          setHiringAgentIds((prev) => new Set([...prev, agentId]));
-          // Inject optimistic status entry immediately so it appears before server refresh
-          setStatuses((prev) => {
-            if (prev.some((s) => s.agentId === agentId)) return prev;
-            return [...prev, {
-              agentId,
-              name: agentId,
-              state: "idle",
-              unreadCount: 0,
-              recentMessages: [],
-              sessionCount: 0,
-              lastSeenTs: 0,
-              runtime: runtime ?? "openclaw",
-            }];
-          });
-          // Refresh immediately then again after connector catches up
-          refresh();
-          setTimeout(() => refresh(), 1500);
-        }}
       />
     </motion.div>
   );

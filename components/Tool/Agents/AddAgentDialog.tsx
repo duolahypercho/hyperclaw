@@ -22,7 +22,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Loader2 } from "lucide-react";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
 import {
   readOpenClawConfig,
@@ -139,7 +138,6 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess }: AddAgentDialog
   const [description, setDescription] = useState("");
   const [model, setModel] = useState("__default__");
   const [availableModels, setAvailableModels] = useState<string[]>([]);
-  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const runtime = useMemo(
@@ -177,7 +175,7 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess }: AddAgentDialog
     [onOpenChange, reset]
   );
 
-  const handleSubmit = useCallback(async () => {
+  const handleSubmit = useCallback(() => {
     setError(null);
 
     const name = displayName.trim();
@@ -188,69 +186,57 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess }: AddAgentDialog
       return;
     }
 
-    setSubmitting(true);
-    try {
-      let result: { success?: boolean; error?: string };
+    // Populate identity cache now so avatar renders the moment the row appears.
+    patchIdentityCache(id, { name, emoji: activeEmoji, runtime: selectedRuntime });
 
-      if (selectedRuntime === "openclaw") {
-        // Step 1: Register agent with OpenClaw CLI
-        result = (await bridgeInvoke("add-agent", { agentName: id })) as typeof result;
+    // Close dialog immediately and signal StatusWidget to show the Hiring badge.
+    window.dispatchEvent(new CustomEvent("agent.hiring", {
+      detail: { agentId: id, name, emoji: activeEmoji, runtime: selectedRuntime },
+    }));
+    onSuccess?.(id, selectedRuntime);
+    handleOpenChange(false);
+
+    // Fire bridge calls in the background.
+    const identityContent = buildIdentityMd({ name, emoji: activeEmoji, role, description, runtime: selectedRuntime });
+
+    const run = async () => {
+      try {
+        let result: { success?: boolean; error?: string };
+
+        if (selectedRuntime === "openclaw") {
+          result = (await bridgeInvoke("add-agent", { agentName: id })) as typeof result;
+          if (result?.success) {
+            const folder = resolveAgentFolder(id);
+            await bridgeInvoke("write-openclaw-doc", {
+              relativePath: `${folder}/IDENTITY.md`,
+              content: identityContent,
+            });
+            if (model && model !== "__default__") {
+              await saveAgentModel(id, model);
+            }
+          }
+        } else {
+          result = (await bridgeInvoke("setup-agent", {
+            agentId: id,
+            runtime: selectedRuntime,
+            identity: identityContent,
+          })) as typeof result;
+        }
 
         if (result?.success) {
-          // Step 2: Write IDENTITY.md
-          const identityContent = buildIdentityMd({
-            name,
-            emoji: activeEmoji,
-            role,
-            description,
-            runtime: selectedRuntime,
-          });
-          const folder = resolveAgentFolder(id);
-          await bridgeInvoke("write-openclaw-doc", {
-            relativePath: `${folder}/IDENTITY.md`,
-            content: identityContent,
-          });
-
-          // Step 3: Save model override if chosen
-          if (model && model !== "__default__") {
-            await saveAgentModel(id, model);
-          }
+          window.dispatchEvent(new CustomEvent("agent.hired", {
+            detail: { agentId: id, runtime: selectedRuntime },
+          }));
+          window.dispatchEvent(new CustomEvent("agent.file.changed"));
+        } else {
+          window.dispatchEvent(new CustomEvent("agent.hire.failed", { detail: { agentId: id } }));
         }
-      } else {
-        // Non-OpenClaw: write IDENTITY.md via setup-agent
-        const identityContent = buildIdentityMd({
-          name,
-          emoji: activeEmoji,
-          role,
-          description,
-          runtime: selectedRuntime,
-        });
-        result = (await bridgeInvoke("setup-agent", {
-          agentId: id,
-          runtime: selectedRuntime,
-          identity: identityContent,
-        })) as typeof result;
+      } catch {
+        window.dispatchEvent(new CustomEvent("agent.hire.failed", { detail: { agentId: id } }));
       }
+    };
 
-      if (result?.success) {
-        // Populate identity cache immediately so avatar/emoji renders before
-        // the connector's file watcher has a chance to process IDENTITY.md.
-        patchIdentityCache(id, {
-          name,
-          emoji: activeEmoji,
-          runtime: selectedRuntime,
-        });
-        window.dispatchEvent(new CustomEvent("agent.file.changed"));
-        onSuccess?.(id, selectedRuntime);
-        handleOpenChange(false);
-      } else {
-        setError(result?.error ?? "Failed to create agent");
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create agent");
-    } finally {
-      setSubmitting(false);
-    }
+    run();
   }, [displayName, selectedRuntime, activeEmoji, role, description, model, onSuccess, handleOpenChange]);
 
   return (
@@ -323,7 +309,7 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess }: AddAgentDialog
               onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSubmit()}
               autoComplete="off"
               autoFocus
-              disabled={submitting}
+              disabled={false}
             />
             {agentId && (
               <p className="text-[10px] text-muted-foreground">
@@ -351,7 +337,7 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess }: AddAgentDialog
                       ? "bg-primary/15 ring-1 ring-primary/60 scale-110 border-primary/40"
                       : "border-border/40 bg-muted hover:bg-muted/80 hover:scale-105",
                   ].join(" ")}
-                  disabled={submitting}
+                  disabled={false}
                 >
                   {e}
                 </button>
@@ -362,7 +348,7 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess }: AddAgentDialog
               value={customEmoji}
               onChange={(e) => setCustomEmoji(e.target.value)}
               className="h-9 w-40"
-              disabled={submitting}
+              disabled={false}
             />
           </div>
 
@@ -379,7 +365,7 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess }: AddAgentDialog
               placeholder="e.g. Code & Automation"
               value={role}
               onChange={(e) => setRole(e.target.value)}
-              disabled={submitting}
+              disabled={false}
             />
           </div>
 
@@ -398,7 +384,7 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess }: AddAgentDialog
               onChange={(e) => setDescription(e.target.value)}
               rows={3}
               className="resize-none"
-              disabled={submitting}
+              disabled={false}
             />
           </div>
 
@@ -409,7 +395,7 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess }: AddAgentDialog
                 <Label className="text-xs uppercase tracking-wider text-muted-foreground">Model</Label>
                 <span className="text-xs text-muted-foreground/50">optional</span>
               </div>
-              <Select value={model} onValueChange={setModel} disabled={submitting}>
+              <Select value={model} onValueChange={setModel} disabled={false}>
                 <SelectTrigger>
                   <SelectValue placeholder="Use OpenClaw default" />
                 </SelectTrigger>
@@ -428,18 +414,17 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess }: AddAgentDialog
           <Button
             variant="outline"
             onClick={() => handleOpenChange(false)}
-            disabled={submitting}
+            disabled={false}
             className="flex-1"
           >
             Cancel
           </Button>
           <Button
             onClick={handleSubmit}
-            disabled={submitting || !displayName.trim() || !agentId}
+            disabled={!displayName.trim() || !agentId}
             className="flex-1"
           >
-            {submitting && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
-            {submitting ? "Creating…" : `Add to ${runtime.label}`}
+            {`Add to ${runtime.label}`}
           </Button>
         </SheetFooter>
       </SheetContent>
