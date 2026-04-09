@@ -271,6 +271,33 @@ const TOOLS = [
     },
   },
   {
+    name: "hyperclaw_list_projects",
+    description: "List all projects in HyperClaw.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "hyperclaw_list_goals",
+    description: "List goals, optionally filtered by project.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        projectId: { type: "string", description: "Filter by project ID" },
+      },
+    },
+  },
+  {
+    name: "hyperclaw_list_issues",
+    description: "List issues, optionally filtered by status, project, or agent.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        status: { type: "string", enum: ["open", "in_progress", "resolved", "closed"] },
+        projectId: { type: "string" },
+        agentId: { type: "string" },
+      },
+    },
+  },
+  {
     name: "hyperclaw_read_commands",
     description: "Read and consume pending commands queued by the HyperClaw UI (each delivered once).",
     inputSchema: { type: "object", properties: {} },
@@ -420,6 +447,19 @@ async function callTool(name: string, args: Record<string, unknown>) {
         severity: args.severity as string | undefined,
         agentId: args.agentId as string | undefined,
         projectId: args.projectId as string | undefined,
+      }));
+
+    case "hyperclaw_list_projects":
+      return ok(bridge.listProjects());
+
+    case "hyperclaw_list_goals":
+      return ok(bridge.listGoals(args.projectId as string | undefined));
+
+    case "hyperclaw_list_issues":
+      return ok(bridge.listIssues({
+        status: args.status as string | undefined,
+        projectId: args.projectId as string | undefined,
+        agentId: args.agentId as string | undefined,
       }));
 
     case "hyperclaw_read_commands":

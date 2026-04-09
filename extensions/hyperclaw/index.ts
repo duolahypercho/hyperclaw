@@ -650,6 +650,48 @@ const plugin = {
       },
     });
 
+    // ── hyperclaw_list_projects ───────────────────────────────────────────
+    api.registerTool({
+      name: "hyperclaw_list_projects",
+      description: "List all projects in HyperClaw.",
+      parameters: { type: "object", properties: {} },
+      async execute() {
+        return { content: [{ type: "text", text: JSON.stringify(bridge.listProjects()) }] };
+      },
+    });
+
+    // ── hyperclaw_list_goals ──────────────────────────────────────────────
+    api.registerTool({
+      name: "hyperclaw_list_goals",
+      description: "List goals, optionally filtered by project.",
+      parameters: {
+        type: "object",
+        properties: {
+          projectId: { type: "string", description: "Filter by project ID" },
+        },
+      },
+      async execute(_id: string, params: any) {
+        return { content: [{ type: "text", text: JSON.stringify(bridge.listGoals(params.projectId)) }] };
+      },
+    });
+
+    // ── hyperclaw_list_issues ─────────────────────────────────────────────
+    api.registerTool({
+      name: "hyperclaw_list_issues",
+      description: "List issues, optionally filtered by status, project, or agent.",
+      parameters: {
+        type: "object",
+        properties: {
+          status: { type: "string", enum: ["open", "in_progress", "resolved", "closed"], description: "Filter by status" },
+          projectId: { type: "string", description: "Filter by project ID" },
+          agentId: { type: "string", description: "Filter by agent ID" },
+        },
+      },
+      async execute(_id: string, params: any) {
+        return { content: [{ type: "text", text: JSON.stringify(bridge.listIssues({ status: params.status, projectId: params.projectId, agentId: params.agentId })) }] };
+      },
+    });
+
     // ── hyperclaw_read_commands ───────────────────────────────────────────
     api.registerTool({
       name: "hyperclaw_read_commands",
