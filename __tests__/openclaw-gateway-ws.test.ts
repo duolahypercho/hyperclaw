@@ -28,7 +28,7 @@ describe("gatewayConnection.getChatHistory", () => {
     expect(requestSpy).toHaveBeenCalledTimes(1);
     expect(first).toBe(second);
 
-    resolveRequest?.({ messages: [{ id: "m1" }] });
+    resolveRequest!({ messages: [{ id: "m1" }] });
     await expect(first).resolves.toEqual({ messages: [{ id: "m1" }] });
     await expect(second).resolves.toEqual({ messages: [{ id: "m1" }] });
   });

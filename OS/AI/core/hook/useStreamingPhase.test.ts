@@ -13,12 +13,12 @@ vi.stubGlobal("cancelAnimationFrame", (id: number) => clearTimeout(id));
 // ── Shared helpers ───────────────────────────────────────────────────
 
 function makeOptions(overrides: Partial<Parameters<typeof useStreamingPhase>[0]> = {}) {
-  return {
+  const base = {
     mergeHistory: vi.fn(),
     setIsLoading: vi.fn(),
     sessionKeyRef: { current: "session-1" },
-    ...overrides,
   };
+  return Object.assign(base, overrides) as typeof base;
 }
 
 function makeMessage(partial: Partial<GatewayChatMessage> = {}): GatewayChatMessage {
@@ -197,7 +197,7 @@ describe("useStreamingPhase", () => {
       expect(opts.setIsLoading).toHaveBeenCalledWith(false);
       // Smart merge: should NOT call mergeHistory for text-only
       const mergeCallsAfterFinalize = opts.mergeHistory.mock.calls.filter(
-        (call: [boolean]) => call[0] === false
+        (call: any[]) => call[0] === false
       );
       expect(mergeCallsAfterFinalize).toHaveLength(0);
     });
@@ -238,7 +238,7 @@ describe("useStreamingPhase", () => {
       expect(result.current.phase).toBe("idle");
       // mergeHistory called twice: once at 3s, once at 3+5=8s
       const falseMerges = opts.mergeHistory.mock.calls.filter(
-        (call: [boolean]) => call[0] === false
+        (call: any[]) => call[0] === false
       );
       expect(falseMerges).toHaveLength(2);
     });
@@ -602,7 +602,7 @@ describe("useStreamingPhase", () => {
         // mergeHistory should only be called by the finalize debounce, not safety
         // (text-only, so finalize goes straight to idle without merge)
         const falseMerges = opts.mergeHistory.mock.calls.filter(
-          (call: [boolean]) => call[0] === false
+          (call: any[]) => call[0] === false
         );
         expect(falseMerges).toHaveLength(0);
       });
@@ -688,7 +688,7 @@ describe("useStreamingPhase", () => {
 
         // mergeHistory should NOT have been called with false (finalize merge)
         const falseMerges = opts.mergeHistory.mock.calls.filter(
-          (call: [boolean]) => call[0] === false
+          (call: any[]) => call[0] === false
         );
         expect(falseMerges).toHaveLength(0);
         expect(result.current.phase).toBe("idle");
@@ -746,7 +746,7 @@ describe("useStreamingPhase", () => {
       expect(opts.setIsLoading).toHaveBeenCalledWith(false);
       // mergeHistory should not have been called with autoFinalize=false
       const nonAutoMerges = opts.mergeHistory.mock.calls.filter(
-        (call: [boolean]) => call[0] === false
+        (call: any[]) => call[0] === false
       );
       expect(nonAutoMerges).toHaveLength(0);
     });
