@@ -173,10 +173,10 @@ function AgentInboxView({ sessions, loading, lastSeenTs, readSessions, unreadCou
           <button
             key={s.key}
             onClick={() => onSelect(s.key)}
-            className="flex items-start gap-2 px-3 py-2.5 text-left hover:bg-muted/30 transition-colors border-b border-border/20 last:border-0"
+            className="flex items-start w-full gap-2 px-3 py-2.5 text-left hover:bg-muted/30 transition-colors border-b border-border/20 last:border-0"
           >
             {/* Status icon — top-aligned */}
-            <div className="shrink-0 w-3.5 flex items-center justify-center mt-0.5">
+            <div className="shrink-0 w-3.5 flex items-center justify-center mt-1.5">
               {isActive ? (
                 <span className="relative flex w-2 h-2">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
@@ -427,6 +427,9 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
   const [addAgentOpen, setAddAgentOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deleteState, setDeleteState] = useState<"idle" | "deleting" | "deleted">("idle");
+  // Snapshot captured when the dialog opens — prevents deleting the wrong agent
+  // if currentAgentId changes while the confirmation dialog is visible.
+  const [pendingDeleteAgentId, setPendingDeleteAgentId] = useState<string>("");
   const chatRef = useRef<PanelChatViewHandle>(null);
   // Keyed by "agentId:backendTab" — avoids refetching when re-opening the same agent
   const sessionsCacheRef = useRef<Map<string, Session[]>>(new Map());
@@ -763,10 +766,10 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
                   </DropdownMenuItem>
                   <DropdownMenuItem
                     className="text-destructive focus:text-destructive focus:bg-destructive/10 gap-2 text-xs"
-                    disabled={isProtectedAgent}
                     onSelect={(e) => {
                       e.preventDefault();
                       setMoreMenuOpen(false);
+                      setPendingDeleteAgentId(currentAgentId);
                       setDeleteDialogOpen(true);
                     }}
                   >
@@ -989,13 +992,12 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
       <DeleteAgentDialog
         open={deleteDialogOpen}
         onOpenChange={setDeleteDialogOpen}
-        agentId={currentAgentId}
-        agentDisplayName={displayName}
-        isFirstAgent={isProtectedAgent}
+        agentId={pendingDeleteAgentId}
+        agentDisplayName={agents.find((a) => a.id === pendingDeleteAgentId)?.name ?? pendingDeleteAgentId}
         onDeleteStart={() => {
           // Switch to next agent immediately — no red/deleting state shown here.
           // StatusWidget shows the Firing… badge for that.
-          const next = agents.find((a) => a.id !== currentAgentId);
+          const next = agents.find((a) => a.id !== pendingDeleteAgentId);
           setSelectedAgentId(next?.id);
         }}
         onSuccess={() => {

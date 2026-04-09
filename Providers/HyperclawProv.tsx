@@ -18,6 +18,11 @@ export type { SavedLayout };
 
 /* ── Runtime-agnostic agent type ─────────────────────────────────── */
 
+/**
+ * A Hyperclaw agent — covers all runtimes: openclaw, claude-code, codex,
+ * hermes, hyperclaw. Superset of OpenClawRegistryAgent so existing consumers
+ * work without changes.
+ */
 export interface HyperclawAgent {
   id: string;
   name: string;
@@ -43,36 +48,44 @@ const HyperclawContext = createContext<HyperclawContextValue | null>(null);
 
 function HyperclawInner({ children }: { children: ReactNode }) {
   const openClaw = useOpenClawContext();
-  const [agents, setAgents] = useState<HyperclawAgent[]>([]);
+  const [sqliteAgents, setSqliteAgents] = useState<HyperclawAgent[]>([]);
   const fnsRef = useRef(openClaw);
   fnsRef.current = openClaw;
 
-  // Hyperclaw SQLite is the single source of truth for all agents across every
-  // runtime. We never fall back to the OpenClaw agent list — that path was the
-  // source of race conditions, flicker, and agents disappearing after add/delete.
-  const fetchAgents = useCallback(async () => {
+  const fetchSeqRef = useRef(0);
+
+  const fetchSQLiteAgents = useCallback(async () => {
+    const seq = ++fetchSeqRef.current;
     try {
       const res = (await bridgeInvoke("list-agent-identities", {})) as {
         success?: boolean;
         data?: HyperclawAgent[];
       };
+      // Only apply if no newer fetch has started — prevents stale responses
+      // from overwriting fresher data when multiple events fire concurrently.
+      if (seq !== fetchSeqRef.current) return;
       if (res?.success && Array.isArray(res.data)) {
-        setAgents(res.data);
+        // Trust the full response, even if it's an empty array.
+        setSqliteAgents(res.data);
       }
-      // On !success or bad shape: keep existing state.
+      // On !success or unexpected shape: keep existing state — don't wipe.
     } catch {
-      // On bridge error: keep existing state — don't wipe the list.
+      // On bridge error / timeout: keep existing state.
+      // Wiping here would drop all non-OpenClaw agents until hard reload.
     }
   }, []);
 
   // Initial load
   useEffect(() => {
-    fetchAgents();
-  }, [fetchAgents]);
+    fetchSQLiteAgents();
+  }, [fetchSQLiteAgents]);
 
-  // Refresh whenever agent data changes (add / delete / file sync).
+  // Live refresh when agent data changes.
+  // agent.file.changed — IDENTITY.md sync
+  // agent.hired        — new agent confirmed by connector; refresh before StatusWidget runs
+  // agent.deleted      — removed agent; refresh so StatusWidget doesn't re-add it
   useEffect(() => {
-    const handler = () => fetchAgents();
+    const handler = () => fetchSQLiteAgents();
     window.addEventListener("agent.file.changed", handler);
     window.addEventListener("agent.hired", handler);
     window.addEventListener("agent.deleted", handler);
@@ -81,19 +94,34 @@ function HyperclawInner({ children }: { children: ReactNode }) {
       window.removeEventListener("agent.hired", handler);
       window.removeEventListener("agent.deleted", handler);
     };
-  }, [fetchAgents]);
+  }, [fetchSQLiteAgents]);
+
+  // SQLite agents when available; fall back to OpenClaw list so nothing breaks
+  // if the connector is offline or hasn't cold-synced yet.
+  const agents = useMemo<HyperclawAgent[]>(() => {
+    if (sqliteAgents.length > 0) return sqliteAgents;
+    return openClaw.agents.map((a) => ({
+      id: a.id,
+      name: a.name,
+      runtime: "openclaw",
+      status: a.status,
+      role: a.role,
+      lastActive: a.lastActive,
+    }));
+  }, [sqliteAgents, openClaw.agents]);
 
   const value = useMemo<HyperclawContextValue>(
     () => ({
       ...openClaw,
       agents,
+      // Override refreshAll so it also re-fetches Hyperclaw agents
       refreshAll: async () => {
         await fnsRef.current.refreshAll();
-        await fetchAgents();
+        await fetchSQLiteAgents();
       },
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [openClaw, agents, fetchAgents]
+    [openClaw, agents, fetchSQLiteAgents]
   );
 
   return (

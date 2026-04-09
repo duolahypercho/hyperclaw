@@ -141,6 +141,9 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [addAgentDialogOpen, setAddAgentDialogOpen] = useState(false);
   const [deleteAgentDialogOpen, setDeleteAgentDialogOpen] = useState(false);
+  // Snapshot of the agent to delete — captured when the dialog opens so it
+  // doesn't shift if selectedAgentId changes while the dialog is visible.
+  const [pendingDeleteAgentId, setPendingDeleteAgentId] = useState<string>("");
   const [deletingAgentIds, setDeletingAgentIds] = useState<Set<string>>(new Set());
   const selectedPathRef = useRef<string | null>(null);
   const [ceoAgentId, setCeoAgentId] = useState<string | null>(null);
@@ -510,7 +513,10 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
               label: "Delete agent",
               icon: <Trash2 className="h-4 w-4" />,
               onClick: () => {
-                if (!isProtectedAgent) setDeleteAgentDialogOpen(true);
+                if (!isProtectedAgent) {
+                  setPendingDeleteAgentId(selectedAgentId);
+                  setDeleteAgentDialogOpen(true);
+                }
               },
               disabled: !selectedAgentId || isProtectedAgent,
               variant: "ghost",
@@ -626,20 +632,20 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
       <DeleteAgentDialog
         open={deleteAgentDialogOpen}
         onOpenChange={setDeleteAgentDialogOpen}
-        agentId={selectedAgentId}
-        agentDisplayName={workspaceLabels[selectedAgentId] ?? selectedAgentId}
+        agentId={pendingDeleteAgentId}
+        agentDisplayName={workspaceLabels[pendingDeleteAgentId] ?? pendingDeleteAgentId}
         onDeleteStart={() => {
-          setDeletingAgentIds((prev) => new Set([...prev, selectedAgentId]));
+          setDeletingAgentIds((prev) => new Set([...prev, pendingDeleteAgentId]));
         }}
         onSuccess={() => {
           setDeletingAgentIds((prev) => {
             const next = new Set(prev);
-            next.delete(selectedAgentId);
+            next.delete(pendingDeleteAgentId);
             return next;
           });
           refresh();
         }}
-        isFirstAgent={agents[0] != null && selectedAgentId === agents[0].id}
+        isFirstAgent={agents[0] != null && pendingDeleteAgentId === agents[0].id}
       />
     </AgentsContext.Provider>
   );
