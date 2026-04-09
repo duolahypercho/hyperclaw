@@ -1,9 +1,10 @@
-import React, { useEffect, memo, useRef, useState, useCallback } from "react";
+import React, { useEffect, memo, useState } from "react";
 import { useOS, useCopanionChatOS } from "@OS/Provider/OSProv";
 import { useHyperclawContext } from "$/Providers/HyperclawProv";
 import DocsAppLayout from "$/components/Tool/Docs/DocsAppLayout";
 import FloatingChatAppLayout from "$/components/Tool/FloatingChat/FloatingChatAppLayout";
 import Navbar from "$/components/navbar";
+import { TitleBar } from "@OS/AI/components/electron";
 import { useRouter } from "next/router";
 import { TodoListProvider } from "$/components/Tool/TodoList/provider/todolistProvider";
 import { Guidance } from "$/components/Guidance";
@@ -19,7 +20,6 @@ const MemoizedChildren = memo(
   }: {
     children: React.ReactNode;
     isCopanionOpen: boolean;
-    navbarHeight: number;
   }) => {
     return (
       <div
@@ -65,38 +65,6 @@ const DesktopLayout = ({ children }: any) => {
     };
   }, [isDashboard, isTodoSidebarOpen]);
 
-  const [navbarHeight, setNavbarHeight] = useState(64); // Default fallback height
-  const navbarRef = useRef<HTMLDivElement>(null);
-
-  // Function to measure navbar width
-  const measureNavbarHeight = useCallback(() => {
-    if (navbarRef.current) {
-      const height = navbarRef.current.offsetHeight;
-      setNavbarHeight(height);
-    }
-  }, []);
-
-  // Set up ResizeObserver to track navbar width changes
-  useEffect(() => {
-    if (!navbarRef.current) return;
-
-    const resizeObserver = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        const height = entry.contentRect.height;
-        setNavbarHeight(height);
-      }
-    });
-
-    resizeObserver.observe(navbarRef.current);
-
-    // Initial measurement
-    measureNavbarHeight();
-
-    return () => {
-      resizeObserver.disconnect();
-    };
-  }, [measureNavbarHeight]);
-
   // Wait for dashboard state + layouts to be ready before rendering
   if (!dashboardReady) return null;
 
@@ -112,14 +80,14 @@ const DesktopLayout = ({ children }: any) => {
 
       {/* Main content area - takes remaining space */}
       <div className="relative z-10 flex-1 flex flex-col overflow-hidden">
-        {/* Navbar container - takes up space in layout */}
-        <div ref={navbarRef} className="flex-shrink-0 relative w-full">
-          <Navbar />
-        </div>
-        <div className="flex-1 flex flex-row overflow-hidden">
+        {/* Titlebar: fixed top strip with OS-native window controls */}
+        <TitleBar />
+        {/* Sidebar: fixed, starts below titlebar */}
+        <Navbar />
+        {/* Content offset by sidebar width + titlebar height */}
+        <div className="flex-1 flex flex-row overflow-hidden pl-12 pt-8">
           <MemoizedChildren
             isCopanionOpen={showState}
-            navbarHeight={navbarHeight}
           >
             {isDashboard ? (
               <div data-guidance="center-display" className="w-full h-full">

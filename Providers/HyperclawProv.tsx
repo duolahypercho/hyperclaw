@@ -46,13 +46,34 @@ const HyperclawContext = createContext<HyperclawContextValue | null>(null);
 
 /* ── Inner consumer — must live inside OpenClawProvider ──────────── */
 
+async function fetchHermesProfiles(): Promise<HyperclawAgent[]> {
+  try {
+    const res = (await bridgeInvoke("list-hermes-profiles", {})) as {
+      success?: boolean;
+      data?: { profiles?: Array<{ id: string; name: string; status?: string; lastActive?: string }> };
+    };
+    if (!res?.success || !res.data?.profiles) return [];
+    return res.data.profiles.map((p) => ({
+      id: `hermes:${p.id}`,
+      name: p.name,
+      runtime: "hermes",
+      status: p.status ?? "idle",
+      lastActive: p.lastActive,
+    }));
+  } catch {
+    return [];
+  }
+}
+
 function HyperclawInner({ children }: { children: ReactNode }) {
   const openClaw = useOpenClawContext();
   const [sqliteAgents, setSqliteAgents] = useState<HyperclawAgent[]>([]);
+  const [hermesProfiles, setHermesProfiles] = useState<HyperclawAgent[]>([]);
   const fnsRef = useRef(openClaw);
   fnsRef.current = openClaw;
 
   const fetchSeqRef = useRef(0);
+  const hermesSeqRef = useRef(0);
 
   const fetchSQLiteAgents = useCallback(async () => {
     const seq = ++fetchSeqRef.current;
@@ -75,17 +96,25 @@ function HyperclawInner({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const refreshHermesProfiles = useCallback(async () => {
+    const seq = ++hermesSeqRef.current;
+    const profiles = await fetchHermesProfiles();
+    if (seq !== hermesSeqRef.current) return;
+    setHermesProfiles(profiles);
+  }, []);
+
   // Initial load
   useEffect(() => {
     fetchSQLiteAgents();
-  }, [fetchSQLiteAgents]);
+    refreshHermesProfiles();
+  }, [fetchSQLiteAgents, refreshHermesProfiles]);
 
   // Live refresh when agent data changes.
   // agent.file.changed — IDENTITY.md sync
   // agent.hired        — new agent confirmed by connector; refresh before StatusWidget runs
   // agent.deleted      — removed agent; refresh so StatusWidget doesn't re-add it
   useEffect(() => {
-    const handler = () => fetchSQLiteAgents();
+    const handler = () => { fetchSQLiteAgents(); refreshHermesProfiles(); };
     window.addEventListener("agent.file.changed", handler);
     window.addEventListener("agent.hired", handler);
     window.addEventListener("agent.deleted", handler);
@@ -94,13 +123,13 @@ function HyperclawInner({ children }: { children: ReactNode }) {
       window.removeEventListener("agent.hired", handler);
       window.removeEventListener("agent.deleted", handler);
     };
-  }, [fetchSQLiteAgents]);
+  }, [fetchSQLiteAgents, refreshHermesProfiles]);
 
-  // SQLite agents when available; fall back to OpenClaw list so nothing breaks
-  // if the connector is offline or hasn't cold-synced yet.
+  // OpenClaw agents are always sourced from the OpenClaw registry — never from
+  // SQLite — so an OpenClaw agent named "Hermes" is never conflated with the
+  // actual Hermes runtime agent that also lives in SQLite.
   const agents = useMemo<HyperclawAgent[]>(() => {
-    if (sqliteAgents.length > 0) return sqliteAgents;
-    return openClaw.agents.map((a) => ({
+    const ocAgents: HyperclawAgent[] = openClaw.agents.map((a) => ({
       id: a.id,
       name: a.name,
       runtime: "openclaw",
@@ -108,7 +137,28 @@ function HyperclawInner({ children }: { children: ReactNode }) {
       role: a.role,
       lastActive: a.lastActive,
     }));
-  }, [sqliteAgents, openClaw.agents]);
+
+    const ocIds = new Set(ocAgents.map((a) => a.id));
+
+    // Hermes filesystem profiles: deduplicate against OpenClaw and against
+    // bare-id collision (e.g. an OpenClaw agent whose id is "hermes").
+    const uniqueHermes = hermesProfiles.filter((h) => {
+      if (ocIds.has(h.id)) return false;
+      if (h.id.startsWith("hermes:") && ocIds.has(h.id.slice("hermes:".length))) return false;
+      return true;
+    });
+
+    const mergedIds = new Set([...ocIds, ...uniqueHermes.map((h) => h.id)]);
+
+    // Add only non-openclaw agents from SQLite (claude-code, codex, hermes that
+    // were created via setup-agent). Skip any hermes entry already covered by
+    // the filesystem scan above.
+    const nonOcSqlite = sqliteAgents.filter(
+      (a) => a.runtime !== "openclaw" && !mergedIds.has(a.id)
+    );
+
+    return [...ocAgents, ...uniqueHermes, ...nonOcSqlite];
+  }, [sqliteAgents, hermesProfiles, openClaw.agents]);
 
   const value = useMemo<HyperclawContextValue>(
     () => ({
@@ -117,11 +167,11 @@ function HyperclawInner({ children }: { children: ReactNode }) {
       // Override refreshAll so it also re-fetches Hyperclaw agents
       refreshAll: async () => {
         await fnsRef.current.refreshAll();
-        await fetchSQLiteAgents();
+        await Promise.all([fetchSQLiteAgents(), refreshHermesProfiles()]);
       },
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [openClaw, agents, fetchSQLiteAgents]
+    [openClaw, agents, fetchSQLiteAgents, refreshHermesProfiles]
   );
 
   return (

@@ -21,6 +21,11 @@ export interface AgentIdentity {
 const identityCache = new Map<string, AgentIdentity>();
 const inflight = new Map<string, Promise<AgentIdentity | null>>();
 
+// TTL for cached identities. Re-fetches are skipped if the cached entry was
+// populated within this window. Invalidated on reconnect and on IDENTITY.md change.
+const IDENTITY_TTL_MS = 60_000;
+const fetchedAtCache = new Map<string, number>();
+
 // --- localStorage persistence ---
 const STORAGE_KEY = "agent-identity-cache";
 
@@ -71,6 +76,7 @@ subscribeGatewayConnection(() => {
   const { connected } = getGatewayConnectionState();
   if (connected) {
     identityCache.clear();
+    fetchedAtCache.clear();
     loadFromStorage(); // reload persisted as baseline
     inflight.clear();
   }
@@ -85,11 +91,19 @@ export function patchIdentityCache(agentId: string, patch: Partial<AgentIdentity
   const existing = identityCache.get(agentId);
   const updated: AgentIdentity = { ...(existing ?? { agentId }), ...patch, agentId };
   identityCache.set(agentId, updated);
+  fetchedAtCache.set(agentId, Date.now()); // user edit is authoritative — treat as fresh
   saveToStorage();
   notifyCacheUpdate(agentId, updated);
 }
 
 async function fetchIdentity(agentId: string): Promise<AgentIdentity | null> {
+  // Return cached data immediately if still within TTL — avoids a bridge round-trip.
+  const cached = identityCache.get(agentId);
+  const fetchedAt = fetchedAtCache.get(agentId);
+  if (cached && fetchedAt && Date.now() - fetchedAt < IDENTITY_TTL_MS) {
+    return cached;
+  }
+
   // Deduplicate concurrent requests for the same agent
   const existing = inflight.get(agentId);
   if (existing) return existing;
@@ -113,6 +127,7 @@ async function fetchIdentity(agentId: string): Promise<AgentIdentity | null> {
         project: res.data.projectPath || cached?.project || undefined,
       };
       identityCache.set(agentId, identity);
+      fetchedAtCache.set(agentId, Date.now());
       saveToStorage();
       notifyCacheUpdate(agentId, identity);
       return identity;
@@ -291,6 +306,9 @@ export function resolveAvatarUrl(avatar: string | undefined, gatewayBaseUrl?: st
   if (!avatar) return undefined;
   const trimmed = avatar.trim();
   if (!trimmed) return undefined;
+  // SVG data URIs are auto-generated seed avatars, never real user uploads — skip them
+  // so components fall back to the emoji/initials fallback instead.
+  if (/^data:image\/svg\+xml/i.test(trimmed)) return undefined;
   if (/^https?:\/\//i.test(trimmed) || /^data:image\//i.test(trimmed)) {
     return trimmed;
   }
@@ -335,6 +353,7 @@ if (typeof window !== "undefined") {
     if (event === "agent.file.changed" && data?.fileKey === "IDENTITY" && data?.agentId) {
       const agentId = data.agentId;
       identityCache.delete(agentId);
+      fetchedAtCache.delete(agentId);
       inflight.delete(agentId);
       // Re-fetch fresh identity immediately so the UI never goes blank.
       // fetchIdentity calls notifyCacheUpdate internally on success.

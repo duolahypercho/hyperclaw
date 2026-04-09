@@ -74,9 +74,8 @@ export interface AgentIdentityEditorState {
   setHbEvery: (v: string) => void;
   originalHbEvery: string;
 
-  /* Runtime */
+  /* Runtime (read-only — set at agent creation) */
   runtime: string;
-  setRuntime: (v: string) => void;
 
   /* Department / org chart */
   department: string;
@@ -173,7 +172,7 @@ export function useAgentIdentityEditor(
         setRole(parseIdentityField(content, "Role") || "");
         setDescription(parseIdentityDescription(content));
         setEmoji(parseIdentityField(content, "Emoji") || opts?.identityEmoji || "🤖");
-        setRuntime(parseIdentityField(content, "Runtime") || "");
+        setRuntime(parseIdentityField(content, "Runtime") || opts?.agentRuntime || "");
         const avatarVal = parseIdentityField(content, "Avatar") || "";
         setAvatarPath(avatarVal);
         setAvatarPreview(null);
@@ -199,20 +198,48 @@ export function useAgentIdentityEditor(
       if (!cancelled) setLoading(false);
     })();
 
-    // 2. openclaw.json (model + heartbeat)
+    // 2. Models + heartbeat — source depends on runtime
     (async () => {
+      const runtime = opts?.agentRuntime;
       try {
-        const config = await readOpenClawConfig();
-        if (cancelled || !config) return;
-        setAvailableModels(getAvailableModels(config));
-        const m = getAgentModel(config, agentId);
-        setModel(m);
-        setOriginalModel(m);
-        const hb = getAgentHeartbeat(config, agentId);
-        setHbModel(hb.model);
-        setOriginalHbModel(hb.model);
-        setHbEvery(hb.every);
-        setOriginalHbEvery(hb.every);
+        if (runtime === "hermes") {
+          const res = (await bridgeInvoke("list-models", {
+            runtime: "hermes",
+            agentId,
+          })) as { models?: Array<{ id: string; label: string }> };
+          if (cancelled) return;
+          const modelList = (res?.models ?? []).map((m) => m.id).filter(Boolean);
+          setAvailableModels(modelList);
+          const defaultModel = modelList[0] ?? "";
+          if (defaultModel) {
+            setModel(defaultModel);
+            setOriginalModel(defaultModel);
+          }
+        } else if (runtime === "claude-code") {
+          if (cancelled) return;
+          setAvailableModels([
+            "claude-opus-4-6",
+            "claude-sonnet-4-6",
+            "claude-haiku-4-5-20251001",
+          ]);
+        } else if (runtime === "codex") {
+          if (cancelled) return;
+          // Codex handles model selection internally — nothing to show
+          setAvailableModels([]);
+        } else {
+          // OpenClaw: read from openclaw.json
+          const config = await readOpenClawConfig();
+          if (cancelled || !config) return;
+          setAvailableModels(getAvailableModels(config));
+          const m = getAgentModel(config, agentId);
+          setModel(m);
+          setOriginalModel(m);
+          const hb = getAgentHeartbeat(config, agentId);
+          setHbModel(hb.model);
+          setOriginalHbModel(hb.model);
+          setHbEvery(hb.every);
+          setOriginalHbEvery(hb.every);
+        }
       } catch { /* */ }
     })();
 
@@ -237,7 +264,7 @@ export function useAgentIdentityEditor(
 
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentId]);
+  }, [agentId, opts?.agentRuntime]);
 
   /* ── Display avatar ─────────────────────────────── */
   const displayAvatarSrc = avatarPreview || loadedAvatarUri || opts?.identityAvatarUrl;
@@ -266,7 +293,6 @@ export function useAgentIdentityEditor(
     const origDesc = parseIdentityDescription(raw);
     const origEmoji = parseIdentityField(raw, "Emoji") || opts?.identityEmoji || "🤖";
     const origAvatar = parseIdentityField(raw, "Avatar") || "";
-    const origRuntime = parseIdentityField(raw, "Runtime") || "";
     return (
       name !== origName ||
       role !== origRole ||
@@ -277,8 +303,7 @@ export function useAgentIdentityEditor(
       model !== originalModel ||
       hbModel !== originalHbModel ||
       hbEvery !== originalHbEvery ||
-      department !== originalDepartment ||
-      runtime !== origRuntime
+      department !== originalDepartment
     );
   })();
 
@@ -300,9 +325,21 @@ export function useAgentIdentityEditor(
           ...(avatarData ? { avatarData } : {}),
         })) as { success?: boolean };
         if (!res?.success) { setSaving(false); return false; }
-        patchIdentityCache(agentId, { name, emoji, ...(avatarData ? { avatar: avatarData } : {}) });
+        patchIdentityCache(agentId, {
+          name,
+          emoji,
+          ...(avatarData ? { avatar: avatarData } : {}),
+        });
         if (avatarPreview) setLoadedAvatarUri(avatarPreview);
         setAvatarPreview(null);
+        // Save model back to Hermes profile config.yaml
+        if (opts?.agentRuntime === "hermes" && model !== originalModel && model && model !== "__default__") {
+          const profileId = agentId.replace(/^hermes:/, "");
+          if (typeof window !== "undefined") {
+            await window.electronAPI?.hermes?.saveProfileModel(profileId, model).catch(() => {});
+          }
+          setOriginalModel(model);
+        }
         setSaved(true);
         setTimeout(() => setSaved(false), 2000);
         setSaving(false);
@@ -312,7 +349,6 @@ export function useAgentIdentityEditor(
       let content = raw || "";
       content = updateIdentityField(content, "Name", name);
       if (role.trim()) content = updateIdentityField(content, "Role", role);
-      if (runtime.trim()) content = updateIdentityField(content, "Runtime", runtime);
       if (department.trim()) {
         const deptLabel = departments.find((d) => d.id === department)?.name || department;
         content = updateIdentityField(content, "Department", deptLabel);
@@ -457,7 +493,7 @@ export function useAgentIdentityEditor(
     originalHbModel,
     hbEvery, setHbEvery,
     originalHbEvery,
-    runtime, setRuntime,
+    runtime,
     department, setDepartment,
     originalDepartment,
     departments,
