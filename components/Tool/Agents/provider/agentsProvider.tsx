@@ -11,6 +11,7 @@ import React, {
 } from "react";
 import { Bot, FileText, Plus, RefreshCw, Save, Loader2, Trash2, Sparkles, Brain, UserRound, Users, Wrench, Heart, Crown, Zap } from "lucide-react";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
+import { patchIdentityCache } from "$/hooks/useAgentIdentity";
 import { dashboardState } from "$/lib/dashboard-state";
 import { useHyperclawContext } from "$/Providers/HyperclawProv";
 import { gatewayConnection } from "$/lib/openclaw-gateway-ws";
@@ -98,6 +99,47 @@ async function fetchListAgentFiles(): Promise<AgentFilesResponse> {
   return { files, workspaceLabels };
 }
 
+async function fetchHermesProfiles(): Promise<Agent[]> {
+  try {
+    const res = (await bridgeInvoke("list-hermes-profiles", {})) as {
+      success?: boolean;
+      data?: { profiles?: Array<{ id: string; name: string; status: string; lastActive: string }> };
+    };
+    if (!res?.success || !res.data?.profiles) return [];
+    return res.data.profiles.map((p) => ({
+      id: `hermes:${p.id}`,
+      name: p.name,
+      status: p.status ?? "idle",
+      lastActive: p.lastActive,
+      runtime: "hermes" as const,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+async function fetchIdentityAgents(): Promise<Agent[]> {
+  try {
+    const res = (await bridgeInvoke("list-agent-identities", {})) as {
+      success?: boolean;
+      data?: Array<{ id: string; name?: string; emoji?: string; runtime?: string; status?: string }>;
+    };
+    if (!res?.success || !Array.isArray(res.data)) return [];
+    return res.data
+      .filter((a) => a.runtime === "claude-code" || a.runtime === "codex" || a.runtime === "hermes")
+      .map((a) => ({
+        // Hermes identity agents get the same "hermes:" prefix as Hermes profiles so
+        // the dedup logic treats them consistently and prevents double-entries.
+        id: a.runtime === "hermes" ? `hermes:${a.id}` : a.id,
+        name: a.name ?? a.id,
+        status: a.status ?? "idle",
+        runtime: a.runtime as "claude-code" | "codex" | "hermes",
+      }));
+  } catch {
+    return [];
+  }
+}
+
 async function fetchDocContent(relativePath: string): Promise<string | null> {
   const res = (await bridgeInvoke("get-openclaw-doc", { relativePath })) as {
     success?: boolean;
@@ -181,11 +223,61 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
       // Fetch fresh agent list from the server instead of using the stale
       // context value — critical after add/delete so the UI updates immediately
       // rather than waiting for the next 30s auto-refresh cycle.
-      const [freshAgents, filesResponse] = await Promise.all([
-        fetchAgents(),
+      const [freshAgents, filesResponse, hermesAgents, identityAgents] = await Promise.all([
+        fetchAgents().catch(() => [] as Agent[]),
         fetchListAgentFiles(),
+        fetchHermesProfiles(),
+        fetchIdentityAgents(),
       ]);
-      setAgents(freshAgents as Agent[]);
+      // Tag OpenClaw agents and merge with Hermes profiles
+      const openClawAgents = (freshAgents as Agent[]).map((a) => ({
+        ...a,
+        runtime: a.runtime ?? ("openclaw" as const),
+      }));
+      // Deduplicate: skip Hermes profile if an agent with the same base id already exists
+      const openClawIds = new Set(openClawAgents.map((a) => a.id));
+      const uniqueHermes = hermesAgents.filter((h) => {
+        if (openClawIds.has(h.id)) return false;
+        // Hermes profile IDs carry a "hermes:" prefix — also skip if the bare ID
+        // matches an OpenClaw agent so we don't surface a ghost "hermes:hermes" entry
+        // when an OpenClaw agent happens to share the same name (e.g. id="hermes").
+        if (h.id.startsWith("hermes:")) {
+          const bareId = h.id.slice("hermes:".length);
+          if (openClawIds.has(bareId)) return false;
+        }
+        return true;
+      });
+      // Deduplicate: skip identity agents if already present in openclaw or hermes
+      const mergedIds = new Set([...openClawIds, ...uniqueHermes.map((h) => h.id)]);
+      const uniqueIdentity = identityAgents.filter((a) => {
+        if (mergedIds.has(a.id)) return false;
+        // Extra guard: skip stale SQLite hermes identity agents whose bare id (without "hermes:")
+        // matches an existing OpenClaw agent — these are stale runtime="hermes" records that
+        // were incorrectly set before the openclaw default was applied.
+        if (a.runtime === "hermes" && a.id.startsWith("hermes:")) {
+          const bareId = a.id.slice("hermes:".length);
+          if (openClawIds.has(bareId)) return false;
+        }
+        return true;
+      });
+      const allAgents = [...openClawAgents, ...uniqueHermes, ...uniqueIdentity];
+
+      // Auto-fix stale SQLite runtime entries: if an OpenClaw agent has a ghost
+      // "hermes:X" identity entry (stale runtime="hermes" in SQLite for an openclaw agent),
+      // silently patch the DB so the ghost disappears on next refresh.
+      for (const ocAgent of openClawAgents) {
+        if (identityAgents.some((a) => a.id === `hermes:${ocAgent.id}`)) {
+          bridgeInvoke("update-agent-identity", { agentId: ocAgent.id, runtime: "openclaw" }).catch(() => {});
+        }
+      }
+
+      // Patch the identity cache so useAgentIdentity returns the source-correct
+      // runtime for every agent — OpenClaw agents always get "openclaw" here,
+      // preventing stale SQLite "hermes" values from overriding the display.
+      for (const agent of allAgents) {
+        if (agent.runtime) patchIdentityCache(agent.id, { runtime: agent.runtime });
+      }
+      setAgents(allAgents);
       setAgentFiles(filesResponse.files);
       setWorkspaceLabels(filesResponse.workspaceLabels);
     } catch (err: unknown) {
@@ -335,6 +427,16 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
     }
   }, [loading, agents, selectedAgentId]);
 
+  // Broadcast selected agent name to the titlebar
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const name = agents.find((a) => a.id === selectedAgentId)?.name ?? selectedAgentId ?? null;
+    window.dispatchEvent(new CustomEvent("titlebar-context", { detail: { subtitle: name } }));
+    return () => {
+      window.dispatchEvent(new CustomEvent("titlebar-context", { detail: { subtitle: null } }));
+    };
+  }, [selectedAgentId, agents]);
+
   // When agent or file list changes: keep current file if still in list; otherwise default to agents.md or first file
   useEffect(() => {
     const currentInList =
@@ -466,7 +568,7 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
       const firstAgentId = agents[0]?.id ?? null;
       const isFirstAgent = firstAgentId != null && selectedAgentId === firstAgentId;
       const selectedAgent = agents.find((a) => a.id === selectedAgentId);
-      const isProtectedAgent = isFirstAgent;
+      const isProtectedAgent = selectedAgentId === "main" || selectedAgentId === "hermes:__main__";
       const breadcrumbs = [{ label: "Agents" }];
       if (selectedAgentName) breadcrumbs.push({ label: selectedAgentName });
       if (selectedFile) breadcrumbs.push({ label: selectedFile.name });
@@ -624,6 +726,7 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
       <AddAgentDialog
         open={addAgentDialogOpen}
         onOpenChange={setAddAgentDialogOpen}
+        existingAgents={agents}
         onSuccess={(name) => {
           addOptimisticAgent(name);
           refreshAfterMutation();
@@ -645,7 +748,7 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
           });
           refresh();
         }}
-        isFirstAgent={agents[0] != null && pendingDeleteAgentId === agents[0].id}
+        isFirstAgent={pendingDeleteAgentId === "main" || pendingDeleteAgentId === "hermes:__main__"}
       />
     </AgentsContext.Provider>
   );

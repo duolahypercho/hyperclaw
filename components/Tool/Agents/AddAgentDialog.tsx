@@ -1,8 +1,8 @@
 "use client";
 
-import React, { useState, useCallback, useMemo, useEffect } from "react";
+import React, { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Sparkles } from "lucide-react";
+import { Sparkles, ImagePlus, X } from "lucide-react";
 import {
   Sheet,
   SheetContent,
@@ -28,6 +28,8 @@ import {
   getAvailableModels,
   saveAgentModel,
   resolveAgentFolder,
+  saveAvatarImage,
+  syncToIdentityMd,
 } from "$/lib/identity-md";
 import { patchIdentityCache } from "$/hooks/useAgentIdentity";
 import { OpenClawIcon, ClaudeCodeIcon, CodexIcon, HermesIcon } from "$/components/Onboarding/RuntimeIcons";
@@ -127,15 +129,17 @@ export interface AddAgentDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSuccess?: (agentId: string, runtime: string) => void;
+  existingAgents?: Array<{ id: string; name: string; runtime?: string }>;
 }
 
 /* ── Component ───────────────────────────────────────────────────── */
 
-export function AddAgentDialog({ open, onOpenChange, onSuccess }: AddAgentDialogProps) {
+export function AddAgentDialog({ open, onOpenChange, onSuccess, existingAgents = [] }: AddAgentDialogProps) {
   const [selectedRuntime, setSelectedRuntime] = useState("openclaw");
   const [displayName, setDisplayName] = useState("");
   const [selectedEmoji, setSelectedEmoji] = useState("🤖");
   const [customEmoji, setCustomEmoji] = useState("");
+  const [avatarDataUri, setAvatarDataUri] = useState<string | null>(null);
   const [role, setRole] = useState("");
   const [description, setDescription] = useState("");
   const [model, setModel] = useState("__default__");
@@ -143,6 +147,7 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess }: AddAgentDialog
   const [projectPath, setProjectPath] = useState("");
   const [availableProjects, setAvailableProjects] = useState<Array<{ dirName: string; projectPath: string; sessionCount: number }>>([]);
   const [error, setError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const runtime = useMemo(
     () => RUNTIMES.find((r) => r.id === selectedRuntime) ?? RUNTIMES[0],
@@ -170,10 +175,31 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess }: AddAgentDialog
       .catch(() => setAvailableProjects([]));
   }, [open, selectedRuntime]);
 
+  const handleImageSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      setError("Please select an image file");
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setError("Image must be under 5 MB");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const result = ev.target?.result;
+      if (typeof result === "string") setAvatarDataUri(result);
+    };
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  }, []);
+
   const reset = useCallback(() => {
     setDisplayName("");
     setSelectedEmoji("🤖");
     setCustomEmoji("");
+    setAvatarDataUri(null);
     setRole("");
     setDescription("");
     setModel("__default__");
@@ -203,8 +229,29 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess }: AddAgentDialog
       return;
     }
 
+    // Duplicate check: compare against existing agents for the same runtime.
+    const isDuplicate = existingAgents.some((a) => {
+      if (selectedRuntime === "openclaw") {
+        return a.runtime === "openclaw" && a.id === id;
+      }
+      if (selectedRuntime === "hermes") {
+        return a.runtime === "hermes" && (a.id === `hermes:${id}` || a.id === id);
+      }
+      // claude-code / codex: compare by name (case-insensitive) within same runtime
+      return a.runtime === selectedRuntime && a.name.toLowerCase() === name.toLowerCase();
+    });
+    if (isDuplicate) {
+      setError(`An agent named "${name}" already exists in ${runtime.label}`);
+      return;
+    }
+
     // Populate identity cache now so avatar renders the moment the row appears.
-    patchIdentityCache(id, { name, emoji: activeEmoji, runtime: selectedRuntime });
+    patchIdentityCache(id, {
+      name,
+      emoji: activeEmoji,
+      runtime: selectedRuntime,
+      ...(avatarDataUri ? { avatar: avatarDataUri } : {}),
+    });
 
     // Close dialog immediately and signal StatusWidget to show the Hiring badge.
     window.dispatchEvent(new CustomEvent("agent.hiring", {
@@ -243,6 +290,21 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess }: AddAgentDialog
         }
 
         if (result?.success) {
+          // Persist avatar image through the connector after the agent exists.
+          if (avatarDataUri) {
+            try {
+              const fileName = await saveAvatarImage(id, avatarDataUri);
+              await bridgeInvoke("update-agent-identity", {
+                agentId: id,
+                avatarData: avatarDataUri,
+              });
+              if (selectedRuntime === "openclaw" && fileName) {
+                await syncToIdentityMd(id, { avatar: fileName });
+              }
+            } catch {
+              // Non-fatal — avatar save failure doesn't block agent creation
+            }
+          }
           window.dispatchEvent(new CustomEvent("agent.hired", {
             detail: { agentId: id, runtime: selectedRuntime },
           }));
@@ -256,7 +318,7 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess }: AddAgentDialog
     };
 
     run();
-  }, [displayName, selectedRuntime, activeEmoji, role, description, model, projectPath, onSuccess, handleOpenChange]);
+  }, [displayName, selectedRuntime, activeEmoji, avatarDataUri, role, description, model, projectPath, onSuccess, handleOpenChange]);
 
   return (
     <Sheet open={open} onOpenChange={handleOpenChange}>
@@ -338,11 +400,69 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess }: AddAgentDialog
             )}
           </div>
 
+          {/* Avatar image */}
+          <div className="space-y-2.5">
+            <Label className="text-xs uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+              <ImagePlus className="w-3 h-3" />
+              Avatar photo
+              <span className="text-muted-foreground/50 normal-case tracking-normal">optional</span>
+            </Label>
+            <div className="flex items-center gap-4">
+              {/* Preview circle */}
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="relative w-16 h-16 rounded-2xl border-2 border-dashed border-border/60 flex items-center justify-center overflow-hidden hover:border-primary/50 transition-all group shrink-0"
+              >
+                {avatarDataUri ? (
+                  <img src={avatarDataUri} alt="Agent avatar" className="w-full h-full object-cover" />
+                ) : (
+                  <span className="text-3xl select-none">{activeEmoji}</span>
+                )}
+                <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity rounded-[14px]">
+                  <ImagePlus className="w-5 h-5 text-white" />
+                </div>
+              </button>
+              <div className="flex flex-col gap-2">
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="text-xs h-7 px-2.5 rounded-lg border border-border/60 bg-muted/30 hover:bg-muted/60 transition-colors flex items-center gap-1.5 text-foreground/80"
+                  >
+                    <ImagePlus className="w-3 h-3" />
+                    {avatarDataUri ? "Change photo" : "Upload photo"}
+                  </button>
+                  {avatarDataUri && (
+                    <button
+                      type="button"
+                      onClick={() => setAvatarDataUri(null)}
+                      className="text-xs h-7 px-2 rounded-lg border border-border/40 hover:bg-destructive/10 hover:border-destructive/40 hover:text-destructive transition-colors text-muted-foreground flex items-center gap-1"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+                <p className="text-[10px] text-muted-foreground leading-tight">
+                  PNG, JPEG, WebP · max 5 MB<br />
+                  Falls back to emoji if no photo.
+                </p>
+              </div>
+            </div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/webp,image/gif"
+              className="hidden"
+              onChange={handleImageSelect}
+            />
+          </div>
+
           {/* Emoji */}
           <div className="space-y-2.5">
             <Label className="text-xs uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
               <Sparkles className="w-3 h-3" />
-              Emoji
+              {avatarDataUri ? "Fallback emoji" : "Emoji"}
             </Label>
             <div className="flex flex-wrap gap-2">
               {EMOJI_OPTIONS.map((e) => (

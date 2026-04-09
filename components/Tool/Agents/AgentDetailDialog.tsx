@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
-import { Save, Trash2, Loader2, ImagePlus } from "lucide-react";
+import { Save, Trash2, Loader2, ImagePlus, Package, ScrollText } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -47,7 +47,16 @@ const TAB_FILES = [
   { key: "MEMORY",    label: "MEMORY",    desc: "Persistent memory" },
 ] as const;
 
-type TabKey = "INFO" | (typeof TAB_FILES)[number]["key"];
+// Tabs shown only for Hermes runtime agents — maps to per-profile data in ~/.hermes/profiles/{id}/
+const HERMES_TABS = [
+  { key: "SOUL",   label: "SOUL",   desc: "Personality & behavior (SOUL.md in Hermes profile)" },
+  { key: "CONFIG", label: "CONFIG", desc: "Model, env, toolsets (config.yaml in Hermes profile)" },
+  { key: "SKILLS", label: "SKILLS", desc: "Installed skill bundles" },
+  { key: "LOGS",   label: "LOGS",   desc: "Recent profile logs" },
+] as const;
+
+type HermesTabKey = "INFO" | (typeof HERMES_TABS)[number]["key"];
+type TabKey = "INFO" | (typeof TAB_FILES)[number]["key"] | (typeof HERMES_TABS)[number]["key"];
 
 /* ── Helpers ────────────────────────────────────────────────── */
 
@@ -66,6 +75,8 @@ export interface AgentDetailDialogProps {
   onOpenChange: (open: boolean) => void;
   agentId: string;
   agentName: string;
+  /** Runtime from the live agents list — takes precedence over stale SQLite identity runtime. */
+  agentRuntime?: string;
   workspaceFolder?: string;
   onDeleted?: () => void;
 }
@@ -77,6 +88,7 @@ export function AgentDetailDialog({
   onOpenChange,
   agentId,
   agentName,
+  agentRuntime,
   workspaceFolder,
   onDeleted,
 }: AgentDetailDialogProps) {
@@ -93,20 +105,44 @@ export function AgentDetailDialog({
   const resolvedAvatarUrl = resolveAvatarUrl(identity?.avatar);
   const avatarUrl = resolvedAvatarUrl && !resolvedAvatarUrl.startsWith("data:image/svg+xml") ? resolvedAvatarUrl : undefined;
   const avatarText = isAvatarText(identity?.avatar) ? identity!.avatar! : undefined;
-  const DialogRuntimeIcon = identity?.runtime === "claude-code" ? ClaudeCodeIcon
-    : identity?.runtime === "codex" ? CodexIcon
-    : identity?.runtime === "hermes" ? HermesIcon
+  // agentRuntime (from live agents list) takes precedence over stale SQLite identity runtime.
+  const effectiveRuntime = agentRuntime || identity?.runtime;
+  const DialogRuntimeIcon = effectiveRuntime === "claude-code" ? ClaudeCodeIcon
+    : effectiveRuntime === "codex" ? CodexIcon
+    : effectiveRuntime === "hermes" ? HermesIcon
     : null;
   const displayName = identity?.name || agentName;
 
-  const isMain = agentId === "main";
+  const isMain = agentId === "main" || agentId === "hermes:__main__";
+
+  // Personality cache — fetched once per (agentId, open) so tab switches are instant.
+  // Keys are uppercase file keys: SOUL, IDENTITY, USER, AGENTS, TOOLS, HEARTBEAT, MEMORY.
+  const [personalityCache, setPersonalityCache] = useState<Record<string, string> | null>(null);
 
   useEffect(() => {
     if (open) {
       setTab("INFO");
       setFooterState({ isDirty: false, saving: false, saved: false, save: null });
+      // Prefetch all personality files upfront so FileEditorTab tabs are instant.
+      setPersonalityCache(null);
+      (async () => {
+        try {
+          const p = (await bridgeInvoke("get-agent-personality", { agentId })) as Record<string, unknown>;
+          setPersonalityCache({
+            SOUL:      (p?.soul      as string) ?? "",
+            IDENTITY:  (p?.identity  as string) ?? "",
+            USER:      (p?.user      as string) ?? "",
+            AGENTS:    (p?.agents    as string) ?? "",
+            TOOLS:     (p?.tools     as string) ?? "",
+            HEARTBEAT: (p?.heartbeat as string) ?? "",
+            MEMORY:    (p?.memory    as string) ?? "",
+          });
+        } catch {
+          setPersonalityCache({});
+        }
+      })();
     }
-  }, [open]);
+  }, [open, agentId]);
 
   return (
     <>
@@ -143,23 +179,22 @@ export function AgentDetailDialog({
             value={tab}
             onValueChange={(v) => setTab(v as TabKey)}
             className="flex flex-col flex-1 min-h-0"
+            // Reset to INFO when switching between agents with different runtimes
           >
             <TabsList className="shrink-0 w-full justify-start rounded-none bg-transparent h-auto p-0 px-6">
-              <TabsTrigger
-                value="INFO"
-                className="text-xs"
-              >
-                INFO
-              </TabsTrigger>
-              {TAB_FILES.map((tf) => (
-                <TabsTrigger
-                  key={tf.key}
-                  value={tf.key}
-                  className="text-xs"
-                >
-                  {tf.label}
-                </TabsTrigger>
-              ))}
+              <TabsTrigger value="INFO" className="text-xs">INFO</TabsTrigger>
+              {effectiveRuntime === "hermes"
+                ? HERMES_TABS.map((tf) => (
+                    <TabsTrigger key={tf.key} value={tf.key} className="text-xs">
+                      {tf.label}
+                    </TabsTrigger>
+                  ))
+                : TAB_FILES.map((tf) => (
+                    <TabsTrigger key={tf.key} value={tf.key} className="text-xs">
+                      {tf.label}
+                    </TabsTrigger>
+                  ))
+              }
             </TabsList>
 
             {tab === "INFO" && (
@@ -173,7 +208,46 @@ export function AgentDetailDialog({
               </TabsContent>
             )}
 
-            {TAB_FILES.map((tf) =>
+            {/* Hermes-specific tabs — read/write directly from ~/.hermes/profiles/{agentId}/ */}
+            {effectiveRuntime === "hermes" && HERMES_TABS.map((tf) =>
+              tab === tf.key ? (
+                <TabsContent
+                  key={tf.key}
+                  value={tf.key}
+                  className="flex-1 min-h-0 flex flex-col overflow-y-auto customScrollbar2 px-6 py-4 mt-0"
+                >
+                  <p className="text-xs text-muted-foreground mb-3">{tf.desc}</p>
+                  {tf.key === "SOUL" && (
+                    <HermesTextFileTab
+                      agentId={agentId}
+                      action="hermes-get-soul"
+                      updateAction="hermes-update-soul"
+                      placeholder="Define Hermemes personality, values, and behavior..."
+                      onStateChange={setFooterState}
+                    />
+                  )}
+                  {tf.key === "CONFIG" && (
+                    <HermesTextFileTab
+                      agentId={agentId}
+                      action="hermes-get-profile-config"
+                      updateAction="hermes-update-profile-config"
+                      placeholder="# config.yaml — model, toolsets, env, etc."
+                      lang="yaml"
+                      onStateChange={setFooterState}
+                    />
+                  )}
+                  {tf.key === "SKILLS" && (
+                    <HermesSkillsTab agentId={agentId} onStateChange={setFooterState} />
+                  )}
+                  {tf.key === "LOGS" && (
+                    <HermesLogsTab agentId={agentId} onStateChange={setFooterState} />
+                  )}
+                </TabsContent>
+              ) : null
+            )}
+
+            {/* OpenClaw / Claude Code / default tabs */}
+            {effectiveRuntime !== "hermes" && TAB_FILES.map((tf) =>
               tab === tf.key ? (
                 <TabsContent
                   key={tf.key}
@@ -185,6 +259,10 @@ export function AgentDetailDialog({
                     agentId={agentId}
                     fileKey={tf.key}
                     onStateChange={setFooterState}
+                    preloaded={personalityCache ? (personalityCache[tf.key] ?? null) : undefined}
+                    onAfterSave={(fileKey, newContent) =>
+                      setPersonalityCache(prev => prev ? { ...prev, [fileKey]: newContent } : null)
+                    }
                   />
                 </TabsContent>
               ) : null
@@ -392,51 +470,47 @@ export function InfoTab({
       </div>
 
       {/* ── Model ──────────────────────────────── */}
-      <div>
-        <label className="block text-sm font-medium mb-1.5">Model</label>
-        <Select value={ed.model} onValueChange={ed.setModel}>
-          <SelectTrigger className="h-10">
-            <SelectValue placeholder="Use OpenClaw default" />
-          </SelectTrigger>
-          <SelectContent className="z-[102]">
-            <SelectItem value="__default__">-- Use Default Model --</SelectItem>
-            {ed.availableModels.map((m) => (
-              <SelectItem key={m} value={m}>
-                {m}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <p className="text-[10px] text-muted-foreground/60 mt-1">
-          AI model used by this agent. Leave empty to use OpenClaw default.
-        </p>
-      </div>
+      {runtime !== "codex" && (
+        <div>
+          <label className="block text-sm font-medium mb-1.5">Model</label>
+          <Select value={ed.model || "__default__"} onValueChange={ed.setModel}>
+            <SelectTrigger className="h-10">
+              <SelectValue placeholder={runtime === "hermes" ? "Hermes default" : "Use default"} />
+            </SelectTrigger>
+            <SelectContent className="z-[102]">
+              <SelectItem value="__default__">-- Use Default Model --</SelectItem>
+              {ed.availableModels.map((m) => (
+                <SelectItem key={m} value={m}>
+                  {m}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-[10px] text-muted-foreground/60 mt-1">
+            {runtime === "hermes"
+              ? "Model from Hermes profile config.yaml."
+              : runtime === "claude-code"
+              ? "Claude model for this agent."
+              : "AI model used by this agent. Leave empty to use OpenClaw default."}
+          </p>
+        </div>
+      )}
 
-      {/* ── Runtime ────────────────────────────── */}
-      <div>
-        <label className="block text-sm font-medium mb-1.5">Runtime</label>
-        <Select
-          value={ed.runtime || "__default__"}
-          onValueChange={(v) => ed.setRuntime(v === "__default__" ? "" : v)}
-        >
-          <SelectTrigger className="h-10">
-            <SelectValue placeholder="Select runtime" />
-          </SelectTrigger>
-          <SelectContent className="z-[102]">
-            <SelectItem value="__default__">-- Use Default --</SelectItem>
-            <SelectItem value="openclaw">OpenClaw</SelectItem>
-            <SelectItem value="hermes">Hermes</SelectItem>
-            <SelectItem value="codex">Codex</SelectItem>
-            <SelectItem value="claude-code">Claude Code</SelectItem>
-          </SelectContent>
-        </Select>
-        <p className="text-[10px] text-muted-foreground/60 mt-1">
-          AI runtime this agent uses to execute tasks.
-        </p>
-      </div>
+      {/* ── Runtime (read-only — set at agent creation) ── */}
+      {ed.runtime && (
+        <div>
+          <label className="block text-sm font-medium mb-1.5">Runtime</label>
+          <div className="h-10 px-3 flex items-center rounded-md border bg-muted/40 text-sm text-muted-foreground select-none">
+            {ed.runtime}
+          </div>
+          <p className="text-[10px] text-muted-foreground/60 mt-1">
+            Runtime is set when the agent is created and cannot be changed.
+          </p>
+        </div>
+      )}
 
-      {/* ── Heartbeat ────────────────────────────── */}
-      <div>
+      {/* ── Heartbeat — OpenClaw only ────────────── */}
+      {(!runtime || runtime === "openclaw") && <div>
         <label className="block text-sm font-medium mb-1.5">Heartbeat</label>
         <div className="flex gap-2">
           <div className="flex-1">
@@ -466,7 +540,7 @@ export function InfoTab({
         <p className="text-[10px] text-muted-foreground/60 mt-1">
           Model and interval for periodic heartbeat tasks.
         </p>
-      </div>
+      </div>}
 
       {/* ── Name ───────────────────────────────── */}
       <div>
@@ -544,11 +618,17 @@ export function FileEditorTab({
   fileKey,
   onStateChange,
   className,
+  preloaded,
+  onAfterSave,
 }: {
   agentId: string;
   fileKey: string;
   onStateChange: (state: FooterSaveState) => void;
   className?: string;
+  /** Pre-fetched content from parent cache. `null` = file not found. `undefined` = not yet loaded. */
+  preloaded?: string | null;
+  /** Called after a successful save so the parent can update its cache. */
+  onAfterSave?: (fileKey: string, newContent: string) => void;
 }) {
   const [content, setContent] = useState<string | null>(null);
   const [originalContent, setOriginalContent] = useState<string | null>(null);
@@ -559,20 +639,33 @@ export function FileEditorTab({
   const [notFound, setNotFound] = useState(false);
 
   useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
     setSaveError(null);
     setSaveSuccess(false);
+
+    // If the parent has already fetched personality data, use it directly —
+    // no bridge round-trip needed on tab switch.
+    if (preloaded !== undefined) {
+      const text = preloaded ?? "";
+      setContent(text);
+      setOriginalContent(preloaded === null ? null : text);
+      setNotFound(preloaded === null || preloaded === "");
+      setLoading(false);
+      return;
+    }
+
+    // Fallback: fetch independently (e.g. when used outside AgentDetailDialog).
+    let cancelled = false;
+    setLoading(true);
     setNotFound(false);
     (async () => {
       try {
-        const res = (await bridgeInvoke("get-agent-file", {
+        const personality = (await bridgeInvoke("get-agent-personality", {
           agentId,
-          fileKey,
-        })) as { success?: boolean; data?: { content: string; updatedAt: number } | null };
+        })) as Record<string, string | boolean | undefined>;
         if (cancelled) return;
-        const fileContent = res?.data?.content;
-        if (res?.success && typeof fileContent === "string") {
+        const fieldName = fileKey.toLowerCase();
+        const fileContent = personality?.[fieldName];
+        if (typeof fileContent === "string" && fileContent !== "") {
           setContent(fileContent);
           setOriginalContent(fileContent);
         } else {
@@ -590,7 +683,7 @@ export function FileEditorTab({
       if (!cancelled) setLoading(false);
     })();
     return () => { cancelled = true; };
-  }, [agentId, fileKey]);
+  }, [agentId, fileKey, preloaded]);
 
   const isDirty = notFound ? (content ?? "") !== "" : content !== originalContent;
 
@@ -600,14 +693,16 @@ export function FileEditorTab({
     setSaveError(null);
     setSaveSuccess(false);
     try {
-      const res = (await bridgeInvoke("save-agent-personality", {
+      const res = (await bridgeInvoke("save-agent-file", {
         agentId,
-        [fileKey.toLowerCase()]: content,
+        fileKey,
+        content,
       })) as { success?: boolean; error?: string };
       if (res?.success) {
         setOriginalContent(content);
         setNotFound(false);
         setSaveSuccess(true);
+        onAfterSave?.(fileKey, content);
         setTimeout(() => setSaveSuccess(false), 2000);
       } else {
         setSaveError(res?.error ?? "Failed to save");
@@ -616,7 +711,7 @@ export function FileEditorTab({
       setSaveError(e instanceof Error ? e.message : "Save failed");
     }
     setSaving(false);
-  }, [agentId, fileKey, content]);
+  }, [agentId, fileKey, content, onAfterSave]);
 
   // Sync footer state
   useEffect(() => {
@@ -664,6 +759,252 @@ export function FileEditorTab({
         )}
         <span className="text-[10px] text-muted-foreground/60">{fileKey}.md</span>
       </div>
+    </div>
+  );
+}
+
+/* ── Hermes text-file tab (SOUL.md / config.yaml) ────────────── */
+
+export function HermesTextFileTab({
+  agentId,
+  action,
+  updateAction,
+  placeholder,
+  lang,
+  onStateChange,
+}: {
+  agentId: string;
+  action: string;
+  updateAction: string;
+  placeholder?: string;
+  lang?: string;
+  onStateChange: (state: FooterSaveState) => void;
+}) {
+  const [content, setContent] = useState<string | null>(null);
+  const [originalContent, setOriginalContent] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveSuccess, setSaveSuccess] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setSaveError(null);
+    setSaveSuccess(false);
+    (async () => {
+      try {
+        const res = (await bridgeInvoke(action, { agentId })) as { content?: string };
+        if (!cancelled) {
+          const c = res?.content ?? "";
+          setContent(c);
+          setOriginalContent(c);
+        }
+      } catch {
+        if (!cancelled) { setContent(""); setOriginalContent(""); }
+      }
+      if (!cancelled) setLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [agentId, action]);
+
+  const isDirty = content !== originalContent;
+
+  const handleSave = useCallback(async () => {
+    if (content === null) return;
+    setSaving(true);
+    setSaveError(null);
+    setSaveSuccess(false);
+    try {
+      const res = (await bridgeInvoke(updateAction, { agentId, content })) as { success?: boolean; error?: string };
+      if (res?.success) {
+        setOriginalContent(content);
+        setSaveSuccess(true);
+        setTimeout(() => setSaveSuccess(false), 2000);
+      } else {
+        setSaveError(res?.error ?? "Failed to save");
+      }
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : "Save failed");
+    }
+    setSaving(false);
+  }, [agentId, updateAction, content]);
+
+  useEffect(() => {
+    onStateChange({ isDirty, saving, saved: saveSuccess, save: handleSave });
+  }, [isDirty, saving, saveSuccess, handleSave, onStateChange]);
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "s") {
+        e.preventDefault();
+        if (isDirty) handleSave();
+      }
+    },
+    [isDirty, handleSave]
+  );
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-12 text-muted-foreground">
+        <Loader2 className="h-5 w-5 animate-spin" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2 flex-1" onKeyDown={handleKeyDown}>
+      <Textarea
+        value={content ?? ""}
+        onChange={(e) => setContent(e.target.value)}
+        className="w-full flex-1 min-h-[300px] text-xs font-mono leading-relaxed resize-none"
+        spellCheck={false}
+        placeholder={placeholder}
+      />
+      <div className="flex items-center justify-end">
+        {saveError && (
+          <span className="text-[10px] text-destructive mr-auto">{saveError}</span>
+        )}
+        {lang && <span className="text-[10px] text-muted-foreground/60">{lang}</span>}
+      </div>
+    </div>
+  );
+}
+
+/* ── Hermes skills tab ────────────────────────────────────────── */
+
+interface HermesSkill {
+  name: string;
+  description: string;
+  fileCount: number;
+}
+
+export function HermesSkillsTab({
+  agentId,
+  onStateChange,
+}: {
+  agentId: string;
+  onStateChange: (state: FooterSaveState) => void;
+}) {
+  const [skills, setSkills] = useState<HermesSkill[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    onStateChange({ isDirty: false, saving: false, saved: false, save: null });
+  }, [onStateChange]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    (async () => {
+      try {
+        const res = (await bridgeInvoke("hermes-list-skills", { agentId })) as { skills?: HermesSkill[] };
+        if (!cancelled) setSkills(res?.skills ?? []);
+      } catch {
+        if (!cancelled) setSkills([]);
+      }
+      if (!cancelled) setLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [agentId]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-12 text-muted-foreground">
+        <Loader2 className="h-5 w-5 animate-spin" />
+      </div>
+    );
+  }
+
+  if (skills.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-12 text-muted-foreground gap-2">
+        <Package className="h-8 w-8 opacity-30" />
+        <p className="text-sm">No skill bundles installed</p>
+        <p className="text-xs opacity-60">Install skills with <code className="font-mono bg-muted px-1 rounded">hermes skills install &lt;name&gt;</code></p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      {skills.map((skill) => (
+        <div key={skill.name} className="flex items-start gap-3 p-3 rounded-lg border border-border/40 bg-muted/20">
+          <Package className="h-4 w-4 mt-0.5 text-muted-foreground shrink-0" />
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium font-mono">{skill.name}</p>
+            {skill.description && (
+              <p className="text-xs text-muted-foreground mt-0.5 truncate">{skill.description}</p>
+            )}
+          </div>
+          <span className="text-[10px] text-muted-foreground/60 shrink-0">{skill.fileCount} file{skill.fileCount !== 1 ? "s" : ""}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ── Hermes logs tab ──────────────────────────────────────────── */
+
+interface HermesLogEntry {
+  file: string;
+  content: string;
+}
+
+export function HermesLogsTab({
+  agentId,
+  onStateChange,
+}: {
+  agentId: string;
+  onStateChange: (state: FooterSaveState) => void;
+}) {
+  const [logs, setLogs] = useState<HermesLogEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    onStateChange({ isDirty: false, saving: false, saved: false, save: null });
+  }, [onStateChange]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    (async () => {
+      try {
+        const res = (await bridgeInvoke("hermes-get-profile-logs", { agentId, limit: 300 })) as { logs?: HermesLogEntry[] };
+        if (!cancelled) setLogs(res?.logs ?? []);
+      } catch {
+        if (!cancelled) setLogs([]);
+      }
+      if (!cancelled) setLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [agentId]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-12 text-muted-foreground">
+        <Loader2 className="h-5 w-5 animate-spin" />
+      </div>
+    );
+  }
+
+  if (logs.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-12 text-muted-foreground gap-2">
+        <ScrollText className="h-8 w-8 opacity-30" />
+        <p className="text-sm">No logs yet</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-0.5">
+      {logs.map((entry, i) => (
+        <div key={i} className="flex items-start gap-2 text-[10px] font-mono">
+          <span className="text-muted-foreground/40 shrink-0 w-[72px] truncate">{entry.file}</span>
+          <span className="text-muted-foreground/80 break-all">{entry.content}</span>
+        </div>
+      ))}
     </div>
   );
 }
