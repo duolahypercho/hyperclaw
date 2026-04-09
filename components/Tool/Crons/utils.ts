@@ -31,6 +31,8 @@ export interface CronAddParams {
   model?: string;
   thinking?: string;
   agent?: string;
+  /** Runtime to execute on: "openclaw" (default) | "claude-code" | "codex" | "hermes" */
+  runtime?: string;
   /** When set, each cron trigger creates a new task instead of (or in addition to) running a prompt */
   spawnTask?: {
     templateTitle: string;

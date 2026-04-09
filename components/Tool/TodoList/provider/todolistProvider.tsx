@@ -155,6 +155,7 @@ interface exportedValue {
     existingId?: string;
     /** When 'bridge', task came from ~/.hyperclaw/todo.json — do not write back to bridge (avoids loop) */
     source?: "app" | "bridge";
+    status?: string;
     assignedAgent?: string;
     assignedAgentId?: string;
     linkedDocumentUrl?: string;
@@ -565,6 +566,7 @@ export function TodoListProvider({ children, inMiniMode }: Props) {
       recurrence,
       ignore = false,
       existingId,
+      status,
       assignedAgent,
       assignedAgentId,
       linkedDocumentUrl,
@@ -579,6 +581,7 @@ export function TodoListProvider({ children, inMiniMode }: Props) {
       recurrence?: RecurrenceRule;
       ignore?: boolean;
       existingId?: string;
+      status?: string;
       assignedAgent?: string;
       assignedAgentId?: string;
       linkedDocumentUrl?: string;
@@ -594,7 +597,7 @@ export function TodoListProvider({ children, inMiniMode }: Props) {
             {
               _id: newObjectId,
               title: trimmedTitle,
-              status: "pending",
+              status: (status as any) ?? "pending",
               listId: listId || "",
               description: description || "",
               order: tasks.length,
@@ -622,6 +625,7 @@ export function TodoListProvider({ children, inMiniMode }: Props) {
           listId: listId || "",
           description: description || "",
           order: tasks.length,
+          status: status || undefined,
           starred: starred || currentTab === "starred",
           myDay: myDay || currentTab === "myday",
           dueDate: date,

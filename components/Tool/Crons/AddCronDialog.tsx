@@ -68,6 +68,8 @@ export function AddCronDialog({ open, onOpenChange, onSuccess, defaultAgent }: A
   const [atCustom, setAtCustom] = useState("");
   const [cronPreset, setCronPreset] = useState<string>("0 7 * * *");
   const [cronCustom, setCronCustom] = useState("");
+  const [runtime, setRuntime] = useState<string>("openclaw");
+  const [model, setModel] = useState("");
   const [session, setSession] = useState<"main" | "isolated">("isolated");
   const [prompt, setPrompt] = useState("");
   const [deleteAfterRun, setDeleteAfterRun] = useState(false);
@@ -87,6 +89,8 @@ export function AddCronDialog({ open, onOpenChange, onSuccess, defaultAgent }: A
     setAtCustom("");
     setCronPreset("0 7 * * *");
     setCronCustom("");
+    setRuntime("openclaw");
+    setModel("");
     setSession("main");
     setPrompt("");
     setDeleteAfterRun(false);
@@ -124,19 +128,28 @@ export function AddCronDialog({ open, onOpenChange, onSuccess, defaultAgent }: A
       return;
     }
     if (!prompt.trim()) {
-      setError(session === "main" ? "System event is required for main session." : "Message is required for isolated session.");
+      setError("Message is required.");
       return;
     }
     const params: CronAddParams = {
       name: name.trim(),
-      session,
-      deleteAfterRun: deleteAfterRun || undefined,
+      ...(runtime !== "openclaw" && { runtime }),
     };
     if (scheduleType === "one-shot") params.at = atValue;
     else params.cron = cronValue;
-    if (session === "main") params.systemEvent = prompt.trim();
-    else params.message = prompt.trim();
-    if (agent && agent !== AGENT_NONE && agent.trim()) params.agent = agent.trim();
+    if (runtime === "openclaw") {
+      params.session = session;
+      params.deleteAfterRun = deleteAfterRun || undefined;
+      if (session === "main") params.systemEvent = prompt.trim();
+      else params.message = prompt.trim();
+      if (agent && agent !== AGENT_NONE && agent.trim()) params.agent = agent.trim();
+    } else {
+      params.message = prompt.trim();
+      if (agent && agent !== AGENT_NONE && agent.trim()) params.agent = agent.trim();
+      if (model.trim() && (runtime === "claude-code" || runtime === "codex")) {
+        params.model = model.trim();
+      }
+    }
     setSubmitting(true);
     try {
       const result = await cronAdd(params);
@@ -208,6 +221,22 @@ export function AddCronDialog({ open, onOpenChange, onSuccess, defaultAgent }: A
                 <SelectContent>
                   <SelectItem value="one-shot">One-shot (run once)</SelectItem>
                   <SelectItem value="recurring">Recurring</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Runtime */}
+            <div className="space-y-2">
+              <Label className="text-xs uppercase tracking-wider text-muted-foreground">Runtime</Label>
+              <Select value={runtime} onValueChange={setRuntime}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="openclaw">OpenClaw</SelectItem>
+                  <SelectItem value="claude-code">Claude Code</SelectItem>
+                  <SelectItem value="codex">Codex</SelectItem>
+                  <SelectItem value="hermes">Hermes</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -292,21 +321,23 @@ export function AddCronDialog({ open, onOpenChange, onSuccess, defaultAgent }: A
 
             {/* Session + Agent */}
             <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label className="text-xs uppercase tracking-wider text-muted-foreground">Session</Label>
-                <Select value={session} onValueChange={(v) => setSession(v as "main" | "isolated")}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="main">Main</SelectItem>
-                    <SelectItem value="isolated">Isolated</SelectItem>
-                  </SelectContent>
-                </Select>
-                <p className="text-[10px] text-muted-foreground">
-                  {session === "main" ? "System event style." : "Isolated AI prompt."}
-                </p>
-              </div>
+              {runtime === "openclaw" && (
+                <div className="space-y-2">
+                  <Label className="text-xs uppercase tracking-wider text-muted-foreground">Session</Label>
+                  <Select value={session} onValueChange={(v) => setSession(v as "main" | "isolated")}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="main">Main</SelectItem>
+                      <SelectItem value="isolated">Isolated</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-[10px] text-muted-foreground">
+                    {session === "main" ? "System event style." : "Isolated AI prompt."}
+                  </p>
+                </div>
+              )}
               <div className="space-y-2">
                 <Label className="text-xs uppercase tracking-wider text-muted-foreground">Agent</Label>
                 <Select
@@ -332,15 +363,30 @@ export function AddCronDialog({ open, onOpenChange, onSuccess, defaultAgent }: A
               </div>
             </div>
 
+            {/* Model (claude-code / codex only) */}
+            {(runtime === "claude-code" || runtime === "codex") && (
+              <div className="space-y-2">
+                <Label htmlFor="add-cron-model" className="text-xs uppercase tracking-wider text-muted-foreground">
+                  Model <span className="text-muted-foreground/60 normal-case">(optional)</span>
+                </Label>
+                <Input
+                  id="add-cron-model"
+                  placeholder="e.g. claude-sonnet-4-6"
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                />
+              </div>
+            )}
+
             {/* Prompt / system event */}
             <div className="space-y-2">
               <Label htmlFor="add-cron-prompt" className="text-xs uppercase tracking-wider text-muted-foreground">
-                {session === "main" ? "System event" : "Message (prompt)"}
+                {runtime === "openclaw" && session === "main" ? "System event" : "Message (prompt)"}
               </Label>
               <Textarea
                 id="add-cron-prompt"
                 placeholder={
-                  session === "main"
+                  runtime === "openclaw" && session === "main"
                     ? "e.g. Reminder: submit report"
                     : "e.g. Summarize my inbox for today"
                 }
@@ -351,16 +397,18 @@ export function AddCronDialog({ open, onOpenChange, onSuccess, defaultAgent }: A
               />
             </div>
 
-            {/* Delete after run */}
-            <label className="flex items-center gap-2 cursor-pointer text-xs text-muted-foreground hover:text-foreground">
-              <input
-                type="checkbox"
-                checked={deleteAfterRun}
-                onChange={(e) => setDeleteAfterRun(e.target.checked)}
-                className="rounded border-border"
-              />
-              Delete after run
-            </label>
+            {/* Delete after run (OpenClaw only) */}
+            {runtime === "openclaw" && (
+              <label className="flex items-center gap-2 cursor-pointer text-xs text-muted-foreground hover:text-foreground">
+                <input
+                  type="checkbox"
+                  checked={deleteAfterRun}
+                  onChange={(e) => setDeleteAfterRun(e.target.checked)}
+                  className="rounded border-border"
+                />
+                Delete after run
+              </label>
+            )}
           </div>
 
           <SheetFooter className="px-6 py-4 border-t border-border flex flex-row gap-2">

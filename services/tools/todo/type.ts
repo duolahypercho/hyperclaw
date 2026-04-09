@@ -15,6 +15,7 @@ export interface AddTodoTaskRequest {
   description: string;
   listId: string;
   order: number;
+  status?: string;
   starred?: boolean;
   myDay?: boolean;
   dueDate?: Date;

@@ -364,7 +364,7 @@ export const addTodoTaskAPI = async (req: AddTodoTaskRequest) => {
   const newTask: StoredTask = {
     _id: req._id || generateId(),
     title: req.title,
-    status: "pending",
+    status: (req.status as StoredTask["status"]) ?? "pending",
     starred: req.starred ?? false,
     listId: req.listId || "",
     order: req.order ?? data.tasks.length,
