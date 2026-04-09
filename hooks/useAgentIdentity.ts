@@ -13,6 +13,7 @@ export interface AgentIdentity {
   avatar?: string;
   emoji?: string;
   runtime?: string;
+  project?: string;
 }
 
 // Module-level cache shared across all hook instances.
@@ -97,7 +98,7 @@ async function fetchIdentity(agentId: string): Promise<AgentIdentity | null> {
     try {
       const res = (await bridgeInvoke("get-agent-identity", { agentId })) as {
         success?: boolean;
-        data?: { name?: string; avatarData?: string; emoji?: string; runtime?: string } | null;
+        data?: { name?: string; avatarData?: string; emoji?: string; runtime?: string; projectPath?: string } | null;
       };
       if (!res?.success || !res.data) return null;
       // Preserve cached fields that DB doesn't have (e.g. file-based avatar converted
@@ -109,6 +110,7 @@ async function fetchIdentity(agentId: string): Promise<AgentIdentity | null> {
         avatar: res.data.avatarData || cached?.avatar || undefined,
         emoji: res.data.emoji || cached?.emoji || undefined,
         runtime: res.data.runtime || cached?.runtime || undefined,
+        project: res.data.projectPath || cached?.project || undefined,
       };
       identityCache.set(agentId, identity);
       saveToStorage();

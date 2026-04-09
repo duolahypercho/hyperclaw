@@ -359,7 +359,8 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
           }));
         }
       } else if (backendTab === "claude-code") {
-        const r = await bridgeInvoke("claude-code-list-sessions", { agentId, limit: 15 }).catch(() => ({ sessions: [] })) as any;
+        const projectPath = identity?.project;
+        const r = await bridgeInvoke("claude-code-list-sessions", { agentId, limit: 15, ...(projectPath ? { projectPath } : {}) }).catch(() => ({ sessions: [] })) as any;
         result = (r?.sessions || []).map((s: any) => ({
           key: s.key || `claude:${s.id}`,
           label: s.label || s.id?.slice(0, 8),
