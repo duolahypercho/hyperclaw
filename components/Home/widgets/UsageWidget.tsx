@@ -38,7 +38,40 @@ import { UsageProvider } from "$/components/Tool/Usage/provider/usageProvider";
 import { useOS } from "@OS/Provider/OSProv";
 import { useFocusMode } from "./hooks/useFocusMode";
 import { cn } from "@/lib/utils";
-import { loadLocalUsage, saveLocalUsage, type LocalUsageData } from "$/lib/hyperclaw-bridge-client";
+import { loadLocalUsage, saveLocalUsage, type LocalUsageData, bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
+import { ClaudeCodeIcon, CodexIcon, HermesIcon, OpenClawIcon } from "$/components/Onboarding/RuntimeIcons";
+
+interface RuntimeSummary {
+  groupKey: string;
+  totalCostUsd: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+}
+
+function dateToStartMs(dateStr: string): number {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return new Date(y, m - 1, d, 0, 0, 0, 0).getTime();
+}
+
+function dateToEndMs(dateStr: string): number {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return new Date(y, m - 1, d, 23, 59, 59, 999).getTime();
+}
+
+const RUNTIME_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
+  "claude-code": ClaudeCodeIcon,
+  "codex": CodexIcon,
+  "hermes": HermesIcon,
+  "openclaw": OpenClawIcon,
+};
+
+const RUNTIME_LABELS: Record<string, string> = {
+  "claude-code": "Claude Code",
+  "codex": "Codex",
+  "hermes": "Hermes",
+  "openclaw": "OpenClaw",
+};
 
 function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -259,10 +292,51 @@ const UsageWidgetContent = memo((props: CustomProps) => {
   const { isFocusModeActive } = useFocusMode();
   const { usage, sessionsUsage, loading, error, refetch, startDate, endDate } = useUsage();
   const [localUsage, setLocalUsage] = useState<LocalUsageData | null>(null);
+  const [runtimeBreakdown, setRuntimeBreakdown] = useState<RuntimeSummary[]>([]);
 
   // Ref to access localUsage inside effects without re-triggering them
   const localUsageRef = useRef(localUsage);
   useEffect(() => { localUsageRef.current = localUsage; }, [localUsage]);
+
+  // Fetch per-runtime usage from connector SQLite (Claude Code, Codex, Hermes)
+  useEffect(() => {
+    async function loadRuntimeUsage() {
+      try {
+        const result = await bridgeInvoke("get-token-usage", {
+          groupBy: "runtime",
+          from: dateToStartMs(startDate),
+          to: dateToEndMs(endDate),
+        }) as { success: boolean; data: RuntimeSummary[] };
+        if (result?.success && Array.isArray(result.data)) {
+          setRuntimeBreakdown(result.data);
+        }
+      } catch {
+        // connector offline — leave existing breakdown
+      }
+    }
+    loadRuntimeUsage();
+  }, [startDate, endDate]);
+
+  // Re-fetch connector data when refetch is triggered
+  const runtimeFetchRef = useRef(false);
+  useEffect(() => {
+    if (!loading && runtimeFetchRef.current) {
+      async function reload() {
+        try {
+          const result = await bridgeInvoke("get-token-usage", {
+            groupBy: "runtime",
+            from: dateToStartMs(startDate),
+            to: dateToEndMs(endDate),
+          }) as { success: boolean; data: RuntimeSummary[] };
+          if (result?.success && Array.isArray(result.data)) {
+            setRuntimeBreakdown(result.data);
+          }
+        } catch { /* ignore */ }
+      }
+      reload();
+    }
+    runtimeFetchRef.current = true;
+  }, [loading]);
 
   // Load local usage data on mount
   useEffect(() => {
@@ -329,16 +403,37 @@ const UsageWidgetContent = memo((props: CustomProps) => {
     mergeAndSave();
   }, [usage, sessionsUsage]);
 
-  // Totals: prefer sessions.usage (primary, matches OpenClaw), then usage.cost, then local cache
+  // Connector totals from runtime breakdown (Claude Code, Codex, Hermes)
+  const connectorTotals = useMemo(() => {
+    return runtimeBreakdown.reduce(
+      (acc, r) => ({
+        inputTokens: acc.inputTokens + r.inputTokens,
+        outputTokens: acc.outputTokens + r.outputTokens,
+        totalCost: acc.totalCost + r.totalCostUsd,
+      }),
+      { inputTokens: 0, outputTokens: 0, totalCost: 0 }
+    );
+  }, [runtimeBreakdown]);
+
+  // Totals: OpenClaw gateway + connector runtimes combined
   const totals = useMemo(() => {
-    // Primary: sessions.usage totals (complete token counts including cache reads)
     const liveTotals = sessionsUsage?.totals ?? usage?.totals;
     if (liveTotals) {
       return {
-        inputTokens: liveTotals.input,
-        outputTokens: liveTotals.output,
-        totalTokens: liveTotals.totalTokens,
-        totalCost: liveTotals.totalCost ?? 0,
+        inputTokens: liveTotals.input + connectorTotals.inputTokens,
+        outputTokens: liveTotals.output + connectorTotals.outputTokens,
+        totalTokens: liveTotals.totalTokens + connectorTotals.inputTokens + connectorTotals.outputTokens,
+        totalCost: (liveTotals.totalCost ?? 0) + connectorTotals.totalCost,
+      };
+    }
+
+    // If no OpenClaw data, use connector data only
+    if (connectorTotals.inputTokens > 0 || connectorTotals.outputTokens > 0) {
+      return {
+        inputTokens: connectorTotals.inputTokens,
+        outputTokens: connectorTotals.outputTokens,
+        totalTokens: connectorTotals.inputTokens + connectorTotals.outputTokens,
+        totalCost: connectorTotals.totalCost,
       };
     }
 
@@ -363,7 +458,36 @@ const UsageWidgetContent = memo((props: CustomProps) => {
     }
 
     return { inputTokens: input, outputTokens: output, totalTokens, totalCost };
-  }, [sessionsUsage, usage, localUsage, startDate, endDate]);
+  }, [sessionsUsage, usage, localUsage, startDate, endDate, connectorTotals]);
+
+  // All runtimes for breakdown display: connector runtimes + OpenClaw from gateway
+  const allRuntimes = useMemo(() => {
+    const rows: Array<{ key: string; inputTokens: number; outputTokens: number; totalCost: number }> = [];
+
+    // Connector-tracked runtimes (Claude Code, Codex, Hermes)
+    for (const r of runtimeBreakdown) {
+      rows.push({
+        key: r.groupKey,
+        inputTokens: r.inputTokens,
+        outputTokens: r.outputTokens,
+        totalCost: r.totalCostUsd,
+      });
+    }
+
+    // OpenClaw gateway totals (only if there's actual data)
+    const gatewayTotals = sessionsUsage?.totals ?? usage?.totals;
+    if (gatewayTotals && (gatewayTotals.totalTokens ?? 0) > 0) {
+      rows.push({
+        key: "openclaw",
+        inputTokens: gatewayTotals.input,
+        outputTokens: gatewayTotals.output,
+        totalCost: gatewayTotals.totalCost ?? 0,
+      });
+    }
+
+    // Sort by cost descending
+    return rows.sort((a, b) => b.totalCost - a.totalCost);
+  }, [runtimeBreakdown, sessionsUsage, usage]);
 
   // Auto-refresh (pauses when tab is hidden)
   useEffect(() => {
@@ -389,8 +513,8 @@ const UsageWidgetContent = memo((props: CustomProps) => {
     };
   }, [refetch]);
 
-  const isInitialLoading = loading && !usage && !sessionsUsage && !localUsage;
-  const showError = error && !usage && !sessionsUsage && !localUsage;
+  const isInitialLoading = loading && !usage && !sessionsUsage && !localUsage && runtimeBreakdown.length === 0;
+  const showError = error && !usage && !sessionsUsage && !localUsage && runtimeBreakdown.length === 0;
 
   return (
     <motion.div
@@ -442,7 +566,8 @@ const UsageWidgetContent = memo((props: CustomProps) => {
               </Button>
             </div>
           ) : (
-            <div className="flex flex-col h-full justify-center">
+            <div className="flex flex-col h-full gap-2">
+              {/* Overall totals */}
               <div className="grid grid-cols-4 gap-1 text-center">
                 <div className="flex flex-col items-center">
                   <ArrowDownToLine className="h-3 w-3 text-[hsl(var(--chart-1))] mb-0.5" />
@@ -509,6 +634,41 @@ const UsageWidgetContent = memo((props: CustomProps) => {
                   </div>
                 </div>
               </div>
+
+              {/* Per-runtime breakdown */}
+              {allRuntimes.length > 0 && (
+                <div className="border-t border-border/50 pt-2 flex flex-col gap-0.5">
+                  {allRuntimes.map((r) => {
+                    const Icon = RUNTIME_ICONS[r.key];
+                    const label = RUNTIME_LABELS[r.key] ?? r.key;
+                    const pct = totals.totalCost > 0 ? r.totalCost / totals.totalCost : 0;
+                    return (
+                      <div key={r.key} className="flex items-center gap-1.5 min-w-0">
+                        {Icon ? (
+                          <Icon className="w-3 h-3 shrink-0 text-muted-foreground" />
+                        ) : (
+                          <span className="w-3 h-3 shrink-0" />
+                        )}
+                        <span className={cn("text-[10px] truncate min-w-0 flex-1", isFocusModeActive ? "text-muted-foreground" : "text-foreground/70")}>
+                          {label}
+                        </span>
+                        <span className="text-[10px] tabular-nums text-muted-foreground shrink-0">
+                          {formatTokens(r.inputTokens + r.outputTokens)}
+                        </span>
+                        <div className="w-10 h-1 rounded-full bg-muted shrink-0 overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-primary/60"
+                            style={{ width: `${Math.round(pct * 100)}%` }}
+                          />
+                        </div>
+                        <span className="text-[10px] tabular-nums text-primary shrink-0">
+                          ${formatCost(r.totalCost)}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
         </div>

@@ -51,6 +51,57 @@ export const memoizedMarkdownComponents = {
   assistant: createMarkdownComponents(false),
 };
 
+function AttachmentItem({ attachment }: { attachment: { id: string; type: string; mimeType: string; name: string; dataUrl: string } }) {
+  if (attachment.mimeType.startsWith("image/")) {
+    return (
+      <a href={attachment.dataUrl} download={attachment.name} title={attachment.name}>
+        <img
+          src={attachment.dataUrl}
+          alt={attachment.name}
+          className="max-w-[200px] max-h-[150px] rounded-md object-contain border border-border/30 hover:opacity-80 transition-opacity"
+        />
+      </a>
+    );
+  }
+
+  if (attachment.mimeType.startsWith("video/")) {
+    return (
+      <div className="flex flex-col gap-1">
+        <video
+          src={attachment.dataUrl}
+          controls
+          className="max-w-[280px] max-h-[180px] rounded-md border border-border/30"
+        />
+        <a
+          href={attachment.dataUrl}
+          download={attachment.name}
+          className="text-[10px] text-muted-foreground hover:text-foreground truncate max-w-[280px]"
+        >
+          {attachment.name}
+        </a>
+      </div>
+    );
+  }
+
+  // Generic file — show icon + name + download
+  return (
+    <a
+      href={attachment.dataUrl}
+      download={attachment.name}
+      className="flex items-center gap-1.5 px-2 py-1.5 rounded-md border border-border/50 bg-muted/30 hover:bg-muted/60 transition-colors text-xs max-w-[220px]"
+      title={`Download ${attachment.name}`}
+    >
+      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0 text-muted-foreground">
+        <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/>
+        <polyline points="14 2 14 8 20 8"/>
+        <line x1="12" y1="18" x2="12" y2="12"/>
+        <line x1="9" y1="15" x2="15" y2="15"/>
+      </svg>
+      <span className="truncate text-foreground/80">{attachment.name}</span>
+    </a>
+  );
+}
+
 export const EnhancedMessageBubble = memo(
   ({
     message,
@@ -113,7 +164,7 @@ export const EnhancedMessageBubble = memo(
       content = userLines.join("\n").trim();
     }
     const hasTextContent = content.trim();
-    const hasAttachments = isUser && message.attachments && message.attachments.length > 0;
+    const hasAttachments = message.attachments && message.attachments.length > 0;
 
     // If no real content, hide the message entirely
     if (!hasTextContent && !hasAttachments && !systemEvents.length && !isLoading) {
@@ -326,20 +377,23 @@ export const EnhancedMessageBubble = memo(
                   borderBottomLeftRadius: isUser ? "10px" : "10px",
                 }}
               >
-                {/* Render attached images for user messages */}
-                {hasAttachments && (
+                {/* User attachments — shown above text */}
+                {hasAttachments && isUser && (
                   <div className="flex flex-wrap gap-2 mb-1">
                     {message.attachments!.map((att) => (
-                      <img
-                        key={att.id}
-                        src={att.dataUrl}
-                        alt={att.name}
-                        className="max-w-[200px] max-h-[150px] rounded-md object-contain"
-                      />
+                      <AttachmentItem key={att.id} attachment={att} />
                     ))}
                   </div>
                 )}
                 {renderContent()}
+                {/* Assistant attachments — shown below text */}
+                {hasAttachments && !isUser && (
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    {message.attachments!.map((att) => (
+                      <AttachmentItem key={att.id} attachment={att} />
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* Copy button — only on the last assistant message before each user turn, and the final assistant message */}
@@ -395,6 +449,7 @@ export const EnhancedMessageBubble = memo(
     return (
       prevProps.message.content === nextProps.message.content &&
       prevProps.message.role === nextProps.message.role &&
+      prevProps.message.attachments === nextProps.message.attachments &&
       prevProps.isLoading === nextProps.isLoading &&
       prevProps.isLastAssistantMessage === nextProps.isLastAssistantMessage &&
       prevProps.showAvatar === nextProps.showAvatar &&

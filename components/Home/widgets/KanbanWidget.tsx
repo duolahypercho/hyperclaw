@@ -31,6 +31,7 @@ import {
   Check,
   AlertTriangle,
   Zap,
+  ListChecks,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -634,6 +635,129 @@ const MiniKanbanCard = React.forwardRef<HTMLDivElement, MiniKanbanCardProps>(
 
 MiniKanbanCard.displayName = "MiniKanbanCard";
 
+/* ── Inline Add Card ────────────────────────────────────── */
+
+interface InlineAddCardProps {
+  agents: BridgeAgent[];
+  onAdd: (title: string, agentId?: string) => void;
+}
+
+const InlineAddCard = memo<InlineAddCardProps>(({ agents, onAdd }) => {
+  const [open, setOpen] = useState(false);
+  const [title, setTitle] = useState("");
+  const [selectedAgentId, setSelectedAgentId] = useState("");
+  const [agentPickerOpen, setAgentPickerOpen] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const cancel = useCallback(() => {
+    setOpen(false);
+    setTitle("");
+    setSelectedAgentId("");
+    setAgentPickerOpen(false);
+  }, []);
+
+  const submit = useCallback(() => {
+    const t = title.trim();
+    if (!t) { cancel(); return; }
+    onAdd(t, selectedAgentId || undefined);
+    cancel();
+  }, [title, selectedAgentId, onAdd, cancel]);
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") { e.preventDefault(); submit(); }
+    if (e.key === "Escape") cancel();
+  }, [submit, cancel]);
+
+  const selectedAgent = agents.find((a) => a.id === selectedAgentId);
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => {
+          setOpen(true);
+          setTimeout(() => inputRef.current?.focus(), 30);
+        }}
+        className="w-full flex items-center gap-1.5 px-2 py-1.5 rounded-md text-[11px] text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted/40 transition-colors group"
+      >
+        <Plus className="w-3 h-3 shrink-0" />
+        <span>Add card</span>
+      </button>
+    );
+  }
+
+  return (
+    <div className="space-y-1.5 px-0.5 pb-1">
+      <input
+        ref={inputRef}
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        onKeyDown={handleKeyDown}
+        placeholder="Task title…"
+        className="w-full rounded-md border border-primary/50 bg-background px-2.5 py-1.5 text-xs outline-none focus:ring-1 focus:ring-primary/40 placeholder:text-muted-foreground/40"
+      />
+      <div className="flex items-center gap-1">
+        {/* Agent picker */}
+        <div className="relative flex-1 min-w-0">
+          <button
+            type="button"
+            onClick={() => setAgentPickerOpen((p) => !p)}
+            className={cn(
+              "w-full flex items-center gap-1.5 px-2 py-1 rounded-md border text-[10px] transition-colors truncate",
+              selectedAgent
+                ? "border-primary/40 bg-primary/5 text-foreground"
+                : "border-border bg-muted/30 text-muted-foreground hover:text-foreground"
+            )}
+          >
+            <Bot className="w-2.5 h-2.5 shrink-0" />
+            <span className="truncate">{selectedAgent ? selectedAgent.name : "Assign…"}</span>
+          </button>
+          {agentPickerOpen && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setAgentPickerOpen(false)} />
+              <div className="absolute bottom-full mb-1 left-0 z-50 w-[170px] rounded-lg border border-border bg-card shadow-lg py-1 max-h-[180px] overflow-y-auto customScrollbar2">
+                <button
+                  onClick={() => { setSelectedAgentId(""); setAgentPickerOpen(false); }}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-[11px] text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+                >
+                  None
+                </button>
+                {agents.map((a) => (
+                  <button
+                    key={a.id}
+                    onClick={() => { setSelectedAgentId(a.id); setAgentPickerOpen(false); }}
+                    className={cn(
+                      "w-full flex items-center gap-2 px-3 py-1.5 text-left text-[11px] transition-colors",
+                      selectedAgentId === a.id
+                        ? "bg-primary/10 text-foreground font-medium"
+                        : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+                    )}
+                  >
+                    <Bot className="w-3 h-3 shrink-0" />
+                    <span className="truncate">{a.name}</span>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+        <Button size="iconSm" variant="ghost" onClick={cancel} className="h-6 w-6 shrink-0">
+          <X className="w-3 h-3" />
+        </Button>
+        <Button
+          size="sm"
+          onClick={submit}
+          disabled={!title.trim()}
+          className="h-6 px-2 text-[10px] shrink-0"
+        >
+          Add
+        </Button>
+      </div>
+    </div>
+  );
+});
+
+InlineAddCard.displayName = "InlineAddCard";
+
 /* ── Mini Column ────────────────────────────────────────── */
 
 interface MiniKanbanColumnProps {
@@ -643,6 +767,8 @@ interface MiniKanbanColumnProps {
   onSelect: (taskId: string) => void;
   onEdit?: (taskId: string) => void;
   onDelete: (taskId: string) => void;
+  agents?: BridgeAgent[];
+  onAddCard?: (title: string, agentId?: string) => void;
   // DnD props (from MissionQueue)
   isDragOver?: boolean;
   draggedTask?: Task | null;
@@ -660,6 +786,8 @@ const MiniKanbanColumn = memo<MiniKanbanColumnProps>(({
   onSelect,
   onEdit,
   onDelete,
+  agents = [],
+  onAddCard,
   isDragOver = false,
   draggedTask = null,
   onDragOver,
@@ -668,7 +796,6 @@ const MiniKanbanColumn = memo<MiniKanbanColumnProps>(({
   onDragEnd,
   onDragLeave,
 }) => {
-  const hasTasks = tasks.length > 0;
 
   return (
     <div
@@ -739,6 +866,11 @@ const MiniKanbanColumn = memo<MiniKanbanColumnProps>(({
           )}
         </AnimatePresence>
       </div>
+      {onAddCard && (
+        <div className="px-1 pb-1 shrink-0">
+          <InlineAddCard agents={agents} onAdd={onAddCard} />
+        </div>
+      )}
     </div>
   );
 });
@@ -1340,7 +1472,7 @@ LiveFeedPanel.displayName = "LiveFeedPanel";
 
 const KanbanWidgetContent = memo((props: CustomProps) => {
   const { isFocusModeActive } = useFocusMode();
-  const { tasks, handleStatusChange, handleSelectTask, handleDeleteTask } =
+  const { tasks, lists, handleStatusChange, handleSelectTask, handleDeleteTask, handleAddTask } =
     useTodoList();
   const { agents: openClawAgents, fetchAgents } = useHyperclawContext();
   const { openChat } = useFloatingChatOS();
@@ -1362,6 +1494,10 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
     () => (openClawAgents ?? []).map((a) => ({ ...a, status: a.status ?? "idle", workspaceFolder: undefined })),
     [openClawAgents]
   );
+
+  // List/project filter state
+  const [selectedListId, setSelectedListId] = useState<string | null>(null);
+  const [listPickerOpen, setListPickerOpen] = useState(false);
 
   // Team panel state — org chart based
   const [orgData, setOrgData] = useState<OrgChartData | null>(null);
@@ -1674,6 +1810,9 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
       cancelled: [],
     };
     tasks.forEach((task) => {
+      // Filter by selected list/project
+      if (selectedListId && task.listId !== selectedListId) return;
+
       // Filter by selected team's agents
       if (selectedTeamAgentKeys) {
         const matchesAssignedAgent = task.assignedAgent && selectedTeamAgentKeys.has(task.assignedAgent);
@@ -1696,7 +1835,7 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
       }
     });
     return g;
-  }, [tasks, selectedTeamAgentKeys]);
+  }, [tasks, selectedTeamAgentKeys, selectedListId]);
 
   const handleMove = useCallback(
     (taskId: string, newStatus: KanbanStatus) => {
@@ -1873,6 +2012,28 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
   // Stable callbacks for child components (prevents re-renders from new fn refs)
   const openAddTask = useCallback(() => setAddTaskOpen(true), []);
   const closeAddTask = useCallback(() => setAddTaskOpen(false), []);
+
+  const handleInlineAddPending = useCallback((title: string, agentId?: string) => {
+    const agentObj = agentId ? agents.find((a) => a.id === agentId) : undefined;
+    handleAddTask({ title, status: "pending", assignedAgent: agentObj?.name, assignedAgentId: agentObj?.id });
+  }, [agents, handleAddTask]);
+
+  const handleInlineAddInProgress = useCallback((title: string, agentId?: string) => {
+    const agentObj = agentId ? agents.find((a) => a.id === agentId) : undefined;
+    handleAddTask({ title, status: "in_progress", assignedAgent: agentObj?.name, assignedAgentId: agentObj?.id });
+  }, [agents, handleAddTask]);
+
+  const handleInlineAddCompleted = useCallback((title: string, agentId?: string) => {
+    const agentObj = agentId ? agents.find((a) => a.id === agentId) : undefined;
+    handleAddTask({ title, status: "completed", assignedAgent: agentObj?.name, assignedAgentId: agentObj?.id });
+  }, [agents, handleAddTask]);
+
+  const inlineAddHandlers: Record<KanbanStatus, (title: string, agentId?: string) => void> = {
+    pending: handleInlineAddPending,
+    in_progress: handleInlineAddInProgress,
+    completed: handleInlineAddCompleted,
+    cancelled: handleInlineAddPending, // fallback
+  };
   const openAddAgent = useCallback(() => setAddAgentOpen(true), []);
   const handleEditAgent = useCallback((agentId: string) => setEditingAgentId(agentId), []);
   const closeAgentDetail = useCallback((open: boolean) => { if (!open) setEditingAgentId(null); }, []);
@@ -1898,11 +2059,70 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
               <GripVertical className="w-3 h-3 text-muted-foreground" />
             </div>
           )}
-          {tasks.length > 0 && (
+          {(grouped.pending.length + grouped.in_progress.length + grouped.completed.length) > 0 && (
             <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 font-normal">
-              {tasks.length} tasks
+              {grouped.pending.length + grouped.in_progress.length + grouped.completed.length} tasks
             </Badge>
           )}
+
+          {/* List / project selector */}
+          {lists.length > 0 && (
+            <div className="relative">
+              <button
+                onClick={() => setListPickerOpen((p) => !p)}
+                className={cn(
+                  "flex items-center gap-1.5 px-2 py-0.5 rounded-md border text-[10px] transition-colors",
+                  listPickerOpen || selectedListId
+                    ? "border-primary bg-primary/5 text-foreground"
+                    : "border-border bg-background/60 text-muted-foreground hover:text-foreground hover:border-foreground/20"
+                )}
+              >
+                <ListChecks className="w-2.5 h-2.5 shrink-0" />
+                <span className="max-w-[80px] truncate">
+                  {selectedListId
+                    ? (lists.find((l) => l._id === selectedListId)?.name ?? "List")
+                    : "All lists"}
+                </span>
+                <ChevronRight className={cn("w-2.5 h-2.5 transition-transform", listPickerOpen && "rotate-90")} />
+              </button>
+
+              {listPickerOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setListPickerOpen(false)} />
+                  <div className="absolute left-0 top-full mt-1 z-50 w-[180px] rounded-lg border border-border bg-card shadow-lg py-1 max-h-[280px] overflow-y-auto customScrollbar2">
+                    <button
+                      onClick={() => { setSelectedListId(null); setListPickerOpen(false); }}
+                      className={cn(
+                        "w-full flex items-center gap-2 px-3 py-1.5 text-left text-[11px] transition-colors",
+                        selectedListId === null
+                          ? "bg-primary/10 text-foreground font-medium"
+                          : "text-muted-foreground hover:bg-card hover:text-foreground"
+                      )}
+                    >
+                      <Columns3 className="w-3 h-3 shrink-0" />
+                      All lists
+                    </button>
+                    {lists.map((list) => (
+                      <button
+                        key={list._id}
+                        onClick={() => { setSelectedListId(list._id); setListPickerOpen(false); }}
+                        className={cn(
+                          "w-full flex items-center gap-2 px-3 py-1.5 text-left text-[11px] transition-colors",
+                          selectedListId === list._id
+                            ? "bg-primary/10 text-foreground font-medium"
+                            : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+                        )}
+                      >
+                        <ListChecks className="w-3 h-3 shrink-0 opacity-60" />
+                        <span className="truncate">{list.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
           <div className="flex items-center gap-1 ml-auto shrink-0">
             <Button
               variant="ghost"
@@ -2009,6 +2229,8 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
                   onSelect={handleSelect}
                   onEdit={handleEdit}
                   onDelete={handleDelete}
+                  agents={agents}
+                  onAddCard={inlineAddHandlers[col.id]}
                   isDragOver={dragOverColumn === col.id}
                   draggedTask={draggedTask}
                   onDragOver={handleDragOver}

@@ -300,6 +300,7 @@ export const GatewayChatCustomHeader: React.FC<GatewayChatHeaderProps> = ({
         onOpenChange={setAgentDetailOpen}
         agentId={currentAgentId || agent.id}
         agentName={agent.name}
+        agentRuntime={(agent as { runtime?: string }).runtime}
         onDeleted={() => fetchAgents()}
       />
     </CardHeader>

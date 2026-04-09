@@ -23,6 +23,7 @@ import {
   Users,
   FolderOpen,
   ChevronDown,
+  Search,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -243,6 +244,7 @@ interface StatusHeaderProps extends CustomProps {
   agentCount?: number;
   hiddenCount?: number;
   unreadTotal?: number;
+  className?: string;
   onRefresh?: () => void;
   refreshing?: boolean;
   connected?: boolean;
@@ -521,6 +523,7 @@ function ProjectRow({ project }: { project: import("$/components/Tool/Projects/p
 
 const StatusWidgetContent = memo((props: CustomProps) => {
   const { isFocusModeActive } = useFocusMode();
+  const { className } = props;
   const { agents: openClawAgents } = useHyperclawContext();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [statuses, setStatuses] = useState<AgentStatus[]>([]);
@@ -540,6 +543,7 @@ const StatusWidgetContent = memo((props: CustomProps) => {
   const activeAgentIdRef = useRef<string | null>(null);
   useEffect(() => { activeAgentIdRef.current = activeAgentId; }, [activeAgentId]);
   const [addAgentOpen, setAddAgentOpen] = useState(false);
+  const [search, setSearch] = useState("");
   const [hiringAgentIds, setHiringAgentIds] = useState<Set<string>>(new Set());
   const [deletingAgentIds, setDeletingAgentIds] = useState<Set<string>>(new Set());
   // Refs kept in sync so refresh() can read without stale closures
@@ -554,6 +558,22 @@ const StatusWidgetContent = memo((props: CustomProps) => {
     () => inboxItems.filter((i) => i.status === "pending").length,
     [inboxItems]
   );
+
+  const filteredStatuses = useMemo(() => {
+    if (!search.trim()) return statuses;
+    const q = search.trim().toLowerCase();
+    return statuses.filter((s) =>
+      s.name.toLowerCase().includes(q) || s.agentId.toLowerCase().includes(q)
+    );
+  }, [statuses, search]);
+
+  const filteredProjects = useMemo(() => {
+    if (!search.trim()) return projects;
+    const q = search.trim().toLowerCase();
+    return projects.filter((p) =>
+      (p.name || "").toLowerCase().includes(q)
+    );
+  }, [projects, search]);
 
   const fetchInbox = useCallback(async () => {
     setInboxLoading(true);
@@ -1000,7 +1020,8 @@ const StatusWidgetContent = memo((props: CustomProps) => {
       <Card
         className={cn(
           "group h-full w-full min-w-0 flex flex-col overflow-hidden bg-card/70 backdrop-blur-xl border border-border transition-all duration-300 rounded-md",
-          isFocusModeActive && "border-transparent grayscale-[30%]"
+          isFocusModeActive && "border-transparent grayscale-[30%]",
+          className
         )}
       >
         {/* Compact tab bar — no title, just tabs + controls */}
@@ -1012,7 +1033,7 @@ const StatusWidgetContent = memo((props: CustomProps) => {
               </div>
             )}
             <button
-              onClick={() => setActiveTab("agents")}
+              onClick={() => { setActiveTab("agents"); setSearch(""); }}
               className={cn(
                 "px-2 py-1 text-[11px] font-medium transition-all duration-200 rounded-md shrink-0",
                 activeTab === "agents"
@@ -1024,7 +1045,7 @@ const StatusWidgetContent = memo((props: CustomProps) => {
               Agents
             </button>
             <button
-              onClick={() => setActiveTab("projects")}
+              onClick={() => { setActiveTab("projects"); setSearch(""); }}
               className={cn(
                 "px-2 py-1 text-[11px] font-medium transition-all duration-200 rounded-md shrink-0",
                 activeTab === "projects"
@@ -1036,7 +1057,7 @@ const StatusWidgetContent = memo((props: CustomProps) => {
               Projects
             </button>
             <button
-              onClick={() => setActiveTab("inbox")}
+              onClick={() => { setActiveTab("inbox"); setSearch(""); }}
               className={cn(
                 "px-2 py-1 text-[11px] font-medium transition-all duration-200 rounded-md shrink-0",
                 activeTab === "inbox"
@@ -1049,6 +1070,22 @@ const StatusWidgetContent = memo((props: CustomProps) => {
             </button>
           </div>
         </div>
+
+        {/* Search bar — shown on agents and projects tabs */}
+        {activeTab !== "inbox" && (
+          <div className="px-3 pb-2 shrink-0">
+            <div className="relative">
+              <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-muted-foreground/50 pointer-events-none" />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder={activeTab === "agents" ? "Search agents" : "Search projects"}
+                className="w-full h-7 pl-6 pr-2 rounded-md bg-muted/40 border border-border/30 text-xs text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary/40 transition-colors"
+              />
+            </div>
+          </div>
+        )}
 
         <div className="flex-1 overflow-hidden flex flex-col min-h-0 px-0 pb-2">
           {activeTab === "projects" ? (
@@ -1067,23 +1104,41 @@ const StatusWidgetContent = memo((props: CustomProps) => {
               </div>
               <ScrollArea className="flex-1 min-h-0">
                 {projectsLoading ? (
-                  <div className="flex items-center justify-center py-6">
-                    <Loader2 className="w-4 h-4 animate-spin text-muted-foreground/50" />
+                  <div className="space-y-0.5 pr-1">
+                    {Array.from({ length: 4 }).map((_, i) => (
+                      <div key={i} className="flex items-center gap-2 px-2.5 py-2">
+                        <div className="w-5 h-5 rounded bg-muted/50 animate-pulse shrink-0" />
+                        <div className="flex-1 min-w-0 flex flex-col gap-1.5">
+                          <div className="h-2.5 rounded bg-muted/50 animate-pulse" style={{ width: `${40 + (i % 3) * 15}%` }} />
+                          {i % 2 === 0 && (
+                            <div className="h-2 rounded bg-muted/40 animate-pulse" style={{ width: `${55 + (i % 2) * 10}%` }} />
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <div className="w-4 h-2 rounded bg-muted/40 animate-pulse" />
+                          <div className="w-3 h-3 rounded bg-muted/40 animate-pulse" />
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                ) : projects.length === 0 ? (
+                ) : filteredProjects.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-8 gap-2">
                     <FolderOpen className="w-6 h-6 text-muted-foreground/30" />
-                    <p className="text-xs text-muted-foreground/60">No projects yet</p>
-                    <button
-                      onClick={() => setCreateProjectOpen(true)}
-                      className="text-[11px] text-primary hover:underline"
-                    >
-                      Create your first project
-                    </button>
+                    <p className="text-xs text-muted-foreground/60">
+                      {search.trim() ? "No matching projects" : "No projects yet"}
+                    </p>
+                    {!search.trim() && (
+                      <button
+                        onClick={() => setCreateProjectOpen(true)}
+                        className="text-[11px] text-primary hover:underline"
+                      >
+                        Create your first project
+                      </button>
+                    )}
                   </div>
                 ) : (
                   <div className="space-y-0.5 pr-1">
-                    {projects.map((p) => (
+                    {filteredProjects.map((p) => (
                       <ProjectRow key={p.id} project={p} />
                     ))}
                   </div>
@@ -1094,9 +1149,25 @@ const StatusWidgetContent = memo((props: CustomProps) => {
           ) : activeTab === "inbox" ? (
             <ScrollArea className="flex-1 min-h-0">
               {inboxLoading ? (
-                <div className="flex items-center justify-center py-6 gap-2">
-                  <Loader2 className="w-4 h-4 animate-spin text-primary" />
-                  <span className="text-xs text-muted-foreground">Loading...</span>
+                <div className="space-y-1 pr-1 px-0.5 pt-0.5">
+                  {Array.from({ length: 3 }).map((_, i) => (
+                    <div key={i} className="p-2.5 rounded-md border border-border/30 bg-card/40">
+                      <div className="flex items-start gap-2">
+                        <div className="w-3.5 h-3.5 rounded bg-muted/50 animate-pulse shrink-0 mt-0.5" />
+                        <div className="flex-1 min-w-0 flex flex-col gap-1.5">
+                          <div className="flex items-center gap-2">
+                            <div className="h-2.5 rounded bg-muted/50 animate-pulse" style={{ width: `${50 + (i % 3) * 12}%` }} />
+                            <div className="flex-1" />
+                            <div className="h-2 w-10 rounded bg-muted/40 animate-pulse" />
+                          </div>
+                          {i % 2 !== 0 && (
+                            <div className="h-2 rounded bg-muted/40 animate-pulse" style={{ width: `${65 + (i % 2) * 10}%` }} />
+                          )}
+                          <div className="h-2 rounded bg-muted/40 animate-pulse w-3/4" />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               ) : inboxItems.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-8 gap-2">
@@ -1186,9 +1257,22 @@ const StatusWidgetContent = memo((props: CustomProps) => {
                 </button>
               </div>
               {loading && statuses.length === 0 ? (
-                <div className="flex-1 flex items-center justify-center gap-2 py-6">
-                  <Loader2 className="w-5 h-5 animate-spin text-primary" />
-                  <span className="text-sm text-muted-foreground">Loading agents...</span>
+                <div className="flex-1 overflow-hidden">
+                  <div className="space-y-0.5 pr-1">
+                    {Array.from({ length: 5 }).map((_, i) => (
+                      <div key={i} className="flex items-start gap-2.5 px-2.5 py-2">
+                        <div className="shrink-0 mt-0.5 w-7 h-7 rounded-full bg-muted/50 animate-pulse" />
+                        <div className="flex-1 min-w-0 flex flex-col gap-1.5 pt-0.5">
+                          <div className="flex items-center gap-2">
+                            <div className="h-2.5 rounded bg-muted/50 animate-pulse" style={{ width: `${45 + (i % 3) * 15}%` }} />
+                            <div className="flex-1" />
+                            <div className="h-2 w-8 rounded bg-muted/40 animate-pulse" />
+                          </div>
+                          <div className="h-2 rounded bg-muted/40 animate-pulse" style={{ width: `${60 + (i % 4) * 8}%` }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               ) : error && statuses.length === 0 ? (
                 <div className="flex-1 flex flex-col items-center justify-center gap-2 py-6">
@@ -1198,16 +1282,18 @@ const StatusWidgetContent = memo((props: CustomProps) => {
                     <RefreshCw className={cn("w-3 h-3 mr-1", loading && "animate-spin")} />Retry
                   </Button>
                 </div>
-              ) : statuses.length === 0 ? (
+              ) : filteredStatuses.length === 0 ? (
                 <div className="flex-1 flex flex-col items-center justify-center gap-2 py-6">
                   <Activity className="w-6 h-6 text-muted-foreground/40" />
-                  <p className="text-xs text-muted-foreground text-center">No employees yet</p>
+                  <p className="text-xs text-muted-foreground text-center">
+                    {search.trim() ? "No matching agents" : "No employees yet"}
+                  </p>
                 </div>
               ) : (
                 <ScrollArea className="flex-1 min-h-0 w-full min-w-0">
                   <div className="space-y-0.5 pr-1 w-full min-w-0 overflow-hidden">
                     <AnimatePresence mode="popLayout">
-                      {statuses.map((status) => (
+                      {filteredStatuses.map((status) => (
                         <AgentExpandedRow
                           key={status.agentId}
                           status={status}
@@ -1238,9 +1324,10 @@ const StatusWidgetContent = memo((props: CustomProps) => {
 StatusWidgetContent.displayName = "StatusWidgetContent";
 
 const StatusWidget = memo((props: CustomProps) => {
+  const { className } = props;
   return (
     <ProjectsProvider>
-      <StatusWidgetContent {...props} />
+      <StatusWidgetContent className={className} {...props} />
     </ProjectsProvider>
   );
 });
