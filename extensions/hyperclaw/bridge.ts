@@ -138,6 +138,54 @@ export class HyperClawBridge {
         );
         CREATE INDEX IF NOT EXISTS idx_sm_session_created
           ON session_messages(session_key, created_at_ms);
+        -- Agents registry
+        CREATE TABLE IF NOT EXISTS agents (
+          id         TEXT PRIMARY KEY,
+          name       TEXT NOT NULL,
+          type       TEXT,
+          emoji      TEXT,
+          status     TEXT NOT NULL DEFAULT 'active',
+          config     TEXT NOT NULL DEFAULT '{}',
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        -- Projects
+        CREATE TABLE IF NOT EXISTS projects (
+          id          TEXT PRIMARY KEY,
+          name        TEXT NOT NULL,
+          description TEXT,
+          status      TEXT NOT NULL DEFAULT 'active',
+          created_by  TEXT,
+          created_at  INTEGER NOT NULL,
+          updated_at  INTEGER NOT NULL
+        );
+        -- Goals
+        CREATE TABLE IF NOT EXISTS goals (
+          id          TEXT PRIMARY KEY,
+          title       TEXT NOT NULL,
+          description TEXT,
+          kpis        TEXT NOT NULL DEFAULT '[]',
+          status      TEXT NOT NULL DEFAULT 'active',
+          project_id  TEXT,
+          created_by  TEXT,
+          created_at  INTEGER NOT NULL,
+          updated_at  INTEGER NOT NULL
+        );
+        -- Issues
+        CREATE TABLE IF NOT EXISTS issues (
+          id          TEXT PRIMARY KEY,
+          title       TEXT NOT NULL,
+          description TEXT,
+          severity    TEXT NOT NULL DEFAULT 'medium',
+          status      TEXT NOT NULL DEFAULT 'open',
+          agent_id    TEXT,
+          project_id  TEXT,
+          created_by  TEXT,
+          created_at  INTEGER NOT NULL,
+          updated_at  INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_issues_status ON issues(status);
+        CREATE INDEX IF NOT EXISTS idx_issues_project ON issues(project_id);
         -- KV store for flags
         CREATE TABLE IF NOT EXISTS kv (
           key        TEXT PRIMARY KEY,
@@ -335,14 +383,32 @@ export class HyperClawBridge {
     priority?: string;
     status?: string;
     agent?: string;
+    kind?: string;
+    projectId?: string;
+    goalId?: string;
+    dueAt?: string;
+    externalId?: string;
     metadata?: Record<string, unknown>;
   }): Record<string, unknown> {
+    // If externalId provided, upsert by external ID
+    if (task.externalId) {
+      const { externalId, agent, ...fields } = task;
+      return this.upsertTask({
+        externalId,
+        data: { ...fields, ...(agent ? { assignedAgent: agent } : {}) },
+      });
+    }
+
     const now = new Date().toISOString();
-    const { agent, ...rest } = task;
+    const { agent, kind, projectId, goalId, dueAt, ...rest } = task;
     const id = generateTaskId();
     const newTask: Record<string, unknown> = {
       ...rest,
       ...(agent ? { assignedAgent: agent } : {}),
+      ...(kind ? { kind } : {}),
+      ...(projectId ? { projectId } : {}),
+      ...(goalId ? { goalId } : {}),
+      ...(dueAt ? { dueAt } : {}),
       id,
       _id: id,
       listId: "",
@@ -512,12 +578,32 @@ export class HyperClawBridge {
     agent?: string;
     status?: string;
     kind?: string;
+    projectId?: string;
+    goalId?: string;
     limit?: number;
     sort?: string;
   }): Record<string, unknown>[] {
     let tasks: Record<string, unknown>[];
     const db = this.getDb();
     if (db) {
+      // Auto-release expired leases before returning
+      const now = Date.now();
+      const expiredRows = (db.prepare("SELECT * FROM tasks").all() as TaskRow[]).filter((r) => {
+        try {
+          const d = JSON.parse(r.data || "{}");
+          const lease = d.lease as { expiresAtMs?: number } | undefined;
+          return d.status === "in_progress" && lease?.expiresAtMs && lease.expiresAtMs < now;
+        } catch { return false; }
+      });
+      for (const row of expiredRows) {
+        try {
+          const d = JSON.parse(row.data || "{}");
+          delete d.lease;
+          d.status = "pending";
+          db.prepare("UPDATE tasks SET data = ?, updated_at = ? WHERE id = ?")
+            .run(JSON.stringify(d), now, row.id);
+        } catch { /* ignore */ }
+      }
       tasks = (db.prepare("SELECT * FROM tasks").all() as TaskRow[]).map((r) => this.rowToTask(r));
     } else {
       tasks = this.readTodoData().tasks;
@@ -537,6 +623,12 @@ export class HyperClawBridge {
         const d = t.data as Record<string, unknown> | undefined;
         return (t as any).kind === filters.kind || d?.kind === filters.kind;
       });
+    }
+    if (filters.projectId) {
+      tasks = tasks.filter((t) => (t as any).projectId === filters.projectId);
+    }
+    if (filters.goalId) {
+      tasks = tasks.filter((t) => (t as any).goalId === filters.goalId);
     }
     if (filters.sort === "oldest") {
       tasks.sort((a, b) => String(a.createdAt ?? "").localeCompare(String(b.createdAt ?? "")));
@@ -1381,5 +1473,166 @@ export class HyperClawBridge {
       else if (start > 0) { msgs = msgs.slice(start); }
       return msgs;
     } catch { return []; }
+  }
+
+  // ── Agents registry ───────────────────────────────────────────────────────
+
+  addAgent(params: {
+    name: string;
+    type?: string;
+    emoji?: string;
+    config?: Record<string, unknown>;
+    createdBy?: string;
+  }): Record<string, unknown> {
+    const now = Date.now();
+    const id = generateTaskId();
+    const agent: Record<string, unknown> = {
+      id,
+      name: params.name,
+      type: params.type ?? null,
+      emoji: params.emoji ?? null,
+      status: "active",
+      config: params.config ?? {},
+      created_at: now,
+      updated_at: now,
+    };
+    const db = this.getDb();
+    if (db) {
+      db.prepare(
+        "INSERT INTO agents (id, name, type, emoji, status, config, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+      ).run(id, params.name, params.type ?? null, params.emoji ?? null, "active", JSON.stringify(params.config ?? {}), now, now);
+    }
+    this.emitEvent("agent_added", { agentId: id, name: params.name, type: params.type });
+    return agent;
+  }
+
+  listAgents(): Record<string, unknown>[] {
+    const db = this.getDb();
+    if (!db) return [];
+    return (db.prepare("SELECT * FROM agents ORDER BY created_at DESC").all() as any[]).map((r) => ({
+      ...r,
+      config: (() => { try { return JSON.parse(r.config || "{}"); } catch { return {}; } })(),
+    }));
+  }
+
+  // ── Projects ─────────────────────────────────────────────────────────────
+
+  createProject(params: {
+    name: string;
+    description?: string;
+    createdBy?: string;
+  }): Record<string, unknown> {
+    const now = Date.now();
+    const id = generateTaskId();
+    const project: Record<string, unknown> = {
+      id,
+      name: params.name,
+      description: params.description ?? null,
+      status: "active",
+      created_by: params.createdBy ?? null,
+      created_at: now,
+      updated_at: now,
+    };
+    const db = this.getDb();
+    if (db) {
+      db.prepare(
+        "INSERT INTO projects (id, name, description, status, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+      ).run(id, params.name, params.description ?? null, "active", params.createdBy ?? null, now, now);
+    }
+    this.emitEvent("project_created", { projectId: id, name: params.name });
+    return project;
+  }
+
+  listProjects(): Record<string, unknown>[] {
+    const db = this.getDb();
+    if (!db) return [];
+    return db.prepare("SELECT * FROM projects ORDER BY created_at DESC").all() as Record<string, unknown>[];
+  }
+
+  // ── Goals ─────────────────────────────────────────────────────────────────
+
+  createGoal(params: {
+    title: string;
+    description?: string;
+    kpis?: string[];
+    projectId?: string;
+    createdBy?: string;
+  }): Record<string, unknown> {
+    const now = Date.now();
+    const id = generateTaskId();
+    const goal: Record<string, unknown> = {
+      id,
+      title: params.title,
+      description: params.description ?? null,
+      kpis: params.kpis ?? [],
+      status: "active",
+      project_id: params.projectId ?? null,
+      created_by: params.createdBy ?? null,
+      created_at: now,
+      updated_at: now,
+    };
+    const db = this.getDb();
+    if (db) {
+      db.prepare(
+        "INSERT INTO goals (id, title, description, kpis, status, project_id, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+      ).run(id, params.title, params.description ?? null, JSON.stringify(params.kpis ?? []), "active", params.projectId ?? null, params.createdBy ?? null, now, now);
+    }
+    this.emitEvent("goal_created", { goalId: id, title: params.title, projectId: params.projectId });
+    return goal;
+  }
+
+  listGoals(projectId?: string): Record<string, unknown>[] {
+    const db = this.getDb();
+    if (!db) return [];
+    const rows = projectId
+      ? (db.prepare("SELECT * FROM goals WHERE project_id = ? ORDER BY created_at DESC").all(projectId) as any[])
+      : (db.prepare("SELECT * FROM goals ORDER BY created_at DESC").all() as any[]);
+    return rows.map((r) => ({ ...r, kpis: (() => { try { return JSON.parse(r.kpis || "[]"); } catch { return []; } })() }));
+  }
+
+  // ── Issues ────────────────────────────────────────────────────────────────
+
+  createIssue(params: {
+    title: string;
+    description?: string;
+    severity?: string;
+    agentId?: string;
+    projectId?: string;
+    createdBy?: string;
+  }): Record<string, unknown> {
+    const now = Date.now();
+    const id = generateTaskId();
+    const issue: Record<string, unknown> = {
+      id,
+      title: params.title,
+      description: params.description ?? null,
+      severity: params.severity ?? "medium",
+      status: "open",
+      agent_id: params.agentId ?? null,
+      project_id: params.projectId ?? null,
+      created_by: params.createdBy ?? null,
+      created_at: now,
+      updated_at: now,
+    };
+    const db = this.getDb();
+    if (db) {
+      db.prepare(
+        "INSERT INTO issues (id, title, description, severity, status, agent_id, project_id, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+      ).run(id, params.title, params.description ?? null, params.severity ?? "medium", "open", params.agentId ?? null, params.projectId ?? null, params.createdBy ?? null, now, now);
+    }
+    this.emitEvent("issue_created", { issueId: id, title: params.title, severity: params.severity ?? "medium" });
+    return issue;
+  }
+
+  listIssues(filters?: { status?: string; projectId?: string; agentId?: string }): Record<string, unknown>[] {
+    const db = this.getDb();
+    if (!db) return [];
+    let sql = "SELECT * FROM issues WHERE 1=1";
+    const binds: unknown[] = [];
+    if (filters?.status) { sql += " AND status = ?"; binds.push(filters.status); }
+    if (filters?.projectId) { sql += " AND project_id = ?"; binds.push(filters.projectId); }
+    if (filters?.agentId) { sql += " AND agent_id = ?"; binds.push(filters.agentId); }
+    sql += " ORDER BY created_at DESC";
+    return db.prepare(sql).all(...binds) as Record<string, unknown>[];
   }
 }

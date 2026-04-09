@@ -72,10 +72,16 @@ function HyperclawInner({ children }: { children: ReactNode }) {
   }, [fetchSQLiteAgents]);
 
   // Live refresh when any agent file changes (IDENTITY.md sync fires this)
+  // Also re-fetch on agent.deleted so the context is up-to-date before
+  // StatusWidget's refresh() runs — otherwise the deleted agent re-appears.
   useEffect(() => {
     const handler = () => fetchSQLiteAgents();
     window.addEventListener("agent.file.changed", handler);
-    return () => window.removeEventListener("agent.file.changed", handler);
+    window.addEventListener("agent.deleted", handler);
+    return () => {
+      window.removeEventListener("agent.file.changed", handler);
+      window.removeEventListener("agent.deleted", handler);
+    };
   }, [fetchSQLiteAgents]);
 
   // SQLite agents when available; fall back to OpenClaw list so nothing breaks

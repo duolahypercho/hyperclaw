@@ -96,9 +96,10 @@ interface AgentInboxViewProps {
   unreadCount: number;
   previewLoadingKeys: Set<string>;
   onSelect: (key: string) => void;
+  onNewChat: () => void;
 }
 
-function AgentInboxView({ sessions, loading, lastSeenTs, readSessions, unreadCount, previewLoadingKeys, onSelect }: AgentInboxViewProps) {
+function AgentInboxView({ sessions, loading, lastSeenTs, readSessions, unreadCount, previewLoadingKeys, onSelect, onNewChat }: AgentInboxViewProps) {
   // Key of the most recently updated unread session — this one shows the numeric count badge
   const latestUnreadKey = useMemo(() => {
     let best: Session | null = null;
@@ -139,11 +140,27 @@ function AgentInboxView({ sessions, loading, lastSeenTs, readSessions, unreadCou
       <div className="flex flex-col items-center justify-center flex-1 gap-2 text-muted-foreground">
         <MessageSquare className="w-7 h-7 opacity-30" />
         <p className="text-xs">No sessions yet</p>
+        <Button variant="outline" size="sm" className="h-7 text-xs gap-1.5 mt-1" onClick={onNewChat}>
+          <Plus className="w-3 h-3" />
+          New Chat
+        </Button>
       </div>
     );
   }
   return (
-    <div className="flex flex-col overflow-y-auto customScrollbar2 flex-1">
+    <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
+      {/* Toolbar */}
+      <div className="shrink-0 flex items-center justify-between px-3 py-1 border-b border-border/20">
+        <span className="text-[10px] text-muted-foreground">{sessions.length} session{sessions.length !== 1 ? "s" : ""}</span>
+        <button
+          onClick={onNewChat}
+          className="h-5 w-5 flex items-center justify-center rounded hover:bg-muted/40 transition-colors text-muted-foreground hover:text-foreground"
+          title="New chat"
+        >
+          <Plus className="w-3 h-3" />
+        </button>
+      </div>
+      <div className="flex-1 overflow-y-auto customScrollbar2">
       {sessions.map((s) => {
         const isUnread = !readSessions.has(s.key) && lastSeenTs > 0 && (s.updatedAt || 0) > lastSeenTs;
         const isActive = s.status === "active";
@@ -227,6 +244,7 @@ function AgentInboxView({ sessions, loading, lastSeenTs, readSessions, unreadCou
           </button>
         );
       })}
+      </div>
     </div>
   );
 }
@@ -454,7 +472,10 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
             const r = await gatewayConnection.getChatHistory(s.key, 20);
             messages = (r.messages || []) as typeof messages;
           } else if (backendTab === "claude-code") {
-            const r = await bridgeInvoke("claude-code-load-history", { sessionKey: s.key }) as any;
+            // claude-code-load-history expects sessionId, not sessionKey
+            // session keys are formatted as "claude:<sessionId>"
+            const sessionId = s.key.startsWith("claude:") ? s.key.slice(7) : s.key;
+            const r = await bridgeInvoke("claude-code-load-history", { sessionId }) as any;
             messages = r?.messages || [];
           } else if (backendTab === "codex") {
             const r = await bridgeInvoke("codex-load-history", { sessionKey: s.key }) as any;
@@ -636,9 +657,11 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
               <Avatar key={currentAgentId} className="h-8 w-8 shrink-0">
                 {avatarUrl && <AvatarImage src={avatarUrl} alt={displayName} />}
                 <AvatarFallback className="bg-primary/10 text-primary text-sm">
-                  {RuntimeIcon && !avatarUrl
+                  {(avatarText || identity?.emoji)
+                    ? (avatarText || identity?.emoji)
+                    : RuntimeIcon
                     ? <RuntimeIcon className="w-5 h-5" />
-                    : (avatarText || identity?.emoji || "🤖")
+                    : "🤖"
                   }
                 </AvatarFallback>
               </Avatar>
@@ -650,7 +673,12 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
                   </h3>
                 </div>
                 <p className="text-[10px] text-muted-foreground truncate">
-                  {activeSessionLabel && chatView === "chat" ? displayName : currentAgentId}
+                  {activeSessionLabel && chatView === "chat"
+                    ? displayName
+                    : backendTab === "claude-code" ? "Claude Code"
+                    : backendTab === "codex" ? "Codex"
+                    : backendTab === "hermes" ? "Hermes"
+                    : "OpenClaw"}
                 </p>
               </div>
             </div>
@@ -828,6 +856,10 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
               unreadCount={inboxUnreadCount}
               previewLoadingKeys={previewLoadingKeys}
               readSessions={readSessions}
+              onNewChat={() => {
+                setChatView("chat");
+                chatRef.current?.newChat();
+              }}
               onSelect={(key) => {
                 const session = inboxSessions.find((s) => s.key === key);
                 setActiveSessionLabel(session?.label || key);

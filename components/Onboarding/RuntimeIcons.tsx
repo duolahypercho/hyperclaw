@@ -63,31 +63,14 @@ export function ClaudeCodeIcon({ className }: IconProps) {
   );
 }
 
-/** Hermes — caduceus (winged staff with serpents, purple-gold) */
+/** Hermes — branded PNG logo */
 export function HermesIcon({ className }: IconProps) {
   return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
+    <img
+      src="/assets/hermes-agent.png"
+      alt="Hermes"
       className={className}
-    >
-      <defs>
-        <linearGradient id="hermes-grad" x1="12" y1="2" x2="12" y2="23" gradientUnits="userSpaceOnUse">
-          <stop stopColor="#C5A03F" />
-          <stop offset="1" stopColor="#8B6914" />
-        </linearGradient>
-      </defs>
-      <line x1="12" y1="6" x2="12" y2="23" stroke="url(#hermes-grad)" strokeWidth="1.5" strokeLinecap="round" />
-      <path d="M12 8 C10 9 9.5 11 10.5 13 C11.5 15 10 17 12 18" stroke="url(#hermes-grad)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M12 8 C14 9 14.5 11 13.5 13 C12.5 15 14 17 12 18" stroke="url(#hermes-grad)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-      <circle cx="10" cy="8" r="0.8" fill="#C5A03F" />
-      <circle cx="14" cy="8" r="0.8" fill="#C5A03F" />
-      <path d="M12 6 L8 3 L6 5 L9 6" stroke="url(#hermes-grad)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M12 6 L16 3 L18 5 L15 6" stroke="url(#hermes-grad)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-      <line x1="7.5" y1="4" x2="7" y2="5.2" stroke="url(#hermes-grad)" strokeWidth="1" strokeLinecap="round" />
-      <line x1="16.5" y1="4" x2="17" y2="5.2" stroke="url(#hermes-grad)" strokeWidth="1" strokeLinecap="round" />
-      <circle cx="12" cy="6.5" r="1.2" stroke="url(#hermes-grad)" strokeWidth="1.5" fill="none" />
-    </svg>
+      style={{ objectFit: "contain" }}
+    />
   );
 }

@@ -260,11 +260,13 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
   const claudeCodeChat = useClaudeCodeChat({
     sessionKey,
     autoConnect: effectiveProvider === "claude-code",
+    agentId,
   });
 
   const codexChat = useCodexChat({
     sessionKey,
     autoConnect: effectiveProvider === "codex",
+    agentId,
   });
 
   const activeChat = effectiveProvider === "claude-code" ? claudeCodeChat

@@ -22,6 +22,7 @@ export interface UseCodexChatOptions {
   sessionKey?: string;
   autoConnect?: boolean;
   defaultModel?: string;
+  agentId?: string;
 }
 
 // Map HyperClaw session keys → Codex thread IDs for resume
@@ -30,7 +31,7 @@ const sessionIdMap = new Map<string, string>();
 export function useCodexChat(
   options: UseCodexChatOptions = {}
 ): UseGatewayChatReturn {
-  const { sessionKey: initialSessionKey, defaultModel } = options;
+  const { sessionKey: initialSessionKey, defaultModel, agentId } = options;
 
   const [messages, setMessages] = useState<GatewayChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -121,6 +122,7 @@ export function useCodexChat(
           sessionId: codexThreadId || undefined,
           sessionKey: currentSessionKey,
           ...(model && { model }),
+          ...(agentId && { agentId }),
         })) as {
           success?: boolean;
           error?: string;

@@ -26,6 +26,7 @@ export interface UseClaudeCodeChatOptions {
   sessionKey?: string;
   autoConnect?: boolean;
   defaultModel?: string;
+  agentId?: string;
 }
 
 // Map HyperClaw session keys → Claude Code session IDs for resume
@@ -61,7 +62,7 @@ const sessionIdMap = hydrateSessionIdMap();
 export function useClaudeCodeChat(
   options: UseClaudeCodeChatOptions = {}
 ): UseGatewayChatReturn {
-  const { sessionKey: initialSessionKey, defaultModel } = options;
+  const { sessionKey: initialSessionKey, defaultModel, agentId } = options;
 
   const [messages, setMessages] = useState<GatewayChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -319,6 +320,7 @@ export function useClaudeCodeChat(
           sessionId: claudeSessionId || undefined,
           sessionKey: currentSessionKey,
           ...(modelRef.current && { model: modelRef.current }),
+          ...(agentId && { agentId }),
         })) as {
           success?: boolean;
           error?: string;

@@ -341,6 +341,8 @@ const AgentExpandedRow = React.forwardRef<HTMLDivElement, {
   const avatarText = resolveAvatarText(identity?.avatar);
   const RuntimeIcon = getRuntimeIcon(identity?.runtime || status.runtime);
   const displayName = identity?.name || status.name || status.agentId;
+  const runtime = identity?.runtime || status.runtime;
+  const showRuntime = runtime && runtime !== "openclaw";
 
   return (
     <motion.div
@@ -356,14 +358,16 @@ const AgentExpandedRow = React.forwardRef<HTMLDivElement, {
       )}
       onClick={() => !isHiring && !isDeleting && onClick(status.agentId)}
     >
-      {/* Avatar with unread badge */}
+      {/* Avatar */}
       <div className="shrink-0 mt-0.5 relative">
         <Avatar className="w-7 h-7">
           {avatarUrl && <AvatarImage src={avatarUrl} alt={displayName} />}
           <AvatarFallback className="bg-primary/10 text-primary text-[11px] select-none">
-            {RuntimeIcon && !avatarUrl
-              ? <RuntimeIcon className="w-4 h-4" />
-              : <span className="leading-[0]">{avatarText || identity?.emoji || displayName.slice(0, 2).toUpperCase()}</span>
+            {identity?.emoji || avatarText
+              ? <span className="leading-[0]">{identity?.emoji || avatarText}</span>
+              : RuntimeIcon
+                ? <RuntimeIcon className="w-4 h-4" />
+                : <span className="leading-[0]">{displayName.slice(0, 2).toUpperCase()}</span>
             }
           </AvatarFallback>
         </Avatar>
@@ -376,66 +380,60 @@ const AgentExpandedRow = React.forwardRef<HTMLDivElement, {
 
       {/* Content */}
       <div className="flex-1 min-w-0 overflow-hidden flex flex-col gap-0.5">
-        {/* Name line */}
-        <div className="flex items-center gap-1.5 min-w-0">
-          <span className="text-xs font-medium text-foreground truncate">
+
+        {/* Line 1: Name · badge · [flex spacer] · runtime · ago */}
+        <div className="flex items-center gap-1 min-w-0 w-full">
+          <span className="text-xs font-medium text-foreground truncate shrink min-w-0">
             {displayName}
           </span>
+
+          {/* Status badge — inline after name */}
           {isHiring ? (
-            <span className="text-[10px] text-amber-500/80 shrink-0 border border-amber-500/30 rounded px-1 py-px leading-none flex items-center gap-1">
-              <Loader2 className="w-2.5 h-2.5 animate-spin inline-block" />
-              Hiring…
+            <span className="shrink-0 text-[9px] text-amber-500/80 border border-amber-500/30 rounded px-1 py-px leading-none flex items-center gap-0.5">
+              <Loader2 className="w-2 h-2 animate-spin" />Hiring
             </span>
           ) : isDeleting ? (
-            <span className="text-[10px] text-red-400/80 shrink-0 border border-red-400/30 rounded px-1 py-px leading-none flex items-center gap-1">
-              <Loader2 className="w-2.5 h-2.5 animate-spin inline-block" />
-              Firing…
+            <span className="shrink-0 text-[9px] text-red-400/80 border border-red-400/30 rounded px-1 py-px leading-none flex items-center gap-0.5">
+              <Loader2 className="w-2 h-2 animate-spin" />Firing
             </span>
-          ) : (
-            <>
-              {status.runtime && status.runtime !== "openclaw" && (
-                <span className="text-[9px] text-muted-foreground/50 shrink-0 border border-border/30 rounded px-1 py-px leading-none">
-                  {status.runtime}
-                </span>
-              )}
-              {status.state === "running" && (
-                <span className="text-[10px] text-emerald-500 shrink-0">Running...</span>
-              )}
-              {status.lastActivity && status.state !== "running" && (
-                <span className="text-[10px] text-muted-foreground/50 shrink-0">
-                  {timeAgo(status.lastActivity)}
-                </span>
-              )}
-            </>
+          ) : status.state === "running" ? (
+            <span className="shrink-0 text-[9px] text-emerald-500 border border-emerald-500/30 rounded px-1 py-px leading-none flex items-center gap-0.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse inline-block" />Running
+            </span>
+          ) : null}
+
+          {/* Spacer */}
+          <span className="flex-1" />
+
+          {/* Runtime tag */}
+          {!isHiring && !isDeleting && showRuntime && (
+            <span className="shrink-0 text-[9px] text-muted-foreground/40 border border-border/20 rounded px-1 py-px leading-none">
+              {runtime}
+            </span>
           )}
+
+          {/* Timestamp */}
+          {!isHiring && !isDeleting && status.lastActivity ? (
+            <span className="shrink-0 text-[10px] text-muted-foreground/40">
+              {timeAgo(status.lastActivity)}
+            </span>
+          ) : null}
         </div>
 
-        {/* Error state */}
-        {status.state === "error" && status.errorMessage && (
+        {/* Line 2: message preview or error */}
+        {status.state === "error" && status.errorMessage ? (
           <div className="flex items-center gap-1 text-[11px] text-destructive min-w-0 overflow-hidden">
             <AlertTriangle className="w-2.5 h-2.5 shrink-0" />
-            <span className="line-clamp-1 [overflow-wrap:anywhere]">{status.errorMessage}</span>
+            <span className="line-clamp-2 [overflow-wrap:anywhere]">{status.errorMessage}</span>
           </div>
-        )}
-
-        {/* Recent messages — always visible; opacity reflects read state */}
-        {status.state !== "error" && status.recentMessages.length > 0 && (
-          <div className="flex flex-col gap-0.5 mt-0.5">
-            {status.recentMessages.slice(0, 2).map((msg, i) => (
-              <p
-                key={i}
-                className={cn(
-                  "text-[11px] line-clamp-1 [overflow-wrap:anywhere] overflow-hidden transition-opacity",
-                  status.unreadCount > 0
-                    ? "text-muted-foreground/80"
-                    : "text-muted-foreground/40"
-                )}
-              >
-                {msg}
-              </p>
-            ))}
-          </div>
-        )}
+        ) : status.recentMessages.length > 0 && !isHiring && !isDeleting ? (
+          <p className={cn(
+            "text-[11px] line-clamp-2 [overflow-wrap:anywhere] overflow-hidden leading-snug",
+            status.unreadCount > 0 ? "text-muted-foreground/80" : "text-muted-foreground/40"
+          )}>
+            {status.recentMessages[0]}
+          </p>
+        ) : null}
 
       </div>
     </motion.div>
@@ -443,58 +441,6 @@ const AgentExpandedRow = React.forwardRef<HTMLDivElement, {
 });
 
 AgentExpandedRow.displayName = "AgentExpandedRow";
-
-// ── Collapsed idle agent row (compact single line) ──
-
-function AgentCollapsedRow({
-  status,
-  identity,
-  onClick,
-  isHiring,
-}: {
-  status: AgentStatus;
-  identity?: AgentIdentity;
-  onClick: (agentId: string) => void;
-  isHiring?: boolean;
-}) {
-  const resolvedAvatarUrl = resolveAvatarUrl(identity?.avatar);
-  const avatarUrl = isCustomImageAvatar(resolvedAvatarUrl) ? resolvedAvatarUrl : undefined;
-  const avatarText = resolveAvatarText(identity?.avatar);
-  const RuntimeIcon = getRuntimeIcon(identity?.runtime || status.runtime);
-  const displayName = identity?.name || status.name || status.agentId;
-
-  return (
-    <div
-      className={cn(
-        "w-full min-w-0 flex items-center gap-2 px-2.5 py-1 overflow-hidden rounded-md transition-colors",
-        isHiring ? "opacity-60 cursor-not-allowed pointer-events-none" : "cursor-pointer hover:bg-muted/20"
-      )}
-      onClick={() => !isHiring && onClick(status.agentId)}
-    >
-      <Avatar className="w-5 h-5">
-        {avatarUrl && <AvatarImage src={avatarUrl} alt={displayName} />}
-        <AvatarFallback className="bg-muted text-muted-foreground text-[8px]">
-          {isHiring
-            ? <Loader2 className="w-3 h-3 animate-spin" />
-            : RuntimeIcon && !avatarUrl
-              ? <RuntimeIcon className="w-3 h-3" />
-              : (avatarText || identity?.emoji || displayName.slice(0, 2).toUpperCase())
-          }
-        </AvatarFallback>
-      </Avatar>
-      <span className="text-[11px] text-muted-foreground truncate">{displayName}</span>
-      {isHiring ? (
-        <span className="text-[10px] text-amber-500/80 ml-auto shrink-0 border border-amber-500/30 rounded px-1 py-px leading-none">
-          Hiring…
-        </span>
-      ) : status.lastActivity ? (
-        <span className="text-[10px] text-muted-foreground/40 ml-auto shrink-0">
-          {timeAgo(status.lastActivity)}
-        </span>
-      ) : null}
-    </div>
-  );
-}
 
 // ── Project row (collapsible, shows members when expanded) ──
 

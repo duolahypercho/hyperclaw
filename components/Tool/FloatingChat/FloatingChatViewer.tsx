@@ -544,8 +544,8 @@ export function FloatingChatViewer({ agentId, sessionKey: providedSessionKey, ta
   const { provider: activeProvider } = useAIProviderSafe();
 
   const openClawChat = useGatewayChat({ sessionKey: resolvedSessionKey, autoConnect: activeProvider === "openclaw" });
-  const claudeCodeChat = useClaudeCodeChat({ sessionKey: resolvedSessionKey, autoConnect: activeProvider === "claude-code" });
-  const codexChat = useCodexChat({ sessionKey: resolvedSessionKey, autoConnect: activeProvider === "codex" });
+  const claudeCodeChat = useClaudeCodeChat({ sessionKey: resolvedSessionKey, autoConnect: activeProvider === "claude-code", agentId: effectiveAgentId });
+  const codexChat = useCodexChat({ sessionKey: resolvedSessionKey, autoConnect: activeProvider === "codex", agentId: effectiveAgentId });
 
   const {
     messages,
