@@ -10,23 +10,6 @@ import { hubCommand } from "$/lib/hub-direct";
 export type BridgeBody = Record<string, unknown>;
 
 export async function bridgeInvoke(action: string, body: BridgeBody = {}): Promise<unknown> {
-  // Route Hermes actions through dedicated Electron IPC when available
-  if (
-    typeof window !== "undefined" &&
-    window.electronAPI?.hermes &&
-    action.startsWith("hermes-")
-  ) {
-    const hm = window.electronAPI.hermes;
-    switch (action) {
-      case "hermes-list-sessions":
-        return hm.listSessions();
-      case "hermes-load-history":
-        return hm.loadHistory(body as Parameters<typeof hm.loadHistory>[0]);
-      default:
-        break;
-    }
-  }
-
   // Streaming actions (claude-code-send, codex-send) always use hubCommand
   // for the WS path with proper timeout + streaming event support.
   // The Electron bridge uses a 60s REST timeout which is too short.

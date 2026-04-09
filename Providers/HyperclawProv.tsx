@@ -18,11 +18,6 @@ export type { SavedLayout };
 
 /* ── Runtime-agnostic agent type ─────────────────────────────────── */
 
-/**
- * A Hyperclaw agent — covers all runtimes: openclaw, claude-code, codex,
- * hermes, hyperclaw. Superset of OpenClawRegistryAgent so existing consumers
- * work without changes.
- */
 export interface HyperclawAgent {
   id: string;
   name: string;
@@ -48,68 +43,57 @@ const HyperclawContext = createContext<HyperclawContextValue | null>(null);
 
 function HyperclawInner({ children }: { children: ReactNode }) {
   const openClaw = useOpenClawContext();
-  const [sqliteAgents, setSqliteAgents] = useState<HyperclawAgent[]>([]);
+  const [agents, setAgents] = useState<HyperclawAgent[]>([]);
   const fnsRef = useRef(openClaw);
   fnsRef.current = openClaw;
 
-  const fetchSQLiteAgents = useCallback(async () => {
+  // Hyperclaw SQLite is the single source of truth for all agents across every
+  // runtime. We never fall back to the OpenClaw agent list — that path was the
+  // source of race conditions, flicker, and agents disappearing after add/delete.
+  const fetchAgents = useCallback(async () => {
     try {
       const res = (await bridgeInvoke("list-agent-identities", {})) as {
         success?: boolean;
         data?: HyperclawAgent[];
       };
-      if (res?.success && Array.isArray(res.data) && res.data.length > 0) {
-        setSqliteAgents(res.data);
-        return;
+      if (res?.success && Array.isArray(res.data)) {
+        setAgents(res.data);
       }
-    } catch {}
-    setSqliteAgents([]);
+      // On !success or bad shape: keep existing state.
+    } catch {
+      // On bridge error: keep existing state — don't wipe the list.
+    }
   }, []);
 
   // Initial load
   useEffect(() => {
-    fetchSQLiteAgents();
-  }, [fetchSQLiteAgents]);
+    fetchAgents();
+  }, [fetchAgents]);
 
-  // Live refresh when any agent file changes (IDENTITY.md sync fires this)
-  // Also re-fetch on agent.deleted so the context is up-to-date before
-  // StatusWidget's refresh() runs — otherwise the deleted agent re-appears.
+  // Refresh whenever agent data changes (add / delete / file sync).
   useEffect(() => {
-    const handler = () => fetchSQLiteAgents();
+    const handler = () => fetchAgents();
     window.addEventListener("agent.file.changed", handler);
+    window.addEventListener("agent.hired", handler);
     window.addEventListener("agent.deleted", handler);
     return () => {
       window.removeEventListener("agent.file.changed", handler);
+      window.removeEventListener("agent.hired", handler);
       window.removeEventListener("agent.deleted", handler);
     };
-  }, [fetchSQLiteAgents]);
-
-  // SQLite agents when available; fall back to OpenClaw list so nothing breaks
-  // if the connector is offline or hasn't cold-synced yet.
-  const agents = useMemo<HyperclawAgent[]>(() => {
-    if (sqliteAgents.length > 0) return sqliteAgents;
-    return openClaw.agents.map((a) => ({
-      id: a.id,
-      name: a.name,
-      runtime: "openclaw",
-      status: a.status,
-      role: a.role,
-      lastActive: a.lastActive,
-    }));
-  }, [sqliteAgents, openClaw.agents]);
+  }, [fetchAgents]);
 
   const value = useMemo<HyperclawContextValue>(
     () => ({
       ...openClaw,
       agents,
-      // Override refreshAll so it also re-fetches Hyperclaw agents
       refreshAll: async () => {
         await fnsRef.current.refreshAll();
-        await fetchSQLiteAgents();
+        await fetchAgents();
       },
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [openClaw, agents, fetchSQLiteAgents]
+    [openClaw, agents, fetchAgents]
   );
 
   return (

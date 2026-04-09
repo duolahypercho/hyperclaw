@@ -521,7 +521,7 @@ function ProjectRow({ project }: { project: import("$/components/Tool/Projects/p
 
 const StatusWidgetContent = memo((props: CustomProps) => {
   const { isFocusModeActive } = useFocusMode();
-  const { agents: openClawAgents } = useHyperclawContext();
+  const { agents: contextAgents } = useHyperclawContext();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [statuses, setStatuses] = useState<AgentStatus[]>([]);
   const [loading, setLoading] = useState(true);
@@ -592,13 +592,12 @@ const StatusWidgetContent = memo((props: CustomProps) => {
     });
   }, []);
 
-  // Get agents from context (no separate fetch needed).
-  // Use a ref so the callback identity is stable — prevents refresh/effect churn
-  // when the context provides a new agents array with the same content.
-  const openClawAgentsRef = useRef(openClawAgents);
-  openClawAgentsRef.current = openClawAgents;
+  // Read agents from context (Hyperclaw SQLite — single source of truth).
+  // Ref keeps the callback identity stable and avoids stale closure churn.
+  const contextAgentsRef = useRef(contextAgents);
+  contextAgentsRef.current = contextAgents;
   const fetchAgents = useCallback(async (): Promise<Agent[]> => {
-    return openClawAgentsRef.current as Agent[];
+    return contextAgentsRef.current as Agent[];
   }, []);
 
   // Fetch session/activity data for a single agent.
@@ -743,14 +742,14 @@ const StatusWidgetContent = memo((props: CustomProps) => {
     }
   }, [fetchAgents, fetchAgentSessions]);
 
-  // Re-run refresh when the context agents list changes (e.g. initial load completes)
-  const prevAgentCountRef = useRef(openClawAgents.length);
+  // Trigger a refresh when SQLite agents first load (0 → >0).
+  const prevAgentCountRef = useRef(contextAgents.length);
   useEffect(() => {
-    if (openClawAgents.length > 0 && prevAgentCountRef.current === 0) {
+    if (contextAgents.length > 0 && prevAgentCountRef.current === 0) {
       refresh();
     }
-    prevAgentCountRef.current = openClawAgents.length;
-  }, [openClawAgents, refresh]);
+    prevAgentCountRef.current = contextAgents.length;
+  }, [contextAgents, refresh]);
 
   // Initial load + auto-refresh (30s, pauses when tab hidden)
   useEffect(() => {
@@ -956,7 +955,9 @@ const StatusWidgetContent = memo((props: CustomProps) => {
     const onHired = (e: Event) => {
       const { agentId } = (e as CustomEvent<{ agentId: string }>).detail ?? {};
       if (!agentId) return;
-      setHiringAgentIds((prev) => { const n = new Set(prev); n.delete(agentId); return n; });
+      // Don't clear hiringAgentIds here — refresh() clears it naturally once
+      // the agent appears in the context list. Clearing it early empties the ref
+      // before refresh() runs, so the optimistic entry can't be preserved.
       refresh();
       setTimeout(() => refresh(), 1500);
     };

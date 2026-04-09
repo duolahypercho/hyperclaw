@@ -359,7 +359,7 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
           }));
         }
       } else if (backendTab === "claude-code") {
-        const r = await bridgeInvoke("claude-code-list-sessions", {}).catch(() => ({ sessions: [] })) as any;
+        const r = await bridgeInvoke("claude-code-list-sessions", { agentId, limit: 15 }).catch(() => ({ sessions: [] })) as any;
         result = (r?.sessions || []).map((s: any) => ({
           key: s.key || `claude:${s.id}`,
           label: s.label || s.id?.slice(0, 8),
@@ -369,7 +369,7 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
           preview: s.preview,
         }));
       } else if (backendTab === "codex") {
-        const r = await bridgeInvoke("codex-list-sessions", {}).catch(() => ({ sessions: [] })) as any;
+        const r = await bridgeInvoke("codex-list-sessions", { agentId }).catch(() => ({ sessions: [] })) as any;
         result = (r?.sessions || []).map((s: any) => ({
           key: s.key || `codex:${s.id}`,
           label: s.label || s.id?.slice(0, 8),
@@ -379,7 +379,7 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
           preview: s.preview,
         }));
       } else if (backendTab === "hermes") {
-        const r = await bridgeInvoke("hermes-list-sessions", {}).catch(() => ({ sessions: [] })) as any;
+        const r = await bridgeInvoke("hermes-list-sessions", { agentId }).catch(() => ({ sessions: [] })) as any;
         result = (r?.sessions || []).map((s: any) => ({
           key: s.key || `hermes:${s.id}`,
           label: s.label || s.id?.slice(0, 16),
@@ -390,8 +390,10 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
         }));
       }
       result.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-      setSessions(result);
-      onSessionsUpdate?.(result);
+      // Cap inbox to 15 most recent — claude-code in particular accumulates many sessions
+      const capped = result.slice(0, 15);
+      setSessions(capped);
+      onSessionsUpdate?.(capped);
     } catch {
       setSessionsError("Failed to load sessions");
     } finally {
