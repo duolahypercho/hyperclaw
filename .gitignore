@@ -52,4 +52,8 @@ electron/*.rpm
 # plugin tarball (auto-built by prebuild script)
 public/hyperclaw-plugin.tgz
 
+# extension subdirectory node_modules and build artifacts
+extensions/*/node_modules/
+extensions/*/dist/
+
 .gstack/
