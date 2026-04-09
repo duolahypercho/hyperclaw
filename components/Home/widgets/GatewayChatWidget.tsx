@@ -320,15 +320,13 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
           result = (r.sessions || []).map((s: any) => ({ ...s, label: s.label || s.key }));
         }
       } else if (activeTab === "hermes") {
-        // Hermes sessions — read from ~/.hermes/sessions/ via Electron IPC
-        if (typeof window !== "undefined" && window.electronAPI?.hermes?.listSessions) {
-          const r = await bridgeInvoke("hermes-list-sessions", {}).catch(() => ({ sessions: [] })) as any;
-          result = (r?.sessions || []).map((s: any) => ({
-            key: s.key || `hermes:${s.id}`,
-            label: s.label || s.id?.slice(0, 16),
-            updatedAt: s.updatedAt,
-          }));
-        }
+        // Hermes sessions via hub/connector relay
+        const r = await bridgeInvoke("hermes-list-sessions", {}).catch(() => ({ sessions: [] })) as any;
+        result = (r?.sessions || []).map((s: any) => ({
+          key: s.key || `hermes:${s.id}`,
+          label: s.label || s.id?.slice(0, 16),
+          updatedAt: s.updatedAt,
+        }));
       } else if (activeTab === "claude-code") {
         // Claude Code sessions — relay through hub/connector
         const r = await bridgeInvoke("claude-code-list-sessions", {}).catch(() => ({ sessions: [] })) as any;

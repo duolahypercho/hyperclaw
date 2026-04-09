@@ -1435,10 +1435,10 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
   // "AI is generating" state (currentRunIdRef.current !== null while streaming).
   const loadChatHistory = useCallback(async () => {
     if (backend === "hermes") {
-      // Try loading from Electron IPC first (reads ~/.hermes/sessions/*.jsonl)
+      // Load hermes history via hub/connector relay
       const key = sessionKeyRef.current;
       const hermesSessionId = key.replace(/^hermes:/, "").replace(/^agent:[^:]+:/, "");
-      if (typeof window !== "undefined" && (window as any).electronAPI?.hermes?.loadHistory && hermesSessionId && hermesSessionId !== "main" && hermesSessionId !== "default") {
+      if (hermesSessionId && hermesSessionId !== "main" && hermesSessionId !== "default") {
         try {
           const { bridgeInvoke: invoke } = await import("$/lib/hyperclaw-bridge-client");
           const result = await invoke("hermes-load-history", { sessionId: hermesSessionId }) as {
