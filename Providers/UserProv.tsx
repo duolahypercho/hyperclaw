@@ -45,6 +45,8 @@ export interface exportedValue {
   status: sessionStatus;
   userId: string | null;
   logout: () => void;
+  /** True when the hub returned 401 — JWT expired. Resets on re-authentication. */
+  hubAuthExpired: boolean;
 }
 
 const initialState: exportedValue = {
@@ -57,6 +59,7 @@ const initialState: exportedValue = {
     username: "",
     aboutme: "",
   },
+  hubAuthExpired: false,
   membership: null,
   setId: () => {},
   status: "loading",
@@ -188,6 +191,24 @@ export const UserProvider = ({ children }: { children: ReactNode }) => {
   const fnsRef = useRef({ setId, logout });
   fnsRef.current = { setId, logout };
 
+  // Surface a re-login banner when the hub returns 401 (JWT expired).
+  // The banner is dismissed automatically when the user signs in again
+  // (clearAuthExpired is called by setId on successful auth).
+  const [hubAuthExpired, setHubAuthExpired] = useState(false);
+
+  useEffect(() => {
+    const handler = () => setHubAuthExpired(true);
+    window.addEventListener("hyperclaw:auth-expired", handler);
+    return () => window.removeEventListener("hyperclaw:auth-expired", handler);
+  }, []);
+
+  // When the session is re-established, clear the expired flag.
+  useEffect(() => {
+    if (sessionStatus === "authenticated" && sessionUserId) {
+      setHubAuthExpired(false);
+    }
+  }, [sessionStatus, sessionUserId]);
+
   const value = useMemo(() => ({
     userInfo,
     membership,
@@ -195,11 +216,52 @@ export const UserProvider = ({ children }: { children: ReactNode }) => {
     status,
     userId,
     logout: () => fnsRef.current.logout(),
-  }), [userInfo, membership, status, userId]);
+    hubAuthExpired,
+  }), [userInfo, membership, status, userId, hubAuthExpired]);
 
   return (
     <>
       <UserInfoContext.Provider value={value}>
+        {hubAuthExpired && (
+          <div
+            role="alert"
+            style={{
+              position: "fixed",
+              top: 0,
+              left: 0,
+              right: 0,
+              zIndex: 9999,
+              background: "oklch(35% 0.18 25)",
+              color: "#fff",
+              padding: "10px 20px",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              fontSize: 13,
+              gap: 12,
+            }}
+          >
+            <span>
+              <strong>Session expired.</strong> Your hub connection has timed out — please sign in again to reconnect.
+            </span>
+            <button
+              onClick={() => fnsRef.current.logout()}
+              style={{
+                background: "rgba(255,255,255,0.15)",
+                border: "1px solid rgba(255,255,255,0.4)",
+                color: "#fff",
+                borderRadius: 6,
+                padding: "4px 14px",
+                cursor: "pointer",
+                fontSize: 12,
+                fontWeight: 600,
+                whiteSpace: "nowrap",
+              }}
+            >
+              Sign in
+            </button>
+          </div>
+        )}
         {children}
       </UserInfoContext.Provider>
     </>
