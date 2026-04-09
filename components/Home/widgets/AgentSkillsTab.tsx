@@ -43,9 +43,9 @@ interface HermesBundle {
 }
 
 interface ClaudeSkillFile {
-  name: string;      // slug, e.g. "tdd-workflow"
+  name: string;        // slug, e.g. "tdd-workflow" (no .md extension)
   description?: string;
-  path: string;      // absolute path to .md file
+  path: string;        // absolute path on disk (returned by connector, used for display only)
 }
 
 /* ── localStorage skill store ────────────────────────────────── */
