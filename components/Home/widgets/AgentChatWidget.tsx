@@ -483,7 +483,9 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
             const r = await bridgeInvoke("codex-load-history", { sessionKey: s.key }) as any;
             messages = r?.messages || [];
           } else if (backendTab === "hermes") {
-            const r = await bridgeInvoke("hermes-load-history", { sessionKey: s.key }) as any;
+            // hermes-load-history expects sessionId (without the "hermes:" prefix)
+            const hermesSessionId = s.key.replace(/^hermes:/, "").replace(/^agent:[^:]+:/, "");
+            const r = await bridgeInvoke("hermes-load-history", { sessionId: hermesSessionId }) as any;
             messages = r?.messages || [];
           }
           const text = extractLastAssistantText(messages);
