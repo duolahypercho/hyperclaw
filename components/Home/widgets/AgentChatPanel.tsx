@@ -93,6 +93,19 @@ export function AgentChatPanel({ open, agentId, sessionKey: initialSessionKey, o
   };
 
   const identity = useAgentIdentity(agentId);
+
+  // Sync backendTab with the agent's runtime so the panel uses the correct backend.
+  const agentListRuntime = (currentAgent as { runtime?: string }).runtime;
+  useEffect(() => {
+    const runtime = agentListRuntime || identity?.runtime;
+    if (!runtime) return;
+    const expected: BackendTab =
+      runtime === "claude-code" ? "claude-code"
+      : runtime === "codex" ? "codex"
+      : runtime === "hermes" ? "hermes"
+      : "openclaw";
+    setBackendTab(expected);
+  }, [agentId, agentListRuntime, identity?.runtime]);
   const avatarUrl = resolveAvatarUrl(identity?.avatar);
   const avatarText = isAvatarText(identity?.avatar) ? identity!.avatar! : undefined;
   const displayName = identity?.name || currentAgent.name;
@@ -181,6 +194,7 @@ export function AgentChatPanel({ open, agentId, sessionKey: initialSessionKey, o
               onOpenChange={setEditDialogOpen}
               agentId={agentId}
               agentName={displayName}
+              agentRuntime={agentListRuntime}
             />
           </motion.div>
         </>
@@ -251,16 +265,25 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
     : backendTab === "codex" ? "codex"
     : "gateway";
 
+  const hermesProfileId = backendTab === "hermes"
+    ? (agentId.startsWith("hermes:") ? agentId.slice(7) : agentId)
+    : undefined;
+
+  // Agent identity — needed for project-scoped session filtering (claude-code)
+  const sessionAgentIdentity = useAgentIdentity(agentId);
+
   const gatewayChat = useGatewayChat({
     sessionKey,
     autoConnect: effectiveProvider === "gateway",
     backend: backendTab === "hermes" ? "hermes" : "openclaw",
+    agentId: hermesProfileId,
   });
 
   const claudeCodeChat = useClaudeCodeChat({
     sessionKey,
     autoConnect: effectiveProvider === "claude-code",
     agentId,
+    projectPath: sessionAgentIdentity?.project,
   });
 
   const codexChat = useCodexChat({
@@ -342,9 +365,6 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
       .finally(() => setInitialReady(true));
   }, [sessionKey, loadChatHistory]);
 
-  // Agent identity — needed for project-scoped session filtering (claude-code)
-  const sessionAgentIdentity = useAgentIdentity(agentId);
-
   // Fetch sessions
   const fetchSessions = useCallback(async () => {
     setSessionsLoading(true);
@@ -383,7 +403,9 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
           preview: s.preview,
         }));
       } else if (backendTab === "hermes") {
-        const r = await bridgeInvoke("hermes-list-sessions", { agentId }).catch(() => ({ sessions: [] })) as any;
+        // Strip "hermes:" prefix — the connector expects the bare profile name
+        const hermesProfileId = agentId.startsWith("hermes:") ? agentId.slice(7) : agentId;
+        const r = await bridgeInvoke("hermes-sessions", { agentId: hermesProfileId }).catch(() => ({ sessions: [] })) as any;
         result = (r?.sessions || []).map((s: any) => ({
           key: s.key || `hermes:${s.id}`,
           label: s.label || s.id?.slice(0, 16),
@@ -404,6 +426,20 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
       setSessionsLoading(false);
     }
   }, [agentId, backendTab, sessionAgentIdentity]);
+
+  // Re-fetch sessions once agent identity loads — the initial fetch fires before
+  // the async get-agent-identity call resolves, so projectPath is missing the
+  // first time around and the connector falls back to showing all sessions.
+  const prevIdentityProjectRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!initialLoadDoneRef.current) return;
+    if (backendTab !== "claude-code") return;
+    const newProject = sessionAgentIdentity?.project;
+    if (newProject && prevIdentityProjectRef.current !== newProject) {
+      prevIdentityProjectRef.current = newProject;
+      fetchSessions();
+    }
+  }, [sessionAgentIdentity, backendTab, fetchSessions]);
 
   // Re-fetch sessions when the backend tab switches (e.g. openclaw → claude-code)
   // without the agent changing. Guard against firing on mount.
@@ -728,7 +764,7 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
                         name: agentNameStr || currentAgent.name,
                         coverPhoto: "",
                         tag: backendTab === "hermes" ? "Hermes Agent"
-                          : backendTab === "claude-code" ? "Claude Code"
+                          : backendTab === "claude-code" ? "ClaudNot just ae Code"
                           : backendTab === "codex" ? "Codex"
                           : "OpenClaw Agent",
                       }}

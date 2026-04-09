@@ -15,7 +15,6 @@ import {
   MoreHorizontal,
   Trash2,
   ChevronDown,
-  ArrowLeft,
   Check,
   X,
 } from "lucide-react";
@@ -52,6 +51,8 @@ import { OPEN_AGENT_CHAT_EVENT, AGENT_READ_EVENT } from "./StatusWidget";
 import { OPEN_AGENT_PANEL_EVENT } from "./AgentChatPanel";
 import type { BackendTab } from "./gateway-chat/GatewayChatHeader";
 import AgentStatsTab from "./AgentStatsTab";
+import AgentOverviewTab from "./AgentOverviewTab";
+import { AgentSkillsTab } from "./AgentSkillsTab";
 import { CronsProvider, useCrons } from "$/components/Tool/Crons/provider/cronsProvider";
 import { AddCronDialog } from "$/components/Tool/Crons/AddCronDialog";
 import { EditCronDialog } from "$/components/Tool/Crons/EditCronDialog";
@@ -86,169 +87,6 @@ function extractLastAssistantText(messages: Array<{ role?: string; content?: unk
 
 type Session = { key: string; label?: string; updatedAt?: number; status?: string; trigger?: string; preview?: string };
 
-/* ── Agent Inbox ──────────────────────────────────────────── */
-
-interface AgentInboxViewProps {
-  sessions: Session[];
-  loading: boolean;
-  lastSeenTs: number;
-  readSessions: Set<string>;
-  unreadCount: number;
-  previewLoadingKeys: Set<string>;
-  onSelect: (key: string) => void;
-  onNewChat: () => void;
-}
-
-function AgentInboxView({ sessions, loading, lastSeenTs, readSessions, unreadCount, previewLoadingKeys, onSelect, onNewChat }: AgentInboxViewProps) {
-  // Key of the most recently updated unread session — this one shows the numeric count badge
-  const latestUnreadKey = useMemo(() => {
-    let best: Session | null = null;
-    for (const s of sessions) {
-      const isUnread = !readSessions.has(s.key) && lastSeenTs > 0 && (s.updatedAt || 0) > lastSeenTs;
-      if (isUnread && (!best || (s.updatedAt || 0) > (best.updatedAt || 0))) best = s;
-    }
-    return best?.key ?? null;
-  }, [sessions, readSessions, lastSeenTs]);
-  if (loading) {
-    return (
-      <div className="flex flex-col overflow-y-auto customScrollbar2 flex-1">
-        {Array.from({ length: 5 }).map((_, i) => (
-          <div key={i} className="flex items-start gap-2 px-3 py-2.5 border-b border-border/20 last:border-0">
-            {/* Status icon placeholder */}
-            <div className="shrink-0 w-3.5 flex items-center justify-center mt-0.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/10 animate-pulse" />
-            </div>
-            <div className="flex-1 min-w-0 space-y-1">
-              {/* Title row */}
-              <div className="flex items-baseline gap-1.5">
-                <div className="h-[11px] bg-muted-foreground/10 rounded animate-pulse flex-1" style={{ width: `${55 + (i % 3) * 15}%` }} />
-                <div className="h-[10px] bg-muted-foreground/10 rounded animate-pulse w-7 shrink-0" />
-              </div>
-              {/* Preview lines */}
-              <div className="space-y-1">
-                <div className="h-[11px] bg-muted-foreground/10 rounded animate-pulse w-4/5" />
-                <div className="h-[11px] bg-muted-foreground/10 rounded animate-pulse" style={{ width: `${40 + (i % 4) * 10}%` }} />
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-    );
-  }
-  if (sessions.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center flex-1 gap-2 text-muted-foreground">
-        <MessageSquare className="w-7 h-7 opacity-30" />
-        <p className="text-xs">No sessions yet</p>
-        <Button variant="outline" size="sm" className="h-7 text-xs gap-1.5 mt-1" onClick={onNewChat}>
-          <Plus className="w-3 h-3" />
-          New Chat
-        </Button>
-      </div>
-    );
-  }
-  return (
-    <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
-      {/* Toolbar */}
-      <div className="shrink-0 flex items-center justify-between px-3 py-1 border-b border-border/20">
-        <span className="text-[10px] text-muted-foreground">{sessions.length} session{sessions.length !== 1 ? "s" : ""}</span>
-        <button
-          onClick={onNewChat}
-          className="h-5 w-5 flex items-center justify-center rounded hover:bg-muted/40 transition-colors text-muted-foreground hover:text-foreground"
-          title="New chat"
-        >
-          <Plus className="w-3 h-3" />
-        </button>
-      </div>
-      <div className="flex-1 overflow-y-auto customScrollbar2">
-      {sessions.map((s) => {
-        const isUnread = !readSessions.has(s.key) && lastSeenTs > 0 && (s.updatedAt || 0) > lastSeenTs;
-        const isActive = s.status === "active";
-        const isWaiting = s.status === "waiting";
-        const isSuccess = s.status === "completed" || s.status === "success" || s.status === "done";
-        const isError = s.status === "error" || s.status === "failed" || s.status === "aborted";
-        const title = s.label || s.key.split(":").pop() || s.key;
-        const preview = s.preview;
-        return (
-          <button
-            key={s.key}
-            onClick={() => onSelect(s.key)}
-            className="flex items-start w-full gap-2 px-3 py-2.5 text-left hover:bg-muted/30 transition-colors border-b border-border/20 last:border-0"
-          >
-            {/* Status icon — top-aligned */}
-            <div className="shrink-0 w-3.5 flex items-center justify-center mt-1.5">
-              {isActive ? (
-                <span className="relative flex w-2 h-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                  <span className="relative inline-flex rounded-full w-2 h-2 bg-emerald-500" />
-                </span>
-              ) : isWaiting ? (
-                <span className="w-2 h-2 rounded-full bg-amber-400" />
-              ) : isSuccess ? (
-                <Check className="w-3 h-3 text-emerald-500" />
-              ) : isError ? (
-                <X className="w-3 h-3 text-destructive" />
-              ) : (
-                <span className={cn(
-                  "w-1.5 h-1.5 rounded-full",
-                  isUnread ? "bg-primary" : "bg-muted-foreground/20"
-                )} />
-              )}
-            </div>
-
-            <div className="flex-1 min-w-0">
-              {/* Title row: session timestamp + status tags + time ago + NEW */}
-              <div className="flex items-baseline gap-1.5 min-w-0">
-                <p className={cn(
-                  "text-[11px] truncate min-w-0 flex-1",
-                  isUnread ? "font-semibold text-foreground" : "font-medium text-foreground/60"
-                )}>
-                  {title}
-                </p>
-                {isActive && (
-                  <span className="shrink-0 text-[9px] font-medium text-emerald-500 bg-emerald-500/10 px-1.5 py-px rounded-full">
-                    generating
-                  </span>
-                )}
-                {isWaiting && (
-                  <span className="shrink-0 text-[9px] font-medium text-amber-500 bg-amber-500/10 px-1.5 py-px rounded-full">
-                    waiting
-                  </span>
-                )}
-                {!isActive && s.updatedAt && (
-                  <span className="shrink-0 text-[10px] text-muted-foreground/50">
-                    {relTime(s.updatedAt)}
-                  </span>
-                )}
-                {isUnread && (
-                  <span className="shrink-0 text-[9px] font-semibold text-primary bg-primary/10 px-1.5 py-0.5 rounded-full">
-                    {s.key === latestUnreadKey && unreadCount > 1 ? unreadCount : "NEW"}
-                  </span>
-                )}
-              </div>
-              {/* Latest message preview — skeleton while loading, text when ready */}
-              {preview ? (
-                <p className={cn(
-                  "text-[11px] line-clamp-2 [overflow-wrap:anywhere] mt-0.5",
-                  isUnread ? "text-muted-foreground/80" : "text-muted-foreground/50"
-                )}>
-                  {preview}
-                </p>
-              ) : previewLoadingKeys.has(s.key) && (
-                <div className="mt-0.5 space-y-1">
-                  <div className="h-[11px] bg-muted-foreground/10 rounded animate-pulse w-4/5" />
-                  <div className="h-[11px] bg-muted-foreground/10 rounded animate-pulse w-3/5" />
-                </div>
-              )}
-            </div>
-          </button>
-        );
-      })}
-      </div>
-    </div>
-  );
-}
-
 /* ── Tab definitions ──────────────────────────────────────── */
 
 const TAB_FILES = [
@@ -262,7 +100,7 @@ const TAB_FILES = [
 ] as const;
 
 type FileTabKey = (typeof TAB_FILES)[number]["key"];
-type WidgetTab = "CHAT" | "INFO" | "STATS" | "FILES" | "CRONS";
+type WidgetTab = "CHAT" | "OVERVIEW" | "INFO" | "FILES" | "CRONS" | "SKILLS";
 
 /* ── Agent Crons Tab ──────────────────────────────────────── */
 
@@ -406,7 +244,7 @@ function AgentCronsTab({ agentId }: { agentId: string }) {
 /* ── Widget content ────────────────────────────────────────── */
 
 const AgentChatWidgetContent = memo((props: CustomProps) => {
-  const { widget, isEditMode, isMaximized, onMaximize, onConfigChange } = props;
+  const { widget, isEditMode, isMaximized, onMaximize, onConfigChange, className } = props;
   const { isFocusModeActive } = useFocusMode();
   const { agents } = useHyperclawContext();
 
@@ -423,6 +261,11 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
   const [footerState, setFooterState] = useState<FooterSaveState>({
     isDirty: false, saving: false, saved: false, save: null,
   });
+  // Personality cache keyed by agentId — fetched once per agent switch so
+  // file-key tab changes inside the FILES tab are instant with no bridge round-trip.
+  const [personalityCache, setPersonalityCache] = useState<Record<string, string> | null>(null);
+  const personalityCacheAgentRef = useRef<string | undefined>(undefined);
+
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [addAgentOpen, setAddAgentOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -432,6 +275,8 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
   const chatRef = useRef<PanelChatViewHandle>(null);
   // Keyed by "agentId:backendTab" — avoids refetching when re-opening the same agent
   const sessionsCacheRef = useRef<Map<string, Session[]>>(new Map());
+  // Set to true when switching agents so onSessionsUpdate auto-selects the latest session
+  const autoSelectSessionRef = useRef(false);
 
   // Inbox state
   const [chatView, setChatView] = useState<"inbox" | "chat">("chat");
@@ -444,7 +289,6 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
   const [readSessions, setReadSessions] = useState<Set<string>>(new Set());
   // Cache of last-assistant-message per session key, fetched lazily when inbox opens
   const [inboxPreviews, setInboxPreviews] = useState<Map<string, string>>(new Map());
-  const [previewLoadingKeys, setPreviewLoadingKeys] = useState<Set<string>>(new Set());
   const previewFetchedForRef = useRef<Set<string>>(new Set());
 
   // Sync config on late hydration
@@ -452,19 +296,13 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
     if (configAgentId && !selectedAgentId) setSelectedAgentId(configAgentId);
   }, [configAgentId, selectedAgentId]);
 
+
   // Lazily fetch last assistant message for each inbox session
   useEffect(() => {
     if (inboxSessions.length === 0) return;
     const unfetched = inboxSessions.filter((s) => !previewFetchedForRef.current.has(s.key) && !s.preview);
     if (unfetched.length === 0) return;
     unfetched.forEach((s) => previewFetchedForRef.current.add(s.key));
-
-    // Mark these sessions as loading so the skeleton is shown immediately
-    setPreviewLoadingKeys((prev) => {
-      const next = new Set(prev);
-      unfetched.forEach((s) => next.add(s.key));
-      return next;
-    });
 
     Promise.all(
       unfetched.map(async (s): Promise<[string, string] | null> => {
@@ -505,12 +343,6 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
           return next;
         });
       }
-      // Clear loading state for all fetched sessions (resolved or not)
-      setPreviewLoadingKeys((prev) => {
-        const next = new Set(prev);
-        unfetched.forEach((s) => next.delete(s.key));
-        return next;
-      });
     });
   }, [inboxSessions, backendTab]);
 
@@ -527,11 +359,32 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
   // Only use img for custom uploads (PNG/JPG/HTTP); SVG data URIs are the seed defaults.
   const avatarUrl = resolvedAvatarUrl && !resolvedAvatarUrl.startsWith("data:image/svg+xml") ? resolvedAvatarUrl : undefined;
   const avatarText = resolveAvatarText(identity?.avatar);
-  const RuntimeIcon = identity?.runtime === "claude-code" ? ClaudeCodeIcon
-    : identity?.runtime === "codex" ? CodexIcon
-    : identity?.runtime === "hermes" ? HermesIcon
+  // agentListRuntime is authoritative for OpenClaw agents — a stale SQLite
+  // identity record (e.g. runtime="hermes") must not override it.
+  const agentListRuntime = (currentAgent as { runtime?: string }).runtime;
+  const effectiveRuntime = agentListRuntime || identity?.runtime;
+  const RuntimeIcon = effectiveRuntime === "claude-code" ? ClaudeCodeIcon
+    : effectiveRuntime === "codex" ? CodexIcon
+    : effectiveRuntime === "hermes" ? HermesIcon
     : null;
   const displayName = identity?.name || currentAgent.name;
+
+  // Sync backendTab with the agent's runtime whenever the agent or its
+  // identity changes. The agents list (HyperclawProv) is authoritative for
+  // OpenClaw agents — always "openclaw" — so prefer it over the SQLite-backed
+  // identity cache which can hold stale runtime values for the same agent ID.
+  useEffect(() => {
+    const runtime = agentListRuntime || identity?.runtime;
+    if (!runtime) return;
+    const expected: BackendTab =
+      runtime === "claude-code" ? "claude-code"
+      : runtime === "codex" ? "codex"
+      : runtime === "hermes" ? "hermes"
+      : "openclaw";
+    setBackendTab(expected);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentAgentId, agentListRuntime, identity?.runtime]);
+
   // Listen for agent-click events from StatusWidget
   useEffect(() => {
     const handler = (e: Event) => {
@@ -570,12 +423,21 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
       if (cached) {
         setInboxSessions(cached);
         setInboxLoading(false);
-        setChatView("inbox");
+        setChatView("chat");
+        // Auto-select the latest session immediately
+        if (cached.length > 0) {
+          const latest = cached[0];
+          setTimeout(() => {
+            chatRef.current?.onSessionChange(latest.key);
+            setActiveSessionLabel(latest.label || latest.key.split(":").pop() || latest.key);
+          }, 0);
+        }
       } else {
         // First open — show spinner while PanelChatView fetches
         setInboxSessions([]);
-        setChatView("inbox");
+        setChatView("chat");
         setInboxLoading(true);
+        autoSelectSessionRef.current = true;
         // Kick off the fetch after React commits the new backendTab/agentId
         setTimeout(() => chatRef.current?.fetchSessions(), 0);
       }
@@ -592,6 +454,30 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
   useEffect(() => {
     setFooterState({ isDirty: false, saving: false, saved: false, save: null });
   }, [activeTab, currentAgentId]);
+
+  // Prefetch personality when FILES tab opens or agent changes — keeps tab switches instant.
+  useEffect(() => {
+    if (activeTab !== "FILES") return;
+    if (personalityCacheAgentRef.current === currentAgentId && personalityCache !== null) return;
+    personalityCacheAgentRef.current = currentAgentId;
+    setPersonalityCache(null);
+    (async () => {
+      try {
+        const p = (await bridgeInvoke("get-agent-personality", { agentId: currentAgentId })) as Record<string, unknown>;
+        setPersonalityCache({
+          SOUL:      (p?.soul      as string) ?? "",
+          IDENTITY:  (p?.identity  as string) ?? "",
+          USER:      (p?.user      as string) ?? "",
+          AGENTS:    (p?.agents    as string) ?? "",
+          TOOLS:     (p?.tools     as string) ?? "",
+          HEARTBEAT: (p?.heartbeat as string) ?? "",
+          MEMORY:    (p?.memory    as string) ?? "",
+        });
+      } catch {
+        setPersonalityCache({});
+      }
+    })();
+  }, [activeTab, currentAgentId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Persist config
   const onConfigChangeRef = useRef(onConfigChange);
@@ -631,7 +517,8 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
       <Card
         className={cn(
           "group h-full w-full flex flex-col overflow-hidden bg-card/70 backdrop-blur-xl border border-border transition-all duration-300 rounded-md",
-          isFocusModeActive && "border-transparent grayscale-[30%]"
+          isFocusModeActive && "border-transparent grayscale-[30%]",
+          className,
         )}
       >
         {/* ── Header: avatar + tabs + actions ── */}
@@ -639,16 +526,7 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
           {/* Top row: agent info + maximize */}
           <div className="flex items-center justify-between px-3 pt-2 pb-1">
             <div className="flex items-center gap-2.5 min-w-0">
-              {/* Back button — shown when drilling into a session from inbox */}
-              {chatView === "chat" && activeTab === "CHAT" && inboxSessions.length > 1 ? (
-                <button
-                  onClick={() => { setChatView("inbox"); setActiveSessionLabel(undefined); }}
-                  className="h-7 w-7 flex items-center justify-center shrink-0 rounded hover:bg-muted/40 transition-colors"
-                  title="Back to sessions"
-                >
-                  <ArrowLeft className="w-3.5 h-3.5 text-muted-foreground" />
-                </button>
-              ) : isEditMode ? (
+              {isEditMode ? (
                 <div className="cursor-move h-7 w-7 flex items-center justify-center shrink-0">
                   <GripVertical className="w-3.5 h-3.5 text-muted-foreground" />
                 </div>
@@ -666,13 +544,12 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
               </Avatar>
               <div className="min-w-0">
                 <div className="flex items-center gap-1.5">
-                  {/* Show session label when drilled in, otherwise agent name */}
                   <h3 className="text-xs font-semibold truncate">
-                    {activeSessionLabel && chatView === "chat" ? activeSessionLabel : displayName}
+                    {activeSessionLabel ?? displayName}
                   </h3>
                 </div>
                 <p className="text-[10px] text-muted-foreground truncate">
-                  {activeSessionLabel && chatView === "chat"
+                  {activeSessionLabel
                     ? displayName
                     : backendTab === "claude-code" ? "Claude Code"
                     : backendTab === "codex" ? "Codex"
@@ -685,28 +562,25 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
               {/* Chat actions — only on Chat tab */}
               {showChatActions && (
                 <>
-                  {chatView === "chat" && (
-                    <>
-                      <Button variant="ghost" size="iconSm" className="h-6 w-6" onClick={() => chatRef.current?.reload()} title="Reload chat">
-                        <RefreshCw className="w-3 h-3" />
-                      </Button>
-                      <Button variant="ghost" size="iconSm" className="h-6 w-6" onClick={() => chatRef.current?.newChat()} title="New chat">
-                        <Plus className="w-3 h-3" />
-                      </Button>
-                    </>
-                  )}
-                  {/* Session history only shown in chat view (inbox replaces it for multi-session) */}
-                  {chatView === "chat" && inboxSessions.length <= 1 && (
-                    <SessionHistoryDropdown
-                      sessions={chatRef.current?.sessions || []}
-                      isLoading={chatRef.current?.sessionsLoading || false}
-                      error={chatRef.current?.sessionsError || null}
-                      currentSessionKey={chatRef.current?.selectedSessionKey}
-                      onLoadSession={(key) => chatRef.current?.onSessionChange(key)}
-                      onNewChat={() => chatRef.current?.newChat()}
-                      onFetchSessions={() => chatRef.current?.fetchSessions()}
-                    />
-                  )}
+                  <Button variant="ghost" size="iconSm" className="h-6 w-6" onClick={() => chatRef.current?.reload()} title="Reload chat">
+                    <RefreshCw className="w-3 h-3" />
+                  </Button>
+                  <Button variant="ghost" size="iconSm" className="h-6 w-6" onClick={() => { chatRef.current?.newChat(); setActiveSessionLabel(undefined); }} title="New chat">
+                    <Plus className="w-3 h-3" />
+                  </Button>
+                  <SessionHistoryDropdown
+                    sessions={chatRef.current?.sessions || []}
+                    isLoading={chatRef.current?.sessionsLoading || false}
+                    error={chatRef.current?.sessionsError || null}
+                    currentSessionKey={chatRef.current?.selectedSessionKey}
+                    onLoadSession={(key) => {
+                      chatRef.current?.onSessionChange(key);
+                      const s = inboxSessions.find((s) => s.key === key);
+                      setActiveSessionLabel(s?.label || key.split(":").pop() || key);
+                    }}
+                    onNewChat={() => { chatRef.current?.newChat(); setActiveSessionLabel(undefined); }}
+                    onFetchSessions={() => chatRef.current?.fetchSessions()}
+                  />
                 </>
               )}
               {/* Save button — only on editor tabs when dirty */}
@@ -802,15 +676,15 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
               Config
             </button>
             <button
-              onClick={() => setActiveTab("STATS")}
+              onClick={() => setActiveTab("OVERVIEW")}
               className={cn(
                 "px-2 py-1 text-[10px] font-medium rounded-md transition-all duration-200 shrink-0",
-                activeTab === "STATS"
+                activeTab === "OVERVIEW"
                   ? "border-primary text-foreground bg-primary/5"
                   : "border-transparent text-muted-foreground hover:text-foreground/70 hover:bg-muted/30"
               )}
             >
-              Usage
+              Overview
             </button>
             <button
               onClick={() => setActiveTab("CRONS")}
@@ -837,61 +711,27 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
                 : "Instructions"}
               <ChevronDown className="w-2.5 h-2.5 opacity-60" />
             </button>
+            <button
+              onClick={() => setActiveTab("SKILLS")}
+              className={cn(
+                "px-2 py-1 text-[10px] font-medium rounded-md transition-all duration-200 shrink-0",
+                activeTab === "SKILLS"
+                  ? "border-primary text-foreground bg-primary/5"
+                  : "border-transparent text-muted-foreground hover:text-foreground/70 hover:bg-muted/30"
+              )}
+            >
+              Skills
+            </button>
           </div>
         </div>
 
         {/* ── Content area ── */}
         <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
 
-          {/* Inbox — only rendered while on CHAT tab in inbox view */}
-          {activeTab === "CHAT" && chatView === "inbox" && (
-            <AgentInboxView
-              sessions={inboxSessions.map((s) => ({
-                ...s,
-                preview: s.preview ?? inboxPreviews.get(s.key),
-              }))}
-              loading={inboxLoading}
-              lastSeenTs={inboxLastSeenTs}
-              unreadCount={inboxUnreadCount}
-              previewLoadingKeys={previewLoadingKeys}
-              readSessions={readSessions}
-              onNewChat={() => {
-                setChatView("chat");
-                chatRef.current?.newChat();
-              }}
-              onSelect={(key) => {
-                const session = inboxSessions.find((s) => s.key === key);
-                setActiveSessionLabel(session?.label || key);
-                setChatView("chat");
-                chatRef.current?.onSessionChange(key);
-
-                // Mark this specific session as read
-                const newRead = new Set([...readSessions, key]);
-                setReadSessions(newRead);
-
-                // Only fire if this session was actually unread
-                const wasUnread = !readSessions.has(key) && inboxLastSeenTs > 0 && (session?.updatedAt || 0) > inboxLastSeenTs;
-                if (wasUnread) {
-                  const anyStillUnread = inboxSessions.some(
-                    (s) => !newRead.has(s.key) && inboxLastSeenTs > 0 && (s.updatedAt || 0) > inboxLastSeenTs
-                  );
-                  if (!anyStillUnread) setInboxUnreadCount(0);
-                  // Decrement badge immediately; persist + zero on the last unread
-                  window.dispatchEvent(
-                    new CustomEvent(AGENT_READ_EVENT, {
-                      detail: { agentId: currentAgentId, clearAll: !anyStillUnread },
-                    })
-                  );
-                }
-              }}
-            />
-          )}
-
-          {/* PanelChatView — always mounted so chat history and ref survive tab switches.
-              Hidden via CSS when not on the CHAT tab or when inbox is in front. */}
+          {/* PanelChatView — always mounted so chat history and ref survive tab switches. */}
           <div className={cn(
             "flex-1 min-h-0 flex flex-col",
-            (activeTab !== "CHAT" || chatView === "inbox") && "hidden"
+            activeTab !== "CHAT" && "hidden"
           )}>
             <PanelChatView
               ref={chatRef}
@@ -904,6 +744,13 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
                 setInboxLoading(false);
                 // Persist to cache so subsequent opens are instant
                 sessionsCacheRef.current.set(`${currentAgentId}:${backendTab}`, sessions);
+                // Auto-select the latest session when switching agents
+                if (autoSelectSessionRef.current && sessions.length > 0) {
+                  autoSelectSessionRef.current = false;
+                  const latest = sessions[0];
+                  chatRef.current?.onSessionChange(latest.key);
+                  setActiveSessionLabel(latest.label || latest.key.split(":").pop() || latest.key);
+                }
               }}
             />
           </div>
@@ -918,9 +765,34 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
             </div>
           )}
 
-          {activeTab === "STATS" && (
+          {activeTab === "OVERVIEW" && (
             <div className="flex-1 min-h-0 overflow-y-auto customScrollbar2 px-3 py-3">
-              <AgentStatsTab agentId={currentAgentId} />
+              <AgentOverviewTab
+                agentId={currentAgentId}
+                agentRuntime={agentListRuntime || identity?.runtime}
+                sessions={inboxSessions.map((s) => ({
+                  ...s,
+                  preview: s.preview ?? inboxPreviews.get(s.key),
+                }))}
+                sessionsLoading={inboxLoading}
+                lastSeenTs={inboxLastSeenTs}
+                readSessions={readSessions}
+                unreadCount={inboxUnreadCount}
+                onOpenSession={(key) => {
+                  const session = inboxSessions.find((s) => s.key === key);
+                  setActiveSessionLabel(session?.label || key);
+                  setChatView("chat");
+                  setActiveTab("CHAT");
+                  chatRef.current?.onSessionChange(key);
+                  setReadSessions((prev) => new Set([...prev, key]));
+                }}
+                onNewChat={() => {
+                  setActiveTab("CHAT");
+                  setChatView("chat");
+                  chatRef.current?.newChat();
+                  setActiveSessionLabel(undefined);
+                }}
+              />
             </div>
           )}
 
@@ -966,6 +838,10 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
                   fileKey={selectedFileKey}
                   onStateChange={setFooterState}
                   className="flex-1 min-h-0"
+                  preloaded={personalityCache ? (personalityCache[selectedFileKey] ?? null) : undefined}
+                  onAfterSave={(fileKey, newContent) =>
+                    setPersonalityCache(prev => prev ? { ...prev, [fileKey]: newContent } : null)
+                  }
                 />
               </div>
             </div>
@@ -976,13 +852,29 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
             </div>
           )}
 
+          {activeTab === "SKILLS" && (
+            <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+              <AgentSkillsTab
+                agentId={currentAgentId}
+                runtime={effectiveRuntime ?? backendTab}
+                projectPath={identity?.project}
+              />
+            </div>
+          )}
+
         </div>
       </Card>
 
       <AddAgentDialog
         open={addAgentOpen}
         onOpenChange={setAddAgentOpen}
-        onSuccess={(id) => setSelectedAgentId(id)}
+        onSuccess={(id, runtime) => {
+            setSelectedAgentId(id);
+            if (runtime === "claude-code") setBackendTab("claude-code");
+            else if (runtime === "codex") setBackendTab("codex");
+            else if (runtime === "hermes") setBackendTab("hermes");
+            else setBackendTab("openclaw");
+          }}
       />
 
       <DeleteAgentDialog
@@ -1007,7 +899,7 @@ AgentChatWidgetContent.displayName = "AgentChatWidgetContent";
 export const AgentChatCustomHeader = () => null;
 
 const AgentChatWidget = memo((props: CustomProps) => {
-  return <AgentChatWidgetContent {...props} />;
+  return <AgentChatWidgetContent className={props.className} {...props} />;
 });
 
 AgentChatWidget.displayName = "AgentChatWidget";
