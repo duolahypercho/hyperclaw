@@ -106,12 +106,14 @@ function buildIdentityMd(opts: {
   role: string;
   description: string;
   runtime?: string;
+  projectPath?: string;
 }): string {
   const lines: string[] = [];
   lines.push(`- **Name:** ${opts.name}`);
   if (opts.emoji) lines.push(`- **Emoji:** ${opts.emoji}`);
   if (opts.role.trim()) lines.push(`- **Role:** ${opts.role.trim()}`);
   if (opts.runtime) lines.push(`- **Runtime:** ${opts.runtime}`);
+  if (opts.projectPath?.trim()) lines.push(`- **Project:** ${opts.projectPath.trim()}`);
   const header = lines.join("\n");
   if (opts.description.trim()) {
     return `${header}\n\n---\n\n${opts.description.trim()}\n`;
@@ -138,6 +140,8 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess }: AddAgentDialog
   const [description, setDescription] = useState("");
   const [model, setModel] = useState("__default__");
   const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [projectPath, setProjectPath] = useState("");
+  const [availableProjects, setAvailableProjects] = useState<Array<{ dirName: string; projectPath: string; sessionCount: number }>>([]);
   const [error, setError] = useState<string | null>(null);
 
   const runtime = useMemo(
@@ -156,6 +160,16 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess }: AddAgentDialog
     });
   }, [open]);
 
+  // Fetch available claude-code projects when runtime switches to claude-code
+  useEffect(() => {
+    if (!open || selectedRuntime !== "claude-code") return;
+    bridgeInvoke("claude-code-list-projects", {})
+      .then((r: any) => {
+        setAvailableProjects(r?.projects || []);
+      })
+      .catch(() => setAvailableProjects([]));
+  }, [open, selectedRuntime]);
+
   const reset = useCallback(() => {
     setDisplayName("");
     setSelectedEmoji("🤖");
@@ -163,6 +177,7 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess }: AddAgentDialog
     setRole("");
     setDescription("");
     setModel("__default__");
+    setProjectPath("");
     setError(null);
     setSelectedRuntime("openclaw");
   }, []);
@@ -197,7 +212,7 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess }: AddAgentDialog
     handleOpenChange(false);
 
     // Fire bridge calls in the background.
-    const identityContent = buildIdentityMd({ name, emoji: activeEmoji, role, description, runtime: selectedRuntime });
+    const identityContent = buildIdentityMd({ name, emoji: activeEmoji, role, description, runtime: selectedRuntime, projectPath: selectedRuntime === "claude-code" ? projectPath : undefined });
 
     const run = async () => {
       try {
@@ -239,7 +254,7 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess }: AddAgentDialog
     };
 
     run();
-  }, [displayName, selectedRuntime, activeEmoji, role, description, model, onSuccess, handleOpenChange]);
+  }, [displayName, selectedRuntime, activeEmoji, role, description, model, projectPath, onSuccess, handleOpenChange]);
 
   return (
     <Sheet open={open} onOpenChange={handleOpenChange}>
@@ -389,6 +404,41 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess }: AddAgentDialog
               disabled={false}
             />
           </div>
+
+          {/* Project path (claude-code only — scopes session history) */}
+          {selectedRuntime === "claude-code" && (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <Label className="text-xs uppercase tracking-wider text-muted-foreground">Project</Label>
+                <span className="text-xs text-muted-foreground/50">optional</span>
+              </div>
+              {availableProjects.length > 0 ? (
+                <Select value={projectPath || "__none__"} onValueChange={(v) => setProjectPath(v === "__none__" ? "" : v)}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select a project…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">— No project filter —</SelectItem>
+                    {availableProjects.map((p) => (
+                      <SelectItem key={p.dirName} value={p.projectPath}>
+                        <span className="font-mono text-xs truncate">{p.projectPath}</span>
+                        {p.sessionCount > 0 && (
+                          <span className="ml-2 text-muted-foreground text-[10px]">{p.sessionCount} sessions</span>
+                        )}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <Input
+                  placeholder="e.g. /Users/you/my-project"
+                  value={projectPath}
+                  onChange={(e) => setProjectPath(e.target.value)}
+                />
+              )}
+              <p className="text-[10px] text-muted-foreground">Only sessions from this project will appear in the inbox.</p>
+            </div>
+          )}
 
           {/* Model (OpenClaw only — stored in openclaw.json) */}
           {selectedRuntime === "openclaw" && availableModels.length > 0 && (

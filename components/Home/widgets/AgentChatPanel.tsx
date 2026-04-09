@@ -342,6 +342,9 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
       .finally(() => setInitialReady(true));
   }, [sessionKey, loadChatHistory]);
 
+  // Agent identity — needed for project-scoped session filtering (claude-code)
+  const sessionAgentIdentity = useAgentIdentity(agentId);
+
   // Fetch sessions
   const fetchSessions = useCallback(async () => {
     setSessionsLoading(true);
@@ -359,7 +362,7 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
           }));
         }
       } else if (backendTab === "claude-code") {
-        const projectPath = identity?.project;
+        const projectPath = sessionAgentIdentity?.project;
         const r = await bridgeInvoke("claude-code-list-sessions", { agentId, limit: 15, ...(projectPath ? { projectPath } : {}) }).catch(() => ({ sessions: [] })) as any;
         result = (r?.sessions || []).map((s: any) => ({
           key: s.key || `claude:${s.id}`,
@@ -400,7 +403,7 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
     } finally {
       setSessionsLoading(false);
     }
-  }, [agentId, backendTab]);
+  }, [agentId, backendTab, sessionAgentIdentity]);
 
   // Re-fetch sessions when the backend tab switches (e.g. openclaw → claude-code)
   // without the agent changing. Guard against firing on mount.
