@@ -289,6 +289,11 @@ async function hubCommandFromElectron(body) {
   const fetchModule = hubUrl.startsWith("https") ? https : http;
   const payload = JSON.stringify(body);
 
+  // Long-running actions (AI chat via CLI) need a longer HTTP timeout.
+  // Must match the hub's extended timeout for these actions (6 min).
+  const slowActions = ["claude-code-send", "codex-send", "hermes-chat"];
+  const httpTimeout = slowActions.includes(body?.action) ? 360000 : 60000;
+
   return new Promise((resolve, reject) => {
     const req = fetchModule.request(url, {
       method: "POST",
@@ -297,7 +302,7 @@ async function hubCommandFromElectron(body) {
         "Content-Type": "application/json",
         "Content-Length": Buffer.byteLength(payload),
       },
-      timeout: 60000,
+      timeout: httpTimeout,
     }, (res) => {
       let data = "";
       res.on("data", (chunk) => { data += chunk; });
@@ -519,7 +524,7 @@ function createWindow() {
     minWidth: 1200,
     minHeight: 700,
     title: "Hyperclaw",
-    frame: false, // Disable default window frame (title bar with controls)
+    frame: false,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -1383,6 +1388,90 @@ ipcMain.handle("show-notification", async (event, { title, body }) => {
   setTimeout(() => {
     notification.close();
   }, 5000);
+});
+
+// ─── IPC Handlers: Hermes ────────────────────────────────────────────────────
+
+ipcMain.handle("hermes:list-models", async (event, { profileId } = {}) => {
+  const fs = require("fs");
+  const path = require("path");
+  const home = process.env.HOME || "";
+  try {
+    const yaml = require("js-yaml");
+
+    // Try profile-specific config first, then fall back to global config
+    let configPath = path.join(home, ".hermes", "config.yaml");
+    if (profileId) {
+      const profileConfigPath = path.join(home, ".hermes", "profiles", profileId, "config.yaml");
+      if (fs.existsSync(profileConfigPath)) configPath = profileConfigPath;
+    }
+
+    if (!fs.existsSync(configPath)) return { models: [], currentModel: null };
+
+    const config = yaml.load(fs.readFileSync(configPath, "utf-8"));
+    const currentModel = config?.model?.default || null;
+    const provider = config?.model?.provider || null;
+
+    const models = currentModel ? [{ id: currentModel, label: currentModel }] : [];
+
+    // Load models from the dev cache: configured provider first, then major providers
+    const cacheFile = path.join(home, ".hermes", "models_dev_cache.json");
+    if (fs.existsSync(cacheFile)) {
+      try {
+        const cache = JSON.parse(fs.readFileSync(cacheFile, "utf-8"));
+        // Priority: configured provider first, then major providers
+        const majorProviders = ["anthropic", "openai", "minimax", "google", "openrouter", "deepseek"];
+        const orderedProviders = [
+          ...(provider && !majorProviders.includes(provider) ? [provider] : []),
+          ...(provider && majorProviders.includes(provider) ? [provider] : []),
+          ...majorProviders.filter((p) => p !== provider),
+        ];
+        for (const p of orderedProviders) {
+          const providerModels = Object.keys(cache[p]?.models || {});
+          for (const modelId of providerModels) {
+            const id = p === provider ? modelId : `${p}/${modelId}`;
+            if (!models.find((m) => m.id === id)) {
+              models.push({ id, label: id });
+            }
+          }
+        }
+      } catch { /* ignore */ }
+    }
+
+    return { models, currentModel };
+  } catch {
+    return { models: [], currentModel: null };
+  }
+});
+
+ipcMain.handle("hermes:save-profile-model", async (event, { profileId, model } = {}) => {
+  if (!profileId || !model) return { success: false };
+  const fs = require("fs");
+  const path = require("path");
+  const home = process.env.HOME || "";
+  try {
+    const yaml = require("js-yaml");
+    const configPath = path.join(home, ".hermes", "profiles", profileId, "config.yaml");
+    if (!fs.existsSync(configPath)) return { success: false };
+
+    const config = yaml.load(fs.readFileSync(configPath, "utf-8")) || {};
+    if (!config.model) config.model = {};
+
+    // If model is "provider/modelId", split and update both fields
+    if (model.includes("/")) {
+      const slashIdx = model.indexOf("/");
+      config.model.provider = model.slice(0, slashIdx);
+      config.model.default = model.slice(slashIdx + 1);
+      delete config.model.base_url; // remove provider-specific base_url when switching
+    } else {
+      config.model.default = model;
+    }
+
+    fs.writeFileSync(configPath, yaml.dump(config, { lineWidth: 120 }), "utf-8");
+    return { success: true };
+  } catch {
+    return { success: false };
+  }
 });
 
 // ─── IPC Handlers: OpenClaw (all routed through Hub → Connector) ────────────

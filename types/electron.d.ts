@@ -340,7 +340,8 @@ declare global {
       hermes: {
         listSessions: () => Promise<{ sessions: Array<{ id: string; key: string; label: string; updatedAt: number }>; error?: string }>;
         loadHistory: (params: { sessionId: string }) => Promise<{ messages: Array<{ id: string; role: string; content: string; timestamp?: number; thinking?: string; toolCalls?: Array<{ id: string; name?: string; arguments?: string }>; toolResults?: Array<{ toolCallId: string; toolName: string; content: string; isError?: boolean }> }>; sessionId?: string; error?: string }>;
-        listModels: () => Promise<{ models: Array<{ id: string; label: string }> | null }>;
+        listModels: (profileId?: string) => Promise<{ models: Array<{ id: string; label: string }>; currentModel: string | null } | null>;
+        saveProfileModel: (profileId: string, model: string) => Promise<{ success: boolean }>;
       };
       hyperClawBridge: HyperClawBridgeAPI;
       noteFS: any;

@@ -96,7 +96,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   hermes: {
     listSessions: () => ipcRenderer.invoke("hermes:list-sessions"),
     loadHistory: (params) => ipcRenderer.invoke("hermes:load-history", params),
-    listModels: () => ipcRenderer.invoke("hermes:list-models"),
+    listModels: (profileId) => ipcRenderer.invoke("hermes:list-models", { profileId }),
+    saveProfileModel: (profileId, model) => ipcRenderer.invoke("hermes:save-profile-model", { profileId, model }),
   },
 
   // HyperClaw Bridge — two-way relay with OpenClaw plugin via ~/.hyperclaw/
