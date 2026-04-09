@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
+import { getActiveSkillsContent } from "$/components/Home/widgets/AgentSkillsTab";
 import type {
   GatewayChatMessage,
   GatewayChatAttachment,
@@ -27,6 +28,8 @@ export interface UseClaudeCodeChatOptions {
   autoConnect?: boolean;
   defaultModel?: string;
   agentId?: string;
+  /** If set, new Claude Code sessions are spawned with this directory as cwd */
+  projectPath?: string;
 }
 
 // Map HyperClaw session keys → Claude Code session IDs for resume
@@ -62,7 +65,9 @@ const sessionIdMap = hydrateSessionIdMap();
 export function useClaudeCodeChat(
   options: UseClaudeCodeChatOptions = {}
 ): UseGatewayChatReturn {
-  const { sessionKey: initialSessionKey, defaultModel, agentId } = options;
+  const { sessionKey: initialSessionKey, defaultModel, agentId, projectPath } = options;
+  const projectPathRef = useRef(projectPath);
+  useEffect(() => { projectPathRef.current = projectPath; }, [projectPath]);
 
   const [messages, setMessages] = useState<GatewayChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -315,12 +320,19 @@ export function useClaudeCodeChat(
       activeRequestIdRef.current = requestId;
 
       try {
+        const activeSkills = agentId ? getActiveSkillsContent(agentId) : "";
+
         const result = (await bridgeInvoke("claude-code-send", {
           message: content.trim(),
           sessionId: claudeSessionId || undefined,
           sessionKey: currentSessionKey,
           ...(modelRef.current && { model: modelRef.current }),
           ...(agentId && { agentId }),
+          // Pass projectPath only for new sessions — resumed sessions already
+          // know their directory from the session file location.
+          ...(!claudeSessionId && projectPathRef.current && { projectPath: projectPathRef.current }),
+          // Inject active skills as additional system context
+          ...(activeSkills && { appendSystemPrompt: activeSkills }),
         })) as {
           success?: boolean;
           error?: string;
@@ -333,6 +345,7 @@ export function useClaudeCodeChat(
             thinking?: string;
             toolCalls?: GatewayChatMessage["toolCalls"];
             toolResults?: GatewayChatMessage["toolResults"];
+            attachments?: Array<{ filename: string; mimeType: string; data: string; size: number }>;
           }>;
         };
 
@@ -356,6 +369,15 @@ export function useClaudeCodeChat(
             ...(m.thinking && { thinking: m.thinking }),
             ...(m.toolCalls && { toolCalls: m.toolCalls }),
             ...(m.toolResults && { toolResults: m.toolResults }),
+            ...(m.attachments?.length && {
+              attachments: m.attachments.map((a, i) => ({
+                id: `${m.id}-att-${i}`,
+                type: a.mimeType.startsWith("image/") ? "image" : a.mimeType.startsWith("video/") ? "video" : "file",
+                mimeType: a.mimeType,
+                name: a.filename,
+                dataUrl: `data:${a.mimeType};base64,${a.data}`,
+              })),
+            }),
           }));
 
           setMessages((prev) => {

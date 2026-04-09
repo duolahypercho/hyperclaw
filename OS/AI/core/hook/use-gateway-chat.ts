@@ -118,6 +118,7 @@ export interface UseGatewayChatOptions {
   sessionKey?: string;
   autoConnect?: boolean;
   backend?: "openclaw" | "hermes";
+  agentId?: string;
 }
 
 export interface UseGatewayChatReturn {
@@ -580,9 +581,10 @@ async function sendMessageViaHermes(
   messages: Array<{ role: string; content: string }>,
   _signal: AbortSignal,
   onDelta: (content: string) => void,
-  onDone: () => void,
+  onDone: (attachments?: GatewayChatAttachment[]) => void,
   onError: (error: string) => void,
   chatSessionKey?: string,
+  agentId?: string,
 ): Promise<void> {
   try {
     const state = chatSessionKey ? hermesSessionState.get(chatSessionKey) : undefined;
@@ -594,6 +596,7 @@ async function sendMessageViaHermes(
       messages,
       sessionId: state?.sessionId || undefined,
       conversation,
+      ...(agentId ? { agentId } : {}),
     }) as {
       content?: string;
       sessionId?: string;
@@ -601,6 +604,7 @@ async function sendMessageViaHermes(
       mode?: "api" | "cli";
       success?: boolean;
       error?: string;
+      attachments?: Array<{ filename: string; mimeType: string; data: string; size: number }>;
     } | null;
 
     if (!result) {
@@ -623,14 +627,23 @@ async function sendMessageViaHermes(
     if (result.content) {
       onDelta(result.content);
     }
-    onDone();
+    const attachments: GatewayChatAttachment[] | undefined = result.attachments?.length
+      ? result.attachments.map((a, i) => ({
+          id: `hermes-att-${Date.now()}-${i}`,
+          type: a.mimeType.startsWith("image/") ? "image" : a.mimeType.startsWith("video/") ? "video" : "file",
+          mimeType: a.mimeType,
+          name: a.filename,
+          dataUrl: `data:${a.mimeType};base64,${a.data}`,
+        }))
+      : undefined;
+    onDone(attachments);
   } catch (err: any) {
     onError(err?.message || "Hermes bridge request failed");
   }
 }
 
 export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayChatReturn {
-  const { sessionKey: initialSessionKey, autoConnect = true, backend = "openclaw" } = options;
+  const { sessionKey: initialSessionKey, autoConnect = true, backend = "openclaw", agentId } = options;
 
   // State
   const [messages, setMessages] = useState<GatewayChatMessage[]>([]);
@@ -1441,7 +1454,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       if (hermesSessionId && hermesSessionId !== "main" && hermesSessionId !== "default") {
         try {
           const { bridgeInvoke: invoke } = await import("$/lib/hyperclaw-bridge-client");
-          const result = await invoke("hermes-load-history", { sessionId: hermesSessionId }) as {
+          const result = await invoke("hermes-load-history", { sessionId: hermesSessionId, ...(agentId ? { agentId } : {}) }) as {
             messages?: Array<{
               id: string; role: string; content: string; timestamp?: number;
               thinking?: string; toolCalls?: GatewayChatMessage["toolCalls"]; toolResults?: GatewayChatMessage["toolResults"];
@@ -1560,16 +1573,19 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
                 : m
             ));
           },
-          () => {
-            // Persist to localStorage
+          (attachments) => {
+            // Persist to localStorage, applying any file attachments to the message
             setMessages(prev => {
+              const updated = attachments?.length
+                ? prev.map(m => m.id === assistantMsgId ? { ...m, attachments } : m)
+                : prev;
               try {
                 localStorage.setItem(
                   `hermes-chat:${sessionKeyRef.current}`,
-                  JSON.stringify(prev)
+                  JSON.stringify(updated)
                 );
               } catch { /* ignore storage errors */ }
-              return prev;
+              return updated;
             });
             currentRunIdRef.current = null;
             setIsLoading(false);
@@ -1587,6 +1603,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
             hermesAbortRef.current = null;
           },
           sessionKeyRef.current,
+          agentId,
         );
       } catch (err) {
         if ((err as Error).name !== "AbortError") {

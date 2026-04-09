@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
+import { getActiveSkillsContent } from "$/components/Home/widgets/AgentSkillsTab";
 import type {
   GatewayChatMessage,
   GatewayChatAttachment,
@@ -117,12 +118,15 @@ export function useCodexChat(
       const codexThreadId = sessionIdMap.get(currentSessionKey);
 
       try {
+        const activeSkills = agentId ? getActiveSkillsContent(agentId) : "";
+
         const result = (await bridgeInvoke("codex-send", {
           message: content.trim(),
           sessionId: codexThreadId || undefined,
           sessionKey: currentSessionKey,
           ...(model && { model }),
           ...(agentId && { agentId }),
+          ...(activeSkills && { appendSystemPrompt: activeSkills }),
         })) as {
           success?: boolean;
           error?: string;
