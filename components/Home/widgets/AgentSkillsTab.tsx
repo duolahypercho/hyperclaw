@@ -272,56 +272,62 @@ function SkillRow({
   );
 }
 
-/* ── Claude Code system skills section ──────────────────────── */
+/* ── Claude Code project-scoped skills section ───────────────
+ *
+ * Skills live at: ~/.claude/projects/<agentId>/skills/*.md
+ * Bridge actions: claude-skills-list, claude-skill-read,
+ *                 claude-skill-write, claude-skill-delete
+ * ────────────────────────────────────────────────────────── */
 
 interface ClaudeSkillsSectionProps {
   agentId: string;
-  projectPath?: string;
   skills: AgentSkill[];
   onSkillsChange: (next: AgentSkill[]) => void;
 }
 
 function ClaudeSkillsSection({
   agentId,
-  projectPath,
   skills,
   onSkillsChange,
 }: ClaudeSkillsSectionProps) {
   const [systemSkills, setSystemSkills] = useState<ClaudeSkillFile[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [loadingContent, setLoadingContent] = useState<string | null>(null);
+  const [loadingSkillId, setLoadingSkillId] = useState<string | null>(null);
+  const [addingSkill, setAddingSkill] = useState(false);
 
-  useEffect(() => {
+  const reload = useCallback(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
     (async () => {
       try {
-        const res = (await bridgeInvoke("claude-skills-list", {
-          ...(projectPath && { projectPath }),
-        })) as { skills?: ClaudeSkillFile[]; error?: string };
+        const res = (await bridgeInvoke("claude-skills-list", { agentId })) as {
+          skills?: ClaudeSkillFile[];
+          error?: string;
+        };
         if (!cancelled) {
           if (res?.error) setError(res.error);
           else setSystemSkills(res?.skills ?? []);
         }
       } catch (err) {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : "Not supported by connector");
-        }
+        if (!cancelled) setError(err instanceof Error ? err.message : "Bridge action not supported");
       }
       if (!cancelled) setLoading(false);
     })();
     return () => { cancelled = true; };
-  }, [projectPath]);
+  }, [agentId]);
 
-  const toggleSystemSkill = useCallback(
+  useEffect(() => {
+    return reload();
+  }, [reload]);
+
+  /** Toggle a skill on/off. First enable fetches the file content. */
+  const toggleSkill = useCallback(
     async (file: ClaudeSkillFile) => {
       const id = `system:${file.name}`;
       const existing = skills.find((s) => s.id === id);
-
       if (existing) {
-        // Toggle existing entry
         const next = skills.map((s) =>
           s.id === id ? { ...s, enabled: !s.enabled } : s
         );
@@ -329,21 +335,19 @@ function ClaudeSkillsSection({
         saveSkills(agentId, next);
         return;
       }
-
-      // First enable: fetch content then add
-      setLoadingContent(id);
+      // First enable: fetch content from connector
+      setLoadingSkillId(id);
       try {
         const res = (await bridgeInvoke("claude-skill-read", {
-          path: file.path,
-        })) as { content?: string; error?: string };
-
-        const content = res?.content ?? "";
+          agentId,
+          name: file.name,
+        })) as { content?: string };
         const next = [
           ...skills,
           {
             id,
             name: file.name,
-            content,
+            content: res?.content ?? "",
             enabled: true,
             source: "system" as const,
             filePath: file.path,
@@ -352,22 +356,58 @@ function ClaudeSkillsSection({
         onSkillsChange(next);
         saveSkills(agentId, next);
       } catch {
-        // Add with empty content — will still show the toggle
         const next = [
           ...skills,
-          {
-            id,
-            name: file.name,
-            content: "",
-            enabled: true,
-            source: "system" as const,
-            filePath: file.path,
-          },
+          { id, name: file.name, content: "", enabled: true, source: "system" as const, filePath: file.path },
         ];
         onSkillsChange(next);
         saveSkills(agentId, next);
       } finally {
-        setLoadingContent(null);
+        setLoadingSkillId(null);
+      }
+    },
+    [agentId, skills, onSkillsChange]
+  );
+
+  /** Save a new skill file to ~/.claude/projects/<agentId>/skills/<name>.md */
+  const createSkill = useCallback(
+    async (name: string, content: string) => {
+      setLoadingSkillId("creating");
+      try {
+        await bridgeInvoke("claude-skill-write", { agentId, name, content });
+        const id = `system:${name}`;
+        const next = [
+          ...skills.filter((s) => s.id !== id),
+          { id, name, content, enabled: true, source: "system" as const },
+        ];
+        onSkillsChange(next);
+        saveSkills(agentId, next);
+        setAddingSkill(false);
+        reload();
+      } catch {
+        // silently fail — user can retry
+      } finally {
+        setLoadingSkillId(null);
+      }
+    },
+    [agentId, skills, onSkillsChange, reload]
+  );
+
+  /** Delete a skill file from disk and from local state. */
+  const deleteSkill = useCallback(
+    async (name: string) => {
+      const id = `system:${name}`;
+      setLoadingSkillId(id);
+      try {
+        await bridgeInvoke("claude-skill-delete", { agentId, name });
+        const next = skills.filter((s) => s.id !== id);
+        onSkillsChange(next);
+        saveSkills(agentId, next);
+        setSystemSkills((prev) => prev.filter((s) => s.name !== name));
+      } catch {
+        /* ignore */
+      } finally {
+        setLoadingSkillId(null);
       }
     },
     [agentId, skills, onSkillsChange]
@@ -377,7 +417,7 @@ function ClaudeSkillsSection({
     return (
       <div className="flex items-center gap-2 py-3 text-muted-foreground text-xs">
         <Loader2 className="w-3 h-3 animate-spin" />
-        Scanning ~/.claude/skills/…
+        Loading project skills…
       </div>
     );
   }
@@ -387,27 +427,10 @@ function ClaudeSkillsSection({
       <div className="flex items-start gap-2 py-2 text-xs text-muted-foreground">
         <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-amber-500" />
         <div>
-          <p className="font-medium text-amber-500/90">Skill listing unavailable</p>
+          <p className="font-medium text-amber-500/90">Skills unavailable</p>
           <p className="text-[10px] mt-0.5 opacity-70">
-            Connector doesn't support <code className="font-mono bg-muted px-0.5 rounded">claude-skills-list</code> yet.
-            Add custom skills below in the meantime.
+            Update the connector to enable <code className="font-mono bg-muted px-0.5 rounded">claude-skills-list</code>.
           </p>
-        </div>
-      </div>
-    );
-  }
-
-  if (systemSkills.length === 0) {
-    return (
-      <div className="flex items-start gap-2 py-2 text-xs text-muted-foreground">
-        <FolderOpen className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-        <div>
-          <p>No skills found in <code className="font-mono text-[10px] bg-muted px-1 rounded">~/.claude/skills/</code></p>
-          {projectPath && (
-            <p className="text-[10px] opacity-70 mt-0.5">
-              Also checked <code className="font-mono bg-muted px-0.5 rounded">{projectPath}/.claude/skills/</code>
-            </p>
-          )}
         </div>
       </div>
     );
@@ -415,11 +438,12 @@ function ClaudeSkillsSection({
 
   return (
     <div className="flex flex-col gap-1.5">
+      {/* Existing skill files */}
       {systemSkills.map((file) => {
         const id = `system:${file.name}`;
         const stored = skills.find((s) => s.id === id);
         const enabled = stored?.enabled ?? false;
-        const isLoadingThis = loadingContent === id;
+        const isLoadingThis = loadingSkillId === id;
 
         return (
           <div
@@ -435,16 +459,23 @@ function ClaudeSkillsSection({
             <div className="flex-1 min-w-0">
               <p className="text-xs font-medium font-mono truncate">{file.name}</p>
               {file.description && (
-                <p className="text-[10px] text-muted-foreground truncate">
-                  {file.description}
-                </p>
+                <p className="text-[10px] text-muted-foreground truncate">{file.description}</p>
               )}
-              <p className="text-[10px] text-muted-foreground/50 truncate font-mono">
-                {file.path}
-              </p>
             </div>
+
+            {/* Delete button */}
             <button
-              onClick={() => !isLoadingThis && toggleSystemSkill(file)}
+              onClick={() => !isLoadingThis && deleteSkill(file.name)}
+              disabled={isLoadingThis}
+              className="h-5 w-5 flex items-center justify-center rounded hover:bg-destructive/10 hover:text-destructive text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity"
+              title="Delete skill file"
+            >
+              <Trash2 className="w-2.5 h-2.5" />
+            </button>
+
+            {/* Toggle */}
+            <button
+              onClick={() => !isLoadingThis && toggleSkill(file)}
               disabled={isLoadingThis}
               title={enabled ? "Disable for this agent" : "Enable for this agent"}
               className="shrink-0"
@@ -460,6 +491,38 @@ function ClaudeSkillsSection({
           </div>
         );
       })}
+
+      {/* Empty state */}
+      {systemSkills.length === 0 && !addingSkill && (
+        <div className="flex items-center gap-2 py-2 text-xs text-muted-foreground">
+          <FolderOpen className="w-3.5 h-3.5 shrink-0" />
+          <span>
+            No skills yet in{" "}
+            <code className="font-mono text-[10px] bg-muted px-1 rounded">
+              ~/.claude/projects/{agentId}/skills/
+            </code>
+          </span>
+        </div>
+      )}
+
+      {/* New skill form */}
+      {addingSkill ? (
+        <EditSkillForm
+          onSave={createSkill}
+          onCancel={() => setAddingSkill(false)}
+        />
+      ) : (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 text-xs gap-1.5 w-full justify-start text-muted-foreground hover:text-foreground"
+          onClick={() => setAddingSkill(true)}
+          disabled={loadingSkillId === "creating"}
+        >
+          <Plus className="w-3 h-3" />
+          New skill file
+        </Button>
+      )}
     </div>
   );
 }
@@ -565,14 +628,13 @@ function HermesBundlesSection({
 interface AgentSkillsTabProps {
   agentId: string;
   runtime?: string;
-  /** For Claude Code agents: the project directory path */
+  /** Unused — kept for backwards compat but Claude Code skills are scoped by agentId */
   projectPath?: string;
 }
 
 export function AgentSkillsTab({
   agentId,
   runtime = "openclaw",
-  projectPath,
 }: AgentSkillsTabProps) {
   const [skills, setSkills] = useState<AgentSkill[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -705,22 +767,19 @@ export function AgentSkillsTab({
             </section>
           )}
 
-          {/* ── Claude Code system skills ── */}
+          {/* ── Claude Code project-scoped skills ── */}
           {isClaudeCode && (
             <section className="flex flex-col gap-1.5">
               <div className="flex items-baseline gap-2">
                 <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">
-                  ~/.claude/skills/
+                  Project Skills
                 </p>
-                {projectPath && (
-                  <span className="text-[10px] text-muted-foreground/50 truncate font-mono">
-                    + {projectPath}/.claude/skills/
-                  </span>
-                )}
+                <span className="text-[10px] text-muted-foreground/50 truncate font-mono">
+                  ~/.claude/projects/{agentId}/skills/
+                </span>
               </div>
               <ClaudeSkillsSection
                 agentId={agentId}
-                projectPath={projectPath}
                 skills={skills}
                 onSkillsChange={setSkills}
               />
