@@ -426,7 +426,6 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [addAgentOpen, setAddAgentOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [deleteState, setDeleteState] = useState<"idle" | "deleting" | "deleted">("idle");
   // Snapshot captured when the dialog opens — prevents deleting the wrong agent
   // if currentAgentId changes while the confirmation dialog is visible.
   const [pendingDeleteAgentId, setPendingDeleteAgentId] = useState<string>("");
@@ -529,13 +528,6 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
     : identity?.runtime === "hermes" ? HermesIcon
     : null;
   const displayName = identity?.name || currentAgent.name;
-  const isFirstAgent = agents[0] != null && currentAgentId === agents[0].id;
-  // Protect built-in runtime agents — these are single-instance and shouldn't be deletable.
-  const isProtectedAgent = isFirstAgent
-    || identity?.runtime === "claude-code"
-    || identity?.runtime === "hermes"
-    || identity?.runtime === "codex";
-
   // Listen for agent-click events from StatusWidget
   useEffect(() => {
     const handler = (e: Event) => {
@@ -1000,9 +992,7 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
           const next = agents.find((a) => a.id !== pendingDeleteAgentId);
           setSelectedAgentId(next?.id);
         }}
-        onSuccess={() => {
-          setDeleteState("idle");
-        }}
+        onSuccess={() => { /* context refresh handled by agent.deleted event */ }}
       />
     </motion.div>
   );
