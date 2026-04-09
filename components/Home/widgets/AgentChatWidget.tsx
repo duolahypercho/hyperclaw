@@ -480,7 +480,9 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
             const r = await bridgeInvoke("claude-code-load-history", { sessionId }) as any;
             messages = r?.messages || [];
           } else if (backendTab === "codex") {
-            const r = await bridgeInvoke("codex-load-history", { sessionKey: s.key }) as any;
+            // codex-load-history expects sessionId (without the "codex:" prefix)
+            const codexSessionId = s.key.replace(/^codex:/, "");
+            const r = await bridgeInvoke("codex-load-history", { sessionId: codexSessionId }) as any;
             messages = r?.messages || [];
           } else if (backendTab === "hermes") {
             // hermes-load-history expects sessionId (without the "hermes:" prefix)
