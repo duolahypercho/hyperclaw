@@ -178,6 +178,8 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess }: AddAgentDialog
     setDescription("");
     setModel("__default__");
     setProjectPath("");
+    setAvailableProjects([]);
+    setAvailableModels([]);
     setError(null);
     setSelectedRuntime("openclaw");
   }, []);
