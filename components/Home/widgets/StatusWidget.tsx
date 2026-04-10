@@ -763,10 +763,12 @@ const StatusWidgetContent = memo((props: CustomProps) => {
     }
   }, [fetchAgents, fetchAgentSessions]);
 
-  // Re-run refresh when the context agents list changes (e.g. initial load completes)
+  // Re-run refresh whenever new agents are added to the context list.
+  // Using count > prev covers both 0→N (initial load) and N→M (OpenClaw agents
+  // arriving after SQLite agents have already populated the list).
   const prevAgentCountRef = useRef(openClawAgents.length);
   useEffect(() => {
-    if (openClawAgents.length > 0 && prevAgentCountRef.current === 0) {
+    if (openClawAgents.length > prevAgentCountRef.current) {
       refresh();
     }
     prevAgentCountRef.current = openClawAgents.length;

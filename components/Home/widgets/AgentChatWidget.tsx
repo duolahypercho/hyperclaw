@@ -501,6 +501,10 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
     };
   }, [currentAgentId, backendTab]);
 
+  const handleAfterFileSave = useCallback((fileKey: string, newContent: string) => {
+    setPersonalityCache(prev => prev ? { ...prev, [fileKey]: newContent } : null);
+  }, []);
+
   const isEditorTab = activeTab === "INFO" || activeTab === "FILES";
   const showChatActions = activeTab === "CHAT";
   const showSaveButton = isEditorTab;
@@ -706,10 +710,7 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
                   : "border-transparent text-muted-foreground hover:text-foreground/70 hover:bg-muted/30"
               )}
             >
-              {activeTab === "FILES"
-                ? TAB_FILES.find((t) => t.key === selectedFileKey)?.label ?? "Instructions"
-                : "Instructions"}
-              <ChevronDown className="w-2.5 h-2.5 opacity-60" />
+              Instructions
             </button>
             <button
               onClick={() => setActiveTab("SKILLS")}
@@ -839,9 +840,7 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
                   onStateChange={setFooterState}
                   className="flex-1 min-h-0"
                   preloaded={personalityCache ? (personalityCache[selectedFileKey] ?? null) : undefined}
-                  onAfterSave={(fileKey, newContent) =>
-                    setPersonalityCache(prev => prev ? { ...prev, [fileKey]: newContent } : null)
-                  }
+                  onAfterSave={handleAfterFileSave}
                 />
               </div>
             </div>
