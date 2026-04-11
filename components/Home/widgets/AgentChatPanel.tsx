@@ -336,22 +336,8 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Reset on agent change
+  // Reset on agent change — ref and effect are below fetchSessions definition
   const prevAgentRef = useRef(agentId);
-  useEffect(() => {
-    if (prevAgentRef.current === agentId) return;
-    prevAgentRef.current = agentId;
-    const newKey = `agent:${agentId}:main`;
-    setSelectedSessionKey(newKey);
-    setChatSessionKey(newKey);
-    initialLoadDoneRef.current = false;
-    setInitialReady(false);
-    loadChatHistory().catch(() => {}).finally(() => {
-      initialLoadDoneRef.current = true;
-      setInitialReady(true);
-      fetchSessions();
-    });
-  }, [agentId, setChatSessionKey, loadChatHistory]);
 
   // Reload on session change — reset initialReady so skeleton shows while loading
   const prevSessionRef = useRef(sessionKey);
@@ -450,6 +436,28 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
     prevBackendTabRef.current = backendTab;
     fetchSessions();
   }, [backendTab, fetchSessions]);
+
+  // Keep fetchSessions in a ref so the agent-change effect can call the latest
+  // version without adding it to the dependency array (which would cause extra
+  // runs when backendTab or sessionAgentIdentity changes).
+  const fetchSessionsRef = useRef(fetchSessions);
+  fetchSessionsRef.current = fetchSessions;
+
+  // Reset on agent change
+  useEffect(() => {
+    if (prevAgentRef.current === agentId) return;
+    prevAgentRef.current = agentId;
+    const newKey = `agent:${agentId}:main`;
+    setSelectedSessionKey(newKey);
+    setChatSessionKey(newKey);
+    initialLoadDoneRef.current = false;
+    setInitialReady(false);
+    loadChatHistory().catch(() => {}).finally(() => {
+      initialLoadDoneRef.current = true;
+      setInitialReady(true);
+      fetchSessionsRef.current();
+    });
+  }, [agentId, setChatSessionKey, loadChatHistory]);
 
   // Merge tool calls
   const mergeToolCalls = useMemo(() => createMergeToolCalls(), []);

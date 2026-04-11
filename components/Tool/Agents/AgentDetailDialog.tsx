@@ -113,7 +113,7 @@ export function AgentDetailDialog({
     : null;
   const displayName = identity?.name || agentName;
 
-  const isMain = agentId === "main" || agentId === "hermes:__main__";
+  const isMain = agentId === "main" || agentId === "__main__";
 
   // Personality cache — fetched once per (agentId, open) so tab switches are instant.
   // Keys are uppercase file keys: SOUL, IDENTITY, USER, AGENTS, TOOLS, HEARTBEAT, MEMORY.

@@ -114,10 +114,64 @@ function CopyButton({ content, isUser }: { content: string; isUser?: boolean }) 
   );
 }
 
+/**
+ * Rewrites oracle proxy URLs and MEDIA: paths to the local-media API route.
+ *
+ * Pattern handled:
+ *   https://static.xion.tech/img/oracle?img=https%3A%2F%2F<hostname>%2F.openclaw%2Fmedia%2F...
+ * becomes:
+ *   /api/local-media?path=/.openclaw/media/...
+ *
+ * MEDIA:/Users/…/.openclaw/media/... becomes:
+ *   /api/local-media?path=/Users/…/.openclaw/media/...
+ */
+function resolveMediaSrc(src?: string): string | undefined {
+  if (!src) return src;
+
+  // Oracle proxy pattern
+  try {
+    const url = new URL(src);
+    if (url.hostname === "static.xion.tech" && url.pathname === "/img/oracle") {
+      const imgParam = url.searchParams.get("img");
+      if (imgParam) {
+        try {
+          const inner = new URL(imgParam);
+          // inner.pathname is e.g. /.openclaw/media/…
+          return `/api/local-media?path=${encodeURIComponent(inner.pathname)}`;
+        } catch {
+          // fall through
+        }
+      }
+    }
+  } catch {
+    // not a valid URL
+  }
+
+  // MEDIA: protocol (direct path)
+  if (src.startsWith("MEDIA:")) {
+    const localPath = src.slice("MEDIA:".length);
+    return `/api/local-media?path=${encodeURIComponent(localPath)}`;
+  }
+
+  return src;
+}
+
 // Enhanced markdown components with consistent styling - memoized to prevent recreation
 const createMarkdownComponents = (isUser?: boolean): Components => {
   // Memoize the components object to prevent recreation on every render
   const components: Components = {
+    img({ src, alt, ...props }) {
+      const resolved = resolveMediaSrc(src);
+      return (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={resolved}
+          alt={alt ?? ""}
+          style={{ maxWidth: "100%", borderRadius: "8px" }}
+          {...props}
+        />
+      );
+    },
     a({ children, ...props }) {
       return (
         <a

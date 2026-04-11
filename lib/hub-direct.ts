@@ -250,9 +250,7 @@ export async function hubCommand(
         signal: AbortSignal.timeout(1_500),
       });
       if (localRes.ok) {
-        const data = await localRes.json();
-
-        return data;
+        return localRes.json();
       }
     } catch {
       // Local bridge not available, try gateway WS

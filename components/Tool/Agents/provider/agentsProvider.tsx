@@ -71,11 +71,55 @@ interface AgentsContextValue {
   deletingAgentIds: Set<string>;
 }
 
-const AgentsContext = createContext<AgentsContextValue | undefined>(undefined);
+/** Stable data that rarely changes — cheap to subscribe to */
+interface AgentsDataContextValue {
+  agents: Agent[];
+  agentFiles: AgentFileEntry[];
+  workspaceLabels: Record<string, string>;
+  filteredAgentFiles: AgentFileEntry[];
+  ceoAgentId: string | null;
+  appSchema: AppSchema;
+  refresh: () => Promise<void>;
+}
 
-export function useAgents() {
-  const ctx = useContext(AgentsContext);
-  if (!ctx) throw new Error("useAgents must be used within AgentsProvider");
+/** Volatile UI state that changes often */
+interface AgentsUIContextValue {
+  selectedAgentId: string;
+  setSelectedAgentId: (id: string) => void;
+  selectedFile: AgentFileEntry | null;
+  setSelectedFile: (file: AgentFileEntry | null) => void;
+  content: string | null;
+  setContent: (value: string | null) => void;
+  loading: boolean;
+  contentLoading: boolean;
+  saving: boolean;
+  error: string | null;
+  saveError: string | null;
+  addOptimisticAgent: (name: string) => void;
+  refreshAfterMutation: () => Promise<void>;
+  deletingAgentIds: Set<string>;
+  saveDoc: () => Promise<boolean>;
+}
+
+const AgentsContext = createContext<AgentsContextValue | undefined>(undefined);
+const AgentsDataContext = createContext<AgentsDataContextValue | null>(null);
+const AgentsUIContext = createContext<AgentsUIContextValue | null>(null);
+
+export function useAgents(): AgentsContextValue {
+  const data = useAgentsData();
+  const ui = useAgentsUI();
+  return { ...data, ...ui };
+}
+
+export function useAgentsData(): AgentsDataContextValue {
+  const ctx = useContext(AgentsDataContext);
+  if (!ctx) throw new Error("useAgentsData must be used within AgentsProvider");
+  return ctx;
+}
+
+export function useAgentsUI(): AgentsUIContextValue {
+  const ctx = useContext(AgentsUIContext);
+  if (!ctx) throw new Error("useAgentsUI must be used within AgentsProvider");
   return ctx;
 }
 
@@ -97,47 +141,6 @@ async function fetchListAgentFiles(): Promise<AgentFilesResponse> {
   }
   const { files = [], workspaceLabels = {} } = res.data as AgentFilesResponse;
   return { files, workspaceLabels };
-}
-
-async function fetchHermesProfiles(): Promise<Agent[]> {
-  try {
-    const res = (await bridgeInvoke("list-hermes-profiles", {})) as {
-      success?: boolean;
-      data?: { profiles?: Array<{ id: string; name: string; status: string; lastActive: string }> };
-    };
-    if (!res?.success || !res.data?.profiles) return [];
-    return res.data.profiles.map((p) => ({
-      id: `hermes:${p.id}`,
-      name: p.name,
-      status: p.status ?? "idle",
-      lastActive: p.lastActive,
-      runtime: "hermes" as const,
-    }));
-  } catch {
-    return [];
-  }
-}
-
-async function fetchIdentityAgents(): Promise<Agent[]> {
-  try {
-    const res = (await bridgeInvoke("list-agent-identities", {})) as {
-      success?: boolean;
-      data?: Array<{ id: string; name?: string; emoji?: string; runtime?: string; status?: string }>;
-    };
-    if (!res?.success || !Array.isArray(res.data)) return [];
-    return res.data
-      .filter((a) => a.runtime === "claude-code" || a.runtime === "codex" || a.runtime === "hermes")
-      .map((a) => ({
-        // Hermes identity agents get the same "hermes:" prefix as Hermes profiles so
-        // the dedup logic treats them consistently and prevents double-entries.
-        id: a.runtime === "hermes" ? `hermes:${a.id}` : a.id,
-        name: a.name ?? a.id,
-        status: a.status ?? "idle",
-        runtime: a.runtime as "claude-code" | "codex" | "hermes",
-      }));
-  } catch {
-    return [];
-  }
 }
 
 async function fetchDocContent(relativePath: string): Promise<string | null> {
@@ -169,6 +172,11 @@ const FILE_ICONS: Record<string, typeof FileText> = {
 
 export function AgentsProvider({ children }: { children: React.ReactNode }) {
   const { agents: openClawAgents, fetchAgents } = useHyperclawContext();
+  // Keep a ref so refresh() always calls the latest fetchAgents without
+  // capturing it in deps — prevents refresh from recreating every 30s when
+  // the context proxy identity changes.
+  const fetchAgentsRef = useRef(fetchAgents);
+  fetchAgentsRef.current = fetchAgents;
   const [agents, setAgents] = useState<Agent[]>([]);
   const [agentFiles, setAgentFiles] = useState<AgentFileEntry[]>([]);
   const [workspaceLabels, setWorkspaceLabels] = useState<Record<string, string>>({});
@@ -201,79 +209,50 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
 
   // handleDeployOrchestrator is defined after refreshAfterMutation / addOptimisticAgent (below)
 
+  // Allowed personality files per runtime (strict filtering)
+  const RUNTIME_FILES: Record<string, Set<string>> = {
+    openclaw: new Set(["IDENTITY.md", "SOUL.md", "AGENTS.md", "TOOLS.md", "USER.md", "HEARTBEAT.md", "MEMORY.md"]),
+    hermes: new Set(["SOUL.md"]),
+  };
+
   // Files belonging to the selected agent: match by workspace folder from getTeam()
+  // Then filter by runtime — only show files relevant to the agent's runtime
   const filteredAgentFiles = useMemo(() => {
     if (!selectedAgentId) return [];
     const agent = agents.find((a) => a.id === selectedAgentId);
     const folder = agent?.workspaceFolder ?? selectedAgentId;
+    const runtime = agent?.runtime ?? "openclaw";
+    const allowedFiles = RUNTIME_FILES[runtime] ?? RUNTIME_FILES.openclaw;
+
     // Workspace dirs may be "workspace-{id}", "{id}", or "workspace" (for main)
     const prefixes = [folder, `workspace-${folder}`];
     if (folder === "main") prefixes.push("workspace");
-    return agentFiles.filter((f) =>
-      prefixes.some(
-        (p) => f.relativePath === p || f.relativePath.startsWith(p + "/")
+
+    return agentFiles
+      .filter((f) =>
+        prefixes.some(
+          (p) => f.relativePath === p || f.relativePath.startsWith(p + "/")
+        )
       )
-    );
+      .filter((f) => allowedFiles.has(f.name));
   }, [agentFiles, agents, selectedAgentId]);
 
   const refresh = useCallback(async (retries = 0) => {
     setLoading(true);
     setError(null);
     try {
-      // Fetch fresh agent list from the server instead of using the stale
-      // context value — critical after add/delete so the UI updates immediately
-      // rather than waiting for the next 30s auto-refresh cycle.
-      const [freshAgents, filesResponse, hermesAgents, identityAgents] = await Promise.all([
-        fetchAgents().catch(() => [] as Agent[]),
+      // All agents come from HyperclawProvider (SQLite single source).
+      // We only need to trigger a re-fetch + grab the agent files list.
+      const [freshAgents, filesResponse] = await Promise.all([
+        fetchAgentsRef.current().catch(() => [] as Agent[]),
         fetchListAgentFiles(),
-        fetchHermesProfiles(),
-        fetchIdentityAgents(),
       ]);
-      // Tag OpenClaw agents and merge with Hermes profiles
-      const openClawAgents = (freshAgents as Agent[]).map((a) => ({
+      const allAgents = (freshAgents as Agent[]).map((a) => ({
         ...a,
         runtime: a.runtime ?? ("openclaw" as const),
       }));
-      // Deduplicate: skip Hermes profile if an agent with the same base id already exists
-      const openClawIds = new Set(openClawAgents.map((a) => a.id));
-      const uniqueHermes = hermesAgents.filter((h) => {
-        if (openClawIds.has(h.id)) return false;
-        // Hermes profile IDs carry a "hermes:" prefix — also skip if the bare ID
-        // matches an OpenClaw agent so we don't surface a ghost "hermes:hermes" entry
-        // when an OpenClaw agent happens to share the same name (e.g. id="hermes").
-        if (h.id.startsWith("hermes:")) {
-          const bareId = h.id.slice("hermes:".length);
-          if (openClawIds.has(bareId)) return false;
-        }
-        return true;
-      });
-      // Deduplicate: skip identity agents if already present in openclaw or hermes
-      const mergedIds = new Set([...openClawIds, ...uniqueHermes.map((h) => h.id)]);
-      const uniqueIdentity = identityAgents.filter((a) => {
-        if (mergedIds.has(a.id)) return false;
-        // Extra guard: skip stale SQLite hermes identity agents whose bare id (without "hermes:")
-        // matches an existing OpenClaw agent — these are stale runtime="hermes" records that
-        // were incorrectly set before the openclaw default was applied.
-        if (a.runtime === "hermes" && a.id.startsWith("hermes:")) {
-          const bareId = a.id.slice("hermes:".length);
-          if (openClawIds.has(bareId)) return false;
-        }
-        return true;
-      });
-      const allAgents = [...openClawAgents, ...uniqueHermes, ...uniqueIdentity];
 
-      // Auto-fix stale SQLite runtime entries: if an OpenClaw agent has a ghost
-      // "hermes:X" identity entry (stale runtime="hermes" in SQLite for an openclaw agent),
-      // silently patch the DB so the ghost disappears on next refresh.
-      for (const ocAgent of openClawAgents) {
-        if (identityAgents.some((a) => a.id === `hermes:${ocAgent.id}`)) {
-          bridgeInvoke("update-agent-identity", { agentId: ocAgent.id, runtime: "openclaw" }).catch(() => {});
-        }
-      }
-
-      // Patch the identity cache so useAgentIdentity returns the source-correct
-      // runtime for every agent — OpenClaw agents always get "openclaw" here,
-      // preventing stale SQLite "hermes" values from overriding the display.
+      // Patch the identity cache so useAgentIdentity returns the correct runtime.
       for (const agent of allAgents) {
         if (agent.runtime) patchIdentityCache(agent.id, { runtime: agent.runtime });
       }
@@ -285,7 +264,7 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setLoading(false);
     }
-  }, [fetchAgents]);
+  }, []); // fetchAgents read via ref; stable identity stops needless re-subscriptions
 
   /** Refresh with a short delay + retry — gives the connector time to register the new agent */
   const refreshAfterMutation = useCallback(async () => {
@@ -568,7 +547,7 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
       const firstAgentId = agents[0]?.id ?? null;
       const isFirstAgent = firstAgentId != null && selectedAgentId === firstAgentId;
       const selectedAgent = agents.find((a) => a.id === selectedAgentId);
-      const isProtectedAgent = selectedAgentId === "main" || selectedAgentId === "hermes:__main__";
+      const isProtectedAgent = selectedAgentId === "main" || selectedAgentId === "__main__";
       const breadcrumbs = [{ label: "Agents" }];
       if (selectedAgentName) breadcrumbs.push({ label: selectedAgentName });
       if (selectedFile) breadcrumbs.push({ label: selectedFile.name });
@@ -671,37 +650,39 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
     ]
   );
 
-  const value = useMemo<AgentsContextValue>(
+  const dataValue = useMemo<AgentsDataContextValue>(
     () => ({
       agents,
       agentFiles,
       workspaceLabels,
+      filteredAgentFiles,
+      ceoAgentId,
+      appSchema,
+      refresh,
+    }),
+    [agents, agentFiles, workspaceLabels, filteredAgentFiles, ceoAgentId, appSchema, refresh]
+  );
+
+  const uiValue = useMemo<AgentsUIContextValue>(
+    () => ({
       selectedAgentId,
       setSelectedAgentId,
-      filteredAgentFiles,
       selectedFile,
+      setSelectedFile,
       content,
+      setContent,
       loading,
       contentLoading,
       saving,
       error,
       saveError,
-      appSchema,
-      setSelectedFile,
-      setContent,
-      refresh,
-      saveDoc,
-      ceoAgentId,
       addOptimisticAgent,
       refreshAfterMutation,
       deletingAgentIds,
+      saveDoc,
     }),
     [
-      agents,
-      agentFiles,
-      workspaceLabels,
       selectedAgentId,
-      filteredAgentFiles,
       selectedFile,
       content,
       loading,
@@ -709,47 +690,53 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
       saving,
       error,
       saveError,
-      appSchema,
-      setContent,
-      refresh,
-      saveDoc,
-      ceoAgentId,
       addOptimisticAgent,
       refreshAfterMutation,
       deletingAgentIds,
+      saveDoc,
     ]
+  );
+
+  // Keep the legacy single-context value for backward compat consumers
+  const value = useMemo<AgentsContextValue>(
+    () => ({ ...dataValue, ...uiValue }),
+    [dataValue, uiValue]
   );
 
   return (
     <AgentsContext.Provider value={value}>
-      {children}
-      <AddAgentDialog
-        open={addAgentDialogOpen}
-        onOpenChange={setAddAgentDialogOpen}
-        existingAgents={agents}
-        onSuccess={(name) => {
-          addOptimisticAgent(name);
-          refreshAfterMutation();
-        }}
-      />
-      <DeleteAgentDialog
-        open={deleteAgentDialogOpen}
-        onOpenChange={setDeleteAgentDialogOpen}
-        agentId={pendingDeleteAgentId}
-        agentDisplayName={workspaceLabels[pendingDeleteAgentId] ?? pendingDeleteAgentId}
-        onDeleteStart={() => {
-          setDeletingAgentIds((prev) => new Set([...prev, pendingDeleteAgentId]));
-        }}
-        onSuccess={() => {
-          setDeletingAgentIds((prev) => {
-            const next = new Set(prev);
-            next.delete(pendingDeleteAgentId);
-            return next;
-          });
-          refresh();
-        }}
-        isFirstAgent={pendingDeleteAgentId === "main" || pendingDeleteAgentId === "hermes:__main__"}
-      />
+      <AgentsDataContext.Provider value={dataValue}>
+        <AgentsUIContext.Provider value={uiValue}>
+          {children}
+          <AddAgentDialog
+            open={addAgentDialogOpen}
+            onOpenChange={setAddAgentDialogOpen}
+            existingAgents={agents}
+            onSuccess={(name) => {
+              addOptimisticAgent(name);
+              refreshAfterMutation();
+            }}
+          />
+          <DeleteAgentDialog
+            open={deleteAgentDialogOpen}
+            onOpenChange={setDeleteAgentDialogOpen}
+            agentId={pendingDeleteAgentId}
+            agentDisplayName={workspaceLabels[pendingDeleteAgentId] ?? pendingDeleteAgentId}
+            onDeleteStart={() => {
+              setDeletingAgentIds((prev) => new Set([...prev, pendingDeleteAgentId]));
+            }}
+            onSuccess={() => {
+              setDeletingAgentIds((prev) => {
+                const next = new Set(prev);
+                next.delete(pendingDeleteAgentId);
+                return next;
+              });
+              refresh();
+            }}
+            isFirstAgent={pendingDeleteAgentId === "main" || pendingDeleteAgentId === "__main__"}
+          />
+        </AgentsUIContext.Provider>
+      </AgentsDataContext.Provider>
     </AgentsContext.Provider>
   );
 }

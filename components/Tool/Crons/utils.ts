@@ -182,10 +182,23 @@ export function mapBridgeCronsToJobs(bridgeCrons: BridgeCron[]): OpenClawCronJob
   });
 }
 
-export async function fetchCronsFromBridge(): Promise<OpenClawCronJobJson[]> {
+export interface FetchCronsOptions {
+  /** Filter by agent ID */
+  agentId?: string;
+  /** Filter by runtime */
+  runtime?: string;
+}
+
+export async function fetchCronsFromBridge(options?: FetchCronsOptions): Promise<OpenClawCronJobJson[]> {
+  const { agentId, runtime } = options ?? {};
+
   // Try unified store first (get-all-crons reads from SQLite)
   try {
-    const unified = await bridgeInvoke("get-all-crons");
+    const params: Record<string, string> = {};
+    if (agentId) params.agentId = agentId;
+    if (runtime) params.runtime = runtime;
+
+    const unified = await bridgeInvoke("get-all-crons", params);
     if (Array.isArray(unified) && unified.length > 0) {
       const first = unified[0] as Record<string, unknown>;
       // If response has rawJson, it's from the unified store — parse each job's raw JSON
@@ -202,8 +215,11 @@ export async function fetchCronsFromBridge(): Promise<OpenClawCronJobJson[]> {
       // Fallback: response is already in BridgeCron format (get-all-crons fell through to get-crons)
       return mapBridgeCronsToJobs(unified as BridgeCron[]);
     }
+    // If agentId filter was used and no results, return empty (don't fall back)
+    if (agentId) return [];
   } catch {
-    // Fall through to legacy get-crons
+    // Fall through to legacy get-crons (only if no agentId filter)
+    if (agentId) return [];
   }
 
   const data = await bridgeInvoke("get-crons");

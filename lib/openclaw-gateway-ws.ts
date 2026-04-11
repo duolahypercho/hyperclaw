@@ -116,6 +116,7 @@ export const gatewayConnection = {
   connected: false,
   error: null as string | null,
   reconnectAttempt: 0,
+  permanentlyFailed: false,
   reconnectTimer: null as ReturnType<typeof setTimeout> | null,
   /** Monotonically increasing counter — incremented every time a new WebSocket
    *  is created. Stale onclose/onerror handlers compare their captured
@@ -1037,6 +1038,13 @@ export const gatewayConnection = {
   },
 
   scheduleReconnect() {
+    if (this.permanentlyFailed) return;
+    if (this.reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
+      this.permanentlyFailed = true;
+      if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("gateway:permanently_failed"));
+      console.warn("[gateway-ws] Permanent failure after max reconnect attempts. Call reset() to try again.");
+      return;
+    }
     if (!this.wsUrl || this.reconnectTimer != null) return;
     const delay = RECONNECT_BACKOFF_MS[Math.min(this.reconnectAttempt, RECONNECT_BACKOFF_MS.length - 1)];
     this.reconnectAttempt = Math.min(this.reconnectAttempt + 1, MAX_RECONNECT_ATTEMPTS);
@@ -1103,6 +1111,14 @@ export const gatewayConnection = {
     this._sessionsListInflight = null;
     this._sessionsListCache = null;
     this.setState(false, null);
+  },
+
+  reset(): void {
+    this.permanentlyFailed = false;
+    this.reconnectAttempt = 0;
+    if (this.wsUrl) {
+      this.connect(this.wsUrl);
+    }
   },
 
   /** Prune stale entries from agentDeltaBuffer (entries older than maxAgeMs) */

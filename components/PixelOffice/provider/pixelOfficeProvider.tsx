@@ -197,15 +197,23 @@ export function PixelOfficeProvider({ children }: { children: React.ReactNode })
   const [loading, setLoading] = useState(true);
   const lastTeamSourceRef = useRef<{ teamForBuild: { id: string; name: string; status?: string }[] } | null>(null);
 
+  // Use a ref so runFullRefresh can read the latest agents without capturing them
+  // in its deps — prevents a new callback identity on every context update and
+  // stops the cascade: agents change → runFullRefresh recreates → useEffect fires
+  // → get-employee-status → ResolveTeam() → openclaw CLI spawns.
+  const openClawAgentsRef = useRef(openClawAgents);
+  openClawAgentsRef.current = openClawAgents;
+
   const runFullRefresh = useCallback(async () => {
+    const agents = openClawAgentsRef.current;
     try {
       const data = (await bridgeInvoke("get-employee-status")) as BridgeResponse;
       const employeesRaw = data && typeof data === "object" && "employees" in data ? (data as BridgeResponse).employees : undefined;
       const employees = Array.isArray(employeesRaw) ? employeesRaw : [];
       const hasDataError = !!(data && typeof data === "object" && (data as { error?: string }).error);
       const teamForBuild =
-        openClawAgents.length > 0
-          ? openClawAgents.map((a) => ({ id: a.id, name: a.name, status: a.status }))
+        agents.length > 0
+          ? agents.map((a) => ({ id: a.id, name: a.name, status: a.status }))
           : employees.filter((e) => e && typeof e === "object" && e.id).map((e) => ({ id: e.id, name: e.name ?? e.id, status: (e as BridgeEmployeeStatus).status }));
       lastTeamSourceRef.current = { teamForBuild };
       const built = buildAgentsFromTeam(teamForBuild);
@@ -221,7 +229,7 @@ export function PixelOfficeProvider({ children }: { children: React.ReactNode })
     } finally {
       setLoading(false);
     }
-  }, [openClawAgents]);
+  }, []); // stable identity — reads agents via ref
 
   const runStatusOnlyRefresh = useCallback(async () => {
     const teamSource = lastTeamSourceRef.current?.teamForBuild;
@@ -246,27 +254,57 @@ export function PixelOfficeProvider({ children }: { children: React.ReactNode })
     await runFullRefresh();
   }, [runFullRefresh]);
 
-  // Initial load only — don't re-show loading screen when runFullRefresh identity changes
+  // In-flight guards — prevent concurrent overlapping poll requests.
+  const statusInFlight = useRef(false);
+  const fullRefreshInFlight = useRef(false);
+
+  // Mount-only initial load. runFullRefresh is now stable so this effect runs once.
   const hasLoadedOnce = useRef(false);
   useEffect(() => {
     if (!hasLoadedOnce.current) {
       hasLoadedOnce.current = true;
       setLoading(true);
       runFullRefresh();
-    } else {
-      // openClawAgents changed — do a silent refresh (no loading screen)
-      runFullRefresh();
     }
   }, [runFullRefresh]);
+
+  // When the actual agent roster changes (by ID), do a silent background refresh
+  // so the office reflects new hires/departures without waiting 45s.
+  const agentIdsKey = openClawAgents.map((a) => a.id).join(",");
+  const prevAgentIdsRef = useRef(agentIdsKey);
+  useEffect(() => {
+    if (!hasLoadedOnce.current) return; // initial load handled above
+    if (agentIdsKey === prevAgentIdsRef.current) return;
+    prevAgentIdsRef.current = agentIdsKey;
+    runFullRefresh();
+  }, [agentIdsKey, runFullRefresh]);
 
   useEffect(() => {
     if (loading) return;
     let fullId: ReturnType<typeof setInterval> | null = null;
     let statusId: ReturnType<typeof setInterval> | null = null;
+    const pollStatus = async () => {
+      if (statusInFlight.current) return;
+      statusInFlight.current = true;
+      try {
+        await runStatusOnlyRefresh();
+      } finally {
+        statusInFlight.current = false;
+      }
+    };
+    const pollFull = async () => {
+      if (fullRefreshInFlight.current) return;
+      fullRefreshInFlight.current = true;
+      try {
+        await runFullRefresh();
+      } finally {
+        fullRefreshInFlight.current = false;
+      }
+    };
     const schedule = () => {
       if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
-      if (!fullId) fullId = setInterval(runFullRefresh, FULL_REFRESH_MS);
-      if (!statusId) statusId = setInterval(runStatusOnlyRefresh, STATUS_POLL_MS);
+      if (!fullId) fullId = setInterval(pollFull, FULL_REFRESH_MS);
+      if (!statusId) statusId = setInterval(pollStatus, STATUS_POLL_MS);
     };
     const clear = () => {
       if (fullId) clearInterval(fullId);

@@ -53,10 +53,12 @@ import type { BackendTab } from "./gateway-chat/GatewayChatHeader";
 import AgentStatsTab from "./AgentStatsTab";
 import AgentOverviewTab from "./AgentOverviewTab";
 import { AgentSkillsTab } from "./AgentSkillsTab";
-import { CronsProvider, useCrons } from "$/components/Tool/Crons/provider/cronsProvider";
+import { AgentMcpsTab } from "./AgentMcpsTab";
+// Crons imports - using direct bridge fetch instead of global provider
+import { CronsProvider } from "$/components/Tool/Crons/provider/cronsProvider";
 import { AddCronDialog } from "$/components/Tool/Crons/AddCronDialog";
 import { EditCronDialog } from "$/components/Tool/Crons/EditCronDialog";
-import { getJobPalette, getJobNextRunDate, getStatusColor } from "$/components/Tool/Crons/utils";
+import { getJobPalette, getStatusColor } from "$/components/Tool/Crons/utils";
 import { formatDistanceToNow } from "date-fns";
 import type { OpenClawCronJobJson } from "$/types/electron";
 
@@ -100,40 +102,82 @@ const TAB_FILES = [
 ] as const;
 
 type FileTabKey = (typeof TAB_FILES)[number]["key"];
-type WidgetTab = "CHAT" | "OVERVIEW" | "INFO" | "FILES" | "CRONS" | "SKILLS";
+type WidgetTab = "CHAT" | "OVERVIEW" | "INFO" | "FILES" | "CRONS" | "SKILLS" | "MCPS";
 
 /* ── Agent Crons Tab ──────────────────────────────────────── */
 
-function AgentCronsView({ agentId }: { agentId: string }) {
-  const { jobsForList, parsedCronJobs, bridgeLoading, runningJobIds, cronDelete } = useCrons();
+/**
+ * Fetches and displays cron jobs for a specific agent.
+ * Fetches directly from the bridge with agentId filter instead of using the global CronsProvider.
+ * This ensures we only load crons for this agent.
+ */
+function AgentCronsTab({ agentId, runtime }: { agentId: string; runtime?: string }) {
+  const [jobs, setJobs] = useState<OpenClawCronJobJson[]>([]);
+  const [loading, setLoading] = useState(true);
   const [selectedJob, setSelectedJob] = useState<OpenClawCronJobJson | null>(null);
   const [editOpen, setEditOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [runningJobIds, setRunningJobIds] = useState<string[]>([]);
 
-  const agentJobs = useMemo(() => {
-    const filtered = jobsForList.filter((j) => j.agentId === agentId);
+  // Fetch crons filtered by agentId
+  const fetchAgentCrons = useCallback(async () => {
+    setLoading(true);
+    try {
+      const { fetchCronsFromBridge } = await import("$/components/Tool/Crons/utils");
+      const data = await fetchCronsFromBridge({ agentId });
+      setJobs(data);
+    } catch {
+      setJobs([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [agentId]);
+
+  useEffect(() => {
+    fetchAgentCrons();
+  }, [fetchAgentCrons]);
+
+  // Sort jobs: running first, then by last run time
+  const sortedJobs = useMemo(() => {
     const running: OpenClawCronJobJson[] = [];
     const rest: OpenClawCronJobJson[] = [];
-    for (const j of filtered) {
+    for (const j of jobs) {
       if (runningJobIds.includes(j.id)) running.push(j);
       else rest.push(j);
     }
     rest.sort((a, b) => (b.state?.lastRunAtMs ?? 0) - (a.state?.lastRunAtMs ?? 0));
     return [...running, ...rest];
-  }, [jobsForList, agentId, runningJobIds]);
+  }, [jobs, runningJobIds]);
 
   const handleDelete = useCallback(async (e: React.MouseEvent, jobId: string) => {
     e.stopPropagation();
     setDeletingId(jobId);
     try {
-      await cronDelete(jobId);
+      const { cronDelete } = await import("$/components/Tool/Crons/utils");
+      const result = await cronDelete(jobId);
+      if (result.success) {
+        setJobs((prev) => prev.filter((j) => j.id !== jobId));
+      }
     } finally {
       setDeletingId(null);
     }
-  }, [cronDelete]);
+  }, []);
 
-  if (bridgeLoading && jobsForList.length === 0) {
+  const handleAddSuccess = useCallback(() => {
+    setAddOpen(false);
+    fetchAgentCrons();
+  }, [fetchAgentCrons]);
+
+  const handleEditClose = useCallback((open: boolean) => {
+    setEditOpen(open);
+    if (!open) {
+      setSelectedJob(null);
+      fetchAgentCrons(); // Refresh after edit
+    }
+  }, [fetchAgentCrons]);
+
+  if (loading && jobs.length === 0) {
     return (
       <div className="flex items-center justify-center flex-1 gap-2 py-6">
         <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
@@ -142,18 +186,23 @@ function AgentCronsView({ agentId }: { agentId: string }) {
   }
 
   return (
-    <>
+    <CronsProvider>
       {/* Toolbar */}
       <div className="shrink-0 flex items-center justify-between px-3 py-1.5 border-b border-border/30">
         <span className="text-[10px] text-muted-foreground">
-          {agentJobs.length} job{agentJobs.length !== 1 ? "s" : ""}
+          {sortedJobs.length} job{sortedJobs.length !== 1 ? "s" : ""}
         </span>
-        <Button variant="ghost" size="iconSm" className="h-6 w-6" onClick={() => setAddOpen(true)} title="Add cron job">
-          <Plus className="w-3 h-3" />
-        </Button>
+        <div className="flex items-center gap-1">
+          <Button variant="ghost" size="iconSm" className="h-6 w-6" onClick={fetchAgentCrons} title="Refresh">
+            <RefreshCw className="w-3 h-3" />
+          </Button>
+          <Button variant="ghost" size="iconSm" className="h-6 w-6" onClick={() => setAddOpen(true)} title="Add cron job">
+            <Plus className="w-3 h-3" />
+          </Button>
+        </div>
       </div>
 
-      {agentJobs.length === 0 ? (
+      {sortedJobs.length === 0 ? (
         <div className="flex flex-col items-center justify-center flex-1 gap-2 text-muted-foreground py-6">
           <MessageSquare className="w-7 h-7 opacity-30" />
           <p className="text-xs">No cron jobs for this agent</p>
@@ -165,9 +214,9 @@ function AgentCronsView({ agentId }: { agentId: string }) {
       ) : (
         <div className="flex-1 min-h-0 overflow-y-auto customScrollbar2">
           <div className="space-y-1 px-2 py-2">
-            {agentJobs.map((job, i) => {
-              const nextRun = getJobNextRunDate(job, parsedCronJobs);
-              const nextRunStr = nextRun ? formatDistanceToNow(nextRun, { addSuffix: true }) : "—";
+            {sortedJobs.map((job, i) => {
+              const nextRunMs = job.state?.nextRunAtMs;
+              const nextRunStr = nextRunMs ? formatDistanceToNow(new Date(nextRunMs), { addSuffix: true }) : "—";
               const lastRunMs = job.state?.lastRunAtMs;
               const lastRunStr = lastRunMs ? formatDistanceToNow(new Date(lastRunMs), { addSuffix: true }) : "—";
               const isRunning = runningJobIds.includes(job.id);
@@ -222,21 +271,14 @@ function AgentCronsView({ agentId }: { agentId: string }) {
         open={addOpen}
         onOpenChange={setAddOpen}
         defaultAgent={agentId}
-        onSuccess={() => setAddOpen(false)}
+        defaultRuntime={runtime}
+        onSuccess={handleAddSuccess}
       />
       <EditCronDialog
         job={selectedJob}
         open={editOpen}
-        onOpenChange={(open) => { setEditOpen(open); if (!open) setSelectedJob(null); }}
+        onOpenChange={handleEditClose}
       />
-    </>
-  );
-}
-
-function AgentCronsTab({ agentId }: { agentId: string }) {
-  return (
-    <CronsProvider>
-      <AgentCronsView agentId={agentId} />
     </CronsProvider>
   );
 }
@@ -723,6 +765,17 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
             >
               Skills
             </button>
+            <button
+              onClick={() => setActiveTab("MCPS")}
+              className={cn(
+                "px-2 py-1 text-[10px] font-medium rounded-md transition-all duration-200 shrink-0",
+                activeTab === "MCPS"
+                  ? "border-primary text-foreground bg-primary/5"
+                  : "border-transparent text-muted-foreground hover:text-foreground/70 hover:bg-muted/30"
+              )}
+            >
+              MCPs
+            </button>
           </div>
         </div>
 
@@ -847,7 +900,7 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
           )}
           {activeTab === "CRONS" && (
             <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-              <AgentCronsTab agentId={currentAgentId} />
+              <AgentCronsTab agentId={currentAgentId} runtime={effectiveRuntime} />
             </div>
           )}
 
@@ -858,6 +911,12 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
                 runtime={effectiveRuntime ?? backendTab}
                 projectPath={identity?.project}
               />
+            </div>
+          )}
+
+          {activeTab === "MCPS" && (
+            <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+              <AgentMcpsTab agentId={currentAgentId} runtime={effectiveRuntime} />
             </div>
           )}
 

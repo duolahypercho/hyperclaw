@@ -57,7 +57,9 @@ interface SessionTokenRow {
   lastActivityMs: number;
 }
 
-// Runtimes where token_usage rows are keyed by runtime name, not agent_id
+// Runtimes where the "main" singleton agent stores token_usage rows keyed by
+// runtime name rather than a specific agent_id. Only applies when agentId === runtime
+// (i.e. the dashboard is showing the root agent, not an isolated profile).
 const RUNTIME_ONLY_STATS = new Set(["claude-code", "codex", "hermes"]);
 
 // ── Helpers ──────────────────────────────────────────────────────────────────────
@@ -95,40 +97,64 @@ function fmtDate(ts: number): string {
   });
 }
 
-// ── Mini sparkline bar chart (last 14 days) ─────────────────────────────────���─
+// ── Mini sparkline bar chart (last 14 days) ─────────────────────────────────────
 
 interface DayStat {
   date: string; // YYYY-MM-DD
   count: number;
 }
 
-function MiniBarChart({ data, color = "hsl(var(--primary))" }: { data: DayStat[]; color?: string }) {
+function MiniBarChart({ data, color = "hsl(var(--primary))", height = 32 }: { data: DayStat[]; color?: string; height?: number }) {
   const max = Math.max(...data.map((d) => d.count), 1);
-  const labelDates = [data[0]?.date, data[6]?.date, data[13]?.date].filter(Boolean);
 
   return (
-    <div className="flex flex-col gap-1">
-      <div className="flex items-end gap-0.5 h-8">
-        {data.map((d, i) => {
-          const h = Math.max((d.count / max) * 32, d.count > 0 ? 2 : 0);
-          return (
-            <div
-              key={i}
-              className="flex-1 rounded-sm transition-all"
-              style={{ height: `${h}px`, background: d.count > 0 ? color : "hsl(var(--muted))" }}
-              title={`${d.date}: ${d.count}`}
-            />
-          );
-        })}
-      </div>
-      <div className="flex justify-between">
-        {labelDates.map((d, i) => (
-          <span key={i} className="text-[9px] text-muted-foreground/50">
-            {new Date(d + "T00:00:00").toLocaleDateString("en-US", { month: "numeric", day: "numeric" })}
-          </span>
-        ))}
-      </div>
+    <div className="flex items-end gap-0.5" style={{ height: `${height}px` }}>
+      {data.map((d, i) => {
+        const h = Math.max((d.count / max) * height, d.count > 0 ? 2 : 0);
+        return (
+          <div
+            key={i}
+            className="flex-1 rounded-sm transition-all"
+            style={{ height: `${h}px`, background: d.count > 0 ? color : "hsl(var(--muted))" }}
+            title={`${d.date}: ${d.count}`}
+          />
+        );
+      })}
     </div>
+  );
+}
+
+// ── Donut/Ring chart for percentages ────────────────────────────────────────────
+
+function MiniDonut({ value, color = "hsl(var(--primary))", size = 32 }: { value: number; color?: string; size?: number }) {
+  const strokeWidth = 4;
+  const radius = (size - strokeWidth) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const offset = circumference - (value / 100) * circumference;
+
+  return (
+    <svg width={size} height={size} className="transform -rotate-90">
+      <circle
+        cx={size / 2}
+        cy={size / 2}
+        r={radius}
+        fill="none"
+        stroke="hsl(var(--muted))"
+        strokeWidth={strokeWidth}
+      />
+      <circle
+        cx={size / 2}
+        cy={size / 2}
+        r={radius}
+        fill="none"
+        stroke={color}
+        strokeWidth={strokeWidth}
+        strokeDasharray={circumference}
+        strokeDashoffset={offset}
+        strokeLinecap="round"
+        className="transition-all duration-500"
+      />
+    </svg>
   );
 }
 
@@ -169,7 +195,7 @@ function CronsSummaryInner({ agentId }: { agentId: string }) {
           return (
             <div
               key={job.id}
-              className="flex items-start gap-2 px-2.5 py-1.5 rounded-md bg-muted/10 border border-border/30 text-[11px]"
+              className="flex items-start gap-2 px-2.5 py-1.5 rounded-md border border-solid border-border text-[11px]"
             >
               <span
                 className={cn(
@@ -242,10 +268,11 @@ export default function AgentOverviewTab({
     try {
       const to = Date.now();
       const from = to - 30 * 24 * 60 * 60 * 1000;
-      // runtime-only agents use runtime as the query key instead of agentId
-      const statsAgentId = agentRuntime && RUNTIME_ONLY_STATS.has(agentRuntime)
-        ? agentRuntime
-        : agentId;
+      // Only fall back to runtime-keyed query for the root singleton agent
+      // (agentId equals the runtime name). Isolated profile agents have their
+      // own agentId and must be queried directly.
+      const isRootRuntimeAgent = agentRuntime && RUNTIME_ONLY_STATS.has(agentRuntime) && agentId === agentRuntime;
+      const statsAgentId = isRootRuntimeAgent ? agentRuntime : agentId;
       const res = await (bridgeInvoke("get-agent-stats", { agentId: statsAgentId, from, to }) as Promise<{
         success?: boolean;
         data?: AgentStats;
@@ -258,14 +285,14 @@ export default function AgentOverviewTab({
     }
   }, [agentId, agentRuntime]);
 
-  // ── Fetch per-session token usage (last 14 days) ──────────────────────────
+  // ── Fetch per-session token usage (last 30 days, matches stats window) ────
 
   const fetchSessionUsage = useCallback(async () => {
     try {
       const to = Date.now();
-      const from = to - 14 * 24 * 60 * 60 * 1000;
-      const isRuntimeOnly = agentRuntime && RUNTIME_ONLY_STATS.has(agentRuntime);
-      const params = isRuntimeOnly
+      const from = to - 30 * 24 * 60 * 60 * 1000;
+      const isRootRuntimeAgent = agentRuntime && RUNTIME_ONLY_STATS.has(agentRuntime) && agentId === agentRuntime;
+      const params = isRootRuntimeAgent
         ? { runtime: agentRuntime, groupBy: "session", from, to }
         : { agentId, groupBy: "session", from, to };
       const res = await (bridgeInvoke("get-token-usage", params) as Promise<{
@@ -344,16 +371,31 @@ export default function AgentOverviewTab({
     return showAllRuns ? rows : rows.slice(0, 10);
   }, [sessionTokenUsage, showAllRuns]);
 
-  // Totals from stats (primary) or summed from sessionUsage (fallback)
+  // Issue metrics (derived from session statuses)
+  const issueMetrics = useMemo(() => {
+    const recent14Days = sessions.filter((s) => s.updatedAt && (Date.now() - s.updatedAt) < 14 * 86400_000);
+    const total = recent14Days.length;
+    if (total === 0) return { byPriority: { high: 0, medium: 0, low: 0 }, byStandards: 0 };
+
+    // Derive "issues" from error/failed statuses
+    const errors = recent14Days.filter((s) =>
+      s.status === "error" || s.status === "failed" || s.status === "aborted"
+    );
+    // Mock priority distribution based on status
+    return {
+      byPriority: {
+        high: errors.filter((s) => s.status === "error").length,
+        medium: errors.filter((s) => s.status === "failed").length,
+        low: errors.filter((s) => s.status === "aborted").length,
+      },
+      byStandards: Math.round((errors.length / Math.max(total, 1)) * 100),
+    };
+  }, [sessions]);
+
+  // Totals always computed from per-session rows so they are scoped to the
+  // current agent. The aggregate stats endpoint can return broader data when
+  // agent_id attribution doesn't match — summing "sections" is authoritative.
   const costTotals = useMemo(() => {
-    if (stats) {
-      return {
-        inputTokens: stats.inputTokens,
-        outputTokens: stats.outputTokens,
-        cacheReadTokens: stats.cacheReadTokens ?? 0,
-        totalCostUsd: stats.totalCostUsd,
-      };
-    }
     return sessionTokenUsage.reduce(
       (acc, r) => ({
         inputTokens: acc.inputTokens + r.inputTokens,
@@ -363,13 +405,81 @@ export default function AgentOverviewTab({
       }),
       { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, totalCostUsd: 0 }
     );
-  }, [stats, sessionTokenUsage]);
+  }, [sessionTokenUsage]);
 
   const recentSessions = useMemo(() => sessions.slice(0, 5), [sessions]);
   const hasRunData = sessionTokenUsage.length > 0;
 
+  const totalRuns14d = activityData.reduce((sum, d) => sum + d.count, 0);
+  const totalIssues = issueMetrics.byPriority.high + issueMetrics.byPriority.medium + issueMetrics.byPriority.low;
+
   return (
     <div className="flex flex-col gap-3">
+
+      {/* ── Metrics Row: Run Activity, Issue by Priority, Issue by Standards, Success Rate ── */}
+      <div className="grid grid-cols-4 gap-2">
+        {/* Run Activity */}
+        <div className="flex flex-col gap-1.5 rounded-md border border-solid border-border px-2.5 py-2">
+          <div className="flex items-center justify-between">
+            <span className="text-[9px] text-muted-foreground/60 uppercase tracking-wide">Run Activity</span>
+            <span className="text-[10px] font-semibold tabular-nums">{totalRuns14d}</span>
+          </div>
+          <MiniBarChart data={activityData} height={24} />
+        </div>
+
+        {/* Issue by Priority */}
+        <div className="flex flex-col gap-1.5 rounded-md border border-solid border-border px-2.5 py-2">
+          <div className="flex items-center justify-between">
+            <span className="text-[9px] text-muted-foreground/60 uppercase tracking-wide">By Priority</span>
+            <span className="text-[10px] font-semibold tabular-nums">{totalIssues}</span>
+          </div>
+          <div className="flex items-end gap-1 h-6">
+            <div className="flex-1 flex flex-col items-center gap-0.5">
+              <div
+                className="w-full rounded-sm bg-destructive/70"
+                style={{ height: Math.max(issueMetrics.byPriority.high > 0 ? 4 : 0, Math.min((issueMetrics.byPriority.high / Math.max(totalIssues, 1)) * 24, 24)) }}
+              />
+              <span className="text-[8px] text-muted-foreground/50">H</span>
+            </div>
+            <div className="flex-1 flex flex-col items-center gap-0.5">
+              <div
+                className="w-full rounded-sm bg-amber-500/70"
+                style={{ height: Math.max(issueMetrics.byPriority.medium > 0 ? 4 : 0, Math.min((issueMetrics.byPriority.medium / Math.max(totalIssues, 1)) * 24, 24)) }}
+              />
+              <span className="text-[8px] text-muted-foreground/50">M</span>
+            </div>
+            <div className="flex-1 flex flex-col items-center gap-0.5">
+              <div
+                className="w-full rounded-sm bg-muted-foreground/40"
+                style={{ height: Math.max(issueMetrics.byPriority.low > 0 ? 4 : 0, Math.min((issueMetrics.byPriority.low / Math.max(totalIssues, 1)) * 24, 24)) }}
+              />
+              <span className="text-[8px] text-muted-foreground/50">L</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Issue by Standards */}
+        <div className="flex flex-col gap-1.5 rounded-md border border-solid border-border px-2.5 py-2">
+          <div className="flex items-center justify-between">
+            <span className="text-[9px] text-muted-foreground/60 uppercase tracking-wide">Error Rate</span>
+            <span className="text-[10px] font-semibold tabular-nums">{issueMetrics.byStandards}%</span>
+          </div>
+          <div className="flex items-center justify-center h-6">
+            <MiniDonut value={issueMetrics.byStandards} color="hsl(var(--destructive))" size={24} />
+          </div>
+        </div>
+
+        {/* Success Rate */}
+        <div className="flex flex-col gap-1.5 rounded-md border border-solid border-border px-2.5 py-2">
+          <div className="flex items-center justify-between">
+            <span className="text-[9px] text-muted-foreground/60 uppercase tracking-wide">Success Rate</span>
+            <span className="text-[10px] font-semibold tabular-nums text-emerald-500">{successRate ?? 0}%</span>
+          </div>
+          <div className="flex items-center justify-center h-6">
+            <MiniDonut value={successRate ?? 0} color="hsl(142, 71%, 45%)" size={24} />
+          </div>
+        </div>
+      </div>
 
       {/* ── Latest Run ── */}
       {latestSession && (
@@ -385,7 +495,7 @@ export default function AgentOverviewTab({
             </button>
           </div>
           <div
-            className="px-2.5 py-2 rounded-md bg-muted/10 border border-border/30 cursor-pointer hover:bg-muted/25 transition-colors"
+            className="px-2.5 py-2 rounded-md border border-solid border-border cursor-pointer hover:bg-muted/10 transition-colors"
             onClick={() => onOpenSession(latestSession.key)}
           >
             <div className="flex items-center gap-2 mb-1">
@@ -433,15 +543,6 @@ export default function AgentOverviewTab({
         </div>
       )}
 
-      {/* ── Run Activity (last 14 days) ── */}
-      <div className="space-y-1.5">
-        <div className="flex items-center justify-between px-0.5">
-          <SectionLabel>Run Activity</SectionLabel>
-          <span className="text-[9px] text-muted-foreground/40">Last 14 days</span>
-        </div>
-        <MiniBarChart data={activityData} />
-      </div>
-
       {/* ── Stats row ── */}
       <div className="space-y-1.5">
         <SectionLabel>Last 30 days</SectionLabel>
@@ -450,34 +551,34 @@ export default function AgentOverviewTab({
             {[1, 2, 3].map((i) => (
               <div
                 key={i}
-                className="h-14 flex-1 rounded-lg border border-border/40 bg-muted/10 animate-pulse"
+                className="h-14 flex-1 rounded-lg border border-solid border-border animate-pulse"
               />
             ))}
           </div>
         ) : (
           <div className="flex gap-2">
-            <div className="flex flex-col gap-0.5 rounded-lg border border-border/50 bg-muted/20 px-2.5 py-2 min-w-0 flex-1">
+            <div className="flex flex-col gap-0.5 rounded-lg border border-solid border-border px-2.5 py-2 min-w-0 flex-1">
               <div className="flex items-center gap-1">
                 <DollarSign className="h-3 w-3 shrink-0 text-muted-foreground" />
                 <span className="text-[9px] text-muted-foreground truncate leading-none uppercase tracking-wide">Cost</span>
               </div>
-              <span className="text-sm font-semibold tabular-nums leading-tight">{fmtCost(stats?.totalCostUsd ?? 0)}</span>
+              <span className="text-sm font-semibold tabular-nums leading-tight">{fmtCost(costTotals.totalCostUsd)}</span>
             </div>
-            <div className="flex flex-col gap-0.5 rounded-lg border border-border/50 bg-muted/20 px-2.5 py-2 min-w-0 flex-1">
+            <div className="flex flex-col gap-0.5 rounded-lg border border-solid border-border px-2.5 py-2 min-w-0 flex-1">
               <div className="flex items-center gap-1">
                 <Hash className="h-3 w-3 shrink-0 text-muted-foreground" />
                 <span className="text-[9px] text-muted-foreground truncate leading-none uppercase tracking-wide">Tokens</span>
               </div>
               <span className="text-sm font-semibold tabular-nums leading-tight">
-                {fmt((stats?.inputTokens ?? 0) + (stats?.outputTokens ?? 0))}
+                {fmt(costTotals.inputTokens + costTotals.outputTokens)}
               </span>
-              {stats && (
+              {(costTotals.inputTokens > 0 || costTotals.outputTokens > 0) && (
                 <span className="text-[9px] text-muted-foreground/60 leading-none">
-                  {fmt(stats.inputTokens)} in · {fmt(stats.outputTokens)} out
+                  {fmt(costTotals.inputTokens)} in · {fmt(costTotals.outputTokens)} out
                 </span>
               )}
             </div>
-            <div className="flex flex-col gap-0.5 rounded-lg border border-border/50 bg-muted/20 px-2.5 py-2 min-w-0 flex-1">
+            <div className="flex flex-col gap-0.5 rounded-lg border border-solid border-border px-2.5 py-2 min-w-0 flex-1">
               <div className="flex items-center gap-1">
                 <Layers className="h-3 w-3 shrink-0 text-muted-foreground" />
                 <span className="text-[9px] text-muted-foreground truncate leading-none uppercase tracking-wide">Sessions</span>
@@ -507,7 +608,7 @@ export default function AgentOverviewTab({
         {sessionsLoading ? (
           <div className="space-y-1">
             {[1, 2, 3].map((i) => (
-              <div key={i} className="h-8 rounded-md border border-border/30 bg-muted/10 animate-pulse" />
+              <div key={i} className="h-8 rounded-md border border-solid border-border animate-pulse" />
             ))}
           </div>
         ) : recentSessions.length === 0 ? (
@@ -534,7 +635,7 @@ export default function AgentOverviewTab({
                 <button
                   key={s.key}
                   onClick={() => onOpenSession(s.key)}
-                  className="flex items-start gap-2 w-full px-2.5 py-2 rounded-md bg-muted/10 border border-border/30 hover:bg-muted/25 transition-colors text-left"
+                  className="flex items-start gap-2 w-full px-2.5 py-2 rounded-md border border-solid border-border hover:bg-muted/10 transition-colors text-left"
                 >
                   <div className="shrink-0 w-3 flex items-center justify-center mt-1">
                     {isActive ? (
@@ -599,19 +700,19 @@ export default function AgentOverviewTab({
 
         {/* Token totals grid */}
         <div className="grid grid-cols-2 gap-1.5">
-          <div className="flex flex-col gap-0.5 px-2.5 py-2 rounded-md bg-muted/10 border border-border/30">
+          <div className="flex flex-col gap-0.5 px-2.5 py-2 rounded-md border border-solid border-border">
             <span className="text-[9px] text-muted-foreground/60 uppercase tracking-wide">Input tokens</span>
             <span className="text-xs font-semibold tabular-nums">{fmt(costTotals.inputTokens)}</span>
           </div>
-          <div className="flex flex-col gap-0.5 px-2.5 py-2 rounded-md bg-muted/10 border border-border/30">
+          <div className="flex flex-col gap-0.5 px-2.5 py-2 rounded-md border border-solid border-border">
             <span className="text-[9px] text-muted-foreground/60 uppercase tracking-wide">Output tokens</span>
             <span className="text-xs font-semibold tabular-nums">{fmt(costTotals.outputTokens)}</span>
           </div>
-          <div className="flex flex-col gap-0.5 px-2.5 py-2 rounded-md bg-muted/10 border border-border/30">
+          <div className="flex flex-col gap-0.5 px-2.5 py-2 rounded-md border border-solid border-border">
             <span className="text-[9px] text-muted-foreground/60 uppercase tracking-wide">Cached tokens</span>
             <span className="text-xs font-semibold tabular-nums">{fmt(costTotals.cacheReadTokens)}</span>
           </div>
-          <div className="flex flex-col gap-0.5 px-2.5 py-2 rounded-md bg-muted/10 border border-border/30">
+          <div className="flex flex-col gap-0.5 px-2.5 py-2 rounded-md border border-solid border-border">
             <span className="text-[9px] text-muted-foreground/60 uppercase tracking-wide">Total cost</span>
             <span className="text-xs font-semibold tabular-nums text-primary">{fmtCost(costTotals.totalCostUsd)}</span>
           </div>
@@ -619,9 +720,9 @@ export default function AgentOverviewTab({
 
         {/* Per-run table */}
         {hasRunData && (
-          <div className="rounded-md border border-border/30 overflow-hidden">
+          <div className="rounded-md border border-solid border-border overflow-hidden">
             {/* Table header */}
-            <div className="grid grid-cols-[1fr_auto_auto_auto] gap-x-2 px-2.5 py-1.5 bg-muted/20 border-b border-border/20">
+            <div className="grid grid-cols-[1fr_auto_auto_auto] gap-x-2 px-2.5 py-1.5 border-b border-border/40">
               <span className="text-[9px] text-muted-foreground/60 uppercase tracking-wide">Date</span>
               <span className="text-[9px] text-muted-foreground/60 uppercase tracking-wide text-right">Input</span>
               <span className="text-[9px] text-muted-foreground/60 uppercase tracking-wide text-right">Output</span>
@@ -629,11 +730,11 @@ export default function AgentOverviewTab({
             </div>
 
             {/* Table rows */}
-            <div className="divide-y divide-border/20">
+            <div className="divide-y divide-border/40">
               {runRows.map((row) => (
                 <div
                   key={row.groupKey}
-                  className="grid grid-cols-[1fr_auto_auto_auto] gap-x-2 px-2.5 py-1.5 hover:bg-muted/10 transition-colors"
+                  className="grid grid-cols-[1fr_auto_auto_auto] gap-x-2 px-2.5 py-1.5 hover:bg-muted/5 transition-colors"
                 >
                   <div className="min-w-0 flex flex-col gap-0.5">
                     <span className="text-[10px] text-foreground/70 truncate">
@@ -663,7 +764,7 @@ export default function AgentOverviewTab({
             {sessionTokenUsage.length > 10 && (
               <button
                 onClick={() => setShowAllRuns((v) => !v)}
-                className="w-full flex items-center justify-center gap-1 py-1.5 text-[10px] text-muted-foreground/50 hover:text-foreground/60 border-t border-border/20 transition-colors"
+                className="w-full flex items-center justify-center gap-1 py-1.5 text-[10px] text-muted-foreground/50 hover:text-foreground/60 border-t border-border/40 transition-colors"
               >
                 {showAllRuns
                   ? "Show less"

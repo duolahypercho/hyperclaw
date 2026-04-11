@@ -31,6 +31,8 @@ export interface AddCronDialogProps {
   onOpenChange: (open: boolean) => void;
   onSuccess?: () => void;
   defaultAgent?: string;
+  /** Default runtime (openclaw, claude-code, codex, hermes) */
+  defaultRuntime?: string;
 }
 
 type ScheduleType = "one-shot" | "recurring";
@@ -59,7 +61,7 @@ interface AgentOption {
 
 const AGENT_NONE = "__none__";
 
-export function AddCronDialog({ open, onOpenChange, onSuccess, defaultAgent }: AddCronDialogProps) {
+export function AddCronDialog({ open, onOpenChange, onSuccess, defaultAgent, defaultRuntime }: AddCronDialogProps) {
   const { cronAdd } = useCronsActions();
   const { agents: openClawAgents } = useHyperclawContext();
   const [name, setName] = useState("");
@@ -68,7 +70,7 @@ export function AddCronDialog({ open, onOpenChange, onSuccess, defaultAgent }: A
   const [atCustom, setAtCustom] = useState("");
   const [cronPreset, setCronPreset] = useState<string>("0 7 * * *");
   const [cronCustom, setCronCustom] = useState("");
-  const [runtime, setRuntime] = useState<string>("openclaw");
+  const [runtime, setRuntime] = useState<string>(defaultRuntime ?? "openclaw");
   const [model, setModel] = useState("");
   const [session, setSession] = useState<"main" | "isolated">("isolated");
   const [prompt, setPrompt] = useState("");
@@ -89,14 +91,14 @@ export function AddCronDialog({ open, onOpenChange, onSuccess, defaultAgent }: A
     setAtCustom("");
     setCronPreset("0 7 * * *");
     setCronCustom("");
-    setRuntime("openclaw");
+    setRuntime(defaultRuntime ?? "openclaw");
     setModel("");
     setSession("main");
     setPrompt("");
     setDeleteAfterRun(false);
     setError(null);
     setAgent(defaultAgent ?? "");
-  }, [defaultAgent]);
+  }, [defaultAgent, defaultRuntime]);
 
   // Sync agents from context
   useEffect(() => {

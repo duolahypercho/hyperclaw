@@ -32,7 +32,7 @@ import {
   syncToIdentityMd,
 } from "$/lib/identity-md";
 import { patchIdentityCache } from "$/hooks/useAgentIdentity";
-import { OpenClawIcon, ClaudeCodeIcon, CodexIcon, HermesIcon } from "$/components/Onboarding/RuntimeIcons";
+import { OpenClawIcon, HermesIcon } from "$/components/Onboarding/RuntimeIcons";
 
 /* ── Runtime definitions ─────────────────────────────────────────── */
 
@@ -43,24 +43,14 @@ type RuntimeOption = {
   idNote: string;
 };
 
+// Only OpenClaw and Hermes are standalone agent platforms.
+// Claude Code and Codex are coding tools/runtimes, not agents.
 const RUNTIMES: RuntimeOption[] = [
   {
     id: "openclaw",
     label: "OpenClaw",
     description: "Multi-channel gateway (WhatsApp, Slack, Discord…)",
     idNote: "Letters, numbers, underscores, hyphens, dots only.",
-  },
-  {
-    id: "claude-code",
-    label: "Claude Code",
-    description: "Anthropic Claude via CLI — runs locally",
-    idNote: "Used as the project folder name.",
-  },
-  {
-    id: "codex",
-    label: "Codex",
-    description: "OpenAI Codex CLI agent",
-    idNote: "Used as the session folder name.",
   },
   {
     id: "hermes",
@@ -71,17 +61,13 @@ const RUNTIMES: RuntimeOption[] = [
 ];
 
 const RUNTIME_ICONS: Record<string, React.ReactNode> = {
-  "openclaw":    <OpenClawIcon className="w-5 h-5" />,
-  "claude-code": <ClaudeCodeIcon className="w-5 h-5" />,
-  "codex":       <CodexIcon className="w-5 h-5" />,
-  "hermes":      <HermesIcon className="w-5 h-5" />,
+  "openclaw": <OpenClawIcon className="w-5 h-5" />,
+  "hermes":   <HermesIcon className="w-5 h-5" />,
 };
 
 const RUNTIME_ICONS_LG: Record<string, React.ReactNode> = {
-  "openclaw":    <OpenClawIcon className="w-6 h-6" />,
-  "claude-code": <ClaudeCodeIcon className="w-6 h-6" />,
-  "codex":       <CodexIcon className="w-6 h-6" />,
-  "hermes":      <HermesIcon className="w-6 h-6" />,
+  "openclaw": <OpenClawIcon className="w-6 h-6" />,
+  "hermes":   <HermesIcon className="w-6 h-6" />,
 };
 
 const EMOJI_OPTIONS = [
@@ -100,27 +86,38 @@ function toSlug(name: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
-/* ── IDENTITY.md builder ─────────────────────────────────────────── */
+/* ── Personality file builders ───────────────────────────────────── */
 
+// OpenClaw: IDENTITY.md with metadata fields
 function buildIdentityMd(opts: {
   name: string;
   emoji: string;
   role: string;
   description: string;
-  runtime?: string;
-  projectPath?: string;
 }): string {
   const lines: string[] = [];
   lines.push(`- **Name:** ${opts.name}`);
   if (opts.emoji) lines.push(`- **Emoji:** ${opts.emoji}`);
   if (opts.role.trim()) lines.push(`- **Role:** ${opts.role.trim()}`);
-  if (opts.runtime) lines.push(`- **Runtime:** ${opts.runtime}`);
-  if (opts.projectPath?.trim()) lines.push(`- **Project:** ${opts.projectPath.trim()}`);
   const header = lines.join("\n");
   if (opts.description.trim()) {
     return `${header}\n\n---\n\n${opts.description.trim()}\n`;
   }
   return `${header}\n`;
+}
+
+// Hermes: SOUL.md with name as H1 header and description as body
+function buildSoulMd(opts: {
+  name: string;
+  description: string;
+}): string {
+  const lines: string[] = [];
+  lines.push(`# ${opts.name}`);
+  if (opts.description.trim()) {
+    lines.push("");
+    lines.push(opts.description.trim());
+  }
+  return lines.join("\n") + "\n";
 }
 
 /* ── Props ───────────────────────────────────────────────────────── */
@@ -144,8 +141,6 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess, existingAgents =
   const [description, setDescription] = useState("");
   const [model, setModel] = useState("__default__");
   const [availableModels, setAvailableModels] = useState<string[]>([]);
-  const [projectPath, setProjectPath] = useState("");
-  const [availableProjects, setAvailableProjects] = useState<Array<{ dirName: string; projectPath: string; sessionCount: number }>>([]);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -164,16 +159,6 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess, existingAgents =
       if (config) setAvailableModels(getAvailableModels(config));
     });
   }, [open]);
-
-  // Fetch available claude-code projects when runtime switches to claude-code
-  useEffect(() => {
-    if (!open || selectedRuntime !== "claude-code") return;
-    bridgeInvoke("claude-code-list-projects", {})
-      .then((r: any) => {
-        setAvailableProjects(r?.projects || []);
-      })
-      .catch(() => setAvailableProjects([]));
-  }, [open, selectedRuntime]);
 
   const handleImageSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -203,8 +188,6 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess, existingAgents =
     setRole("");
     setDescription("");
     setModel("__default__");
-    setProjectPath("");
-    setAvailableProjects([]);
     setAvailableModels([]);
     setError(null);
     setSelectedRuntime("openclaw");
@@ -235,10 +218,9 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess, existingAgents =
         return a.runtime === "openclaw" && a.id === id;
       }
       if (selectedRuntime === "hermes") {
-        return a.runtime === "hermes" && (a.id === `hermes:${id}` || a.id === id);
+        return a.runtime === "hermes" && a.id === id;
       }
-      // claude-code / codex: compare by name (case-insensitive) within same runtime
-      return a.runtime === selectedRuntime && a.name.toLowerCase() === name.toLowerCase();
+      return false;
     });
     if (isDuplicate) {
       setError(`An agent named "${name}" already exists in ${runtime.label}`);
@@ -261,7 +243,12 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess, existingAgents =
     handleOpenChange(false);
 
     // Fire bridge calls in the background.
-    const identityContent = buildIdentityMd({ name, emoji: activeEmoji, role, description, runtime: selectedRuntime, projectPath: selectedRuntime === "claude-code" ? projectPath : undefined });
+    // Build the appropriate personality file based on runtime:
+    // - OpenClaw: IDENTITY.md with metadata fields
+    // - Hermes: SOUL.md with name as header
+    const personalityContent = selectedRuntime === "hermes"
+      ? buildSoulMd({ name, description })
+      : buildIdentityMd({ name, emoji: activeEmoji, role, description });
 
     const run = async () => {
       try {
@@ -273,19 +260,28 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess, existingAgents =
             const folder = resolveAgentFolder(id);
             await bridgeInvoke("write-openclaw-doc", {
               relativePath: `${folder}/IDENTITY.md`,
-              content: identityContent,
+              content: personalityContent,
             });
             if (model && model !== "__default__") {
               await saveAgentModel(id, model);
             }
           }
+        } else if (selectedRuntime === "hermes") {
+          // Hermes: use setup-agent with soul content instead of identity
+          result = (await bridgeInvoke("setup-agent", {
+            agentId: id,
+            runtime: "hermes",
+            name,
+            emoji: activeEmoji,
+            soul: personalityContent,
+          })) as typeof result;
         } else {
           result = (await bridgeInvoke("setup-agent", {
             agentId: id,
             runtime: selectedRuntime,
             name,
             emoji: activeEmoji,
-            identity: identityContent,
+            identity: personalityContent,
           })) as typeof result;
         }
 
@@ -318,7 +314,7 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess, existingAgents =
     };
 
     run();
-  }, [displayName, selectedRuntime, activeEmoji, avatarDataUri, role, description, model, projectPath, onSuccess, handleOpenChange]);
+  }, [displayName, selectedRuntime, activeEmoji, avatarDataUri, role, description, model, onSuccess, handleOpenChange, existingAgents, runtime.label]);
 
   return (
     <Sheet open={open} onOpenChange={handleOpenChange}>
@@ -526,41 +522,6 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess, existingAgents =
               disabled={false}
             />
           </div>
-
-          {/* Project path (claude-code only — scopes session history) */}
-          {selectedRuntime === "claude-code" && (
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <Label className="text-xs uppercase tracking-wider text-muted-foreground">Project</Label>
-                <span className="text-xs text-muted-foreground/50">optional</span>
-              </div>
-              {availableProjects.length > 0 ? (
-                <Select value={projectPath || "__none__"} onValueChange={(v) => setProjectPath(v === "__none__" ? "" : v)}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select a project…" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none__">— No project filter —</SelectItem>
-                    {availableProjects.map((p) => (
-                      <SelectItem key={p.dirName} value={p.projectPath}>
-                        <span className="font-mono text-xs truncate">{p.projectPath}</span>
-                        {p.sessionCount > 0 && (
-                          <span className="ml-2 text-muted-foreground text-[10px]">{p.sessionCount} sessions</span>
-                        )}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              ) : (
-                <Input
-                  placeholder="e.g. /Users/you/my-project"
-                  value={projectPath}
-                  onChange={(e) => setProjectPath(e.target.value)}
-                />
-              )}
-              <p className="text-[10px] text-muted-foreground">Only sessions from this project will appear in the inbox.</p>
-            </div>
-          )}
 
           {/* Model (OpenClaw only — stored in openclaw.json) */}
           {selectedRuntime === "openclaw" && availableModels.length > 0 && (
