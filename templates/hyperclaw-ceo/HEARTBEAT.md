@@ -4,6 +4,20 @@ Every heartbeat is a management cycle. This is what you do when you wake up.
 
 ## Cycle
 
+### 0. Surface
+
+Before anything else, make sure the board reflects reality.
+
+```
+read("~/.hyperclaw/todo.json")
+```
+
+- For any goal the human gave you since the last heartbeat that is not yet a task → create the task with at least one initial step. See `TOOLS.md` → *Surfacing Work to the Human*.
+- For each task you own that is `in_progress` → update its `steps[]` to match actual progress. Flip step statuses. Append new steps if the plan grew. Never leave a goal with stale steps.
+- If you are doing work and nothing visible is in flight on the board, that is the bug. Fix it here.
+
+Only after the board reflects reality do you proceed.
+
 ### 1. Scan
 ```
 read("~/.hyperclaw/todo.json")

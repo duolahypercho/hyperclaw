@@ -11,15 +11,21 @@ Skills define _how_ tools work. This file is for _your_ specifics — what you u
 {
   "tasks": [
     {
-      "id": "69c718...",
-      "title": "Implement auth endpoint",
-      "description": "JWT-based auth with refresh tokens",
-      "agent": "atlas",
+      "_id": "69c718...",
+      "title": "Research top 10 competitors for Hypercho",
+      "description": "User-assigned research goal. Output: markdown report.",
+      "assignedAgentId": "clio",
+      "assignedAgent": "Clio",
       "status": "in_progress",
-      "priority": "high",
-      "data": { "kind": "engineering", "external_id": "...", "sessionKey": "..." },
-      "createdAt": "2026-03-28T00:00:00Z",
-      "updatedAt": "2026-03-28T00:00:00Z"
+      "listId": "default",
+      "order": 0,
+      "steps": [
+        { "_id": "s1", "title": "Collect candidate list from Crunchbase + G2", "status": "completed" },
+        { "_id": "s2", "title": "Pull pricing + positioning for each", "status": "in_progress" },
+        { "_id": "s3", "title": "Draft comparison matrix",            "status": "pending" }
+      ],
+      "createdAt": "2026-04-16T00:00:00Z",
+      "updatedAt": "2026-04-16T00:00:00Z"
     }
   ],
   "lists": [],
@@ -29,9 +35,43 @@ Skills define _how_ tools work. This file is for _your_ specifics — what you u
 
 **Read it:** `read(file_path="~/.hyperclaw/todo.json")`
 
-**Task statuses:** `backlog`, `todo`, `in_progress`, `in_review`, `completed`, `blocked`
+**Task statuses:** `pending`, `in_progress`, `blocked`, `completed`, `cancelled`
+**Step statuses:** `pending`, `in_progress`, `blocked`, `completed`, `cancelled`
 
 **Task priorities:** `critical`, `high`, `medium`, `low`
+
+---
+
+### Surfacing Work to the Human (Producer Contract)
+
+The kanban board the human sees is just `~/.hyperclaw/todo.json` rendered. If you do work without writing here, the board is empty and the human thinks nothing is happening. **That is the worst outcome.** You are the producer. Write.
+
+**Primitive: Goal → Steps.** A `task` is a goal. Its `steps[]` is the plan. Recurrence is a task attribute. There are no other primitives. Do not ask for more.
+
+#### When the human gives you a goal
+
+1. **Create the task immediately** (before you start working). Title = the goal in one line. Description = what "done" looks like. `status: "pending"`. `assignedAgentId` = whoever will own it (you, or a sub-agent).
+2. **Append steps as you plan them.** Do not plan the whole thing silently and then dump 10 steps. Add steps as they become real. Each step is one verb-led action the human can read in under 3 seconds.
+3. **Update step status as you progress.** `pending → in_progress → completed`. Flip on every state change, not at the end.
+4. **Mark the task complete** when every step is `completed` (or explicitly `cancelled`). Set task `status: "completed"` and `finishedAt`.
+
+#### How to write (read/modify/write loop)
+
+```
+1. data = read("~/.hyperclaw/todo.json")
+2. parse, mutate one task or steps array
+3. write("~/.hyperclaw/todo.json", stringify(data))
+```
+
+Always round-trip the full file. Do not truncate lists or tasks you did not touch. Preserve `_id` values exactly.
+
+#### Rules
+
+- **Every user-given goal gets a task within one heartbeat.** No exceptions.
+- **Steps are for the human, not for you.** Write them in plain language, not internal ids. "Pull pricing for each candidate" not "exec step_2a".
+- **No empty-shell tasks.** If you create a task, append at least one initial step in the same write. An unsteppable task is a lie.
+- **Do not delete steps** once written. Mark them `cancelled` with a one-line reason in the step title suffix if you change plan.
+- **If a sub-agent owns the work**, still write the steps here. The human reads this file, not the sub-agent's workspace.
 
 ### Agent-to-Agent Communication
 
