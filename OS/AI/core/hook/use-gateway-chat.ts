@@ -8,6 +8,7 @@ import {
   subscribeGatewayConnection,
   gatewayConnection,
   probeGatewayHealth,
+  resolveMergedStreamText,
 } from "$/lib/openclaw-gateway-ws";
 import { v4 as uuidv4 } from "uuid";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
@@ -111,15 +112,19 @@ export interface GatewayChatAttachment {
   type: string;
   mimeType: string;
   name: string;
-  dataUrl: string;
+  /** Base64 data URL. Not populated for generic file attachments from Claude Code
+   *  (code files are already on disk; embedding them in React state causes ~10GB leaks). */
+  dataUrl?: string;
 }
 
 export interface UseGatewayChatOptions {
   sessionKey?: string;
   autoConnect?: boolean;
-  backend?: "openclaw" | "hermes";
+  backend?: "openclaw" | "claude-code" | "codex" | "hermes";
   agentId?: string;
 }
+
+type GatewayChatBackend = NonNullable<UseGatewayChatOptions["backend"]>;
 
 export interface UseGatewayChatReturn {
   // State
@@ -186,10 +191,30 @@ function stripProtocolMarkers(s: string): string {
   return s.replace(/<\/?\s*(?:final|thinking|NO_REPLY)\s*\/?>/gi, "").trim();
 }
 
+// Strip CLI chrome from Hermes output — box-drawing characters, ANSI escapes,
+// and the decorative header line (e.g. "╭─ ⚕ Hermes ─────╮").
+function stripHermesCLIChrome(s: string): string {
+  return s
+    .replace(/\x1b\[[0-9;]*[mGKHFJ]/g, "")                       // ANSI escape sequences
+    .replace(/^[╭╰├┌└][─═┄┈]+.*[╮╯┤┐┘]?\s*$/gm, "")             // full border lines (top/bottom)
+    .replace(/^[│║┃]\s*/gm, "")                                   // left border prefix
+    .replace(/\s*[│║┃]\s*$/gm, "")                                // right border suffix
+    .replace(/^.*?[╭╮╰╯│─]+\s*⚕\s*\w+\s*[╭╮╰╯│─]+.*$/gm, "")   // header line with agent symbol
+    .replace(/\n{3,}/g, "\n\n")                                   // collapse excessive blank lines
+    .trim();
+}
+
 // Normalize content for fuzzy comparison — the server sometimes returns the
 // same message with slightly different whitespace (e.g. single vs double newline).
 function normalizeForCompare(s: string): string {
   return s.replace(/\s+/g, " ").trim();
+}
+
+function hasNormalizedContainment(a: string, b: string): boolean {
+  const na = normalizeForCompare(a);
+  const nb = normalizeForCompare(b);
+  if (!na || !nb) return false;
+  return na.includes(nb) || nb.includes(na);
 }
 
 // WeakMap-cached normalizeForCompare — avoids redundant regex on same message objects
@@ -342,6 +367,99 @@ function mergeHistoryIntoMessages(
   if (!hasChanges && merged.length === current.length) return null;
 
   return merged;
+}
+
+function findCurrentTurnStart(messages: GatewayChatMessage[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "user") return i + 1;
+  }
+  return 0;
+}
+
+function isFinalTextAlreadyRepresented(
+  messages: GatewayChatMessage[],
+  finalText: string
+): boolean {
+  const searchStart = findCurrentTurnStart(messages);
+  const textSegments = messages
+    .slice(searchStart)
+    .filter((m) => m.role === "assistant" && !m.toolCalls?.length && m.content.trim())
+    .map((m) => m.content);
+
+  if (textSegments.length < 2) return false;
+
+  return normalizeForCompare(textSegments.join("\n")) === normalizeForCompare(finalText);
+}
+
+function pruneContainedAssistantTextMessages(
+  messages: GatewayChatMessage[],
+  finalText: string,
+  keepId?: string
+): GatewayChatMessage[] {
+  if (isFinalTextAlreadyRepresented(messages, finalText)) {
+    return messages;
+  }
+
+  const finalNorm = normalizeForCompare(finalText);
+  const searchStart = findCurrentTurnStart(messages);
+  let changed = false;
+
+  const next = messages.filter((msg, index) => {
+    if (index < searchStart) return true;
+    if (msg.role !== "assistant" || msg.toolCalls?.length || !msg.content.trim()) return true;
+    if (msg.id === keepId) return true;
+
+    const norm = normalizeForCompare(msg.content);
+    if (!norm || norm === finalNorm) return true;
+
+    if (finalNorm.includes(norm)) {
+      changed = true;
+      return false;
+    }
+
+    return true;
+  });
+
+  return changed ? next : messages;
+}
+
+function applyFinalAssistantText(
+  messages: GatewayChatMessage[],
+  finalText: string,
+  runId?: string
+): GatewayChatMessage[] {
+  if (isFinalTextAlreadyRepresented(messages, finalText)) {
+    return messages;
+  }
+
+  const normalizedFinal = normalizeForCompare(finalText);
+  const searchStart = findCurrentTurnStart(messages);
+
+  for (let i = messages.length - 1; i >= searchStart; i--) {
+    const m = messages[i];
+    if (m.role !== "assistant" || m.toolCalls?.length || !m.content.trim()) continue;
+    const normExisting = normalizeForCompare(m.content);
+    if (normExisting === normalizedFinal) {
+      return pruneContainedAssistantTextMessages(messages, finalText, m.id);
+    }
+    if (finalText.startsWith(m.content) || m.content.startsWith(finalText)) {
+      const longer = finalText.length >= m.content.length ? finalText : m.content;
+      if (m.content === longer) {
+        return pruneContainedAssistantTextMessages(messages, longer, m.id);
+      }
+      const updated = [...messages];
+      updated[i] = { ...m, content: longer };
+      return pruneContainedAssistantTextMessages(updated, longer, m.id);
+    }
+  }
+
+  const appended = [...messages, {
+    id: `final-${runId || uuidv4()}`,
+    role: "assistant" as ChatMessageRole,
+    content: finalText,
+    timestamp: Date.now(),
+  }];
+  return pruneContainedAssistantTextMessages(appended, finalText, appended[appended.length - 1].id);
 }
 
 // Helper to normalize message to our format
@@ -565,37 +683,176 @@ export const _testHelpers = {
   extractText,
   stripProtocolMarkers,
   normalizeForCompare,
+  hasNormalizedContainment,
   normalizeMessage,
   deduplicateMessages,
   mergeHistoryIntoMessages,
+  findCurrentTurnStart,
+  isFinalTextAlreadyRepresented,
+  pruneContainedAssistantTextMessages,
+  applyFinalAssistantText,
   cachedNormalize,
   registerRunId,
   runIdOwners,
+  getRuntimeHistorySessionId,
+  seedHermesSession,
+  usesGatewayHealthProbe,
 };
+
+function getRuntimeHistorySessionId(backend: GatewayChatBackend, sessionKey: string): string | null {
+  const trimmedKey = sessionKey.trim();
+  if (!trimmedKey) return null;
+
+  switch (backend) {
+    case "claude-code": {
+      const sessionId = trimmedKey.startsWith("claude:") ? trimmedKey.slice(7) : trimmedKey;
+      return sessionId && sessionId !== "default" ? sessionId : null;
+    }
+    case "codex": {
+      const sessionId = trimmedKey.replace(/^codex:/, "");
+      return sessionId && sessionId !== "default" ? sessionId : null;
+    }
+    case "hermes": {
+      // Session keys arrive as "hermes:<uuid>" from the session list.
+      // Composite keys like "agent:<id>:main" or "agent:<id>:chat-<ts>"
+      // are UI-generated ephemeral keys — not resumable hermes sessions.
+      if (trimmedKey.startsWith("hermes:")) {
+        const sessionId = trimmedKey.slice(7);
+        return sessionId || null;
+      }
+      // Ephemeral UI keys (agent:xxx:main, agent:xxx:chat-123) are not hermes session IDs.
+      return null;
+    }
+    default:
+      return trimmedKey;
+  }
+}
+
+// Seed the hermesSessionState map when switching to a historical session,
+// so sendMessageViaHermes can resume it instead of starting a new one.
+function seedHermesSession(chatSessionKey: string, hermesSessionId: string): void {
+  hermesSessionState.set(chatSessionKey, {
+    sessionId: hermesSessionId,
+    conversation: chatSessionKey,
+  });
+}
+
+function usesGatewayHealthProbe(backend: GatewayChatBackend): boolean {
+  return backend === "openclaw";
+}
 
 // Tracks hermes session state per chat session key for multi-turn conversations.
 // API mode: stores conversation name (stable). CLI mode: stores hermes session ID.
 const hermesSessionState = new Map<string, { sessionId?: string; conversation?: string }>();
+const getHermesSessionStorageKey = (chatSessionKey: string) => `hermes-chat-session:${chatSessionKey}`;
+
+async function loadHermesHistoryMessages(
+  sessionId: string,
+  agentId?: string,
+  limit = 200,
+): Promise<GatewayChatMessage[]> {
+  const result = await bridgeInvoke("hermes-load-history", {
+    sessionId,
+    limit,
+    ...(agentId ? { agentId } : {}),
+  }) as { messages?: unknown[] } | null;
+
+  const rawMessages = Array.isArray(result?.messages) ? result.messages : [];
+  return rawMessages
+    .map((msg) => normalizeMessage(msg))
+    .filter((msg): msg is GatewayChatMessage => msg !== null);
+}
 
 async function sendMessageViaHermes(
   messages: Array<{ role: string; content: string }>,
-  _signal: AbortSignal,
+  signal: AbortSignal,
   onDelta: (content: string) => void,
   onDone: (attachments?: GatewayChatAttachment[]) => void,
   onError: (error: string) => void,
   chatSessionKey?: string,
   agentId?: string,
+  onSessionId?: (sessionId: string) => void,
 ): Promise<void> {
+  let sawStreamDelta = false;
+  const clientRequestId = uuidv4();
+  const activeSessionKey = chatSessionKey || "default";
+
+  // When the caller aborts, tell the connector to kill the in-flight CLI/HTTP
+  // request. Fire-and-forget — the abort action has its own 5s timeout on the
+  // connector side, and the in-flight bridgeInvoke promise will settle once
+  // the connector sends its final (error) response.
+  const handleAbort = () => {
+    bridgeInvoke("hermes-abort", { sessionKey: activeSessionKey }).catch(() => {
+      // Best-effort: if abort fails, nothing we can do beyond UI cleanup.
+    });
+  };
+  if (signal.aborted) {
+    handleAbort();
+  } else {
+    signal.addEventListener("abort", handleAbort, { once: true });
+  }
+
+  const handleHermesStream = (evt: Event) => {
+    const detail = (evt as CustomEvent).detail as {
+      requestId?: string;
+      sessionKey?: string;
+      event?: {
+        type?: string;
+        delta?: string;
+        error?: string;
+        sessionId?: string;
+        clientRequestId?: string;
+      };
+    };
+
+    const streamEvent = detail?.event;
+    if (!streamEvent) return;
+    if (streamEvent.clientRequestId && streamEvent.clientRequestId !== clientRequestId) return;
+    if (!streamEvent.clientRequestId && detail?.sessionKey && detail.sessionKey !== activeSessionKey) return;
+
+    if (streamEvent.type === "session" && streamEvent.sessionId) {
+      hermesSessionState.set(activeSessionKey, {
+        sessionId: streamEvent.sessionId,
+        conversation: activeSessionKey,
+      });
+      try {
+        localStorage.setItem(getHermesSessionStorageKey(activeSessionKey), streamEvent.sessionId);
+      } catch { /* ignore storage errors */ }
+      onSessionId?.(streamEvent.sessionId);
+      return;
+    }
+
+    if (streamEvent.type === "delta" && typeof streamEvent.delta === "string") {
+      sawStreamDelta = true;
+      onDelta(stripHermesCLIChrome(streamEvent.delta));
+      return;
+    }
+
+    if (streamEvent.type === "error" && streamEvent.error) {
+      onError(streamEvent.error);
+    }
+  };
+
+  if (typeof window !== "undefined") {
+    window.addEventListener("hermes-stream", handleHermesStream as EventListener);
+  }
+
   try {
+    const storedSessionId = chatSessionKey && typeof window !== "undefined"
+      ? localStorage.getItem(getHermesSessionStorageKey(chatSessionKey))
+      : null;
     const state = chatSessionKey ? hermesSessionState.get(chatSessionKey) : undefined;
+    const effectiveSessionId = state?.sessionId || storedSessionId || undefined;
 
     // Use the chat session key as conversation name for API mode
     const conversation = chatSessionKey || undefined;
 
     const result = await bridgeInvoke("hermes-chat", {
       messages,
-      sessionId: state?.sessionId || undefined,
+      sessionId: effectiveSessionId,
       conversation,
+      sessionKey: activeSessionKey,
+      clientRequestId,
       ...(agentId ? { agentId } : {}),
     }) as {
       content?: string;
@@ -622,25 +879,45 @@ async function sendMessageViaHermes(
         sessionId: result.sessionId || state?.sessionId,
         conversation,
       });
+      if (result.sessionId) {
+        try {
+          localStorage.setItem(getHermesSessionStorageKey(chatSessionKey), result.sessionId);
+        } catch { /* ignore storage errors */ }
+      }
+    }
+    if (result.sessionId) {
+      onSessionId?.(result.sessionId);
     }
 
-    if (result.content) {
-      onDelta(result.content);
+    if (result.content && !sawStreamDelta) {
+      onDelta(stripHermesCLIChrome(result.content));
     }
     const attachments: GatewayChatAttachment[] | undefined = result.attachments?.length
-      ? result.attachments.map((a, i) => ({
-          id: `hermes-att-${Date.now()}-${i}`,
-          type: a.mimeType.startsWith("image/") ? "image" : a.mimeType.startsWith("video/") ? "video" : "file",
-          mimeType: a.mimeType,
-          name: a.filename,
-          dataUrl: `data:${a.mimeType};base64,${a.data}`,
-        }))
+      ? result.attachments.map((a, i) => {
+          const type = a.mimeType.startsWith("image/") ? "image" : a.mimeType.startsWith("video/") ? "video" : "file";
+          return {
+            id: `hermes-att-${Date.now()}-${i}`,
+            type,
+            mimeType: a.mimeType,
+            name: a.filename,
+            // Only embed base64 for image/video. File attachments are on the connector
+            // machine already — storing them in React state causes multi-GB accumulation.
+            ...(type !== "file" && a.data && { dataUrl: `data:${a.mimeType};base64,${a.data}` }),
+          };
+        })
       : undefined;
     onDone(attachments);
   } catch (err: any) {
     onError(err?.message || "Hermes bridge request failed");
+  } finally {
+    if (typeof window !== "undefined") {
+      window.removeEventListener("hermes-stream", handleHermesStream as EventListener);
+    }
+    signal.removeEventListener("abort", handleAbort);
   }
 }
+
+export { seedHermesSession };
 
 export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayChatReturn {
   const { sessionKey: initialSessionKey, autoConnect = true, backend = "openclaw", agentId } = options;
@@ -728,7 +1005,32 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
   const disconnectGraceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hermesAbortRef = useRef<AbortController | null>(null);
   const messagesRef = useRef<GatewayChatMessage[]>([]);
+  const gatewayStartupRetryRef = useRef<number>(0);
   useEffect(() => { messagesRef.current = messages; }, [messages]);
+
+  const loadHistoryForBackend = useCallback(async (limit?: number): Promise<{ messages?: unknown[] }> => {
+    if (backend === "openclaw") {
+      return gatewayConnection.getChatHistory(sessionKeyRef.current, limit ?? 200);
+    }
+
+    const sessionId = getRuntimeHistorySessionId(backend, sessionKeyRef.current);
+    if (!sessionId) {
+      return { messages: [] };
+    }
+
+    if (backend === "claude-code") {
+      return await bridgeInvoke("claude-code-load-history", {
+        sessionId,
+        ...(agentId ? { agentId } : {}),
+      }) as { messages?: unknown[] };
+    }
+
+    if (backend === "codex") {
+      return await bridgeInvoke("codex-load-history", { sessionId }) as { messages?: unknown[] };
+    }
+
+    return { messages: [] };
+  }, [agentId, backend]);
 
   // Shared helper: fetch history and merge into current messages.
   // Optionally auto-finalizes if the last message is a completed assistant text.
@@ -740,7 +1042,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
   const mergeHistoryAndMaybeFinalize = useCallback((autoFinalize: boolean) => {
     if (isMergingRef.current) return; // skip if a merge is already in progress
     isMergingRef.current = true;
-    gatewayConnection.getChatHistory(sessionKeyRef.current, 50).then((response) => {
+    loadHistoryForBackend(50).then((response) => {
       if (!response.messages?.length) return;
       const loaded: GatewayChatMessage[] = [];
       for (const m of response.messages) {
@@ -765,7 +1067,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
     }).catch(() => {}).finally(() => {
       isMergingRef.current = false;
     });
-  }, []);
+  }, [loadHistoryForBackend]);
 
   // Shared helper: start (or restart) the 3s finalization debounce.
   // 3s allows enough headroom for multi-tool agent runs where there can be
@@ -1052,13 +1354,25 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
           if (ownIdx !== -1) {
             const existingContent = prev[ownIdx].content;
             const extends_ = text.startsWith(existingContent) || existingContent.startsWith(text) || existingContent === text;
+            const contains_ = hasNormalizedContainment(text, existingContent);
 
             // If the new text extends or matches the existing content, this is
             // a normal streaming update for the same segment — update in place.
             if (extends_) {
               if (prev[ownIdx].content === text) return prev; // no change
               const updated = [...prev];
-              updated[ownIdx] = { ...prev[ownIdx], content: text };
+                updated[ownIdx] = { ...prev[ownIdx], content: text };
+              return updated;
+            }
+
+            // Some streaming transports emit a later snapshot that is only a
+            // suffix/subset of text we've already rendered. Treat that as the
+            // same stream instead of appending a duplicate tail message.
+            if (contains_) {
+              const longer = text.length >= existingContent.length ? text : existingContent;
+              if (prev[ownIdx].content === longer) return prev;
+              const updated = [...prev];
+              updated[ownIdx] = { ...prev[ownIdx], content: longer };
               return updated;
             }
 
@@ -1110,7 +1424,12 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
           for (let i = prev.length - 1; i >= searchStart; i--) {
             const m = prev[i];
             if (m.role === "assistant" && !m.toolCalls?.length && m.content.trim()) {
-              if (text.startsWith(m.content) || m.content.startsWith(text) || m.content === text) {
+              if (
+                text.startsWith(m.content) ||
+                m.content.startsWith(text) ||
+                m.content === text ||
+                hasNormalizedContainment(text, m.content)
+              ) {
                 overlapIdx = i;
                 break;
               }
@@ -1162,45 +1481,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       const finalText = extractText(payload.message);
       const cleanFinalText = typeof finalText === "string" ? stripProtocolMarkers(finalText) : null;
       if (cleanFinalText && cleanFinalText.trim()) {
-        setMessages((prev) => {
-          // Check if this text already exists (from streaming deltas) —
-          // either an exact normalized match OR a prefix/overlap relationship
-          // (streaming may still be slightly behind the final text).
-          const normalizedFinal = normalizeForCompare(cleanFinalText);
-
-          // Find last user message to scope the search to the current turn
-          let lastUserIdx = -1;
-          for (let i = prev.length - 1; i >= 0; i--) {
-            if (prev[i].role === "user") { lastUserIdx = i; break; }
-          }
-          const searchStart = Math.max(lastUserIdx + 1, 0);
-
-          for (let i = prev.length - 1; i >= searchStart; i--) {
-            const m = prev[i];
-            if (m.role !== "assistant" || m.toolCalls?.length || !m.content.trim()) continue;
-            const normExisting = normalizeForCompare(m.content);
-            // Exact match — already have the full text
-            if (normExisting === normalizedFinal) return prev;
-            // Streaming message is a prefix of the final — upgrade it in place
-            if (cleanFinalText.startsWith(m.content) || m.content.startsWith(cleanFinalText)) {
-              const longer = cleanFinalText.length >= m.content.length ? cleanFinalText : m.content;
-              if (m.content === longer) return prev;
-              const updated = [...prev];
-              updated[i] = { ...m, content: longer };
-              return updated;
-            }
-          }
-
-          // Add as new message — use a unique ID to avoid collision with
-          // streaming text messages that may share the same runId.
-          // History merge uses content-based matching, so ID doesn't need to match.
-          return [...prev, {
-            id: `final-${payload.runId || uuidv4()}`,
-            role: "assistant" as ChatMessageRole,
-            content: cleanFinalText,
-            timestamp: Date.now(),
-          }];
-        });
+        setMessages((prev) => applyFinalAssistantText(prev, cleanFinalText, payload.runId));
       }
       streamContentRef.current = "";
 
@@ -1266,7 +1547,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
     if (!gatewayConnection.isConnected()) return;
     const fetchLimit = limit ?? HISTORY_TIERS[historyTierRef.current];
     try {
-      const response = await gatewayConnection.getChatHistory(getSessionKey(), fetchLimit);
+      const response = await loadHistoryForBackend(fetchLimit);
       const loaded: GatewayChatMessage[] = [];
       if (response.messages) {
         for (const msg of response.messages) {
@@ -1274,8 +1555,8 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
           if (normalized) loaded.push(normalized);
         }
       }
-      // If we got exactly the limit back, there may be more history
-      setHasMoreHistory(loaded.length >= fetchLimit && fetchLimit < 1000);
+      // Only OpenClaw supports paginated history windows via chat.history.
+      setHasMoreHistory(backend === "openclaw" && loaded.length >= fetchLimit && fetchLimit < 1000);
       const deduped = deduplicateMessages(loaded);
       setMessages((prev) => {
         if (prev.length === 0) return deduped;
@@ -1285,8 +1566,9 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       });
     } catch (err) {
       console.error("[GatewayChat] Failed to load history:", err);
+      throw err; // propagate so loadChatHistory can set the error state
     }
-  }, [getSessionKey]);
+  }, [backend, loadHistoryForBackend]);
 
   // Subscribe to gateway connection state
   useEffect(() => {
@@ -1310,9 +1592,21 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
         // talk to the hub, not that the connector/OpenClaw is reachable. Without
         // this check, chat.history gets relayed into a dead end and times out.
         if (currentRunIdRef.current === null) {
-          probeGatewayHealth().then((probe) => {
-            if (probe.healthy) fetchAndSetHistory();
-          });
+          // Belt-and-suspenders: clear any stale banner immediately on reconnect.
+          // If the relay is still unhealthy, a fresh error will replace it. The
+          // old banner was almost certainly from a prior disconnect window, and
+          // waiting for the probe to resolve leaves it visible for 1-8s.
+          setError(null);
+          gatewayStartupRetryRef.current = 0;
+          if (usesGatewayHealthProbe(backend)) {
+            probeGatewayHealth().then((probe) => {
+              if (probe.healthy) {
+                fetchAndSetHistory().catch(() => {});
+              }
+            });
+          } else {
+            fetchAndSetHistory().catch(() => {});
+          }
         }
       }
 
@@ -1347,16 +1641,67 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       setIsConnected(true);
       if (!previousConnected) {
         previousConnected = true;
-        probeGatewayHealth().then((probe) => {
-          if (probe.healthy) fetchAndSetHistory();
-        });
+        // Same belt-and-suspenders: clear stale banners immediately.
+        setError(null);
+        gatewayStartupRetryRef.current = 0;
+        if (usesGatewayHealthProbe(backend)) {
+          probeGatewayHealth().then((probe) => {
+            if (probe.healthy) {
+              fetchAndSetHistory().catch(() => {});
+            }
+          });
+        } else {
+          fetchAndSetHistory().catch(() => {});
+        }
       }
     }
 
     return () => {
       unsubscribe();
     };
-  }, [fetchAndSetHistory]);
+  }, [backend, fetchAndSetHistory]);
+
+  // Self-heal transient "gateway not connected" / "not reachable" banners.
+  // The underlying connector may flip to healthy moments after the banner
+  // appeared, but nothing re-probes — so the user was forced to hit Retry.
+  // Poll every 3s while a transient error is showing; clear on success.
+  useEffect(() => {
+    if (!error) return;
+    if (!usesGatewayHealthProbe(backend)) return;
+    const msg = error.toLowerCase();
+    // Broad match: any connectivity / reachability / timeout / probe-related
+    // phrasing counts as transient. Keeps the self-heal engaged for variants
+    // like "Gateway not reachable", "Request timed out", "Probe failed", etc.
+    const isTransient =
+      msg.includes("gateway") ||
+      msg.includes("reach") ||
+      msg.includes("time") ||
+      msg.includes("connect") ||
+      msg.includes("probe") ||
+      msg.includes("history");
+    if (!isTransient) return;
+
+    let cancelled = false;
+    const runProbe = async () => {
+      if (cancelled) return;
+      if (!gatewayConnection.isConnected()) return;
+      const probe = await probeGatewayHealth(8000);
+      if (cancelled) return;
+      if (probe.healthy) {
+        setError(null);
+        gatewayStartupRetryRef.current = 0;
+        fetchAndSetHistory().catch(() => {});
+      }
+    };
+    // Fire the first probe immediately so the banner doesn't linger for 3s
+    // before the first heal attempt.
+    runProbe();
+    const interval = setInterval(runProbe, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [error, backend, fetchAndSetHistory]);
 
   // Keep a stable ref to the latest handleChatEvent so the subscription
   // never tears down/re-subscribes (which caused a gap where events were lost).
@@ -1450,26 +1795,18 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
     if (backend === "hermes") {
       // Load hermes history via hub/connector relay
       const key = sessionKeyRef.current;
-      const hermesSessionId = key.replace(/^hermes:/, "").replace(/^agent:[^:]+:/, "");
+      const storedSessionId = typeof window !== "undefined"
+        ? localStorage.getItem(getHermesSessionStorageKey(key))
+        : null;
+      const hermesSessionId = storedSessionId || key.replace(/^hermes:/, "").replace(/^agent:[^:]+:/, "");
       if (hermesSessionId && hermesSessionId !== "main" && hermesSessionId !== "default") {
         try {
-          const { bridgeInvoke: invoke } = await import("$/lib/hyperclaw-bridge-client");
-          const result = await invoke("hermes-load-history", { sessionId: hermesSessionId, ...(agentId ? { agentId } : {}) }) as {
-            messages?: Array<{
-              id: string; role: string; content: string; timestamp?: number;
-              thinking?: string; toolCalls?: GatewayChatMessage["toolCalls"]; toolResults?: GatewayChatMessage["toolResults"];
-            }>;
-          };
-          if (result?.messages && result.messages.length > 0) {
-            const parsed: GatewayChatMessage[] = result.messages.map((m) => ({
-              id: m.id,
-              role: m.role as ChatMessageRole,
-              content: m.content || "",
-              timestamp: m.timestamp || Date.now(),
-              ...(m.thinking && { thinking: m.thinking }),
-              ...(m.toolCalls && { toolCalls: m.toolCalls }),
-              ...(m.toolResults && { toolResults: m.toolResults }),
-            }));
+          const parsed = await loadHermesHistoryMessages(hermesSessionId, agentId);
+          if (parsed.length > 0) {
+            hermesSessionState.set(key, {
+              sessionId: hermesSessionId,
+              conversation: key,
+            });
             setMessages(parsed);
             return;
           }
@@ -1488,6 +1825,37 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
     if (currentRunIdRef.current === null) setIsLoading(true);
     setError(null);
     try {
+      // For OpenClaw, probe gateway health first to avoid a 60s timeout on a
+      // dead relay chain (dashboard → hub → connector → gateway). The probe
+      // uses a shorter 12s timeout with one retry and fails fast.
+      // If the WS isn't connected yet (initial mount race), skip silently —
+      // the reconnect subscription handler will load history when WS is ready.
+      if (usesGatewayHealthProbe(backend)) {
+        if (!gatewayConnection.isConnected()) {
+          // Not connected yet — don't error, just stop loading.
+          // The subscription at line ~1386 handles post-connect loading.
+          if (currentRunIdRef.current === null) setIsLoading(false);
+          return;
+        }
+        const probe = await probeGatewayHealth();
+        if (!probe.healthy) {
+          // "gateway not connected" means OpenClaw is still starting (connector
+          // hasn't established its local WS yet). Auto-retry up to 5 times with
+          // backoff instead of showing an error — the daemon is usually ready
+          // within a few seconds after onboarding.
+          const isStartingUp = probe.error?.includes("gateway not connected");
+          if (isStartingUp && (gatewayStartupRetryRef.current ?? 0) < 5) {
+            gatewayStartupRetryRef.current = (gatewayStartupRetryRef.current ?? 0) + 1;
+            const delay = Math.min(2000 * gatewayStartupRetryRef.current, 8000);
+            console.log(`[GatewayChat] OpenClaw starting up, retry ${gatewayStartupRetryRef.current}/5 in ${delay}ms`);
+            setTimeout(() => loadChatHistory(), delay);
+            return;
+          }
+          throw new Error(probe.error || "Gateway not reachable");
+        }
+        // Gateway healthy — reset startup retry counter.
+        gatewayStartupRetryRef.current = 0;
+      }
       await fetchAndSetHistory();
     } catch (err) {
       console.error("[GatewayChat] loadChatHistory error:", err);
@@ -1496,6 +1864,21 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       if (currentRunIdRef.current === null) setIsLoading(false);
     }
   }, [backend, fetchAndSetHistory]);
+
+  // Backend-change reset: when the consumer flips `backend` (e.g. Hermes ↔ OpenClaw
+  // on the same agent/session in AgentChatPanel), clear messages and reload history
+  // so stale bubbles from the previous runtime don't bleed into the new tab.
+  const prevBackendRef = useRef(backend);
+  useEffect(() => {
+    if (prevBackendRef.current === backend) return;
+    prevBackendRef.current = backend;
+    setMessages([]);
+    setError(null);
+    streamContentRef.current = "";
+    currentRunIdRef.current = null;
+    processedEventSeqRef.current.clear();
+    void loadChatHistory();
+  }, [backend, loadChatHistory]);
 
   // Load more (older) history — steps through tiers: 10 → 50 → 200 → 1000.
   // Re-fetches the full tail with a larger window; the gateway returns the last N
@@ -1518,6 +1901,13 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
   // Send a message
   const sendMessage = useCallback(async (content: string, attachments?: GatewayChatAttachment[]) => {
     if (!content.trim() && (!attachments || attachments.length === 0)) {
+      return;
+    }
+
+    // Pending-send guard: if a run is already in flight for this hook, drop the
+    // second submission. Prevents double-appending the user bubble when Enter
+    // and click fire together, or when the input isn't disabled fast enough.
+    if (currentRunIdRef.current !== null) {
       return;
     }
 
@@ -1547,37 +1937,87 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       // Build conversation history for Hermes (stateless API needs full history)
       // Include the just-added user message since setMessages hasn't flushed yet
       const hermesMessages = [...messagesRef.current, userMessage]
-        .filter(m => m.role === "user" || m.role === "assistant")
+        .filter(m => m.role === "user" || (m.role === "assistant" && m.content.trim()))
         .map(m => ({ role: m.role, content: m.content }));
 
       hermesAbortRef.current = new AbortController();
+      let historyPollTimer: ReturnType<typeof setInterval> | null = null;
+      let historyPollInFlight = false;
 
-      // Create streaming assistant message
+      const stopHermesHistoryPolling = () => {
+        if (historyPollTimer) {
+          clearInterval(historyPollTimer);
+          historyPollTimer = null;
+        }
+      };
+
+      const startHermesHistoryPolling = (sessionId: string) => {
+        if (!sessionId || historyPollTimer) return;
+        const poll = async () => {
+          if (historyPollInFlight) return;
+          historyPollInFlight = true;
+          try {
+            const historyMessages = await loadHermesHistoryMessages(sessionId, agentId);
+            if (historyMessages.length === 0) return;
+            setMessages(prev => {
+              const merged = mergeHistoryIntoMessages(prev, historyMessages);
+              return merged ?? prev;
+            });
+          } catch {
+            // Ignore transient polling failures during active streaming.
+          } finally {
+            historyPollInFlight = false;
+          }
+        };
+        void poll();
+        historyPollTimer = setInterval(() => { void poll(); }, 800);
+      };
+
       const assistantMsgId = uuidv4();
-      setMessages(prev => [...prev, {
-        id: assistantMsgId,
-        role: "assistant" as ChatMessageRole,
-        content: "",
-        timestamp: Date.now(),
-      }]);
+
+      const upsertHermesAssistantMessage = (
+        prev: GatewayChatMessage[],
+        updater: (existing?: GatewayChatMessage) => GatewayChatMessage,
+      ): GatewayChatMessage[] => {
+        const existingIdx = prev.findIndex((m) => m.id === assistantMsgId);
+        if (existingIdx >= 0) {
+          const next = [...prev];
+          next[existingIdx] = updater(next[existingIdx]);
+          return next;
+        }
+        return [...prev, updater()];
+      };
 
       try {
         await sendMessageViaHermes(
           hermesMessages,
           hermesAbortRef.current.signal,
           (delta) => {
-            streamContentRef.current += delta;
-            setMessages(prev => prev.map(m =>
-              m.id === assistantMsgId
-                ? { ...m, content: streamContentRef.current }
-                : m
-            ));
+            streamContentRef.current = resolveMergedStreamText({
+              previousText: streamContentRef.current,
+              nextText: delta,
+              nextDelta: delta,
+            });
+            setMessages(prev => upsertHermesAssistantMessage(prev, (existing) => ({
+              id: assistantMsgId,
+              role: "assistant" as ChatMessageRole,
+              content: streamContentRef.current,
+              timestamp: existing?.timestamp || Date.now(),
+              ...(existing?.attachments ? { attachments: existing.attachments } : {}),
+            })));
           },
           (attachments) => {
+            stopHermesHistoryPolling();
             // Persist to localStorage, applying any file attachments to the message
             setMessages(prev => {
               const updated = attachments?.length
-                ? prev.map(m => m.id === assistantMsgId ? { ...m, attachments } : m)
+                ? upsertHermesAssistantMessage(prev, (existing) => ({
+                    id: assistantMsgId,
+                    role: "assistant" as ChatMessageRole,
+                    content: existing?.content || streamContentRef.current,
+                    timestamp: existing?.timestamp || Date.now(),
+                    attachments,
+                  }))
                 : prev;
               try {
                 localStorage.setItem(
@@ -1587,25 +2027,41 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
               } catch { /* ignore storage errors */ }
               return updated;
             });
+            const state = hermesSessionState.get(sessionKeyRef.current);
+            if (state?.sessionId) {
+              void loadHermesHistoryMessages(state.sessionId, agentId)
+                .then((historyMessages) => {
+                  if (historyMessages.length === 0) return;
+                  setMessages(prev => mergeHistoryIntoMessages(prev, historyMessages) ?? prev);
+                })
+                .catch(() => {});
+            }
             currentRunIdRef.current = null;
             setIsLoading(false);
             hermesAbortRef.current = null;
           },
           (error) => {
+            stopHermesHistoryPolling();
             setError(error);
-            setMessages(prev => prev.map(m =>
-              m.id === assistantMsgId
-                ? { ...m, content: `Error: ${error}` }
-                : m
-            ));
+            setMessages(prev => upsertHermesAssistantMessage(prev, (existing) => ({
+              id: assistantMsgId,
+              role: "assistant" as ChatMessageRole,
+              content: `Error: ${error}`,
+              timestamp: existing?.timestamp || Date.now(),
+              ...(existing?.attachments ? { attachments: existing.attachments } : {}),
+            })));
             currentRunIdRef.current = null;
             setIsLoading(false);
             hermesAbortRef.current = null;
           },
           sessionKeyRef.current,
           agentId,
+          (sessionId) => {
+            startHermesHistoryPolling(sessionId);
+          },
         );
       } catch (err) {
+        stopHermesHistoryPolling();
         if ((err as Error).name !== "AbortError") {
           const msg = err instanceof Error ? err.message : "Failed to send";
           setError(msg);
@@ -1689,7 +2145,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       const apiAttachments = attachments?.map((att) => ({
         type: "image" as const,
         mimeType: att.mimeType,
-        content: att.dataUrl.split(",")[1] || att.dataUrl, // Remove data: prefix
+        content: att.dataUrl ? (att.dataUrl.split(",")[1] || att.dataUrl) : "", // Remove data: prefix
       }));
 
       await gatewayConnection.sendChatMessage({
@@ -1776,6 +2232,8 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
   const clearChat = useCallback(() => {
     if (backend === "hermes") {
       localStorage.removeItem(`hermes-chat:${sessionKeyRef.current}`);
+      localStorage.removeItem(getHermesSessionStorageKey(sessionKeyRef.current));
+      hermesSessionState.delete(sessionKeyRef.current);
     }
     setMessages([]);
     setError(null);

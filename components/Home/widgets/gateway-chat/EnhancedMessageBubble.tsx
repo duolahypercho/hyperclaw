@@ -51,8 +51,11 @@ export const memoizedMarkdownComponents = {
   assistant: createMarkdownComponents(false),
 };
 
-function AttachmentItem({ attachment }: { attachment: { id: string; type: string; mimeType: string; name: string; dataUrl: string } }) {
+function AttachmentItem({ attachment }: { attachment: { id: string; type: string; mimeType: string; name: string; dataUrl?: string } }) {
   if (attachment.mimeType.startsWith("image/")) {
+    if (!attachment.dataUrl) {
+      return <span className="text-xs text-muted-foreground">{attachment.name}</span>;
+    }
     return (
       <a href={attachment.dataUrl} download={attachment.name} title={attachment.name}>
         <img
@@ -65,6 +68,9 @@ function AttachmentItem({ attachment }: { attachment: { id: string; type: string
   }
 
   if (attachment.mimeType.startsWith("video/")) {
+    if (!attachment.dataUrl) {
+      return <span className="text-xs text-muted-foreground">{attachment.name}</span>;
+    }
     return (
       <div className="flex flex-col gap-1">
         <video
@@ -83,7 +89,24 @@ function AttachmentItem({ attachment }: { attachment: { id: string; type: string
     );
   }
 
-  // Generic file — show icon + name + download
+  // Generic file — show icon + name. No dataUrl means the file lives on the
+  // connector machine; we display metadata only (no in-browser download).
+  const fileIcon = (
+    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0 text-muted-foreground">
+      <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/>
+      <polyline points="14 2 14 8 20 8"/>
+      <line x1="12" y1="18" x2="12" y2="12"/>
+      <line x1="9" y1="15" x2="15" y2="15"/>
+    </svg>
+  );
+  if (!attachment.dataUrl) {
+    return (
+      <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-md border border-border/50 bg-muted/30 text-xs max-w-[220px]">
+        {fileIcon}
+        <span className="truncate text-foreground/80">{attachment.name}</span>
+      </div>
+    );
+  }
   return (
     <a
       href={attachment.dataUrl}
@@ -91,12 +114,7 @@ function AttachmentItem({ attachment }: { attachment: { id: string; type: string
       className="flex items-center gap-1.5 px-2 py-1.5 rounded-md border border-border/50 bg-muted/30 hover:bg-muted/60 transition-colors text-xs max-w-[220px]"
       title={`Download ${attachment.name}`}
     >
-      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0 text-muted-foreground">
-        <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/>
-        <polyline points="14 2 14 8 20 8"/>
-        <line x1="12" y1="18" x2="12" y2="12"/>
-        <line x1="9" y1="15" x2="15" y2="15"/>
-      </svg>
+      {fileIcon}
       <span className="truncate text-foreground/80">{attachment.name}</span>
     </a>
   );

@@ -351,12 +351,16 @@ const MessageBubble = memo(
                 {hasAttachments && (
                   <div className="flex flex-wrap gap-1.5 mb-1">
                     {message.attachments!.map((att) => (
-                      <img
-                        key={att.id}
-                        src={att.dataUrl}
-                        alt={att.name}
-                        className="max-w-[160px] max-h-[120px] rounded-md object-contain"
-                      />
+                      att.dataUrl ? (
+                        <img
+                          key={att.id}
+                          src={att.dataUrl}
+                          alt={att.name}
+                          className="max-w-[160px] max-h-[120px] rounded-md object-contain"
+                        />
+                      ) : (
+                        <span key={att.id} className="text-xs text-muted-foreground">{att.name}</span>
+                      )
                     ))}
                   </div>
                 )}

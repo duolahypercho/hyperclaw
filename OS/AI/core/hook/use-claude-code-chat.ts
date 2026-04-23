@@ -80,6 +80,8 @@ export function useClaudeCodeChat(
   const [sessionKeyState, setSessionKeyState] = useState<string>(
     initialSessionKey || "default"
   );
+  // Track every session ID this hook instance has watched so we can clean them all up on unmount.
+  const watchedSessionIdsRef = useRef<Set<string>>(new Set());
 
   // Sync session key from prop
   const prevPropKeyRef = useRef<string>(initialSessionKey || "default");
@@ -115,10 +117,13 @@ export function useClaudeCodeChat(
       const detail = (e as CustomEvent).detail;
       if (!detail) return;
 
-      const { sessionKey: evtSessionKey, event } = detail;
+      const { sessionKey: evtSessionKey, requestId: evtRequestId, event } = detail;
 
       // Only process events for our active session
       if (evtSessionKey && evtSessionKey !== sessionKeyRef.current) return;
+
+      // Only process events that match our active request ID (when set)
+      if (activeRequestIdRef.current && evtRequestId && evtRequestId !== activeRequestIdRef.current) return;
 
       // Only process while we're actively loading (waiting for response)
       if (!isLoadingRef.current) return;
@@ -126,7 +131,7 @@ export function useClaudeCodeChat(
       if (!event) return;
       const eventType = event.type as string;
 
-      // Handle assistant text streaming
+      // Handle assistant text streaming (complete message snapshots)
       if (eventType === "assistant") {
         const msg = event.message as Record<string, unknown> | undefined;
         if (!msg) return;
@@ -145,8 +150,7 @@ export function useClaudeCodeChat(
           }
         }
 
-        if (textContent.trim()) {
-          // Update or create streaming assistant message
+        if (textContent.trim() || thinking.trim()) {
           setMessages((prev) => {
             const streamId = `stream-active`;
             const existingIdx = prev.findIndex((m) => m.id === streamId);
@@ -170,6 +174,70 @@ export function useClaudeCodeChat(
               },
             ];
           });
+        }
+      }
+
+      // Handle incremental streaming deltas (from --include-partial-messages)
+      if (eventType === "stream_event") {
+        const inner = event.event as Record<string, unknown> | undefined;
+        if (!inner) return;
+        const innerType = inner.type as string;
+
+        if (innerType === "content_block_delta") {
+          const delta = inner.delta as Record<string, unknown> | undefined;
+          if (!delta) return;
+          const deltaType = delta.type as string;
+
+          if (deltaType === "text_delta") {
+            const text = (delta.text as string) || "";
+            if (!text) return;
+            setMessages((prev) => {
+              const streamId = `stream-active`;
+              const existingIdx = prev.findIndex((m) => m.id === streamId);
+              if (existingIdx !== -1) {
+                const updated = [...prev];
+                updated[existingIdx] = {
+                  ...updated[existingIdx],
+                  content: (updated[existingIdx].content || "") + text,
+                };
+                return updated;
+              }
+              return [
+                ...prev,
+                {
+                  id: streamId,
+                  role: "assistant" as ChatMessageRole,
+                  content: text,
+                  timestamp: Date.now(),
+                },
+              ];
+            });
+          } else if (deltaType === "thinking_delta") {
+            const thinking = (delta.thinking as string) || "";
+            if (!thinking) return;
+            setMessages((prev) => {
+              const streamId = `stream-active`;
+              const existingIdx = prev.findIndex((m) => m.id === streamId);
+              if (existingIdx !== -1) {
+                const updated = [...prev];
+                updated[existingIdx] = {
+                  ...updated[existingIdx],
+                  thinking: (updated[existingIdx].thinking || "") + thinking,
+                };
+                return updated;
+              }
+              return [
+                ...prev,
+                {
+                  id: streamId,
+                  role: "assistant" as ChatMessageRole,
+                  content: "",
+                  timestamp: Date.now(),
+                  thinking,
+                },
+              ];
+            });
+          }
         }
       }
     };
@@ -310,6 +378,9 @@ export function useClaudeCodeChat(
 
       setMessages((prev) => [...prev, userMessage]);
       setIsLoading(true);
+      // Synchronously update the ref so the stream event listener sees isLoading=true
+      // immediately — before React has a chance to re-render.
+      isLoadingRef.current = true;
       setError(null);
 
       const currentSessionKey = sessionKeyRef.current;
@@ -370,13 +441,18 @@ export function useClaudeCodeChat(
             ...(m.toolCalls && { toolCalls: m.toolCalls }),
             ...(m.toolResults && { toolResults: m.toolResults }),
             ...(m.attachments?.length && {
-              attachments: m.attachments.map((a, i) => ({
-                id: `${m.id}-att-${i}`,
-                type: a.mimeType.startsWith("image/") ? "image" : a.mimeType.startsWith("video/") ? "video" : "file",
-                mimeType: a.mimeType,
-                name: a.filename,
-                dataUrl: `data:${a.mimeType};base64,${a.data}`,
-              })),
+              attachments: m.attachments.map((a, i) => {
+                const type = a.mimeType.startsWith("image/") ? "image" : a.mimeType.startsWith("video/") ? "video" : "file";
+                return {
+                  id: `${m.id}-att-${i}`,
+                  type,
+                  mimeType: a.mimeType,
+                  name: a.filename,
+                  // Only embed base64 for image/video. Code file attachments (Write/Edit results)
+                  // are already on disk — embedding them in React state caused ~10GB memory leaks.
+                  ...(type !== "file" && a.data && { dataUrl: `data:${a.mimeType};base64,${a.data}` }),
+                };
+              }),
             }),
           }));
 
@@ -444,7 +520,11 @@ export function useClaudeCodeChat(
     if (!sessionId || sessionId === "default") return;
 
     try {
-      const result = (await bridgeInvoke("claude-code-load-history", { sessionId })) as {
+      const result = (await bridgeInvoke("claude-code-load-history", {
+        sessionId,
+        ...(agentId && { agentId }),
+        ...(projectPathRef.current && { projectPath: projectPathRef.current }),
+      })) as {
         messages?: Array<{
           id: string;
           role: string;
@@ -479,9 +559,12 @@ export function useClaudeCodeChat(
       // Start watching the session file for live updates from terminal
       const watchSessionId = result?.sessionId || sessionId;
       if (watchSessionId) {
+        watchedSessionIdsRef.current.add(watchSessionId);
         bridgeInvoke("claude-code-watch", {
           sessionId: watchSessionId,
           sessionKey: key,
+          ...(agentId && { agentId }),
+          ...(projectPathRef.current && { projectPath: projectPathRef.current }),
         }).catch(() => {});
       }
     } catch (err) {
@@ -524,10 +607,13 @@ export function useClaudeCodeChat(
   // come back. Only the explicit stop button (stopGeneration) aborts.
   useEffect(() => {
     return () => {
-      const sid = sessionIdMap.get(sessionKeyRef.current);
-      if (sid) {
+      // Unwatch ALL sessions this hook instance ever started, not just the current one.
+      // Previously only the current session was unwatched, leaving goroutines running
+      // in the connector for every session the user had switched away from.
+      for (const sid of watchedSessionIdsRef.current) {
         bridgeInvoke("claude-code-unwatch", { sessionId: sid }).catch(() => {});
       }
+      watchedSessionIdsRef.current.clear();
     };
   }, []);
 

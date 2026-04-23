@@ -25,6 +25,53 @@ function _stripSilentToken(text: string): string {
   return text.replace(_SILENT_TRAILING_RE, "").trim();
 }
 
+export function appendUniqueSuffix(base: string, suffix: string): string {
+  if (!suffix) return base;
+  if (!base) return suffix;
+  if (base.endsWith(suffix)) return base;
+  const maxOverlap = Math.min(base.length, suffix.length);
+  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+    if (base.slice(-overlap) === suffix.slice(0, overlap)) {
+      return base + suffix.slice(overlap);
+    }
+  }
+  return base + suffix;
+}
+
+export function resolveMergedStreamText(params: {
+  previousText: string;
+  nextText?: string;
+  nextDelta?: string;
+}): string {
+  const previousText = params.previousText || "";
+  const nextText = params.nextText || "";
+  const nextDelta = params.nextDelta || "";
+
+  if (nextText && previousText) {
+    if (nextText.startsWith(previousText)) {
+      return nextText;
+    }
+    if (previousText.startsWith(nextText) && !nextDelta) {
+      return previousText;
+    }
+  }
+  if (nextDelta) {
+    return appendUniqueSuffix(previousText, nextDelta);
+  }
+  if (nextText) {
+    return nextText;
+  }
+  return previousText;
+}
+
+export function stripCommittedPrefix(text: string, committedPrefix?: string): string {
+  if (!text || !committedPrefix) return text;
+  if (text.startsWith(committedPrefix)) {
+    return text.slice(committedPrefix.length);
+  }
+  return text;
+}
+
 export function gatewayHttpToWs(httpUrl: string): string {
   return httpUrl.replace(/^http/, "ws");
 }
@@ -67,9 +114,28 @@ export type GatewayConnectOptions = { token?: string | null; hubMode?: boolean; 
 
 const RECONNECT_BACKOFF_MS = [1000, 2000, 4000, 8000, 16000, 30000];
 const MAX_RECONNECT_ATTEMPTS = RECONNECT_BACKOFF_MS.length;
+const GATEWAY_UNAVAILABLE_COOLDOWN_MS = 15_000;
+const DEFAULT_MODELS_TIMEOUT_MS = 25_000;
+const DEFAULT_SESSIONS_LIST_TIMEOUT_MS = 25_000;
 
 function randomId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 11)}`;
+}
+
+function isGatewayMethod(method: string): boolean {
+  return (
+    method.startsWith("chat.") ||
+    method.startsWith("sessions.") ||
+    method.startsWith("models.") ||
+    method.startsWith("agents.") ||
+    method.startsWith("agent.") ||
+    method.startsWith("usage.") ||
+    method.startsWith("skills.")
+  );
+}
+
+function isGatewayUnavailableErrorMessage(message: string): boolean {
+  return /gateway not connected|pairing required|not paired|failed to communicate with device/i.test(message);
 }
 
 /** Sign a connect challenge using Electron API or server-side API fallback */
@@ -123,7 +189,7 @@ export const gatewayConnection = {
    *  generation to the current value and bail out if they differ. */
   _connectionGeneration: 0,
   listeners: new Set<() => void>(),
-  pendingRequests: new Map<string, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>(),
+  pendingRequests: new Map<string, { resolve: (v: unknown) => void; reject: (e: unknown) => void; method: string }>(),
   pendingRequestTimeouts: new Map<string, ReturnType<typeof setTimeout>>(),
   deviceIdentity: null as { deviceId: string; publicKeyPem: string } | null,
   // Chat event handlers
@@ -156,6 +222,7 @@ export const gatewayConnection = {
   _lastPong: 0 as number,
   _PING_INTERVAL: 30_000,
   _PONG_TIMEOUT: 60_000,
+  _gatewayUnavailableUntil: 0 as number,
 
   notify() {
     this.listeners.forEach((cb) => cb());
@@ -187,8 +254,12 @@ export const gatewayConnection = {
         reject(new Error("WebSocket not connected"));
         return;
       }
+      if (this.hubMode && isGatewayMethod(method) && Date.now() < this._gatewayUnavailableUntil) {
+        reject(new Error("Gateway not ready yet"));
+        return;
+      }
       const id = randomId();
-      this.pendingRequests.set(id, { resolve: resolve as (v: unknown) => void, reject });
+      this.pendingRequests.set(id, { resolve: resolve as (v: unknown) => void, reject, method });
       // In hub mode, include routing fields inside params — the hub extracts
       // deviceId + requestType from params (lines 529-530 of hub.go) then
       // deletes them before forwarding clean params to the connector/gateway.
@@ -239,13 +310,18 @@ export const gatewayConnection = {
     }
 
     // Handle streaming events from connector (claude-code-stream, codex-stream,
-    // claude-code-session-update). Dispatch as DOM CustomEvent for React hooks.
+    // claude-code-session-update, runtime.uninstalled). Dispatch as DOM CustomEvent for React hooks.
     if (
       (msgType === "event" || msgType === "evt") &&
       event &&
       (event === "claude-code-stream" ||
        event === "codex-stream" ||
-       event === "claude-code-session-update")
+       event === "hermes-stream" ||
+       event === "room-agent-stream" ||
+       event === "claude-code-session-update" ||
+       event === "runtime.uninstalled" ||
+       event === "onboarding-progress" ||
+       event === "onboarding-action-completed")
     ) {
       const data = payload?.data as Record<string, unknown> | undefined;
       if (data && typeof window !== "undefined") {
@@ -272,14 +348,23 @@ export const gatewayConnection = {
           this.pendingRequestTimeouts.delete(id);
         }
         if (msg.ok) {
+          if (this.hubMode && isGatewayMethod(pending.method)) {
+            this._gatewayUnavailableUntil = 0;
+          }
           pending.resolve(msg.payload);
         } else {
           // Error can be a string or object { code, message }
           const errorObj = msg.error as { code?: string; message?: string } | undefined;
           if (typeof msg.error === "string") {
+            if (this.hubMode && isGatewayMethod(pending.method) && isGatewayUnavailableErrorMessage(msg.error || "")) {
+              this._gatewayUnavailableUntil = Date.now() + GATEWAY_UNAVAILABLE_COOLDOWN_MS;
+            }
             pending.reject(new Error(msg.error || "Request failed"));
           } else {
             const errorMessage = errorObj?.message || errorObj?.code || "Request failed";
+            if (this.hubMode && isGatewayMethod(pending.method) && isGatewayUnavailableErrorMessage(errorMessage)) {
+              this._gatewayUnavailableUntil = Date.now() + GATEWAY_UNAVAILABLE_COOLDOWN_MS;
+            }
             pending.reject(new Error(errorMessage));
           }
         }
@@ -413,14 +498,12 @@ export const gatewayConnection = {
               }
               if (!owner) this._deltaSourceOwner.set(payload.runId, "chat");
               const existing = this.agentDeltaBuffer.get(payload.runId) || "";
-              // If incoming text already starts with the buffer, it's accumulated
-              // (common when hub relays connector chat events) — replace, don't append.
-              let newBuffer: string;
-              if (existing && deltaText.startsWith(existing)) {
-                newBuffer = deltaText;
-              } else {
-                newBuffer = existing + deltaText;
-              }
+              const committedPrefix = this._committedSegments?.get(payload.runId) || "";
+              const nextText = stripCommittedPrefix(deltaText, committedPrefix);
+              let newBuffer = resolveMergedStreamText({
+                previousText: existing,
+                nextText,
+              });
               if (newBuffer.length > 524_288) newBuffer = newBuffer.slice(-524_288);
               this.agentDeltaBuffer.set(payload.runId, newBuffer);
               this._agentDeltaTimestamps?.set(payload.runId, Date.now());
@@ -471,8 +554,10 @@ export const gatewayConnection = {
         const delta = data?.delta as string | undefined;
         const text = data?.text as string | undefined;
         const content = data?.content as string | undefined;
-        const assistantText = delta || text || content;
-        if (assistantText !== undefined && assistantText !== "") {
+        const committedPrefix = this._committedSegments?.get(runId) || "";
+        const nextText = stripCommittedPrefix(text || content || "", committedPrefix);
+        const nextDelta = stripCommittedPrefix(delta || "", committedPrefix);
+        if (nextText !== "" || nextDelta !== "") {
           // Turn-level lock: if the chat path already claimed this turn's
           // text stream (possibly under a different runId), suppress agent path.
           if (this._activeTextSource === "chat") {
@@ -487,19 +572,15 @@ export const gatewayConnection = {
             return;
           }
           if (!owner) this._deltaSourceOwner.set(runId, "agent");
-          // Get existing buffered text for this run and accumulate.
-          // If incoming text already starts with the buffer, it's pre-accumulated
-          // (hub relay may forward accumulated content) — replace, don't append.
           const existingBuffer = this.agentDeltaBuffer.get(runId) || "";
-          let newBuffer: string;
-          if (existingBuffer && assistantText.startsWith(existingBuffer)) {
-            newBuffer = assistantText;
-          } else {
-            newBuffer = existingBuffer + assistantText;
-          }
+          const newBuffer = resolveMergedStreamText({
+            previousText: existingBuffer,
+            nextText,
+            nextDelta,
+          });
           // Cap individual buffer at 512KB to prevent OOM
-          if (newBuffer.length > 524_288) newBuffer = newBuffer.slice(-524_288);
-          this.agentDeltaBuffer.set(runId, newBuffer);
+          const cappedBuffer = newBuffer.length > 524_288 ? newBuffer.slice(-524_288) : newBuffer;
+          this.agentDeltaBuffer.set(runId, cappedBuffer);
           this._agentDeltaTimestamps?.set(runId, Date.now());
           // Periodically prune stale entries (every 50 runs)
           if (this.agentDeltaBuffer.size > 50) this.pruneAgentDeltaBuffer();
@@ -507,7 +588,7 @@ export const gatewayConnection = {
           // Suppress heartbeat/silent-reply text that bypassed server-side filtering.
           // During streaming the text builds up token-by-token; suppress if the
           // accumulated text is purely a silent token or a prefix leading to one.
-          if (_isSilentReplyText(newBuffer) || _isSilentReplyPrefix(newBuffer)) {
+          if (_isSilentReplyText(cappedBuffer) || _isSilentReplyPrefix(cappedBuffer)) {
             return;
           }
 
@@ -516,7 +597,7 @@ export const gatewayConnection = {
             runId,
             sessionKey,
             state: "delta",
-            message: { role: "assistant", content: [{ type: "text", text: newBuffer }] },
+            message: { role: "assistant", content: [{ type: "text", text: cappedBuffer }] },
           };
           this.chatEventListeners.forEach((handler) => handler(chatPayload));
         }
@@ -675,6 +756,18 @@ export const gatewayConnection = {
           }
         });
       }
+
+      // Also dispatch critical device lifecycle events as DOM CustomEvents so
+      // non-subscriber modules (e.g., hub-direct's circuit breaker) can react
+      // without taking a runtime dependency on this singleton.
+      if (typeof window !== "undefined" && (event === "device_connected" || event === "device_disconnected")) {
+        try {
+          const detail = { deviceId: (msg as { deviceId?: string }).deviceId };
+          window.dispatchEvent(new CustomEvent(`hyperclaw:${event}`, { detail }));
+        } catch (err) {
+          console.error(`[Gateway WS] Failed to dispatch DOM event for "${event}":`, err);
+        }
+      }
     }
   },
 
@@ -702,6 +795,20 @@ export const gatewayConnection = {
     }
     this.eventHandlers.get(event)!.add(callback);
     return () => this.eventHandlers.get(event)?.delete(callback);
+  },
+
+  /** Manually emit an event to all registered handlers */
+  emit(event: string, payload: Record<string, unknown> = {}): void {
+    const handlers = this.eventHandlers.get(event);
+    if (handlers) {
+      handlers.forEach((handler) => {
+        try {
+          handler(payload);
+        } catch (err) {
+          console.error(`[gateway] emit handler error for ${event}:`, err);
+        }
+      });
+    }
   },
 
   /** Subscribe to ALL session events (broad — receives session.message for every session) */
@@ -765,7 +872,7 @@ export const gatewayConnection = {
   /** Get chat history */
   _chatHistoryInflight: new Map<string, Promise<{ messages?: unknown[] }>>(),
   _chatHistoryCache: new Map<string, { data: { messages?: unknown[] }; ts: number }>(),
-  _chatHistoryCacheTTL: 1500,
+  _chatHistoryCacheTTL: 30000, // 30s TTL — chat history is mostly append-only
   getChatHistory(sessionKey: string, limit: number = 200): Promise<{ messages?: unknown[] }> {
     const cacheKey = `${sessionKey}::${limit}`;
     const cached = this._chatHistoryCache.get(cacheKey);
@@ -778,9 +885,20 @@ export const gatewayConnection = {
       return inflight;
     }
 
-    const req = this.request<{ messages?: unknown[] }>("chat.history", { sessionKey, limit })
+    // 60s timeout — chat.history reads large JSONL session files (3-8MB) and the
+    // response traverses a 4-hop relay chain (dashboard→hub→connector→gateway).
+    const req = this.request<{ messages?: unknown[] }>("chat.history", { sessionKey, limit }, 60_000)
       .then((result) => {
-        this._chatHistoryCache.set(cacheKey, { data: result, ts: Date.now() });
+        const now = Date.now();
+        this._chatHistoryCache.set(cacheKey, { data: result, ts: now });
+        // Prune stale entries on every write to prevent unbounded Map growth.
+        // Without this, every unique sessionKey::limit combo seen in the session
+        // stays in the Map forever (only TTL-checked on read, never evicted).
+        for (const [k, v] of this._chatHistoryCache) {
+          if (now - v.ts > this._chatHistoryCacheTTL) {
+            this._chatHistoryCache.delete(k);
+          }
+        }
         return result;
       })
       .finally(() => {
@@ -794,14 +912,18 @@ export const gatewayConnection = {
   _modelsInflight: null as Promise<{ models: Array<{ id: string; provider: string; displayName?: string }> }> | null,
   _modelsCache: null as { data: { models: Array<{ id: string; provider: string; displayName?: string }> }; ts: number } | null,
   _modelsCacheTTL: 15_000, // 15s — models change rarely
-  listModels(): Promise<{ models: Array<{ id: string; provider: string; displayName?: string }> }> {
+  listModels(timeoutMs?: number): Promise<{ models: Array<{ id: string; provider: string; displayName?: string }> }> {
     if (this._modelsCache && Date.now() - this._modelsCache.ts < this._modelsCacheTTL) {
       return Promise.resolve(this._modelsCache.data);
     }
     if (this._modelsInflight) {
       return this._modelsInflight;
     }
-    const req = this.request<{ models: Array<{ id: string; provider: string; displayName?: string }> }>("models.list", {})
+    const req = this.request<{ models: Array<{ id: string; provider: string; displayName?: string }> }>(
+      "models.list",
+      {},
+      timeoutMs ?? DEFAULT_MODELS_TIMEOUT_MS
+    )
       .then((result) => {
         this._modelsCache = { data: result, ts: Date.now() };
         return result;
@@ -843,7 +965,7 @@ export const gatewayConnection = {
    * WS round-trip can satisfy many concurrent callers. */
   _sessionsListInflight: null as Promise<{ sessions?: Array<{ key: string; label?: string; createdAt?: number; updatedAt?: number; model?: string; modelProvider?: string; thinkingLevel?: string }> }> | null,
   _sessionsListCache: null as { data: { sessions?: Array<{ key: string; label?: string; createdAt?: number; updatedAt?: number; model?: string; modelProvider?: string; thinkingLevel?: string }> }; ts: number } | null,
-  _sessionsListCacheTTL: 2000, // 2s TTL
+  _sessionsListCacheTTL: 30000, // 30s TTL — sessions don't change that often
 
   /** Get list of sessions for an agent */
   async listSessions(agentId: string, limit: number = 50): Promise<{ sessions?: Array<{ key: string; label?: string; createdAt?: number; updatedAt?: number; model?: string; modelProvider?: string; thinkingLevel?: string }> }> {
@@ -855,7 +977,11 @@ export const gatewayConnection = {
     } else if (this._sessionsListInflight) {
       allSessions = await this._sessionsListInflight;
     } else {
-      const req = this.request<typeof allSessions>("sessions.list", { limit: 200 })
+      const req = this.request<typeof allSessions>(
+        "sessions.list",
+        { limit: 200 },
+        DEFAULT_SESSIONS_LIST_TIMEOUT_MS
+      )
         .finally(() => { this._sessionsListInflight = null; });
       this._sessionsListInflight = req;
       allSessions = await req;
@@ -1028,9 +1154,12 @@ export const gatewayConnection = {
       if (this.pendingRequests.size > 0) {
         const closeError = new Error(err || "WebSocket closed");
         for (const [id, pending] of this.pendingRequests) {
+          const timer = this.pendingRequestTimeouts.get(id);
+          if (timer) clearTimeout(timer);
           pending.reject(closeError);
         }
         this.pendingRequests.clear();
+        this.pendingRequestTimeouts.clear();
       }
       this.setState(false, err);
       this.scheduleReconnect();
@@ -1130,6 +1259,10 @@ export const gatewayConnection = {
       if (now - ts > maxAgeMs) {
         this.agentDeltaBuffer.delete(runId);
         this._agentDeltaTimestamps.delete(runId);
+        // Also prune sibling maps — runs that die without a terminal event leave
+        // stale entries in _deltaSourceOwner and _committedSegments forever.
+        this._deltaSourceOwner?.delete(runId);
+        this._committedSegments?.delete(runId);
       }
     }
   },
@@ -1209,13 +1342,22 @@ export function disconnectGatewayWs(): void {
   gatewayConnection.disconnect();
 }
 
+/** Reset the gateway singleton after onboarding or permanent failure.
+ *  Clears the permanentlyFailed flag and reconnect counter so a fresh
+ *  connection attempt can succeed. */
+export function resetGatewayConnection(): void {
+  gatewayConnection.disconnect();
+  gatewayConnection.permanentlyFailed = false;
+  gatewayConnection.reconnectAttempt = 0;
+}
+
 /**
  * Verify end-to-end connectivity through the full relay chain
  * (dashboard → hub → connector → OpenClaw gateway).
  * The hub WS being connected only means the dashboard can talk to the cloud —
  * this probe verifies OpenClaw is actually running and reachable on the device.
  */
-export async function probeGatewayHealth(timeoutMs = 12000): Promise<{ healthy: boolean; error?: string }> {
+export async function probeGatewayHealth(timeoutMs = 25000): Promise<{ healthy: boolean; error?: string }> {
   if (!gatewayConnection.connected) {
     return { healthy: false, error: "WebSocket not connected" };
   }
@@ -1226,7 +1368,7 @@ export async function probeGatewayHealth(timeoutMs = 12000): Promise<{ healthy: 
   // status banner flap. A single retry eliminates most transient timeouts.
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      await gatewayConnection.listModels();
+      await gatewayConnection.listModels(timeoutMs);
       return { healthy: true };
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Gateway not reachable";
@@ -1282,6 +1424,12 @@ export async function getGatewayConfig(): Promise<{ gatewayUrl: string; token: s
     } catch {
       /* hub not available */
     }
+  } else if (!token) {
+    // Hub URL found (e.g. from Electron hub-config) but JWT is empty — get it from the session cache
+    try {
+      const { getUserToken } = await import("$/lib/hub-direct");
+      token = await getUserToken() || null;
+    } catch { /* ok */ }
   }
 
   if (!hubUrl) return { gatewayUrl: "", token: null };
