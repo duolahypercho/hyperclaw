@@ -1,10 +1,11 @@
 "use client";
 
 import React, { createContext, useContext, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { LayoutGrid } from "lucide-react";
+import { useRouter } from "next/router";
 import type { AppSchema } from "@OS/Layout/types";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
 import { useHyperclawContext } from "$/Providers/HyperclawProv";
+import { getCompanyName } from "$/components/ensemble/shared/toolSchema";
 import { buildAgentsFromTeam, type AgentConfig, type AgentStatus, type RoomLabels } from "../types";
 
 /** How often to refetch employee status (lightweight). */
@@ -192,6 +193,7 @@ function mergeEmployeeStatus(
 }
 
 export function PixelOfficeProvider({ children }: { children: React.ReactNode }) {
+  const router = useRouter();
   const { agents: openClawAgents } = useHyperclawContext();
   const [officeData, setOfficeData] = useState<OfficeData>(EMPTY_OFFICE_DATA);
   const [loading, setLoading] = useState(true);
@@ -330,12 +332,17 @@ export function PixelOfficeProvider({ children }: { children: React.ReactNode })
   const appSchema = useMemo<AppSchema>(
     () => ({
       header: {
-        title: officeName ? `${officeName} Office` : "Office",
-        icon: LayoutGrid,
+        centerUI: {
+          type: "breadcrumbs" as const,
+          breadcrumbs: [
+            { label: getCompanyName(), onClick: () => router.push("/dashboard") },
+            { label: "AI Agent Office" },
+          ],
+        },
       },
       sidebar: { sections: [] },
     }),
-    [officeName]
+    [router]
   );
 
   const value = useMemo(

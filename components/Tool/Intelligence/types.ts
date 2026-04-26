@@ -15,7 +15,6 @@ export interface TableMeta {
 
 export interface IntelSchema {
   tables: Record<string, TableMeta>;
-  fts5_available?: boolean;
 }
 
 export type SmartViewType = "grid" | "pipeline" | "chart" | "timeline" | "research";

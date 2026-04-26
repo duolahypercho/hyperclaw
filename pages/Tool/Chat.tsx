@@ -2,80 +2,59 @@ import React from "react";
 import { getLayout } from "../../layouts/MainLayout";
 import { CopanionProvider } from "@OS/Provider/CopanionProv";
 import { SEOSchema } from "@OS/Provider/SEOProv";
-import Chat from "$/components/Tool/Chat";
+import { InteractApp } from "@OS/InteractApp";
+import EnsembleChat from "$/components/ensemble/views/EnsembleChat";
+import { useEnsembleToolSchema } from "$/components/ensemble/shared/toolSchema";
 import { SITE_URL } from "../../lib/site-url";
+import { Plus, UserPlus } from "lucide-react";
+import type { AppSchema } from "@OS/Layout/types";
 
 const chatSEOSchema: SEOSchema = {
   title: "Chat - Hyperclaw OS",
   description:
-    "Chat with your OpenClaw AI agents. Send messages, view tool actions, manage sessions, and collaborate with your agent team in real time.",
+    "Ensemble chat — rooms and DMs with every agent on your team. @mention for handoffs.",
   url: `${SITE_URL}/Tool/Chat`,
   image: "https://hypercho.com/hypercho_banner.png",
   author: "Hypercho",
   robots: "index,follow",
   type: "software",
   themeColor: "#000319",
-  twitter: {
-    card: "summary_large_image",
-    site: "@hypercho",
-    creator: "@hypercho",
-    title: "Chat - Hyperclaw OS",
-    description:
-      "Chat with your OpenClaw AI agents in real time.",
-    image: "https://hypercho.com/hypercho_banner.png",
-  },
-  openGraph: {
-    type: "software",
-    title: "Chat - Hyperclaw OS",
-    description:
-      "Chat with your OpenClaw AI agents in real time.",
-    url: `${SITE_URL}/Tool/Chat`,
-    image: "https://hypercho.com/hypercho_banner.png",
-    site_name: "Hypercho Hyperclaw",
-    locale: "en_US",
-  },
-  jsonLd: {
-    "@type": "SoftwareApplication",
-    name: "Hyperclaw Chat",
-    description:
-      "Real-time chat with OpenClaw AI agents with tool actions and session management",
-    applicationCategory: "ProductivityApplication",
-    operatingSystem: "Web Browser",
-    softwareVersion: "1.0",
-    featureList: [
-      "Agent Chat",
-      "Tool Action Visualization",
-      "Session Management",
-      "Message History",
-      "File Attachments",
-      "Real-time Streaming",
-    ],
-    offers: {
-      "@type": "Offer",
-      price: "0",
-      priceCurrency: "USD",
-      availability: "https://schema.org/InStock",
-      url: `${SITE_URL}/Tool/Chat`,
-    },
-    creator: {
-      "@type": "Organization",
-      name: "Hypercho",
-      url: "https://hypercho.com",
-    },
-    applicationSubCategory: "OfficeApplication",
-    downloadUrl: `${SITE_URL}/Tool/Chat`,
-    installUrl: `${SITE_URL}/Tool/Chat`,
-    softwareRequirements: "Web Browser with JavaScript enabled",
-    storageRequirements: "Cloud-based storage",
-    permissions: "Access to OpenClaw CLI",
-    browserRequirements: "Chrome 90+, Firefox 88+, Safari 14+, Edge 90+",
-  },
 };
 
 const Index = () => {
+  const base = useEnsembleToolSchema("Chat");
+  const appSchema = React.useMemo<AppSchema>(() => ({
+    ...base,
+    header: {
+      ...base.header,
+      rightUI: {
+        type: "buttons" as const,
+        buttons: [
+          {
+            id: "chat-new-agent",
+            label: "Hire agent",
+            icon: <UserPlus />,
+            variant: "secondary" as const,
+            onClick: () =>
+              window.dispatchEvent(new CustomEvent("ensemble:new-agent")),
+          },
+          {
+            id: "chat-new-room",
+            label: "New room",
+            icon: <Plus />,
+            variant: "secondary" as const,
+            onClick: () =>
+              window.dispatchEvent(new CustomEvent("ensemble:new-room")),
+          },
+        ],
+      },
+    },
+  }), [base]);
   return (
     <CopanionProvider seoSchema={chatSEOSchema}>
-      <Chat />
+      <InteractApp appSchema={appSchema} className="p-0 min-h-0 h-full w-full">
+        <EnsembleChat />
+      </InteractApp>
     </CopanionProvider>
   );
 };

@@ -1,15 +1,24 @@
+/**
+ * /Tool/Docs → now renders the Ensemble Knowledge page.
+ *
+ * The old OpenClaw workspace doc browser has been replaced by the company
+ * knowledge base, which stores collections under ~/.hyperclaw/<companyId>/.
+ * The full Docs functionality (create, edit, delete, search) is available
+ * via the Knowledge view and its sidebar.
+ */
 import React from "react";
 import { getLayout } from "../../layouts/MainLayout";
 import { CopanionProvider } from "@OS/Provider/CopanionProv";
 import { SEOSchema } from "@OS/Provider/SEOProv";
-import Docs from "$/components/Tool/Docs";
-import { DocsProvider } from "$/components/Tool/Docs/provider/docsProvider";
+import { InteractApp } from "@OS/InteractApp";
+import { KnowledgeProvider, useKnowledgeData } from "$/components/ensemble/hooks/useKnowledgeData";
+import Knowledge from "$/components/ensemble/views/Knowledge";
 import { SITE_URL } from "../../lib/site-url";
 
 const docsSEOSchema: SEOSchema = {
-  title: "Docs - Hyperclaw OS",
+  title: "Knowledge - Hyperclaw OS",
   description:
-    "Browse and read markdown documentation from your OpenClaw workspace. View all .md files under ~/.openclaw with a clean, consistent layout.",
+    "Browse and manage company knowledge collections stored under ~/.hyperclaw. Create, edit, and search markdown documents across all agent collections.",
   url: `${SITE_URL}/Tool/Docs`,
   image: "https://hypercho.com/hypercho_banner.png",
   author: "Hypercho",
@@ -20,16 +29,14 @@ const docsSEOSchema: SEOSchema = {
     card: "summary_large_image",
     site: "@hypercho",
     creator: "@hypercho",
-    title: "Docs - Hyperclaw OS",
-    description:
-      "Browse and read markdown documentation from your OpenClaw workspace.",
+    title: "Knowledge - Hyperclaw OS",
+    description: "Browse and manage company knowledge collections.",
     image: "https://hypercho.com/hypercho_banner.png",
   },
   openGraph: {
     type: "software",
-    title: "Docs - Hyperclaw OS",
-    description:
-      "Browse and read markdown documentation from your OpenClaw workspace.",
+    title: "Knowledge - Hyperclaw OS",
+    description: "Browse and manage company knowledge collections.",
     url: `${SITE_URL}/Tool/Docs`,
     image: "https://hypercho.com/hypercho_banner.png",
     site_name: "Hypercho Hyperclaw",
@@ -37,16 +44,17 @@ const docsSEOSchema: SEOSchema = {
   },
   jsonLd: {
     "@type": "SoftwareApplication",
-    name: "Hyperclaw Docs",
-    description: "Browse OpenClaw workspace markdown docs",
+    name: "Hyperclaw Knowledge",
+    description: "Company knowledge base with collections under ~/.hyperclaw",
     applicationCategory: "ProductivityApplication",
     operatingSystem: "Web Browser",
-    softwareVersion: "1.0",
+    softwareVersion: "2.0",
     featureList: [
-      "List all .md files in ~/.openclaw",
-      "Group by folder",
-      "Markdown rendering",
-      "Refresh list",
+      "Browse collections under ~/.hyperclaw/<companyId>/",
+      "Create and edit markdown documents",
+      "Search across all collections",
+      "Agent memory shelves",
+      "Real-time save",
     ],
     offers: {
       "@type": "Offer",
@@ -60,22 +68,24 @@ const docsSEOSchema: SEOSchema = {
       name: "Hypercho",
       url: "https://hypercho.com",
     },
-    applicationSubCategory: "OfficeApplication",
-    downloadUrl: `${SITE_URL}/Tool/Docs`,
-    installUrl: `${SITE_URL}/Tool/Docs`,
-    softwareRequirements: "Web Browser with JavaScript enabled",
-    storageRequirements: "Read-only access to ~/.openclaw",
-    permissions: "None",
-    browserRequirements: "Chrome 90+, Firefox 88+, Safari 14+, Edge 90+",
   },
 };
+
+function KnowledgeApp() {
+  const { appSchema } = useKnowledgeData();
+  return (
+    <InteractApp appSchema={appSchema} className="p-0 min-h-0 h-full w-full">
+      <Knowledge />
+    </InteractApp>
+  );
+}
 
 const Index = () => {
   return (
     <CopanionProvider seoSchema={docsSEOSchema}>
-      <DocsProvider>
-        <Docs />
-      </DocsProvider>
+      <KnowledgeProvider>
+        <KnowledgeApp />
+      </KnowledgeProvider>
     </CopanionProvider>
   );
 };

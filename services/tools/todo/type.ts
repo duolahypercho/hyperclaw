@@ -1,5 +1,7 @@
 import { RecurrenceRule } from "@/components/recurrence_filter";
 
+export type TodoTaskStatus = "pending" | "completed" | "in_progress" | "blocked" | "cancelled";
+
 export type TabType =
   | "task"
   | "starred"
@@ -15,7 +17,7 @@ export interface AddTodoTaskRequest {
   description: string;
   listId: string;
   order: number;
-  status?: string;
+  status?: TodoTaskStatus;
   starred?: boolean;
   myDay?: boolean;
   dueDate?: Date;
@@ -23,6 +25,8 @@ export interface AddTodoTaskRequest {
   assignedAgent?: string;
   assignedAgentId?: string;
   linkedDocumentUrl?: string;
+  /** Optional project/goal this task belongs to. Project issue boards depend on this. */
+  projectId?: string;
   /** Optional delivery channel for announcing task result (e.g. when run by cron) */
   delivery?: {
     announce?: boolean;
@@ -50,7 +54,7 @@ export interface PromoteToTaskRequest {
 export interface UpdateTodoTaskRequest {
   id: string;
   title?: string;
-  status?: "pending" | "completed" | "in_progress" | "blocked" | "cancelled";
+  status?: TodoTaskStatus;
   order?: number;
   listId?: string;
   description?: string;
@@ -60,6 +64,7 @@ export interface UpdateTodoTaskRequest {
   assignedAgent?: string;
   assignedAgentId?: string;
   linkedDocumentUrl?: string;
+  projectId?: string;
 }
 
 export interface UpdateTodoTaskDetailsRequest {

@@ -1,4 +1,5 @@
 import React, { memo, useMemo, useCallback, useState, useEffect, useRef } from "react";
+import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import { CustomProps } from "$/components/Home/widgets/types/widgets";
 import {
@@ -140,7 +141,7 @@ const AGENT_EVENT_TYPES: EventType[] = ["agent_started", "agent_completed", "age
 let _eventSeq = 0;
 function makeEventId() { return `evt-${Date.now()}-${++_eventSeq}`; }
 
-type KanbanStatus = "pending" | "in_progress" | "completed" | "cancelled";
+type KanbanStatus = "pending" | "in_progress" | "blocked" | "completed" | "cancelled";
 
 interface MiniColumnConfig {
   id: KanbanStatus;
@@ -164,6 +165,13 @@ const COLUMNS: MiniColumnConfig[] = [
     icon: <PlayCircle className="w-3 h-3" />,
     accentClass: "text-primary",
     dotClass: "bg-primary",
+  },
+  {
+    id: "blocked",
+    label: "Blocked",
+    icon: <AlertTriangle className="w-3 h-3" />,
+    accentClass: "text-amber-500",
+    dotClass: "bg-amber-500",
   },
   {
     id: "completed",
@@ -1328,13 +1336,13 @@ const TeamAgentsPanel = memo<{
           <Plus className="w-3 h-3" />
           Add Agent
         </button>
-        <a
-          href="/Tool/OrgChart"
+        <Link
+          href="/Tool/Team"
           className="w-full flex items-center justify-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] text-muted-foreground hover:text-foreground hover:bg-card/60 transition-colors"
         >
           <ExternalLink className="w-2.5 h-2.5" />
           Edit teams in Org Chart
-        </a>
+        </Link>
       </div>
     </div>
   );
@@ -1806,6 +1814,7 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
     const g: Record<KanbanStatus, Task[]> = {
       pending: [],
       in_progress: [],
+      blocked: [],
       completed: [],
       cancelled: [],
     };
@@ -1825,8 +1834,8 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
         if (isCompletedToday(task)) g.completed.push(task);
       } else if (s === "cancelled") {
         // cancelled tasks not shown in columns
-      } else if (s === "in_progress" || (task.status as string) === "blocked" || (task.status as string) === "in_review") {
-        // Map legacy blocked/in_review → in_progress
+      } else if ((task.status as string) === "in_review") {
+        // Legacy in_review values still behave as active work.
         g.in_progress.push(task);
       } else if (g[s]) {
         g[s].push(task);
@@ -2028,9 +2037,15 @@ const KanbanWidgetContent = memo((props: CustomProps) => {
     handleAddTask({ title, status: "completed", assignedAgent: agentObj?.name, assignedAgentId: agentObj?.id });
   }, [agents, handleAddTask]);
 
+  const handleInlineAddBlocked = useCallback((title: string, agentId?: string) => {
+    const agentObj = agentId ? agents.find((a) => a.id === agentId) : undefined;
+    handleAddTask({ title, status: "blocked", assignedAgent: agentObj?.name, assignedAgentId: agentObj?.id });
+  }, [agents, handleAddTask]);
+
   const inlineAddHandlers: Record<KanbanStatus, (title: string, agentId?: string) => void> = {
     pending: handleInlineAddPending,
     in_progress: handleInlineAddInProgress,
+    blocked: handleInlineAddBlocked,
     completed: handleInlineAddCompleted,
     cancelled: handleInlineAddPending, // fallback
   };

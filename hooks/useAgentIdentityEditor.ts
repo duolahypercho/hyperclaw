@@ -19,6 +19,7 @@ import {
   readAvatarAsDataUri,
   getAgentHeartbeat,
   saveAgentHeartbeat,
+  syncSoulMd,
 } from "$/lib/identity-md";
 
 /* ── Constants ─────────────────────────────────────────── */
@@ -95,7 +96,7 @@ export interface AgentIdentityEditorState {
   /* Immediate-save helpers (for auto-save-on-blur patterns) */
   saveFieldNow: (field: string, value: string) => Promise<void>;
   saveModelNow: (modelId: string) => void;
-  patchCacheNow: (patch: { name?: string; emoji?: string; avatar?: string }) => void;
+  patchCacheNow: (patch: { name?: string; emoji?: string; avatar?: string; role?: string; description?: string }) => void;
 
   /** Raw IDENTITY.md content (for advanced use) */
   raw: string;
@@ -159,11 +160,23 @@ export function useAgentIdentityEditor(
     setLoading(true);
 
     // 1. IDENTITY.md
+    //    OpenClaw agents live in ~/.openclaw/{workspace}/IDENTITY.md.
+    //    Runtime agents (hermes, claude-code, codex) live under their runtime home.
+    //    Route via runtime-aware bridge so we actually reach ~/.hermes/IDENTITY.md
+    //    instead of a nonexistent path inside the OpenClaw home.
     (async () => {
       try {
-        const res = (await bridgeInvoke("get-openclaw-doc", {
-          relativePath: identityPath,
-        })) as { success?: boolean; content?: string | null };
+        const runtime = opts?.agentRuntime;
+        const useRuntimeDoc = !!(runtime && runtime !== "openclaw");
+        const res = useRuntimeDoc
+          ? ((await bridgeInvoke("get-agent-identity-doc", {
+              runtime,
+              agentId,
+              fileName: "IDENTITY.md",
+            })) as { success?: boolean; content?: string | null })
+          : ((await bridgeInvoke("get-openclaw-doc", {
+              relativePath: identityPath,
+            })) as { success?: boolean; content?: string | null });
         if (cancelled) return;
         const content =
           res?.success && typeof res.content === "string" ? res.content : "";
@@ -315,19 +328,43 @@ export function useAgentIdentityEditor(
     setSaved(false);
     try {
       // Non-OpenClaw runtime agents (claude-code, codex, hermes) don't have
-      // IDENTITY.md in the OpenClaw workspace. Save directly to SQLite instead.
+      // IDENTITY.md in the OpenClaw workspace. Save name/emoji/avatar to SQLite
+      // and description/role to the runtime's IDENTITY.md on disk.
       if (isRuntimeAgent) {
         const avatarData = avatarPreview || loadedAvatarUri || undefined;
         const res = (await bridgeInvoke("update-agent-identity", {
           agentId,
           name,
           emoji,
+          role,
+          description,
+          runtime: opts?.agentRuntime,
           ...(avatarData ? { avatarData } : {}),
         })) as { success?: boolean };
         if (!res?.success) { setSaving(false); return false; }
+
+        // Persist description/role/name back to the runtime's IDENTITY.md so
+        // onboarding-provisioned content and subsequent edits stay in sync.
+        try {
+          let content = raw || "";
+          content = updateIdentityField(content, "Name", name);
+          if (role.trim()) content = updateIdentityField(content, "Role", role);
+          content = updateIdentityField(content, "Emoji", emoji);
+          content = updateIdentityDescription(content, description);
+          await bridgeInvoke("write-agent-identity-doc", {
+            runtime: opts?.agentRuntime,
+            agentId,
+            fileName: "IDENTITY.md",
+            content,
+          });
+          setRaw(content);
+        } catch { /* non-fatal — SQLite copy still saved */ }
+
         patchIdentityCache(agentId, {
           name,
           emoji,
+          role,
+          description,
           ...(avatarData ? { avatar: avatarData } : {}),
         });
         if (avatarPreview) setLoadedAvatarUri(avatarPreview);
@@ -340,6 +377,22 @@ export function useAgentIdentityEditor(
           }
           setOriginalModel(model);
         }
+        // Keep SQLite agents.config in sync so DB readers (widgets, diagnostics)
+        // can reliably find description/role/runtime metadata after onboarding.
+        try {
+          const configPatch: Record<string, unknown> = {
+            description,
+            role,
+            runtime: opts?.agentRuntime || runtime || "",
+          };
+          if (model && model !== "__default__") configPatch.mainModel = model;
+          await bridgeInvoke("update-agent-config", {
+            agentId,
+            config: configPatch,
+          });
+        } catch { /* non-fatal */ }
+        // Keep SOUL.md name/description in sync with IDENTITY.md edits.
+        syncSoulMd(agentId, { name, emoji, description }, { runtime: opts?.agentRuntime });
         setSaved(true);
         setTimeout(() => setSaved(false), 2000);
         setSaving(false);
@@ -379,6 +432,8 @@ export function useAgentIdentityEditor(
       patchIdentityCache(agentId, {
         name,
         emoji,
+        role,
+        description,
         avatar: avatarPreview || loadedAvatarUri || avatarValue,
       });
       if (avatarPreview) setLoadedAvatarUri(avatarPreview);
@@ -391,6 +446,24 @@ export function useAgentIdentityEditor(
         await saveAgentModel(agentId, model);
         setOriginalModel(model === "__default__" ? "" : model);
       }
+
+      // Keep SQLite config metadata aligned with the identity editor values.
+      // This ensures downstream DB reads include description/role/runtime.
+      try {
+        const configPatch: Record<string, unknown> = {
+          description,
+          role,
+          runtime: "openclaw",
+        };
+        if (model && model !== "__default__") configPatch.mainModel = model;
+        await bridgeInvoke("update-agent-config", {
+          agentId,
+          config: configPatch,
+        });
+      } catch { /* non-fatal */ }
+
+      // Keep SOUL.md name/description in sync with IDENTITY.md edits.
+      syncSoulMd(agentId, { name, emoji, description }, { runtime: "openclaw" });
 
       // Save heartbeat
       if (hbModel !== originalHbModel || hbEvery !== originalHbEvery) {
@@ -432,6 +505,7 @@ export function useAgentIdentityEditor(
     hbModel, originalHbModel, hbEvery, originalHbEvery,
     runtime, department, originalDepartment, orgNodeId, departments,
     opts?.identityName,
+    opts?.agentRuntime,
   ]);
 
   /* ── Immediate-save helpers (for auto-save patterns) ── */
@@ -468,7 +542,7 @@ export function useAgentIdentityEditor(
 
   /** Patch the identity cache immediately (for instant UI updates). */
   const patchCacheNow = useCallback(
-    (patch: { name?: string; emoji?: string; avatar?: string }) => {
+    (patch: { name?: string; emoji?: string; avatar?: string; role?: string; description?: string }) => {
       patchIdentityCache(agentId, patch);
     },
     [agentId],

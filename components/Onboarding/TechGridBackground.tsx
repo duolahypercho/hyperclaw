@@ -63,6 +63,12 @@ export default function TechGridBackground() {
       if (!ctx) return;
       ctx.clearRect(0, 0, w, h);
 
+      const dark = document.documentElement.classList.contains("dark");
+      const pr = dark ? 255 : 30;
+      const pg = dark ? 255 : 40;
+      const pb = dark ? 255 : 90;
+      const lineA = dark ? 0.04 : 0.07;
+
       for (const p of particles) {
         p.x += p.vx;
         p.y += p.vy;
@@ -76,7 +82,7 @@ export default function TechGridBackground() {
         const pulse = 0.6 + 0.4 * Math.sin(p.phase);
         const a = p.opacity * pulse;
 
-        ctx.fillStyle = `rgba(255, 255, 255, ${a})`;
+        ctx.fillStyle = `rgba(${pr}, ${pg}, ${pb}, ${a})`;
         ctx.beginPath();
         ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
         ctx.fill();
@@ -89,8 +95,8 @@ export default function TechGridBackground() {
           const dy = particles[i].y - particles[j].y;
           const dist = Math.sqrt(dx * dx + dy * dy);
           if (dist < 120) {
-            const a = (1 - dist / 120) * 0.04;
-            ctx.strokeStyle = `rgba(255, 255, 255, ${a})`;
+            const a = (1 - dist / 120) * lineA;
+            ctx.strokeStyle = `rgba(${pr}, ${pg}, ${pb}, ${a})`;
             ctx.lineWidth = 0.5;
             ctx.beginPath();
             ctx.moveTo(particles[i].x, particles[i].y);

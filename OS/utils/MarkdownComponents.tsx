@@ -1,8 +1,41 @@
 import { Components } from "react-markdown";
 
+function isSafeMarkdownHref(href?: string): boolean {
+  if (!href) return false;
+  const trimmed = href.trim();
+  if (trimmed.startsWith("#") || (trimmed.startsWith("/") && !trimmed.startsWith("//")) || trimmed.startsWith("./")) {
+    return true;
+  }
+
+  try {
+    const url = new URL(trimmed);
+    return ["http:", "https:", "mailto:", "tel:"].includes(url.protocol);
+  } catch {
+    return false;
+  }
+}
+
 export const markdownComponents: Components = {
+  a: ({ node, href, children, ...props }) => {
+    if (!href || !isSafeMarkdownHref(href)) {
+      return <span className="text-muted-foreground line-through">{children}</span>;
+    }
+    const safeHref: string = href;
+
+    return (
+      <a
+        {...props}
+        href={safeHref}
+        target={safeHref.startsWith("#") ? undefined : "_blank"}
+        rel={safeHref.startsWith("#") ? undefined : "noopener noreferrer"}
+        className="text-primary underline-offset-4 hover:underline"
+      >
+        {children}
+      </a>
+    );
+  },
   pre: ({ node, ...props }) => (
-    <div className="overflow-auto w-full my-2 bg-black/10 p-2 rounded-lg customScrollbar2 transition-opacity duration-1000">
+    <div className="overflow-auto w-full my-2 bg-background p-2 rounded-lg customScrollbar2 transition-opacity duration-1000">
       <pre {...props} />
     </div>
   ),

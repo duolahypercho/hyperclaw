@@ -51,6 +51,12 @@ export default function StepAnimations({ step }: StepAnimationsProps) {
     let prevAlpha = 0;      // outgoing scene opacity
     let transitioning = false;
 
+    // Light/dark-aware white: on dark bg use white, on light bg use dark navy
+    let isDark = true;
+    function wc(a: number | string) {
+      return isDark ? `rgba(255,255,255,${a})` : `rgba(20,30,70,${a})`;
+    }
+
     // ─── background particles (shared) ─────────────────────
     const bgP: { x: number; y: number; vx: number; vy: number; o: number }[] = [];
     for (let i = 0; i < 20; i++) {
@@ -169,11 +175,11 @@ export default function StepAnimations({ step }: StepAnimationsProps) {
 
       // Claw
       const cx = w * 0.5, cy = claw.y;
-      ctx!.strokeStyle = "rgba(255,255,255,0.08)"; ctx!.lineWidth = 2;
+      ctx!.strokeStyle = wc(0.08); ctx!.lineWidth = 2;
       ctx!.beginPath(); ctx!.moveTo(w * 0.2, 6); ctx!.lineTo(w * 0.8, 6); ctx!.stroke();
-      ctx!.strokeStyle = "rgba(255,255,255,0.15)"; ctx!.lineWidth = 3;
+      ctx!.strokeStyle = wc(0.15); ctx!.lineWidth = 3;
       ctx!.beginPath(); ctx!.moveTo(cx, 0); ctx!.lineTo(cx, cy - 12); ctx!.stroke();
-      ctx!.fillStyle = "rgba(255,255,255,0.12)"; ctx!.fillRect(cx - 10, cy - 14, 20, 10);
+      ctx!.fillStyle = wc(0.12); ctx!.fillRect(cx - 10, cy - 14, 20, 10);
 
       for (const side of [-1, 0, 1]) {
         const spread = 14 + claw.openness * 18, fLen = 22 + claw.openness * 4;
@@ -183,9 +189,9 @@ export default function StepAnimations({ step }: StepAnimationsProps) {
           ctx!.strokeStyle = `rgba(120,220,255,${0.15 + 0.05 * Math.sin(tick * 0.1)})`;
           ctx!.lineWidth = 5; ctx!.beginPath(); ctx!.moveTo(cx + side * 4, cy); ctx!.quadraticCurveTo(ctrlX, ctrlY, tipX, tipY); ctx!.stroke();
         }
-        ctx!.strokeStyle = "rgba(255,255,255,0.25)"; ctx!.lineWidth = 2.5; ctx!.lineCap = "round";
+        ctx!.strokeStyle = wc(0.25); ctx!.lineWidth = 2.5; ctx!.lineCap = "round";
         ctx!.beginPath(); ctx!.moveTo(cx + side * 4, cy); ctx!.quadraticCurveTo(ctrlX, ctrlY, tipX, tipY); ctx!.stroke();
-        ctx!.fillStyle = "rgba(255,255,255,0.35)"; ctx!.beginPath(); ctx!.arc(tipX, tipY, 2, 0, Math.PI * 2); ctx!.fill();
+        ctx!.fillStyle = wc(0.35); ctx!.beginPath(); ctx!.arc(tipX, tipY, 2, 0, Math.PI * 2); ctx!.fill();
       }
 
       if (claw.holdingOrb) {
@@ -593,14 +599,14 @@ export default function StepAnimations({ step }: StepAnimationsProps) {
           ctx!.fill();
 
           // Body
-          ctx!.fillStyle = `rgba(255,255,255,0.25)`;
+          ctx!.fillStyle = wc(0.25);
           ctx!.beginPath();
           ctx!.moveTo(cx, rocketY - 16); // nose
           ctx!.lineTo(cx + 8, rocketY + 10);
           ctx!.lineTo(cx - 8, rocketY + 10);
           ctx!.closePath();
           ctx!.fill();
-          ctx!.strokeStyle = `rgba(255,255,255,0.4)`;
+          ctx!.strokeStyle = wc(0.4);
           ctx!.lineWidth = 1;
           ctx!.stroke();
 
@@ -651,6 +657,7 @@ export default function StepAnimations({ step }: StepAnimationsProps) {
     // ─── main loop ─────────────────────────────────────────
     function frame() {
       tick++;
+      isDark = document.documentElement.classList.contains("dark");
       const newStep = stepRef.current;
 
       // Handle step transitions with crossfade
@@ -678,7 +685,7 @@ export default function StepAnimations({ step }: StepAnimationsProps) {
         p.x += p.vx; p.y += p.vy;
         if (p.x < 0) p.x = w; if (p.x > w) p.x = 0;
         if (p.y < 0) p.y = h; if (p.y > h) p.y = 0;
-        ctx!.fillStyle = `rgba(255,255,255,${p.o})`;
+        ctx!.fillStyle = wc(p.o);
         ctx!.beginPath(); ctx!.arc(p.x, p.y, 1, 0, Math.PI * 2); ctx!.fill();
       }
 

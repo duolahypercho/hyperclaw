@@ -36,7 +36,6 @@ const Chat = () => {
 
   return (
     <div className="w-full h-full flex flex-row overflow-hidden bg-background">
-      {/* Left panel — agent list / status */}
       {showLeft && (
         <div
           className={
@@ -55,7 +54,6 @@ const Chat = () => {
         </div>
       )}
 
-      {/* Right panel — agent chat */}
       {showRight && (
         <div className="flex-1 h-full min-w-0">
           <AgentChatWidget

@@ -53,7 +53,7 @@ const SidebarSectionView: React.FC<{
   return (
     <>
       {section.title && (
-        <div className="flex items-center text-xs font-medium text-muted-foreground capitalize tracking-wide shrink-0">
+        <div className="flex items-center font-mono uppercase text-[9.5px] tracking-[0.08em] text-muted-foreground/80 px-2 pb-1 shrink-0">
           {section.title}
         </div>
       )}
@@ -87,19 +87,19 @@ const Sidebar: React.FC<{ schema: SidebarSchema }> = ({ schema }) => {
   const content = (
     <>
       {topCustom && (
-        <div className="shrink-0 px-3 pt-4 pb-2 border-b border-border/50">
+        <div className="shrink-0 px-2.5 pt-3 pb-2 border-b border-border">
           {topCustom.content}
         </div>
       )}
-      <div className="flex-1 overflow-y-auto customScrollbar2 px-3 py-4">
-        <div className="flex flex-col gap-4">
+      <div className="flex-1 overflow-y-auto customScrollbar2 px-2.5 py-3">
+        <div className="flex flex-col gap-3.5">
           {restSections.map((section, i) => (
             <SidebarSectionView key={section.id ?? i} section={section} dndEnabled={dndEnabled} />
           ))}
         </div>
       </div>
       {schema.footer && (
-        <div className="flex-none px-3 py-3 border-t border-b-0 border-l-0 border-r-0 border-solid border-primary bg-muted/30">
+        <div className="flex-none px-2.5 py-2.5 border-t border-border bg-muted/30">
           {schema.footer.map((section, i) => (
             <SidebarSectionView key={i} section={section} dndEnabled={dndEnabled} />
           ))}
@@ -109,7 +109,7 @@ const Sidebar: React.FC<{ schema: SidebarSchema }> = ({ schema }) => {
   );
 
   return (
-    <nav className="flex flex-col h-full w-64 border-r border-primary/15 bg-card/50 shadow-sm">
+    <nav className="flex flex-col h-full w-64 border-r border-l-0 border-t-0 border-b-0 border-solid border-border bg-card">
       {dndEnabled ? (
         <DndContext collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
           {content}

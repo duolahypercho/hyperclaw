@@ -13,7 +13,7 @@ import {
 import { useCrons } from "../provider/cronsProvider";
 import { formatDistanceToNow } from "date-fns";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { getJobNextRunDate, getJobPalette, getStatusColor } from "../utils";
+import { getJobNextRunDate, getJobPalette, getStatusColor, formatScheduleExpr } from "../utils";
 import { CronJobDetailDialog } from "../CronJobDetailDialog";
 import type { OpenClawCronJobJson } from "$/types/electron";
 
@@ -65,7 +65,7 @@ export function AllJobsView() {
           >
             <Server className="w-4 h-4 text-primary shrink-0" />
             <span className="text-foreground/90">
-              Viewing jobs from Hyperclaw Bridge. Install OpenClaw CLI to enable or disable jobs from this app.
+              Viewing jobs from Hyperclaw Bridge. All runtimes are managed from here.
             </span>
           </motion.div>
         )}
@@ -85,7 +85,7 @@ export function AllJobsView() {
             <Inbox className="w-10 h-10 text-muted-foreground/50 mb-3" />
             <p className="text-sm font-medium text-foreground">No cron jobs yet</p>
             <p className="text-xs text-muted-foreground text-center mt-1 max-w-[240px]">
-              Create jobs with the OpenClaw CLI to see them here and manage schedules.
+              Create a scheduled job to automate tasks across any runtime.
             </p>
           </motion.div>
         ) : (
@@ -128,7 +128,7 @@ export function AllJobsView() {
                           <Switch
                             checked={job.enabled}
                             onCheckedChange={() => handleToggleEnabled(job)}
-                            disabled={isToggling || bridgeOnly}
+                            disabled={isToggling}
                             className="shrink-0"
                             aria-label={job.enabled ? "Disable job" : "Enable job"}
                           />
@@ -139,9 +139,7 @@ export function AllJobsView() {
                           {job.enabled ? "Disable" : "Enable"} job
                         </p>
                         <p className="text-xs text-muted-foreground mt-0.5">
-                          {bridgeOnly
-                            ? "Install OpenClaw CLI to use openclaw cron enable/disable"
-                            : `Uses openclaw cron ${job.enabled ? "disable" : "enable"}`}
+                          {job.enabled ? "Pause scheduling" : "Resume scheduling"}
                         </p>
                       </TooltipContent>
                     </Tooltip>
@@ -186,7 +184,7 @@ export function AllJobsView() {
                       )}
                     </div>
                     <div className="text-xs text-muted-foreground truncate mt-0.5">
-                      {job.schedule?.expr || "—"}
+                      {formatScheduleExpr(job.schedule?.expr, job.schedule?.kind)}
                     </div>
                   </button>
                   <span

@@ -57,6 +57,8 @@ interface StoredTask {
   /** Canonical assignee id, e.g. "elon". */
   assignedAgentId?: string;
   linkedDocumentUrl?: string;
+  /** Project-scoped task grouping used by the project issue workspace. */
+  projectId?: string;
   /** Delivery channel for announcing result when task is run (e.g. by cron). */
   delivery?: { announce?: boolean; channel?: string; to?: string };
 }
@@ -135,6 +137,16 @@ function normalizeAgentAssignment(t: Record<string, unknown>): Pick<StoredTask, 
   };
 }
 
+function extractProjectId(t: Record<string, unknown>): string | undefined {
+  const nested = t.data && typeof t.data === "object" ? (t.data as Record<string, unknown>) : undefined;
+  return (
+    asString(t.projectId) ??
+    asString((t as Record<string, unknown>).project_id) ??
+    asString(nested?.projectId) ??
+    asString(nested?.project_id)
+  );
+}
+
 /** Normalize a task from bridge (id, no steps) or app (_id, steps) into StoredTask shape. */
 function normalizeTask(t: Record<string, unknown>): StoredTask {
   const _id = (t._id ?? t.id) as string;
@@ -161,6 +173,7 @@ function normalizeTask(t: Record<string, unknown>): StoredTask {
     assignedAgent: assignment.assignedAgent,
     assignedAgentId: assignment.assignedAgentId,
     linkedDocumentUrl: t.linkedDocumentUrl as string | undefined,
+    projectId: extractProjectId(t),
     delivery:
       t.delivery && typeof t.delivery === "object"
         ? {
@@ -248,6 +261,7 @@ function taskToSummary(t: StoredTask) {
     assignedAgent: t.assignedAgent,
     assignedAgentId: t.assignedAgentId,
     linkedDocumentUrl: t.linkedDocumentUrl,
+    projectId: t.projectId,
     delivery: t.delivery,
   };
 }
@@ -279,6 +293,7 @@ function taskToDetails(t: StoredTask) {
     assignedAgent: t.assignedAgent,
     assignedAgentId: t.assignedAgentId,
     linkedDocumentUrl: t.linkedDocumentUrl,
+    projectId: t.projectId,
     delivery: t.delivery,
   };
 }
@@ -381,6 +396,7 @@ export const addTodoTaskAPI = async (req: AddTodoTaskRequest) => {
     assignedAgent: req.assignedAgent,
     assignedAgentId: req.assignedAgentId,
     linkedDocumentUrl: req.linkedDocumentUrl,
+    projectId: req.projectId,
     delivery: req.delivery,
   };
   data.tasks.push(newTask);
@@ -406,6 +422,9 @@ export const updateTodoTaskAPI = async (req: UpdateTodoTaskRequest) => {
   }
   if (patch.assignedAgentId !== undefined) {
     task.assignedAgentId = patch.assignedAgentId ?? undefined;
+  }
+  if (patch.projectId !== undefined) {
+    task.projectId = patch.projectId ?? undefined;
   }
   await save(data);
   return ok(taskToSummary(task));

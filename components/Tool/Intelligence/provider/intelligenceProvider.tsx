@@ -10,12 +10,14 @@ import {
   useCallback,
   useRef,
 } from "react";
-import { Database, RefreshCw, Table2, TerminalSquare } from "lucide-react";
+import { useRouter } from "next/router";
+import { Database, Plus, RefreshCw, Table2, TerminalSquare } from "lucide-react";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
 import { gatewayConnection } from "$/lib/openclaw-gateway-ws";
 import { AppSchema } from "@OS/Layout/types";
 import type { IntelSchema } from "../types";
 import { getIntelEventRefreshPlan, matchesWhere } from "../logic";
+import { getCompanyName } from "$/components/ensemble/shared/toolSchema";
 
 interface IntelContextValue {
   schema: IntelSchema | null;
@@ -25,6 +27,7 @@ interface IntelContextValue {
   tableLoading: boolean;
   error: string | null;
   sqlConsoleOpen: boolean;
+  createTableOpen: boolean;
   appSchema: AppSchema;
   selectTable: (name: string | null) => void;
   refreshSchema: () => Promise<void>;
@@ -34,6 +37,7 @@ interface IntelContextValue {
   deleteRow: (where: Record<string, unknown>) => Promise<boolean>;
   runQuery: (sql: string) => Promise<{ rows?: Record<string, unknown>[]; error?: string }>;
   setSqlConsoleOpen: (open: boolean) => void;
+  setCreateTableOpen: (open: boolean) => void;
 }
 
 const IntelContext = createContext<IntelContextValue | undefined>(undefined);
@@ -45,6 +49,7 @@ export function useIntel() {
 }
 
 export function IntelProvider({ children }: { children: ReactNode }) {
+  const router = useRouter();
   const [schema, setSchema] = useState<IntelSchema | null>(null);
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
   const [rows, setRows] = useState<Record<string, unknown>[]>([]);
@@ -52,6 +57,7 @@ export function IntelProvider({ children }: { children: ReactNode }) {
   const [tableLoading, setTableLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sqlConsoleOpen, setSqlConsoleOpen] = useState(false);
+  const [createTableOpen, setCreateTableOpen] = useState(false);
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const selectedColumns = schema?.tables[selectedTable || ""]?.columns || [];
 
@@ -305,15 +311,29 @@ export function IntelProvider({ children }: { children: ReactNode }) {
       id: "hypercho-intelligence",
       name: "Intelligence",
       header: {
+        centerUI: {
+          type: "breadcrumbs" as const,
+          breadcrumbs: [
+            { label: getCompanyName(), onClick: () => router.push("/dashboard") },
+            { label: "Data" },
+          ],
+        },
         rightUI: {
           type: "buttons",
           buttons: [
+            {
+              id: "intel-new-table",
+              label: "+ New Table",
+              icon: <Plus className="h-4 w-4" />,
+              onClick: () => setCreateTableOpen(true),
+              variant: "default" as const,
+            },
             {
               id: "intel-sql-console",
               label: "SQL",
               icon: <TerminalSquare className="h-4 w-4" />,
               onClick: () => setSqlConsoleOpen((v) => !v),
-              variant: sqlConsoleOpen ? "default" : "ghost",
+              variant: sqlConsoleOpen ? "default" : ("ghost" as const),
             },
           ],
         },
@@ -334,7 +354,7 @@ export function IntelProvider({ children }: { children: ReactNode }) {
         sections,
       },
     };
-  }, [schema, selectedTable, sqlConsoleOpen, selectTable, refreshSchema]);
+  }, [schema, selectedTable, sqlConsoleOpen, selectTable, refreshSchema, setCreateTableOpen, router]);
 
   return (
     <IntelContext.Provider
@@ -346,6 +366,7 @@ export function IntelProvider({ children }: { children: ReactNode }) {
         tableLoading,
         error,
         sqlConsoleOpen,
+        createTableOpen,
         appSchema,
         selectTable,
         refreshSchema,
@@ -355,6 +376,7 @@ export function IntelProvider({ children }: { children: ReactNode }) {
         deleteRow,
         runQuery,
         setSqlConsoleOpen,
+        setCreateTableOpen,
       }}
     >
       {children}

@@ -43,16 +43,22 @@ export interface GatewayChatHeaderProps extends CustomProps {
 export const PROVIDER_MODELS: Record<string, { id: string; label: string }[]> = {
   "claude-code": [
     { id: "", label: "Default" },
-    { id: "sonnet", label: "Sonnet" },
-    { id: "opus", label: "Opus" },
-    { id: "haiku", label: "Haiku" },
+    { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
+    { id: "claude-opus-4-6", label: "Claude Opus 4.6" },
+    { id: "claude-haiku-4-5", label: "Claude Haiku 4.5" },
+    { id: "sonnet", label: "Sonnet (latest)" },
+    { id: "opus", label: "Opus (latest)" },
+    { id: "haiku", label: "Haiku (latest)" },
   ],
   codex: [
     { id: "", label: "Default" },
-    { id: "o3", label: "o3" },
-    { id: "o4-mini", label: "o4-mini" },
-    { id: "gpt-4.1", label: "GPT-4.1" },
-    { id: "gpt-4.1-mini", label: "GPT-4.1 Mini" },
+    { id: "gpt-5.4", label: "GPT-5.4" },
+    { id: "gpt-5.4-mini", label: "GPT-5.4-Mini" },
+    { id: "gpt-5.3-codex", label: "GPT-5.3-Codex" },
+    { id: "gpt-5.2-codex", label: "GPT-5.2 Codex" },
+    { id: "gpt-5.2", label: "GPT-5.2" },
+    { id: "gpt-5.1-codex-max", label: "GPT-5.1-Codex-Max" },
+    { id: "gpt-5.1-codex-mini", label: "GPT-5.1-Codex-Mini" },
   ],
 };
 

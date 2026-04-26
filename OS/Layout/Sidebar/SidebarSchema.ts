@@ -126,8 +126,11 @@ export interface HeaderButton {
     | "success"
     | "input"
     | "selectItem";
+  size?: "default" | "xs" | "sm" | "lg" | "icon" | "iconSm";
   disabled?: boolean;
   dialog?: DialogType;
+  /** Optional keyboard shortcut displayed inside the button (e.g. "⌘K") */
+  kbd?: string;
 }
 
 export interface HeaderTab {

@@ -70,7 +70,6 @@ export type {
   DocOperations,
   IntelOperations,
   CredentialOperations,
-  OrgChartOperations,
   SystemOperations,
   LayoutOperations,
 } from './bridge';

@@ -768,6 +768,17 @@ export const gatewayConnection = {
           console.error(`[Gateway WS] Failed to dispatch DOM event for "${event}":`, err);
         }
       }
+
+      // Dispatch agent file change events so identity caches auto-invalidate
+      // (useAgentIdentity listens for "openclaw-gateway-event").
+      if (typeof window !== "undefined" && event === "agent.file.changed") {
+        try {
+          const data = (msg as Record<string, unknown>).data ?? {};
+          window.dispatchEvent(new CustomEvent("openclaw-gateway-event", { detail: { event, data } }));
+        } catch (err) {
+          console.error(`[Gateway WS] Failed to dispatch DOM event for "${event}":`, err);
+        }
+      }
     }
   },
 
@@ -963,14 +974,18 @@ export const gatewayConnection = {
   /** In-flight + short-lived cache for `sessions.list` — every caller sends
    * the same `{ limit: 200 }` request and filters client-side, so a single
    * WS round-trip can satisfy many concurrent callers. */
-  _sessionsListInflight: null as Promise<{ sessions?: Array<{ key: string; label?: string; createdAt?: number; updatedAt?: number; model?: string; modelProvider?: string; thinkingLevel?: string }> }> | null,
-  _sessionsListCache: null as { data: { sessions?: Array<{ key: string; label?: string; createdAt?: number; updatedAt?: number; model?: string; modelProvider?: string; thinkingLevel?: string }> }; ts: number } | null,
+  _sessionsListInflight: null as Promise<{ sessions?: Array<{ key: string; label?: string; createdAt?: number; updatedAt?: number; status?: string; preview?: string; model?: string; modelProvider?: string; thinkingLevel?: string }> }> | null,
+  _sessionsListCache: null as { data: { sessions?: Array<{ key: string; label?: string; createdAt?: number; updatedAt?: number; status?: string; preview?: string; model?: string; modelProvider?: string; thinkingLevel?: string }> }; ts: number } | null,
   _sessionsListCacheTTL: 30000, // 30s TTL — sessions don't change that often
 
   /** Get list of sessions for an agent */
-  async listSessions(agentId: string, limit: number = 50): Promise<{ sessions?: Array<{ key: string; label?: string; createdAt?: number; updatedAt?: number; model?: string; modelProvider?: string; thinkingLevel?: string }> }> {
+  async listSessions(
+    agentId: string,
+    limit: number = 50,
+    options: { includeDefault?: boolean } = {}
+  ): Promise<{ sessions?: Array<{ key: string; label?: string; createdAt?: number; updatedAt?: number; status?: string; preview?: string; model?: string; modelProvider?: string; thinkingLevel?: string }> }> {
     // Deduplicate: reuse in-flight request or short-lived cache
-    let allSessions: { sessions?: Array<{ key: string; label?: string; createdAt?: number; updatedAt?: number; model?: string; modelProvider?: string; thinkingLevel?: string }> };
+    let allSessions: { sessions?: Array<{ key: string; label?: string; createdAt?: number; updatedAt?: number; status?: string; preview?: string; model?: string; modelProvider?: string; thinkingLevel?: string }> };
     const cached = this._sessionsListCache;
     if (cached && Date.now() - cached.ts < this._sessionsListCacheTTL) {
       allSessions = cached.data;
@@ -996,6 +1011,9 @@ export const gatewayConnection = {
     const prefix = `agent:${agentId}:`;
     const agentSessions = allSessions.sessions.filter(s => s.key.startsWith(prefix));
     if (agentSessions.length === 0) {
+      if (options.includeDefault === false) {
+        return { sessions: [] };
+      }
       // No sessions for this agent yet — return a default "main" session so callers have something to work with
       console.debug(`[Gateway WS] No sessions found for agent "${agentId}", returning default main session`);
       return { sessions: [{ key: `agent:${agentId}:main`, createdAt: Date.now(), updatedAt: Date.now() }] };

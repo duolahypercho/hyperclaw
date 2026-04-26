@@ -32,6 +32,7 @@ import {
   cronRun as cronRunUtil,
   cronEdit as cronEditUtil,
   cronDelete as cronDeleteUtil,
+  cronToggle as cronToggleUtil,
   type CronAddParams,
   type CronEditParams,
 } from "../utils";
@@ -90,9 +91,6 @@ export function CronsProvider({ children }: { children: ReactNode }) {
     installed,
     gatewayHealthy,
     refreshAll,
-    fetchCronListJson,
-    cronEnable,
-    cronDisable,
   } = useHyperclawContext();
 
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(new Date());
@@ -149,7 +147,8 @@ export function CronsProvider({ children }: { children: ReactNode }) {
     });
   }, [rawJobs]);
   const bridgeOnly = !installed && bridgeCrons.length > 0;
-  const showEmptyState = !installed && bridgeCrons.length === 0 && !bridgeLoading;
+  // Show empty state only when there are truly no jobs from any runtime
+  const showEmptyState = rawJobs.length === 0 && !bridgeLoading && !loading;
 
   // No bulk run fetch on mount — list uses job.state (lastRunAtMs, lastStatus). Run history loads on demand when user opens a job detail.
 
@@ -187,7 +186,7 @@ export function CronsProvider({ children }: { children: ReactNode }) {
     }
   }, [installed, refreshAll, fetchBridgeCrons]);
 
-  // Sync running job IDs from session store (shared with CronsWidget and Tool/Crons page).
+  // Sync running job IDs from session store.
   // OpenClaw provider polls get-running-crons and removes jobs when done; we refresh when store loses a job.
   useEffect(() => {
     setRunningJobIds((prev) => {
@@ -211,15 +210,13 @@ export function CronsProvider({ children }: { children: ReactNode }) {
     async (job: OpenClawCronJobJson) => {
       setTogglingId(job.id);
       try {
-        const result = job.enabled
-          ? await cronDisable(job.id)
-          : await cronEnable(job.id);
+        const result = await cronToggleUtil(job.id, !job.enabled);
         if (result?.success) await refresh();
       } finally {
         setTogglingId(null);
       }
     },
-    [cronDisable, cronEnable, refresh]
+    [refresh]
   );
 
   const cronAdd = useCallback(
@@ -257,7 +254,6 @@ export function CronsProvider({ children }: { children: ReactNode }) {
   const cronRun = useCallback(
     async (jobId: string, options?: { due?: boolean }) => {
       try {
-        console.log("cronRun", jobId, options);
         const result = await cronRunUtil(jobId, options);
         if (result.success) {
           addRunningJobId(jobId);

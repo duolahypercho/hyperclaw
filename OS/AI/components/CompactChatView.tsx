@@ -303,7 +303,7 @@ export const CompactChatView = memo(({
                 </AvatarFallback>
               </Avatar>
             </div>
-            <div className="flex items-center py-1.5">
+            <div className="flex items-center px-3 py-1.5">
               <AnimatedThinkingText text={thinkingText} />
             </div>
           </div>

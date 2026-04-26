@@ -27,6 +27,7 @@ import {
   X,
   Square,
   Cpu,
+  Search,
 } from "lucide-react";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import { getMediaUrl } from "$/utils";
@@ -184,6 +185,7 @@ export const InputContainer: React.FC<InputContainerProps> = ({
   const [inputValue, setInputValue] = useState("");
   const [isComposing, setIsComposing] = useState(false);
   const [isPopoverOpen, setIsPopoverOpen] = useState(false);
+  const [modelSearch, setModelSearch] = useState("");
   const [isVoiceMode, setIsVoiceMode] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -226,9 +228,17 @@ export const InputContainer: React.FC<InputContainerProps> = ({
 
   // When runtimeModels are provided (provider tabs), use those; otherwise use OpenClaw models
   const hasRuntimeModels = runtimeModels && runtimeModels.length > 0;
-  const availableModels = hasRuntimeModels
-    ? runtimeModels.map(m => ({ id: m.id, label: m.label, provider: undefined as string | undefined }))
-    : contextModels;
+  const availableModels = (() => {
+    const raw = hasRuntimeModels
+      ? runtimeModels.map(m => ({ id: m.id, label: m.label, provider: undefined as string | undefined }))
+      : contextModels;
+    const seen = new Set<string>();
+    return raw.filter(m => {
+      if (seen.has(m.id)) return false;
+      seen.add(m.id);
+      return true;
+    });
+  })();
 
   // Use external model state when provided (provider tabs), otherwise internal state (OpenClaw)
   const currentModel = externalCurrentModel !== undefined ? externalCurrentModel : internalCurrentModel;
@@ -1071,7 +1081,7 @@ export const InputContainer: React.FC<InputContainerProps> = ({
               <div className="w-[80px] h-3 rounded bg-muted-foreground/20 animate-pulse" />
             </div>
           ) : availableModels.length > 0 ? (
-            <Popover open={isPopoverOpen} onOpenChange={setIsPopoverOpen}>
+            <Popover open={isPopoverOpen} onOpenChange={(open) => { setIsPopoverOpen(open); if (!open) setModelSearch(""); }}>
               <PopoverTrigger asChild>
                 <Button
                   variant="outline"
@@ -1099,32 +1109,66 @@ export const InputContainer: React.FC<InputContainerProps> = ({
                 </Button>
               </PopoverTrigger>
               <PopoverContent
-                className="w-48 p-1 bg-card/95 backdrop-blur-sm border-primary/20 max-h-64 overflow-y-auto customScrollbar2"
+                className="w-56 p-1 bg-card/95 backdrop-blur-sm border-primary/20 max-h-72 overflow-hidden flex flex-col"
                 align="start"
                 side="top"
               >
-                <div className="flex flex-col gap-0.5">
-                  {availableModels.map((model) => {
-                    const isSelected = currentModel === model.id;
-                    return (
-                      <Button
-                        key={model.id}
-                        variant="ghost"
-                        size="sm"
-                        className={cn(
-                          "w-full justify-start h-fit py-1.5 px-2 text-xs font-normal hover:bg-primary/10 transition-all duration-150 gap-2 rounded-md",
-                          isSelected && "bg-primary/10 text-primary font-medium"
-                        )}
-                        onClick={() => {
-                          handleModelChange(model.id);
-                          setIsPopoverOpen(false);
-                        }}
-                      >
-                        <Cpu className={cn("w-3 h-3 flex-shrink-0", isSelected && "text-primary")} />
-                        <span className="truncate">{(model as any).label || model.id.split('/').pop() || model.id}</span>
-                      </Button>
-                    );
-                  })}
+                {availableModels.length > 5 && (
+                  <div className="flex items-center gap-1.5 px-1.5 pb-1 border-b border-border/40 mb-0.5">
+                    <Search className="w-3 h-3 text-muted-foreground shrink-0" />
+                    <input
+                      type="text"
+                      value={modelSearch}
+                      onChange={(e) => setModelSearch(e.target.value)}
+                      placeholder="Search models..."
+                      className="w-full bg-transparent text-xs py-1 outline-none placeholder:text-muted-foreground/50"
+                      autoFocus
+                    />
+                    {modelSearch && (
+                      <button type="button" onClick={() => setModelSearch("")} className="text-muted-foreground hover:text-foreground">
+                        <X className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+                )}
+                <div className="flex flex-col gap-0.5 overflow-y-auto customScrollbar2">
+                  {(() => {
+                    const q = modelSearch.toLowerCase();
+                    const filtered = q
+                      ? availableModels.filter(m =>
+                          m.id.toLowerCase().includes(q)
+                          || ((m as any).label || "").toLowerCase().includes(q)
+                        )
+                      : availableModels;
+                    if (filtered.length === 0) {
+                      return (
+                        <p className="text-xs text-muted-foreground text-center py-3">
+                          No models match "{modelSearch}"
+                        </p>
+                      );
+                    }
+                    return filtered.map((model) => {
+                      const isSelected = currentModel === model.id;
+                      return (
+                        <Button
+                          key={model.id}
+                          variant="ghost"
+                          size="sm"
+                          className={cn(
+                            "w-full justify-start h-fit py-1.5 px-2 text-xs font-normal hover:bg-primary/10 transition-all duration-150 gap-2 rounded-md",
+                            isSelected && "bg-primary/10 text-primary font-medium"
+                          )}
+                          onClick={() => {
+                            handleModelChange(model.id);
+                            setIsPopoverOpen(false);
+                          }}
+                        >
+                          <Cpu className={cn("w-3 h-3 flex-shrink-0", isSelected && "text-primary")} />
+                          <span className="truncate">{(model as any).label || model.id.split('/').pop() || model.id}</span>
+                        </Button>
+                      );
+                    });
+                  })()}
                 </div>
               </PopoverContent>
             </Popover>

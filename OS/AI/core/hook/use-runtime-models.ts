@@ -20,9 +20,12 @@ export interface RuntimeModel {
 export const STATIC_MODELS: Partial<Record<BackendTab, RuntimeModel[]>> = {
   "claude-code": [
     { id: "", label: "Default" },
-    { id: "sonnet", label: "Sonnet" },
-    { id: "opus", label: "Opus" },
-    { id: "haiku", label: "Haiku" },
+    { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
+    { id: "claude-opus-4-6", label: "Claude Opus 4.6" },
+    { id: "claude-haiku-4-5", label: "Claude Haiku 4.5" },
+    { id: "sonnet", label: "Sonnet (latest)" },
+    { id: "opus", label: "Opus (latest)" },
+    { id: "haiku", label: "Haiku (latest)" },
   ],
   codex: [
     { id: "", label: "Default" },

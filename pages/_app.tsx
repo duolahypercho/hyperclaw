@@ -1,5 +1,6 @@
 import "../styles/main.css";
 import "../styles/nProgress.css";
+import "../components/projects/styles/ensemble.css";
 import {
   InterimProvider,
   ServiceProvider,
@@ -18,7 +19,6 @@ import { NextPage } from "next/types";
 import { OSProvider } from "@OS/Provider/OSProv";
 import { GeistSans } from "geist/font/sans";
 import { UpdateNotification } from "$/components/UpdateNotification";
-import { GatewayStatusBanner } from "$/components/GatewayStatusBanner";
 import { GuidanceProvider } from "$/components/Guidance";
 import { ErrorBoundary } from "$/components/ErrorBoundary";
 
@@ -38,7 +38,7 @@ function MyApp({ Component, pageProps, router }: any) {
         refetchInterval={15 * 60}
         refetchOnWindowFocus={false}
       >
-        <ThemeProvider attribute="class" enableSystem disableTransitionOnChange>
+        <ThemeProvider attribute="class" defaultTheme="dark" disableTransitionOnChange>
           <UserProvider>
           <HyperclawProvider>
           <AIProviderProvider>
@@ -53,7 +53,6 @@ function MyApp({ Component, pageProps, router }: any) {
                   </ServiceProvider>
                 {process.env.NODE_ENV === "production" && <Analytics />}
                 <Toaster />
-                <GatewayStatusBanner />
                 <UpdateNotification />
               </TooltipProvider>
             </GuidanceProvider>

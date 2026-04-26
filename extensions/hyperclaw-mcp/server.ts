@@ -17,6 +17,8 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import path from "node:path";
+import fs from "node:fs";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 
 // ── Import bridge from sibling OpenClaw plugin ───────────────────────────────
@@ -31,6 +33,237 @@ const { HyperClawBridge } = await import(
 
 const dataDir = process.env.HYPERCLAW_DATA_DIR ?? undefined;
 const bridge = new HyperClawBridge(dataDir);
+
+// ── Agent workspace helpers ──────────────────────────────────────────────────
+// The MCP has direct filesystem access, so `hyperclaw_create_agent` writes
+// workspace files directly rather than routing through the connector bridge.
+
+type SupportedRuntime = "openclaw" | "hermes" | "claude-code" | "codex";
+
+const SUPPORTED_RUNTIMES: readonly SupportedRuntime[] = [
+  "openclaw",
+  "hermes",
+  "claude-code",
+  "codex",
+];
+
+function isSupportedRuntime(value: unknown): value is SupportedRuntime {
+  return typeof value === "string" && (SUPPORTED_RUNTIMES as readonly string[]).includes(value);
+}
+
+function slugifyAgentName(name: string): string {
+  return name
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, "-")
+    .replace(/[^a-z0-9._-]/g, "")
+    .replace(/^-+|-+$/g, "");
+}
+
+function resolveAgentWorkspace(runtime: SupportedRuntime, agentId: string): string {
+  const home = os.homedir();
+  switch (runtime) {
+    case "openclaw":
+      // Matches lib/identity-md.ts: "main" collapses to "workspace", else
+      // "workspace-<id>" under ~/.openclaw/
+      return path.join(
+        home,
+        ".openclaw",
+        agentId === "main" ? "workspace" : `workspace-${agentId}`,
+      );
+    case "hermes":
+      return path.join(home, ".hermes", "agents", agentId);
+    case "claude-code":
+      return path.join(home, ".claude", "agents", agentId);
+    case "codex":
+      return path.join(home, ".codex", "agents", agentId);
+  }
+}
+
+interface AgentTemplateOpts {
+  name: string;
+  emoji?: string;
+  role?: string;
+  description?: string;
+}
+
+function buildIdentityMd(opts: AgentTemplateOpts): string {
+  const lines: string[] = [`- **Name:** ${opts.name}`];
+  if (opts.emoji) lines.push(`- **Emoji:** ${opts.emoji}`);
+  if (opts.role && opts.role.trim()) lines.push(`- **Role:** ${opts.role.trim()}`);
+  const header = lines.join("\n");
+  const body = opts.description && opts.description.trim() ? opts.description.trim() : "";
+  return body ? `${header}\n\n---\n\n${body}\n` : `${header}\n`;
+}
+
+function buildSoulMd(opts: AgentTemplateOpts): string {
+  const mission = opts.description && opts.description.trim()
+    ? opts.description.trim()
+    : opts.role && opts.role.trim()
+      ? `You focus on ${opts.role.trim().toLowerCase()} work.`
+      : "Your mission will be defined by the work you're assigned.";
+  return `# SOUL.md - Who You Are
+
+You are **${opts.name}**. ${mission}
+
+## Core Principles
+- **Own your craft.** You're responsible for the quality of what you deliver.
+- **Communicate clearly.** Short, direct updates. Lead with the outcome.
+- **Escalate when blocked.** Don't silently stall.
+- **Respect context.** Read USER.md and recent memory files each session.
+- **Be concise.**
+
+## How You Work
+1. Start each session by reading SOUL.md, USER.md, and today's memory file.
+2. Accept assignments from the orchestrator.
+3. Deliver work, update task status, log a memory note.
+4. Escalate if stuck for more than one heartbeat cycle.
+`;
+}
+
+function buildAgentsMd(opts: AgentTemplateOpts): string {
+  const role = opts.role && opts.role.trim() ? opts.role.trim() : "specialist";
+  return `# AGENTS.md - Your Workspace
+
+## Every Session
+1. Read SOUL.md
+2. Read USER.md
+3. Read memory/YYYY-MM-DD.md for recent context
+
+## Memory
+- Daily notes: memory/YYYY-MM-DD.md
+- Long-term: MEMORY.md
+
+## Role
+You operate as a ${role}. The orchestrator assigns tasks; you execute and report.
+`;
+}
+
+function buildClaudeMd(opts: AgentTemplateOpts): string {
+  const instructions = buildAgentsMd(opts)
+    .replace("# AGENTS.md - Your Workspace", "# CLAUDE.md - Your Workspace")
+    .trimEnd();
+  const soul = buildSoulMd(opts).trimEnd();
+
+  return `${instructions}
+
+---
+
+## Agent Personality (SOUL.md)
+
+Claude Code reads \`CLAUDE.md\` on startup. The canonical persona is also written to
+\`SOUL.md\`; this embedded copy makes the runtime wake up with the same soul even
+when it only loads \`CLAUDE.md\`.
+
+${soul}
+`;
+}
+
+function buildHeartbeatMd(): string {
+  return `# HEARTBEAT.md - Session Cycle
+
+## Cycle
+1. **Scan** — any active task? any open thread with the operator?
+2. **Progress** — push work forward one concrete step, or flag blockers.
+3. **Log** — write to memory/YYYY-MM-DD.md, update task status.
+4. **Summary** — notify only if something changed meaningfully.
+`;
+}
+
+function buildToolsMd(): string {
+  return `# TOOLS.md - Local Notes
+
+## Communication
+- \`message({ message, channel: "announce" })\`
+- \`sessions_send({ message, agentId })\`
+
+## Tasks
+- read ~/.hyperclaw/todo.json
+- update task status as work moves
+
+## Memory
+- read/write memory/YYYY-MM-DD.md
+- read/write MEMORY.md
+`;
+}
+
+function buildUserMd(): string {
+  return `# USER.md - About Your Human
+
+- **Name:**
+- **What to call them:**
+- **Timezone:**
+- **Notes:**
+
+## Context
+_(What are they building? What do they need from you?)_
+
+## Operator Style
+_(Detailed reports or "all good"? Approve every step or trust your judgment?)_
+
+## What Annoys Them
+
+## What Delights Them
+`;
+}
+
+function buildMemoryMd(): string {
+  return `# MEMORY.md - Long-Term Memory
+
+## Categories
+- operator-preference
+- task-pattern
+- blocker-pattern
+- process-improvement
+
+## Memories
+_(Populated as you learn.)_
+`;
+}
+
+function buildOpenClawTemplates(opts: AgentTemplateOpts): Record<string, string> {
+  return {
+    "IDENTITY.md":  buildIdentityMd(opts),
+    "SOUL.md":      buildSoulMd(opts),
+    "AGENTS.md":    buildAgentsMd(opts),
+    "HEARTBEAT.md": buildHeartbeatMd(),
+    "TOOLS.md":     buildToolsMd(),
+    "USER.md":      buildUserMd(),
+    "MEMORY.md":    buildMemoryMd(),
+  };
+}
+
+function buildRuntimeFiles(runtime: SupportedRuntime, opts: AgentTemplateOpts): Record<string, string> {
+  switch (runtime) {
+    case "openclaw":
+      return buildOpenClawTemplates(opts);
+    case "hermes":
+      return { "IDENTITY.md": buildIdentityMd(opts), "SOUL.md": buildSoulMd(opts), "USER.md": buildUserMd() };
+    case "claude-code":
+      return { "IDENTITY.md": buildIdentityMd(opts), "SOUL.md": buildSoulMd(opts), "USER.md": buildUserMd(), "CLAUDE.md": buildClaudeMd(opts) };
+    case "codex":
+      return { "IDENTITY.md": buildIdentityMd(opts), "SOUL.md": buildSoulMd(opts), "USER.md": buildUserMd(), "AGENTS.md": buildAgentsMd(opts) };
+  }
+}
+
+function writeAgentWorkspace(
+  runtime: SupportedRuntime,
+  agentId: string,
+  opts: AgentTemplateOpts,
+): { workspacePath: string; filesWritten: string[] } {
+  const workspacePath = resolveAgentWorkspace(runtime, agentId);
+  fs.mkdirSync(workspacePath, { recursive: true });
+  const files = buildRuntimeFiles(runtime, opts);
+  const filesWritten: string[] = [];
+  for (const [filename, content] of Object.entries(files)) {
+    const fullPath = path.join(workspacePath, filename);
+    // Never clobber an existing file — treat agent create as idempotent-safe.
+    if (fs.existsSync(fullPath)) continue;
+    fs.writeFileSync(fullPath, content, "utf8");
+    filesWritten.push(filename);
+  }
+  return { workspacePath, filesWritten };
+}
 
 // ── Tool definitions ─────────────────────────────────────────────────────────
 
@@ -220,6 +453,38 @@ const TOOLS = [
         type: { type: "string" },
         emoji: { type: "string" },
         config: { type: "object" },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    name: "hyperclaw_create_agent",
+    description:
+      "Create a new agent end-to-end: provisions the workspace folder with " +
+      "starter personality files (IDENTITY.md, SOUL.md, AGENTS.md, etc.) AND " +
+      "registers it in the HyperClaw dashboard. Returns the workspace path so " +
+      "the caller knows where the files were written. " +
+      "If `runtime` is omitted it defaults to the env var HYPERCLAW_DEFAULT_RUNTIME, " +
+      "otherwise 'openclaw'. Existing files are never overwritten.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Display name for the agent (required)" },
+        description: {
+          type: "string",
+          description: "What the agent does — becomes the body of IDENTITY.md and the mission statement in SOUL.md",
+        },
+        runtime: {
+          type: "string",
+          enum: ["openclaw", "hermes", "claude-code", "codex"],
+          description: "Runtime to provision for. Defaults to HYPERCLAW_DEFAULT_RUNTIME env var, else 'openclaw'.",
+        },
+        role: { type: "string", description: "Short role label, e.g. 'Code & Automation'" },
+        emoji: { type: "string", description: "Emoji avatar (default 🤖)" },
+        agentId: {
+          type: "string",
+          description: "Explicit agent id slug. If omitted, derived from name.",
+        },
       },
       required: ["name"],
     },
@@ -422,6 +687,63 @@ async function callTool(name: string, args: Record<string, unknown>) {
         emoji: args.emoji as string | undefined,
         config: args.config as Record<string, unknown> | undefined,
       }));
+
+    case "hyperclaw_create_agent": {
+      const name = args.name as string;
+      if (!name || !name.trim()) return err("name is required");
+
+      const envRuntime = process.env.HYPERCLAW_DEFAULT_RUNTIME;
+      const rawRuntime = (args.runtime as string | undefined) ?? envRuntime ?? "openclaw";
+      if (!isSupportedRuntime(rawRuntime)) {
+        return err(`unsupported runtime: ${rawRuntime}. Must be one of ${SUPPORTED_RUNTIMES.join(", ")}`);
+      }
+      const runtime: SupportedRuntime = rawRuntime;
+
+      const agentId = (args.agentId as string | undefined)?.trim() || slugifyAgentName(name);
+      if (!agentId || !/^[a-z0-9][a-z0-9._-]*$/.test(agentId)) {
+        return err(`invalid agentId "${agentId}" — must start with letter/number and contain only [a-z0-9._-]`);
+      }
+
+      const emoji = (args.emoji as string | undefined) ?? "🤖";
+      const role = args.role as string | undefined;
+      const description = args.description as string | undefined;
+
+      let workspacePath: string;
+      let filesWritten: string[];
+      try {
+        const result = writeAgentWorkspace(runtime, agentId, { name, emoji, role, description });
+        workspacePath = result.workspacePath;
+        filesWritten = result.filesWritten;
+      } catch (e) {
+        return err(`workspace write failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+
+      // Mirror into HyperClaw dashboard so the agent appears in StatusWidget.
+      // Non-fatal if it fails — the workspace files are the source of truth.
+      let registered: Record<string, unknown> | null = null;
+      try {
+        registered = bridge.addAgent({
+          name,
+          type: runtime,
+          emoji,
+          config: { agentId, role, description, workspacePath },
+        });
+      } catch {
+        registered = null;
+      }
+
+      return ok({
+        agentId,
+        runtime,
+        workspacePath,
+        filesWritten,
+        registered: registered ? true : false,
+        registryId: registered?.id ?? null,
+        note: filesWritten.length === 0
+          ? "Workspace already existed — no files overwritten. Agent registered in dashboard."
+          : `Wrote ${filesWritten.length} file(s) to ${workspacePath}`,
+      });
+    }
 
     case "hyperclaw_list_agents":
       return ok(bridge.listAgents());

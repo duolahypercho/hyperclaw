@@ -19,7 +19,7 @@ import {
 } from "@/components/ui/tooltip";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
-import { fetchAllCronRunsForJob, fetchCronRunDetail, formatDurationMs, syncCronRunsForJob } from "./utils";
+import { fetchAllCronRunsForJob, fetchCronRunDetail, formatDurationMs, formatScheduleExpr, syncCronRunsForJob } from "./utils";
 import { useCrons } from "./provider/cronsProvider";
 import { EditCronDialog } from "./EditCronDialog";
 import { DeleteCronDialog } from "./DeleteCronDialog";
@@ -136,7 +136,7 @@ export function CronJobDetailDialog({ open, onOpenChange, job }: CronJobDetailDi
   const nextRunStr = nextRunAtMs
     ? format(new Date(nextRunAtMs), "MMM d, yyyy · h:mm a")
     : "—";
-  const scheduleStr = displayJob.schedule?.expr ?? "—";
+  const scheduleStr = formatScheduleExpr(displayJob.schedule?.expr, displayJob.schedule?.kind);
   const agentStr = displayJob.agentId ?? "main";
 
   return (

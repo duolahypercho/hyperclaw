@@ -8,8 +8,6 @@ import {
   SidebarSection,
   SidebarSchema,
   HeaderButton,
-  HeaderTab,
-  SidebarHeader,
 } from "./Sidebar/SidebarSchema";
 import { Tool, useOS } from "@OS/Provider/OSProv";
 import { Button } from "@/components/ui/button";
@@ -25,10 +23,6 @@ import {
   AppHeader,
 } from "./types";
 import { useDialog } from "./Dialog/DialogContext";
-import { useRouter } from "next/navigation";
-import { GoHomeFill } from "react-icons/go";
-import { Minus, Square, X, Maximize2 } from "lucide-react";
-import { useEffect, useState } from "react";
 
 function findBreadcrumbPath(
   sections: SidebarSection[] | undefined,
@@ -64,30 +58,29 @@ function getBreadcrumbDisplay(breadcrumbs: SidebarItem[], activeTool: any) {
       const isLast = idx === breadcrumbs.length - 1;
       if (!crumb.title) return null;
       return (
-        <div
-          key={crumb.id}
-          className="flex flex-row gap-1 items-center min-w-0"
-        >
+        <React.Fragment key={crumb.id}>
           <span
             className={cn(
-              "text-sm font-medium flex items-center gap-1 min-w-0",
-              isLast ? "text-muted-foreground" : "text-muted-foreground"
+              "flex items-center gap-1.5 min-w-0",
+              isLast ? "text-foreground font-medium" : "text-muted-foreground"
             )}
           >
             {crumb.icon &&
               (typeof crumb.icon === "function"
                 ? React.createElement(crumb.icon, {
-                    className: "w-4 h-4 flex-shrink-0",
+                    className: "w-3.5 h-3.5 flex-shrink-0",
                   })
                 : React.isValidElement(crumb.icon)
                 ? React.cloneElement(crumb.icon as any, {
-                    className: "w-4 h-4 flex-shrink-0",
+                    className: "w-3.5 h-3.5 flex-shrink-0",
                   })
                 : null)}
             <span className="truncate">{crumb.title}</span>
-            {!isLast && "-"}
           </span>
-        </div>
+          {!isLast && (
+            <span className="text-muted-foreground/60 shrink-0">/</span>
+          )}
+        </React.Fragment>
       );
     });
   }
@@ -95,11 +88,9 @@ function getBreadcrumbDisplay(breadcrumbs: SidebarItem[], activeTool: any) {
   // Fallback to activeTool.name if no breadcrumbs
   if (activeTool?.name) {
     return (
-      <div className="flex flex-row gap-1 items-center min-w-0">
-        <span className="text-sm flex items-center gap-1 min-w-0 text-foreground">
-          <span className="truncate">{activeTool.name}</span>
-        </span>
-      </div>
+      <span className="flex items-center gap-1.5 min-w-0 text-foreground font-medium">
+        <span className="truncate">{activeTool.name}</span>
+      </span>
     );
   }
 
@@ -110,13 +101,16 @@ const renderButton = (
   button: HeaderButton,
   openDialog: (id: string, data?: Record<string, any>) => void
 ) => {
+  const iconClassName =
+    button.size === "xs" ? "w-3.5 h-3.5 mr-1" : "w-4 h-4 mr-2";
+
   const renderIcon = () => {
     if (!button.icon) return null;
 
     // Handle React.ReactNode (JSX elements)
     if (React.isValidElement(button.icon)) {
       return React.cloneElement(button.icon as any, {
-        className: "w-4 h-4 mr-2",
+        className: iconClassName,
       });
     }
 
@@ -125,7 +119,7 @@ const renderButton = (
       const IconComponent = button.icon as React.ComponentType<{
         className?: string;
       }>;
-      return <IconComponent className="w-4 h-4 mr-2" />;
+      return <IconComponent className={iconClassName} />;
     }
 
     return null;
@@ -144,13 +138,18 @@ const renderButton = (
     <Button
       key={button.id}
       variant={button.variant || "ghost"}
-      size="sm"
+      size={button.size || "sm"}
       onClick={handleClick}
       disabled={button.disabled}
       className={cn("h-8 text-xs", button.className)}
     >
       {renderIcon()}
       {button.label}
+      {button.kbd && (
+        <span className="ml-1 inline-flex items-center rounded bg-muted px-1 py-px font-mono text-[10px] text-muted-foreground leading-none">
+          {button.kbd}
+        </span>
+      )}
     </Button>
   );
 };
@@ -201,42 +200,43 @@ const renderBreadcrumbs = (
   allBreadcrumbs: SidebarItem[],
   activeTool: any
 ) => {
-  // If custom breadcrumbs are provided, render them
+  // If custom breadcrumbs are provided, render them — ensemble .crumb style
   if (config.breadcrumbs && config.breadcrumbs.length > 0) {
     return (
       <nav
         aria-label="Breadcrumb"
         className={cn("flex items-center min-w-0", config.className)}
       >
-        <div className="flex items-center gap-1 min-w-0">
+        <div className="flex items-center gap-2 min-w-0 text-[13px]">
           {config.breadcrumbs.map((crumb, idx) => {
             const isLast = idx === config.breadcrumbs!.length - 1;
             return (
-              <div
-                key={idx}
-                className="flex flex-row gap-1 items-center min-w-0"
-              >
+              <React.Fragment key={idx}>
                 <span
                   className={cn(
-                    "text-xs flex items-center gap-1 min-w-0 cursor-pointer hover:text-foreground transition-colors",
-                    isLast ? "text-muted-foreground" : "text-muted-foreground"
+                    "flex items-center gap-1.5 min-w-0 pointer-events-auto transition-colors",
+                    isLast
+                      ? "text-foreground font-medium"
+                      : "text-muted-foreground hover:text-foreground cursor-pointer"
                   )}
                   onClick={crumb.onClick}
                 >
                   {crumb.icon &&
                     (typeof crumb.icon === "function"
                       ? React.createElement(crumb.icon, {
-                          className: "w-4 h-4 flex-shrink-0",
+                          className: "w-3.5 h-3.5 flex-shrink-0",
                         })
                       : React.isValidElement(crumb.icon)
                       ? React.cloneElement(crumb.icon as any, {
-                          className: "w-4 h-4 flex-shrink-0",
+                          className: "w-3.5 h-3.5 flex-shrink-0",
                         })
                       : null)}
                   <span className="truncate">{crumb.label}</span>
-                  {!isLast && "-"}
                 </span>
-              </div>
+                {!isLast && (
+                  <span className="text-muted-foreground/60 shrink-0">/</span>
+                )}
+              </React.Fragment>
             );
           })}
         </div>
@@ -250,7 +250,7 @@ const renderBreadcrumbs = (
       aria-label="Breadcrumb"
       className={cn("flex items-center min-w-0", config.className)}
     >
-      <div className="flex items-center gap-1 min-w-0">
+      <div className="flex items-center gap-2 min-w-0 text-[13px]">
         {getBreadcrumbDisplay(allBreadcrumbs, activeTool)}
       </div>
     </nav>
@@ -298,7 +298,6 @@ export function SiteHeader() {
     () => findBreadcrumbPath(sidebarSchema?.sections, currentActiveTab),
     [sidebarSchema?.sections, currentActiveTab]
   );
-  const { push } = useRouter();
 
   // Check if sidebar has content (sections with items, or custom content like a dropdown)
   const hasSidebarContent = React.useMemo(() => {
@@ -347,27 +346,18 @@ export function SiteHeader() {
   }, [appSchema?.header]);
 
   return (
-    <header 
-      className="group-has-data-[collapsible=icon]/sidebar-wrapper:h-12 flex h-12 shrink-0 items-center gap-2 border-b border-t-0 border-primary/10 border-solid border-l-0 border-r-0 transition-[width,height] ease-linear"
+    <header
+      className="bg-background group-has-data-[collapsible=icon]/sidebar-wrapper:h-12 flex h-12 shrink-0 items-center border-b border-t-0 border-border border-solid border-l-0 border-r-0 transition-[width,height] ease-linear"
     >
-      <div className="relative flex w-full h-full items-center justify-between gap-3 px-3">
-        {/* Left Section - Left-aligned */}
-        <div className="flex flex-1 min-w-0 items-center justify-start pl-4 pr-2 lg:pl-6 lg:pr-2 z-10">
+      <div className="flex w-full h-full items-center gap-3 px-[18px]">
+        {/* Left — sidebar toggle + breadcrumbs (ensemble .crumb on the left) */}
+        <div className="flex min-w-0 items-center gap-2">
           {hasSidebarContent && (
             <>
               <SidebarTrigger className="-ml-1 w-fit" />
-              <Separator orientation="vertical" className="mx-2 h-4 w-[1px]" />
+              <Separator orientation="vertical" className="mx-1 h-4 w-[1px]" />
             </>
           )}
-
-          <Button
-            variant="ghost"
-            onClick={() => push("/dashboard")}
-            className="flex w-fit h-fit items-center p-1.5 rounded-sm cursor-pointer"
-            aria-label={"Home"}
-          >
-            <GoHomeFill className="w-4 h-4" />
-          </Button>
 
           {header?.leftUI &&
             renderUI(
@@ -376,14 +366,11 @@ export function SiteHeader() {
               activeTool,
               openDialog
             )}
-        </div>
 
-        {/* Center Section - Absolutely centered */}
-        <div className="absolute left-1/2 top-1/2 transform -translate-x-1/2 -translate-y-1/2 flex items-center justify-center min-w-0 max-w-2xl z-20 text-sm font-medium pointer-events-none">
           {header?.centerUI ? (
             renderUI(header.centerUI, breadcrumbItems, activeTool, openDialog)
           ) : (
-            <span className="text-sm font-medium text-muted-foreground capitalize">
+            <span className="text-[13px] font-medium text-foreground capitalize">
               {breadcrumbItems.length > 0
                 ? breadcrumbItems[breadcrumbItems.length - 1].title
                 : currentActiveTab || activeTool?.name || ""}
@@ -391,8 +378,8 @@ export function SiteHeader() {
           )}
         </div>
 
-        {/* Right Section - Tabs / actions on the right (Apple Calendar style) */}
-        <div className="flex flex-1 min-w-0 items-center justify-end gap-2 pr-4 lg:pr-6 z-10">
+        {/* Right — actions pushed to end via ml-auto (ensemble .topbar-actions) */}
+        <div className="ml-auto flex min-w-0 items-center gap-2">
           {header?.rightUI &&
             renderUI(
               header.rightUI as UIConfig,

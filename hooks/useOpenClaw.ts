@@ -1,6 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
-import { hubCommand, getUserToken, isAuthExpired } from "$/lib/hub-direct";
+import {
+  hubCommand,
+  getUserToken,
+  isAuthExpired,
+  isDeviceUnreachable,
+} from "$/lib/hub-direct";
 import {
   getRunningJobIds,
   removeRunningJobIds,
@@ -381,7 +386,7 @@ export function useOpenClaw(autoRefreshMs = 0) {
   }, []);
 
   const refreshAll = useCallback(async () => {
-    if (isAuthExpired()) return;
+    if (isAuthExpired() || isDeviceUnreachable()) return;
     if (refreshInProgressRef.current || globalRefreshInProgress) return;
     if (Date.now() - lastRefreshEndAt < REFRESH_COOLDOWN_MS) return;
     refreshInProgressRef.current = true;
@@ -481,9 +486,9 @@ export function useOpenClaw(autoRefreshMs = 0) {
     let attempt = 0;
 
     const tryRefresh = async () => {
-      if (cancelled || isAuthExpired()) return;
+      if (cancelled || isAuthExpired() || isDeviceUnreachable()) return;
       const token = await getUserToken();
-      if (cancelled || isAuthExpired()) return;
+      if (cancelled || isAuthExpired() || isDeviceUnreachable()) return;
       if (token) {
         refreshAll().catch((err) => {
           console.warn("[useOpenClaw] initial refresh failed:", err);
@@ -547,9 +552,20 @@ export function useOpenClaw(autoRefreshMs = 0) {
     };
 
     tryConnect();
+
+    // When onboarding completes (or a new agent is added), retry immediately
+    // with a fresh config instead of staying dead after exhausting attempts.
+    const onDeviceReady = () => {
+      if (cancelled) return;
+      attempts = 0;
+      tryConnect();
+    };
+    window.addEventListener("agent.hired", onDeviceReady);
+
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);
+      window.removeEventListener("agent.hired", onDeviceReady);
     };
   }, []);
 
@@ -654,7 +670,7 @@ export function useOpenClaw(autoRefreshMs = 0) {
       const startRefresh = () => {
         if (!intervalRef.current) {
           intervalRef.current = setInterval(() => {
-            if (isAuthExpired()) return;
+            if (isAuthExpired() || isDeviceUnreachable()) return;
             refreshAll().catch((err) => console.warn("[useOpenClaw] interval refresh failed:", err));
           }, autoRefreshMs);
         }

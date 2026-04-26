@@ -63,7 +63,7 @@ export interface OpenClawCronJobJson {
   name: string;
   enabled: boolean;
   agentId?: string;
-  runtime?: "openclaw" | "hermes";
+  runtime?: "openclaw" | "hermes" | "claude-code" | "codex";
   schedule?: {
     kind: string;
     expr?: string;
@@ -146,6 +146,22 @@ export interface OpenClawGatewayConnectUrlResult {
   error: string | null;
 }
 
+export interface LocalConnectorInstallParams {
+  token: string;
+  deviceId: string;
+  hubUrl?: string;
+  jwt?: string;
+}
+
+export interface LocalConnectorInstallResult {
+  success: boolean;
+  error?: string;
+  installDir?: string;
+  binaryPath?: string;
+  hubUrl?: string;
+}
+
+/** Internal API surface for hub-routed OpenClaw operations (used by useOpenClaw hook). */
 export interface OpenClawAPI {
   checkInstalled: () => Promise<OpenClawInstallCheck>;
   getStatus: () => Promise<OpenClawCommandResult>;
@@ -160,6 +176,11 @@ export interface OpenClawAPI {
   cronDisable: (id: string) => Promise<OpenClawCommandResult>;
   getMemoryFiles?: () => Promise<{ success: boolean; data?: MemoryFile[]; error?: string }>;
   readMemoryFile?: (relativePath: string) => Promise<{ success: boolean; data?: string; error?: string }>;
+}
+
+/** Electron IPC — only sign-connect-challenge needs the main process (Ed25519 key). */
+export interface ElectronOpenClawAPI {
+  signConnectChallenge: (params: unknown) => Promise<{ device: unknown; client: unknown; role: string; scopes: string[]; deviceToken?: string | null; error?: string }>;
 }
 
 export interface MemoryFile {
@@ -280,29 +301,11 @@ export interface HubConfig {
 
 export interface HyperClawBridgeAPI {
   invoke: (action: string, body?: Record<string, unknown>) => Promise<unknown>;
-  getTasks: () => Promise<HyperClawTask[]>;
-  addTask: (task: (Omit<HyperClawTask, "id" | "createdAt" | "updatedAt">) & { id?: string }) => Promise<HyperClawTask>;
-  updateTask: (id: string, patch: Partial<Omit<HyperClawTask, "id" | "createdAt">>) => Promise<HyperClawTask | null>;
-  deleteTask: (id: string) => Promise<{ success: boolean }>;
-  sendCommand: (command: BridgeCommand) => Promise<{ success: boolean }>;
-  getDailySummary: (date: string) => Promise<{ success: boolean; data?: string | null; error?: string }>;
-  triggerProcessCommands: () => Promise<{ success: boolean; error?: string }>;
-  spawnAgentForTask: (params: {
-    taskId: string;
-    agentId: string;
-    taskTitle: string;
-    taskDescription?: string;
-    document?: string;
-    context?: Record<string, unknown>;
-  }) => Promise<{ success: boolean; error?: string; stdout?: string; taskId: string; agentId: string }>;
   getHubConfig: () => HubConfig;
   setHubConfig: (config: Partial<HubConfig>) => Promise<{ success: boolean; error?: string }>;
   getGatewayConfig: () => Promise<{ host: string; port: number; token?: string }>;
   setGatewayConfig: (host: string, port: number, token?: string) => Promise<{ success: boolean; error?: string }>;
   testGatewayConnection: (host: string, port: number) => Promise<{ success: boolean; error?: string }>;
-  onEvent: (callback: (event: BridgeEvent) => void) => void;
-  onTasksChanged: (callback: (tasks: HyperClawTask[]) => void) => void;
-  removeAllBridgeListeners: () => void;
 }
 
 declare global {
@@ -326,6 +329,7 @@ declare global {
         detectLocal: () => Promise<Record<string, { installed: boolean; version: string | null; running: boolean }>>;
         detectProviderKeys: () => Promise<Array<{ providerId: string; source: string }>>;
         importProviderKey: (params: { providerId: string; source: string }) => Promise<{ apiKey: string | null }>;
+        installLocalConnector: (params: LocalConnectorInstallParams) => Promise<LocalConnectorInstallResult>;
       };
       permissions: {
         checkAccessibility: () => Promise<boolean>;
@@ -335,17 +339,24 @@ declare global {
         checkScreen: () => Promise<boolean>;
         requestScreen: () => Promise<boolean>;
       };
-      openClaw: OpenClawAPI;
-      // Claude Code & Codex: routed through Hub → Connector relay (no local IPC)
+      oauth: {
+        startFlow: (providerId: "openai-codex" | "anthropic-claude") => Promise<{
+          success: boolean;
+          error?: string;
+          tokens?: {
+            accessToken: string;
+            refreshToken: string;
+            expiresIn?: number;
+            idToken?: string;
+            tokenType?: string;
+          };
+        }>;
+      };
+      openClaw: ElectronOpenClawAPI;
       hermes: {
-        listSessions: () => Promise<{ sessions: Array<{ id: string; key: string; label: string; updatedAt: number }>; error?: string }>;
-        loadHistory: (params: { sessionId: string }) => Promise<{ messages: Array<{ id: string; role: string; content: string; timestamp?: number; thinking?: string; toolCalls?: Array<{ id: string; name?: string; arguments?: string }>; toolResults?: Array<{ toolCallId: string; toolName: string; content: string; isError?: boolean }> }>; sessionId?: string; error?: string }>;
-        listModels: (profileId?: string) => Promise<{ models: Array<{ id: string; label: string }>; currentModel: string | null } | null>;
         saveProfileModel: (profileId: string, model: string) => Promise<{ success: boolean }>;
       };
       hyperClawBridge: HyperClawBridgeAPI;
-      noteFS: any;
-      memoryFS: MemoryAPI;
     };
   }
 }

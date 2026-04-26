@@ -70,7 +70,7 @@ import {
 } from "$/services/tools/todo/local";
 import { DefaultRecurrentRule } from "@/components/recurrence_filter";
 import { arrayMove } from "@dnd-kit/sortable";
-import { TabType } from "$/services/tools/todo/type";
+import { TabType, type TodoTaskStatus } from "$/services/tools/todo/type";
 import { Descendant } from "slate";
 import isEqual from "lodash/isEqual";
 import {
@@ -155,10 +155,11 @@ interface exportedValue {
     existingId?: string;
     /** When 'bridge', task came from ~/.hyperclaw/todo.json — do not write back to bridge (avoids loop) */
     source?: "app" | "bridge";
-    status?: string;
+    status?: TodoTaskStatus;
     assignedAgent?: string;
     assignedAgentId?: string;
     linkedDocumentUrl?: string;
+    projectId?: string;
     /** Optional delivery channel for announcing result (e.g. when task is run by cron) */
     delivery?: { announce?: boolean; channel?: string; to?: string };
   }) => Promise<any>;
@@ -570,6 +571,7 @@ export function TodoListProvider({ children, inMiniMode }: Props) {
       assignedAgent,
       assignedAgentId,
       linkedDocumentUrl,
+      projectId,
       delivery,
     }: {
       title: string;
@@ -581,10 +583,11 @@ export function TodoListProvider({ children, inMiniMode }: Props) {
       recurrence?: RecurrenceRule;
       ignore?: boolean;
       existingId?: string;
-      status?: string;
+      status?: TodoTaskStatus;
       assignedAgent?: string;
       assignedAgentId?: string;
       linkedDocumentUrl?: string;
+      projectId?: string;
       delivery?: { announce?: boolean; channel?: string; to?: string };
     }): Promise<any> => {
       const newObjectId = existingId ? sanitizeId(existingId) : generateId();
@@ -615,6 +618,7 @@ export function TodoListProvider({ children, inMiniMode }: Props) {
               assignedAgent: assignedAgent?.trim() || undefined,
               assignedAgentId: assignedAgentId?.trim() || undefined,
               linkedDocumentUrl: linkedDocumentUrl?.trim() || undefined,
+              projectId: projectId?.trim() || undefined,
             },
           ]);
         }
@@ -633,6 +637,7 @@ export function TodoListProvider({ children, inMiniMode }: Props) {
           assignedAgent: assignedAgent?.trim() || undefined,
           assignedAgentId: assignedAgentId?.trim() || undefined,
           linkedDocumentUrl: linkedDocumentUrl?.trim() || undefined,
+          projectId: projectId?.trim() || undefined,
           delivery,
         });
 
@@ -1859,8 +1864,11 @@ export function TodoListProvider({ children, inMiniMode }: Props) {
         let listIdToLoad = undefined;
 
         if (initialTab && outsideTabType(initialTab)) {
-          tabToLoad = `list:${getAppSettings("todo-list").meta.listId}`;
-          listIdToLoad = getAppSettings("todo-list").meta.listId;
+          const savedListId = getAppSettings("todo-list").meta?.listId;
+          if (savedListId) {
+            tabToLoad = `list:${savedListId}`;
+            listIdToLoad = savedListId;
+          }
         }
 
         const [tabPromise, activeTaskPromise] = await Promise.all([

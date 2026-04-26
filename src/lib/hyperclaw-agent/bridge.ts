@@ -6,7 +6,7 @@
  */
 import type { HubConnection } from './connection';
 import type { BridgeAction } from './types';
-import { isLongAction, DEFAULT_TIMEOUT, LONG_TIMEOUT } from './config';
+import { isLongAction, DEFAULT_TIMEOUT, LONG_TIMEOUT, REPAIR_TIMEOUT } from './config';
 
 // ---------------------------------------------------------------------------
 // Core bridge invocation
@@ -21,9 +21,9 @@ function bridge(
 ): Promise<unknown> {
   const timeout = timeoutMs ?? (isLongAction(action) ? LONG_TIMEOUT : DEFAULT_TIMEOUT);
   return conn.request('bridge', {
+    ...params,
     deviceId: deviceId(),
     action,
-    ...params,
   }, timeout);
 }
 
@@ -51,7 +51,6 @@ export type CronOperations = ReturnType<typeof createCronOps>;
 export type DocOperations = ReturnType<typeof createDocOps>;
 export type IntelOperations = ReturnType<typeof createIntelOps>;
 export type CredentialOperations = ReturnType<typeof createCredentialOps>;
-export type OrgChartOperations = ReturnType<typeof createOrgChartOps>;
 export type SystemOperations = ReturnType<typeof createSystemOps>;
 export type LayoutOperations = ReturnType<typeof createLayoutOps>;
 
@@ -149,20 +148,6 @@ export function createCredentialOps(conn: HubConnection, deviceId: () => string)
   };
 }
 
-// --- Org Chart ---
-
-export function createOrgChartOps(conn: HubConnection, deviceId: () => string) {
-  return {
-    read: () => bridge(conn, deviceId, 'read-orgchart').then(unwrap),
-    write: (data: unknown) =>
-      bridge(conn, deviceId, 'write-orgchart', { data }).then(unwrap),
-    assignTask: (params: Record<string, unknown>) =>
-      bridge(conn, deviceId, 'assign-orgchart-task', params).then(unwrap),
-    updateTask: (params: Record<string, unknown>) =>
-      bridge(conn, deviceId, 'update-orgchart-task', params).then(unwrap),
-  };
-}
-
 // --- System ---
 
 export function createSystemOps(conn: HubConnection, deviceId: () => string) {
@@ -174,7 +159,7 @@ export function createSystemOps(conn: HubConnection, deviceId: () => string) {
     restartGateway: () =>
       bridge(conn, deviceId, 'gateway-restart', {}, LONG_TIMEOUT).then(unwrap),
     doctorFix: () =>
-      bridge(conn, deviceId, 'openclaw-doctor-fix', {}, LONG_TIMEOUT).then(unwrap),
+      bridge(conn, deviceId, 'openclaw-doctor-fix', {}, REPAIR_TIMEOUT).then(unwrap),
   };
 }
 

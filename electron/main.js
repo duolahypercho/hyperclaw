@@ -15,105 +15,223 @@ const fs = require("fs");
 const os = require("os");
 const https = require("https");
 const http = require("http");
+const { pipeline } = require("stream");
+const { promisify } = require("util");
 
 const isDev = process.env.NODE_ENV === "development";
-const { spawn } = require("child_process");
+const { execFile } = require("child_process");
+const streamPipeline = promisify(pipeline);
 
-// ─── Connector Process Manager ──────────────────────────────────────────────
-// The hyperclaw-connector binary is bundled inside the Electron app and managed
-// automatically. Users never need to install or run it separately.
+// Gaming mode: disable hardware acceleration to avoid GPU conflicts
+// Set HYPERCLAW_GAMING_MODE=1 or pass --gaming-mode flag
+const gamingMode = process.env.HYPERCLAW_GAMING_MODE === "1" || process.argv.includes("--gaming-mode");
+if (gamingMode) {
+  app.disableHardwareAcceleration();
+  console.log("[main] Gaming mode enabled - hardware acceleration disabled");
+}
 
-let connectorProcess = null;
-let connectorStopped = false; // set true on app quit to prevent restart loops
+// ─── Connector Installer ───────────────────────────────────────────────────
+// Local onboarding downloads and installs the connector as a standalone
+// background service so it survives Electron restarts and reboots.
 
-/**
- * Return the path to the bundled connector binary for the current platform/arch.
- * In packaged builds: <app>/Contents/Resources/connector/<binary>
- * In dev: electron/resources/connector/<binary>
- */
-function getConnectorBinaryPath() {
-  const plat = process.platform; // darwin | linux | win32
-  const arch = process.arch;     // arm64 | x64
+function getConnectorDownloadName() {
+  const plat = process.platform;
+  const arch = process.arch;
 
-  let name;
   if (plat === "darwin") {
-    name = arch === "arm64"
+    return arch === "arm64"
       ? "hyperclaw-connector-darwin-arm64"
       : "hyperclaw-connector-darwin-x64";
-  } else if (plat === "linux") {
-    name = "hyperclaw-connector-linux";
-  } else if (plat === "win32") {
-    name = "hyperclaw-connector-win.exe";
-  } else {
-    return null;
   }
-
-  if (app.isPackaged) {
-    return path.join(process.resourcesPath, "connector", name);
+  if (plat === "linux") {
+    return arch === "arm64"
+      ? "hyperclaw-connector-linux-arm64"
+      : "hyperclaw-connector-linux";
   }
-  // Dev mode: binary lives next to this script in resources/connector/
-  return path.join(__dirname, "resources", "connector", name);
+  if (plat === "win32") {
+    return arch === "arm64"
+      ? "hyperclaw-connector-win-arm64.exe"
+      : "hyperclaw-connector-win.exe";
+  }
+  return null;
 }
 
-/**
- * Start the connector daemon. Restarts automatically on crash (unless we quit).
- * The connector reads its config from ~/.hyperclaw/.env (or flags).
- * On first run with no DEVICE_TOKEN it will do auto-setup (login + create device).
- */
-function startConnector(attempt = 0) {
-  if (connectorStopped) return;
+function getConnectorInstallPaths() {
+  const installDir = path.join(os.homedir(), ".hyperclaw");
+  const binaryName = process.platform === "win32"
+    ? "hyperclaw-connector.exe"
+    : "hyperclaw-connector";
+  return {
+    installDir,
+    binaryPath: path.join(installDir, binaryName),
+    envPath: path.join(installDir, ".env"),
+    credentialsDir: path.join(installDir, "credentials"),
+  };
+}
 
-  const binPath = getConnectorBinaryPath();
-  if (!binPath || !fs.existsSync(binPath)) {
-    console.warn(`[connector] Binary not found at: ${binPath} — skipping auto-start`);
-    return;
+function normalizeHubWsUrl(hubUrl) {
+  if (!hubUrl) return "wss://hub.hypercho.com";
+  if (hubUrl.startsWith("ws://") || hubUrl.startsWith("wss://")) return hubUrl;
+  if (hubUrl.startsWith("https://")) return `wss://${hubUrl.slice("https://".length)}`;
+  if (hubUrl.startsWith("http://")) return `ws://${hubUrl.slice("http://".length)}`;
+  return `wss://${hubUrl}`;
+}
+
+function normalizeHubHttpUrl(hubUrl) {
+  if (!hubUrl) return "https://hub.hypercho.com";
+  if (hubUrl.startsWith("https://") || hubUrl.startsWith("http://")) return hubUrl;
+  if (hubUrl.startsWith("wss://")) return `https://${hubUrl.slice("wss://".length)}`;
+  if (hubUrl.startsWith("ws://")) return `http://${hubUrl.slice("ws://".length)}`;
+  return `https://${hubUrl}`;
+}
+
+async function downloadFile(downloadUrl, destinationPath, redirectCount = 0) {
+  if (redirectCount > 5) {
+    throw new Error("Too many redirects while downloading connector");
   }
 
-  // Inherit env so the connector picks up PATH, HOME, etc.
-  // The connector reads ~/.hyperclaw/.env for HUB_URL / DEVICE_TOKEN.
-  connectorProcess = spawn(binPath, [], {
-    detached: false,
-    stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env },
-  });
+  const client = downloadUrl.startsWith("https://") ? https : http;
 
-  const pid = connectorProcess.pid;
-  console.log(`[connector] Started (pid ${pid}, attempt ${attempt + 1})`);
+  await new Promise((resolve, reject) => {
+    const request = client.get(downloadUrl, (response) => {
+      const statusCode = response.statusCode || 0;
+      if ([301, 302, 307, 308].includes(statusCode) && response.headers.location) {
+        response.resume();
+        const nextUrl = new URL(response.headers.location, downloadUrl).toString();
+        resolve(downloadFile(nextUrl, destinationPath, redirectCount + 1));
+        return;
+      }
 
-  connectorProcess.stdout.on("data", (data) => {
-    const lines = data.toString().trim().split("\n");
-    lines.forEach((l) => console.log(`[connector] ${l}`));
-  });
-  connectorProcess.stderr.on("data", (data) => {
-    const lines = data.toString().trim().split("\n");
-    lines.forEach((l) => console.error(`[connector:err] ${l}`));
-  });
+      if (statusCode !== 200) {
+        response.resume();
+        reject(new Error(`Connector download failed with HTTP ${statusCode}`));
+        return;
+      }
 
-  connectorProcess.on("exit", (code, signal) => {
-    connectorProcess = null;
-    if (connectorStopped) return;
-    // Exponential backoff: 1s, 2s, 4s, 8s, 16s, max 30s
-    const delay = Math.min(Math.pow(2, attempt) * 1000, 30000);
-    console.warn(`[connector] Exited (code=${code} signal=${signal}), restarting in ${delay}ms...`);
-    setTimeout(() => startConnector(attempt + 1), delay);
-  });
+      const fileStream = fs.createWriteStream(destinationPath, { mode: 0o755 });
+      streamPipeline(response, fileStream).then(resolve).catch(reject);
+    });
 
-  connectorProcess.on("error", (err) => {
-    console.error(`[connector] Failed to start: ${err.message}`);
+    request.on("error", reject);
   });
 }
 
-/**
- * Gracefully stop the connector (called on app quit).
- */
-function stopConnector() {
-  connectorStopped = true;
-  if (connectorProcess) {
+function runExecFile(file, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    execFile(file, args, options, (error, stdout, stderr) => {
+      if (error) {
+        reject(new Error(stderr?.trim() || stdout?.trim() || error.message));
+        return;
+      }
+      resolve({ stdout, stderr });
+    });
+  });
+}
+
+async function installLocalConnectorService({ token, deviceId, hubUrl, jwt }) {
+  if (!token || !deviceId) {
+    throw new Error("Missing device token or device ID for connector install");
+  }
+
+  const downloadName = getConnectorDownloadName();
+  if (!downloadName) {
+    throw new Error(`Connector install is not supported on ${process.platform}/${process.arch}`);
+  }
+
+  const { installDir, binaryPath, envPath, credentialsDir } = getConnectorInstallPaths();
+  const normalizedHubUrl = normalizeHubWsUrl(hubUrl);
+  const downloadBase = normalizeHubHttpUrl(appConfig.hub?.url || hubUrl || "https://hub.hypercho.com");
+  const downloadUrl = new URL(`/downloads/${downloadName}`, downloadBase).toString();
+
+  await fs.promises.mkdir(installDir, { recursive: true });
+  await fs.promises.mkdir(credentialsDir, { recursive: true });
+
+  // Skip entire install only when the connector is already running AND already
+  // paired to the same device we are onboarding. The short-circuit has to check
+  // the device.id on disk — otherwise we leave a stale daemon running with
+  // credentials from a previous onboarding, which causes the hub to never flip
+  // the new device to "online" and the UI to hang on
+  // "Waiting for connector to connect...".
+  try {
+    await fs.promises.access(binaryPath, fs.constants.X_OK);
+    let existingDeviceId = "";
     try {
-      connectorProcess.kill("SIGTERM");
-    } catch (_) {}
-    connectorProcess = null;
+      existingDeviceId = (await fs.promises.readFile(
+        path.join(installDir, "device.id"),
+        "utf8"
+      )).trim();
+    } catch { /* no device.id on disk — proceed with install */ }
+
+    if (existingDeviceId && existingDeviceId === deviceId) {
+      const probe = await fetch("http://127.0.0.1:18790/bridge/health", {
+        signal: AbortSignal.timeout(2000),
+      });
+      if (probe.ok) {
+        return { success: true, installDir, binaryPath, hubUrl: normalizedHubUrl };
+      }
+    }
+  } catch { /* not running or binary missing — proceed with install */ }
+
+  // Prefer locally-built connector (dev build) over hub download
+  const localDevBuild = path.join(os.homedir(), "Code", "hyperclaw-connector", "hyperclaw-connector");
+  let usedLocalBuild = false;
+  try {
+    await fs.promises.access(localDevBuild, fs.constants.X_OK);
+    await fs.promises.copyFile(localDevBuild, binaryPath);
+    await fs.promises.chmod(binaryPath, 0o755).catch(() => {});
+    usedLocalBuild = true;
+    console.log("[connector] Using local dev build:", localDevBuild);
+  } catch { /* no local build, download from hub */ }
+
+  if (!usedLocalBuild) {
+    await downloadFile(downloadUrl, binaryPath);
+    await fs.promises.chmod(binaryPath, 0o755).catch(() => {});
   }
+
+  const envContent = [
+    `DEVICE_TOKEN=${token}`,
+    `DEVICE_ID=${deviceId}`,
+    `HUB_URL=${normalizedHubUrl}`,
+    "",
+  ].join("\n");
+
+  await fs.promises.writeFile(path.join(installDir, "device.token"), `${token}\n`, "utf8");
+  await fs.promises.writeFile(path.join(installDir, "device.id"), `${deviceId}\n`, "utf8");
+  await fs.promises.writeFile(path.join(credentialsDir, "device.token"), `${token}\n`, "utf8");
+  await fs.promises.writeFile(path.join(credentialsDir, "device.id"), `${deviceId}\n`, "utf8");
+  await fs.promises.writeFile(envPath, envContent, "utf8");
+
+  await runExecFile(binaryPath, ["install"], {
+    env: {
+      ...process.env,
+      DEVICE_TOKEN: token,
+      DEVICE_ID: deviceId,
+      HUB_URL: normalizedHubUrl,
+    },
+    windowsHide: true,
+  });
+
+  // Write hub-config.json so subsequent Electron restarts auto-load it
+  // Use the HTTP URL — getHubInfo() feeds hubCommandFromElectron which makes HTTP requests
+  const hubConfigPath = path.join(os.homedir(), ".hyperclaw", "hub-config.json");
+  const httpHubUrl = normalizeHubHttpUrl(hubUrl || "https://hub.hypercho.com");
+  const hubConfigData = {
+    enabled: true,
+    url: httpHubUrl,
+    deviceId,
+    jwt: jwt || appConfig.hub?.jwt || "",
+  };
+  await fs.promises.writeFile(hubConfigPath, JSON.stringify(hubConfigData, null, 2), "utf8");
+
+  // Update in-memory appConfig so getHubInfo().enabled is true for the rest of this session
+  appConfig.hub = { ...hubConfigData };
+
+  return {
+    success: true,
+    installDir,
+    binaryPath,
+    hubUrl: normalizedHubUrl,
+  };
 }
 
 // Log crashes so we can debug "opens then closes" (run from Terminal to see output)
@@ -122,7 +240,7 @@ function logCrash(label, err) {
   console.error(msg);
   try {
     const os = require("os");
-    const logPath = path.join(os.homedir(), ".openclaw", "hyperclaw-crash.log");
+    const logPath = path.join(os.homedir(), ".hyperclaw", "hyperclaw-crash.log");
     const logDir = path.dirname(logPath);
     if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
     fs.appendFileSync(logPath, `[${new Date().toISOString()}] ${msg}`, "utf-8");
@@ -135,11 +253,8 @@ process.on("unhandledRejection", (reason, promise) => {
   logCrash("unhandledRejection", reason);
 });
 
-// Prevent app from being suspended when minimized/hidden
-// These must be called before app.whenReady()
-app.commandLine.appendSwitch("disable-background-timer-throttling");
-app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
-app.commandLine.appendSwitch("disable-renderer-backgrounding");
+// Allow OS to throttle the app when minimized/hidden (better for gaming, battery)
+// WebSocket connections stay alive for notifications even when throttled
 
 // Set app name and App User Model ID to "Hyperclaw" everywhere (notifications, taskbar, etc.)
 app.setName("Hyperclaw");
@@ -255,9 +370,8 @@ function discoverActiveDevice(hubUrl, jwt) {
           const devices = JSON.parse(data);
           if (!Array.isArray(devices) || devices.length === 0) return resolve(null);
           const online = devices.filter((d) => d.status === "online");
-          const device = online.length > 0
-            ? online.reduce((a, b) => (a.updatedAt || "") > (b.updatedAt || "") ? a : b)
-            : devices[0];
+          if (online.length === 0) return resolve(null);
+          const device = online.reduce((a, b) => (a.updatedAt || "") > (b.updatedAt || "") ? a : b);
           const id = device.id || device._id;
           _cachedDeviceId = id;
           _cachedDeviceAt = Date.now();
@@ -271,28 +385,25 @@ function discoverActiveDevice(hubUrl, jwt) {
   });
 }
 
-function hubNotConfiguredError() {
-  return { success: false, error: "No device registered. Please set up a device first.", needsSetup: true };
-}
-
 /**
  * Forward a command to the Hub, which relays it to the Connector via WebSocket.
  * The Connector executes it on the user's machine and returns the result.
  * Dynamically discovers the active device if the config device is stale.
+ *
+ * Only used by the Ed25519-signed `sign-connect-challenge` action (which must
+ * run in the Electron main process because it needs local key material). All
+ * other bridge calls go through the renderer's hubCommand() stack.
  */
 async function hubCommandFromElectron(body) {
   const { hubUrl, jwt } = getHubInfo();
-  // Discover active device dynamically (like the browser does)
-  const deviceId = await discoverActiveDevice(hubUrl, jwt) || appConfig.hub?.deviceId || "";
-  if (!deviceId) return hubNotConfiguredError();
+  // Always discover an online device through Hub before command routing.
+  const deviceId = await discoverActiveDevice(hubUrl, jwt) || "";
+  if (!deviceId) return { success: false, error: "No online device connected" };
   const url = new URL(`/api/devices/${deviceId}/command`, hubUrl);
   const fetchModule = hubUrl.startsWith("https") ? https : http;
   const payload = JSON.stringify(body);
 
-  // Long-running actions (AI chat via CLI) need a longer HTTP timeout.
-  // Must match the hub's extended timeout for these actions (6 min).
-  const slowActions = ["claude-code-send", "codex-send", "hermes-chat"];
-  const httpTimeout = slowActions.includes(body?.action) ? 360000 : 60000;
+  const httpTimeout = 60000;
 
   return new Promise((resolve, reject) => {
     const req = fetchModule.request(url, {
@@ -307,12 +418,31 @@ async function hubCommandFromElectron(body) {
       let data = "";
       res.on("data", (chunk) => { data += chunk; });
       res.on("end", () => {
-        try { resolve(unwrapHubResponse(JSON.parse(data))); }
-        catch { resolve({ success: false, error: "Invalid response from hub" }); }
+        const text = data.trim();
+        try {
+          resolve(unwrapHubResponse(JSON.parse(text)));
+          return;
+        } catch {}
+
+        if (res.statusCode && res.statusCode >= 400) {
+          resolve({
+            success: false,
+            error: text || `Hub returned ${res.statusCode}`,
+          });
+          return;
+        }
+
+        resolve({
+          success: false,
+          error: text || "Invalid response from hub",
+        });
       });
     });
     req.on("error", (err) => resolve({ success: false, error: err.message }));
-    req.on("timeout", () => { req.destroy(); resolve({ success: false, error: "Hub request timed out" }); });
+    req.on("timeout", () => {
+      req.destroy();
+      resolve({ success: false, error: `Hub request timed out (${action || "unknown"})` });
+    });
     req.write(payload);
     req.end();
   });
@@ -531,7 +661,7 @@ function createWindow() {
       preload: preloadPath,
       webSecurity: true,
       allowRunningInsecureContent: false,
-      backgroundThrottling: false, // Prevent throttling when window is hidden/minimized
+      backgroundThrottling: true, // Prevent throttling when window is hidden/minimized
       spellcheck: true, // Enable spellchecker
     },
     autoHideMenuBar: true,
@@ -618,7 +748,12 @@ function createWindow() {
   function isOAuthProviderUrl(url) {
     try {
       const host = new URL(url).hostname.toLowerCase();
-      return host === "accounts.google.com" || host.endsWith(".accounts.google.com");
+      return (
+        host === "accounts.google.com" ||
+        host.endsWith(".accounts.google.com") ||
+        host === "auth.openai.com" ||
+        host === "claude.ai"
+      );
     } catch {
       return false;
     }
@@ -652,7 +787,7 @@ function createWindow() {
             nodeIntegration: false,
             contextIsolation: true,
             webSecurity: true,
-            backgroundThrottling: false,
+            backgroundThrottling: true,
             // Use default session so callback cookies are shared with main window
           },
           show: false,
@@ -699,7 +834,7 @@ function createWindow() {
           contextIsolation: true,
           preload: preloadPath,
           webSecurity: true,
-          backgroundThrottling: false,
+          backgroundThrottling: true,
         },
         show: false,
       });
@@ -881,16 +1016,8 @@ function createWindow() {
   // Setting menu to null completely removes it, preventing Alt from activating it
   mainWindow.setMenu(null);
 
-  // Prevent renderer process from being throttled when hidden
-  mainWindow.webContents.setBackgroundThrottling(false);
-
-  // Keep the app running even when minimized/hidden
-  mainWindow.on("hide", () => {
-    // Ensure the window stays active in the background
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.setBackgroundThrottling(false);
-    }
-  });
+  // Allow throttling when minimized/hidden (better for gaming, battery life)
+  // WebSocket connections remain active for notifications
 
   // Windows-specific Tray logic
   mainWindow.on("minimize", (event) => {
@@ -1244,6 +1371,296 @@ ipcMain.handle("runtimes:import-provider-key", async (_event, { providerId, sour
   return { apiKey: null };
 });
 
+ipcMain.handle("runtimes:install-local-connector", async (_event, params = {}) => {
+  try {
+    return await installLocalConnectorService(params);
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Failed to install connector",
+    };
+  }
+});
+
+// ─── OAuth PKCE Flow ──────────────────────────────────────────────────────
+// Handles Authorization Code + PKCE for Codex (OpenAI) and Claude (Anthropic).
+// The Electron main process runs the full flow: generate PKCE verifier,
+// open an OAuth popup, intercept the redirect, exchange code for tokens.
+
+const crypto = require("crypto");
+
+const OAUTH_PROVIDERS = {
+  "openai-codex": {
+    clientId: "app_EMoamEEZ73f0CkXaXp7hrann",
+    authorizeUrl: "https://auth.openai.com/oauth/authorize",
+    tokenUrl: "https://auth.openai.com/oauth/token",
+    redirectUri: "http://localhost:1455/auth/callback",
+    scopes: "openid profile email offline_access",
+    extraParams: {
+      id_token_add_organizations: "true",
+      codex_cli_simplified_flow: "true",
+    },
+  },
+  "anthropic-claude": {
+    clientId: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
+    authorizeUrl: "https://claude.ai/oauth/authorize",
+    tokenUrl: "https://platform.claude.com/v1/oauth/token",
+    redirectUri: "http://localhost:53692/callback",
+    scopes:
+      "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload",
+    extraParams: {},
+    jsonBody: true,
+  },
+};
+
+function generatePkceVerifier() {
+  return crypto.randomBytes(32).toString("base64url");
+}
+
+function generatePkceChallenge(verifier) {
+  return crypto.createHash("sha256").update(verifier).digest("base64url");
+}
+
+function buildOAuthAuthorizeUrl(providerId) {
+  const provider = OAUTH_PROVIDERS[providerId];
+  if (!provider) throw new Error(`Unknown OAuth provider: ${providerId}`);
+
+  const verifier = generatePkceVerifier();
+  const challenge = generatePkceChallenge(verifier);
+
+  // Both providers require a state parameter for CSRF protection.
+  // Anthropic uses the verifier as state; OpenAI requires at least 8 chars.
+  const state = crypto.randomBytes(32).toString("base64url");
+
+  const params = new URLSearchParams({
+    response_type: "code",
+    client_id: provider.clientId,
+    redirect_uri: provider.redirectUri,
+    scope: provider.scopes,
+    state,
+    code_challenge: challenge,
+    code_challenge_method: "S256",
+    ...provider.extraParams,
+  });
+
+  return {
+    url: `${provider.authorizeUrl}?${params.toString()}`,
+    verifier,
+    redirectUri: provider.redirectUri,
+  };
+}
+
+async function exchangeOAuthCode(providerId, code, verifier) {
+  const provider = OAUTH_PROVIDERS[providerId];
+  if (!provider) throw new Error(`Unknown OAuth provider: ${providerId}`);
+
+  const tokenParams = {
+    grant_type: "authorization_code",
+    client_id: provider.clientId,
+    code,
+    redirect_uri: provider.redirectUri,
+    code_verifier: verifier,
+  };
+
+  const isJson = !!provider.jsonBody;
+  const body = isJson
+    ? JSON.stringify(tokenParams)
+    : new URLSearchParams(tokenParams).toString();
+
+  const mod = provider.tokenUrl.startsWith("https") ? https : http;
+
+  return new Promise((resolve, reject) => {
+    const tokenUrl = new URL(provider.tokenUrl);
+    const req = mod.request(
+      {
+        hostname: tokenUrl.hostname,
+        port: tokenUrl.port || (tokenUrl.protocol === "https:" ? 443 : 80),
+        path: tokenUrl.pathname,
+        method: "POST",
+        headers: {
+          "Content-Type": isJson
+            ? "application/json"
+            : "application/x-www-form-urlencoded",
+          Accept: "application/json",
+        },
+      },
+      (res) => {
+        let data = "";
+        res.on("data", (chunk) => (data += chunk));
+        res.on("end", () => {
+          try {
+            const parsed = JSON.parse(data);
+            if (res.statusCode >= 400) {
+              const errorMsg =
+                parsed.error_description ||
+                (typeof parsed.error === "string"
+                  ? parsed.error
+                  : parsed.error?.message) ||
+                `Token exchange failed (${res.statusCode})`;
+              reject(new Error(errorMsg));
+              return;
+            }
+            resolve(parsed);
+          } catch {
+            reject(new Error(`Invalid token response: ${data.slice(0, 200)}`));
+          }
+        });
+      }
+    );
+    req.on("error", reject);
+    req.write(body.toString());
+    req.end();
+  });
+}
+
+// Start an OAuth flow: open popup, wait for redirect, exchange code.
+ipcMain.handle("oauth:start-flow", async (_event, { providerId }) => {
+  if (!OAUTH_PROVIDERS[providerId]) {
+    return { success: false, error: `Unknown OAuth provider: ${providerId}` };
+  }
+
+  try {
+    const { url, verifier, redirectUri } = buildOAuthAuthorizeUrl(providerId);
+    const redirectHost = new URL(redirectUri);
+
+    return new Promise((resolve) => {
+      let resolved = false;
+      const finish = (result) => {
+        if (resolved) return;
+        resolved = true;
+        resolve(result);
+      };
+
+      // Spin up a temporary local HTTP server to catch the redirect
+      const server = http.createServer(async (req, res) => {
+        const reqUrl = new URL(req.url, `http://localhost`);
+
+        // Only handle the callback path
+        if (!req.url.startsWith(new URL(redirectUri).pathname)) {
+          res.writeHead(404);
+          res.end();
+          return;
+        }
+
+        const code = reqUrl.searchParams.get("code");
+        const error = reqUrl.searchParams.get("error");
+
+        if (error) {
+          const desc = reqUrl.searchParams.get("error_description") || error;
+          res.writeHead(200, { "Content-Type": "text/html" });
+          res.end(
+            "<html><body><h2>Authentication failed</h2><p>" +
+              desc +
+              "</p><p>You can close this window.</p></body></html>"
+          );
+          server.close();
+          if (oauthWin && !oauthWin.isDestroyed()) oauthWin.close();
+          finish({ success: false, error: desc });
+          return;
+        }
+
+        if (!code) {
+          res.writeHead(400, { "Content-Type": "text/html" });
+          res.end(
+            "<html><body><h2>Missing authorization code</h2><p>You can close this window.</p></body></html>"
+          );
+          server.close();
+          if (oauthWin && !oauthWin.isDestroyed()) oauthWin.close();
+          finish({ success: false, error: "No authorization code received" });
+          return;
+        }
+
+        // Exchange the code for tokens
+        try {
+          const tokens = await exchangeOAuthCode(providerId, code, verifier);
+          res.writeHead(200, { "Content-Type": "text/html" });
+          res.end(
+            "<html><body><h2>Authenticated!</h2><p>You can close this window.</p><script>window.close()</script></body></html>"
+          );
+          server.close();
+          if (oauthWin && !oauthWin.isDestroyed()) oauthWin.close();
+          finish({
+            success: true,
+            tokens: {
+              accessToken: tokens.access_token,
+              refreshToken: tokens.refresh_token,
+              expiresIn: tokens.expires_in,
+              idToken: tokens.id_token,
+              tokenType: tokens.token_type,
+            },
+          });
+        } catch (exchangeErr) {
+          res.writeHead(200, { "Content-Type": "text/html" });
+          res.end(
+            "<html><body><h2>Token exchange failed</h2><p>" +
+              exchangeErr.message +
+              "</p></body></html>"
+          );
+          server.close();
+          if (oauthWin && !oauthWin.isDestroyed()) oauthWin.close();
+          finish({ success: false, error: exchangeErr.message });
+        }
+      });
+
+      const port = parseInt(redirectHost.port) || (providerId === "openai-codex" ? 1455 : 53692);
+
+      server.listen(port, "127.0.0.1", () => {
+        console.log(`[oauth] Listening for ${providerId} callback on port ${port}`);
+      });
+
+      server.on("error", (err) => {
+        console.error(`[oauth] Server error for ${providerId}:`, err.message);
+        finish({
+          success: false,
+          error: `Could not start OAuth callback server on port ${port}: ${err.message}`,
+        });
+      });
+
+      // Open the OAuth popup
+      const oauthWin = new BrowserWindow({
+        width: 520,
+        height: 700,
+        title: providerId === "openai-codex" ? "Sign in to OpenAI" : "Sign in to Anthropic",
+        frame: true,
+        webPreferences: {
+          nodeIntegration: false,
+          contextIsolation: true,
+          webSecurity: true,
+        },
+        show: false,
+      });
+
+      oauthWin.loadURL(url).catch((err) => {
+        console.error("[oauth] Window load failed:", err);
+        server.close();
+        finish({ success: false, error: "Failed to open authentication page" });
+      });
+
+      oauthWin.once("ready-to-show", () => oauthWin.show());
+
+      // If user closes the window before completing
+      oauthWin.on("closed", () => {
+        setTimeout(() => {
+          server.close();
+          finish({ success: false, error: "Authentication window was closed" });
+        }, 1000); // Small delay to allow redirect to complete
+      });
+
+      // Safety timeout (5 minutes)
+      setTimeout(() => {
+        server.close();
+        if (oauthWin && !oauthWin.isDestroyed()) oauthWin.close();
+        finish({ success: false, error: "Authentication timed out" });
+      }, 5 * 60 * 1000);
+    });
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : "OAuth flow failed",
+    };
+  }
+});
+
 // ─── Permission Handlers ──────────────────────────────────────────────────
 ipcMain.handle("check-accessibility", () => {
   if (process.platform === "darwin") {
@@ -1390,59 +1807,7 @@ ipcMain.handle("show-notification", async (event, { title, body }) => {
   }, 5000);
 });
 
-// ─── IPC Handlers: Hermes ────────────────────────────────────────────────────
-
-ipcMain.handle("hermes:list-models", async (event, { profileId } = {}) => {
-  const fs = require("fs");
-  const path = require("path");
-  const home = process.env.HOME || "";
-  try {
-    const yaml = require("js-yaml");
-
-    // Try profile-specific config first, then fall back to global config
-    let configPath = path.join(home, ".hermes", "config.yaml");
-    if (profileId) {
-      const profileConfigPath = path.join(home, ".hermes", "profiles", profileId, "config.yaml");
-      if (fs.existsSync(profileConfigPath)) configPath = profileConfigPath;
-    }
-
-    if (!fs.existsSync(configPath)) return { models: [], currentModel: null };
-
-    const config = yaml.load(fs.readFileSync(configPath, "utf-8"));
-    const currentModel = config?.model?.default || null;
-    const provider = config?.model?.provider || null;
-
-    const models = currentModel ? [{ id: currentModel, label: currentModel }] : [];
-
-    // Load models from the dev cache: configured provider first, then major providers
-    const cacheFile = path.join(home, ".hermes", "models_dev_cache.json");
-    if (fs.existsSync(cacheFile)) {
-      try {
-        const cache = JSON.parse(fs.readFileSync(cacheFile, "utf-8"));
-        // Priority: configured provider first, then major providers
-        const majorProviders = ["anthropic", "openai", "minimax", "google", "openrouter", "deepseek"];
-        const orderedProviders = [
-          ...(provider && !majorProviders.includes(provider) ? [provider] : []),
-          ...(provider && majorProviders.includes(provider) ? [provider] : []),
-          ...majorProviders.filter((p) => p !== provider),
-        ];
-        for (const p of orderedProviders) {
-          const providerModels = Object.keys(cache[p]?.models || {});
-          for (const modelId of providerModels) {
-            const id = p === provider ? modelId : `${p}/${modelId}`;
-            if (!models.find((m) => m.id === id)) {
-              models.push({ id, label: id });
-            }
-          }
-        }
-      } catch { /* ignore */ }
-    }
-
-    return { models, currentModel };
-  } catch {
-    return { models: [], currentModel: null };
-  }
-});
+// ─── IPC Handlers: Hermes (only save-profile-model needs local YAML access) ──
 
 ipcMain.handle("hermes:save-profile-model", async (event, { profileId, model } = {}) => {
   if (!profileId || !model) return { success: false };
@@ -1474,97 +1839,12 @@ ipcMain.handle("hermes:save-profile-model", async (event, { profileId, model } =
   }
 });
 
-// ─── IPC Handlers: OpenClaw (all routed through Hub → Connector) ────────────
-
-ipcMain.handle("openclaw:check-installed", async () => {
-  if (!getHubInfo().enabled) return { installed: false, version: null, needsSetup: true };
-  // Device exists on hub → OpenClaw is available via the connector
-  return { installed: true, version: "remote" };
-});
-
-ipcMain.handle("openclaw:status", async () => {
-  if (!getHubInfo().enabled) return hubNotConfiguredError();
-  return hubCommandFromElectron({ action: "get-config" });
-});
-
-ipcMain.handle("openclaw:gateway-health", async () => {
-  if (!getHubInfo().enabled) return { healthy: false, error: "No device registered", needsSetup: true };
-  return { healthy: true };
-});
-
-ipcMain.handle("openclaw:get-gateway-connect-url", async () => {
-  if (!getHubInfo().enabled) return { gatewayUrl: null, token: null, error: "No device registered", needsSetup: true };
-  return { gatewayUrl: null, token: null, hubMode: true };
-});
-
-ipcMain.handle("openclaw:get-device-identity", async () => {
-  if (!getHubInfo().enabled) return { error: "No device registered. Please set up a device first.", needsSetup: true };
-  return hubCommandFromElectron({ action: "get-device-identity" });
-});
+// ─── IPC Handlers: OpenClaw (only sign-connect-challenge needs Electron IPC) ─
 
 ipcMain.handle("openclaw:sign-connect-challenge", async (event, params) => {
   if (!getHubInfo().enabled) return { error: "No device registered. Please set up a device first.", needsSetup: true };
   return hubCommandFromElectron({ action: "sign-connect-challenge", ...params });
 });
-
-ipcMain.handle("openclaw:message-send", async (event, p) => {
-  if (!getHubInfo().enabled) return hubNotConfiguredError();
-  return hubCommandFromElectron({ action: "send-command", command: p });
-});
-
-ipcMain.handle("openclaw:cron-list", async () => {
-  if (!getHubInfo().enabled) return hubNotConfiguredError();
-  return hubCommandFromElectron({ action: "get-crons" });
-});
-
-ipcMain.handle("openclaw:cron-list-json", async () => {
-  if (!getHubInfo().enabled) return hubNotConfiguredError();
-  return hubCommandFromElectron({ action: "get-crons" });
-});
-
-function sanitizeCronId(id) {
-  if (typeof id !== "string" || !id.trim()) return null;
-  const s = id.trim();
-  if (!/^[a-f0-9-]{36}$/i.test(s)) return null;
-  return s;
-}
-
-ipcMain.handle("openclaw:cron-enable", async (event, id) => {
-  if (!getHubInfo().enabled) return hubNotConfiguredError();
-  const safeId = sanitizeCronId(id);
-  if (!safeId) return { success: false, error: "Invalid job id" };
-  return hubCommandFromElectron({ action: "cron-edit", cronEditJobId: safeId, cronEditParams: { enabled: true } });
-});
-
-ipcMain.handle("openclaw:cron-disable", async (event, id) => {
-  if (!getHubInfo().enabled) return hubNotConfiguredError();
-  const safeId = sanitizeCronId(id);
-  if (!safeId) return { success: false, error: "Invalid job id" };
-  return hubCommandFromElectron({ action: "cron-edit", cronEditJobId: safeId, cronEditParams: { enabled: false } });
-});
-
-ipcMain.handle("openclaw:agent-list", async () => {
-  if (!getHubInfo().enabled) return hubNotConfiguredError();
-  return hubCommandFromElectron({ action: "list-agents" });
-});
-
-ipcMain.handle("openclaw:run-command", async (event, args) => {
-  if (!getHubInfo().enabled) return hubNotConfiguredError();
-  if (!args || typeof args !== "string") {
-    return { success: false, error: "Invalid command arguments" };
-  }
-  const blocked = ["rm ", "sudo ", "eval ", "exec "];
-  if (blocked.some((b) => args.toLowerCase().includes(b))) {
-    return { success: false, error: "Command blocked for safety" };
-  }
-  return hubCommandFromElectron({ action: "send-command", command: args });
-});
-
-// ─── Claude Code & Codex: routed through Hub → Connector relay ──────────────
-// All claude-code-* and codex-* actions are handled by the connector daemon.
-// The app sends bridge requests via hub-direct.ts → Hub WS → Connector.
-// Streaming events flow back: Connector → Hub → Dashboard WS → app.
-// See hyperclaw-connector/internal/bridge/claude.go for implementation.
 
 // ─── IPC Handlers: Gateway Config ───────────────────────────────────────────
 
@@ -1647,6 +1927,10 @@ ipcMain.on("hyperclaw:get-hub-config-sync", (event) => {
 
 ipcMain.handle("hyperclaw:set-hub-config", async (event, { enabled, url, deviceId, jwt }) => {
   try {
+    // Invalidate device discovery cache — caller may have just installed a new connector
+    _cachedDeviceId = null;
+    _cachedDeviceAt = 0;
+
     if (!appConfig.hub) {
       appConfig.hub = {};
     }
@@ -1659,228 +1943,33 @@ ipcMain.handle("hyperclaw:set-hub-config", async (event, { enabled, url, deviceI
     const configPath = path.join(__dirname, "app-config.json");
     fs.writeFileSync(configPath, JSON.stringify(appConfig, null, 2), "utf-8");
 
+    // Also persist to hub-config.json so the config survives Electron restarts
+    const hubConfigPath = path.join(os.homedir(), ".hyperclaw", "hub-config.json");
+    try {
+      await fs.promises.mkdir(path.join(os.homedir(), ".hyperclaw"), { recursive: true });
+      await fs.promises.writeFile(hubConfigPath, JSON.stringify({
+        enabled: appConfig.hub.enabled,
+        url: appConfig.hub.url,
+        deviceId: appConfig.hub.deviceId,
+        jwt: appConfig.hub.jwt,
+      }, null, 2), "utf8");
+    } catch { /* best-effort */ }
+
     return { success: true };
   } catch (err) {
     return { success: false, error: err && err.message ? err.message : String(err) };
   }
 });
 
-// ─── IPC Handlers: Tasks (routed through Hub → Connector) ──────────────────
-
-ipcMain.handle("hyperclaw:get-tasks", async () => {
-  if (!getHubInfo().enabled) return [];
-  try {
-    const result = await hubCommandFromElectron({ action: "get-tasks" });
-    return Array.isArray(result) ? result : (result?.tasks ?? []);
-  } catch {
-    return [];
-  }
-});
-
-ipcMain.handle("hyperclaw:add-task", async (event, task) => {
-  if (!getHubInfo().enabled) return null;
-  return hubCommandFromElectron({ action: "add-task", task });
-});
-
-ipcMain.handle("hyperclaw:update-task", async (event, { id, patch }) => {
-  if (!getHubInfo().enabled) return null;
-  return hubCommandFromElectron({ action: "update-task", id, patch });
-});
-
-ipcMain.handle("hyperclaw:delete-task", async (event, id) => {
-  if (!getHubInfo().enabled) return { success: false };
-  return hubCommandFromElectron({ action: "delete-task", id });
-});
-
-// ─── IPC Handlers: Commands (routed through Hub → Connector) ────────────────
-
-ipcMain.handle("hyperclaw:send-command", async (event, command) => {
-  if (!getHubInfo().enabled) return hubNotConfiguredError();
-  return hubCommandFromElectron({ action: "send-command", command });
-});
-
-ipcMain.handle("hyperclaw:trigger-process-commands", async () => {
-  if (!getHubInfo().enabled) return hubNotConfiguredError();
-  return hubCommandFromElectron({ action: "trigger-process-commands" });
-});
-
-ipcMain.handle("hyperclaw:spawn-agent-for-task", async (event, params) => {
-  if (!getHubInfo().enabled) return hubNotConfiguredError();
-  return hubCommandFromElectron({ action: "spawn-agent-for-task", ...params });
-});
-
-// ─── IPC Handlers: Notes (routed through Hub → Connector doc ops) ───────────
-
-ipcMain.handle("notes:fetchNote", async () => {
-  if (!getHubInfo().enabled) return { folder: [], recentNote: null, currentFolder: null };
-  try {
-    const result = await hubCommandFromElectron({ action: "list-openclaw-memory" });
-    const sources = Array.isArray(result) ? result : (result?.sources ?? []);
-
-    // Flatten all memory files from all sources
-    const allFiles = [];
-    for (const source of sources) {
-      if (Array.isArray(source.files)) allFiles.push(...source.files);
-    }
-    allFiles.sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""));
-
-    const notes = allFiles.map((f) => ({
-      _id: f.name?.replace(/\.md$/i, "") || f.path,
-      content: "",
-      createdAt: f.updatedAt || new Date().toISOString(),
-      updatedAt: f.updatedAt || new Date().toISOString(),
-      pinned: false,
-      folderId: "all",
-    }));
-
-    // Load content of the most recent note
-    let recentNote = notes.length > 0 ? { ...notes[0] } : null;
-    if (recentNote && allFiles[0]?.path) {
-      try {
-        const doc = await hubCommandFromElectron({ action: "get-openclaw-doc", path: allFiles[0].path });
-        if (doc?.content != null) recentNote.content = doc.content;
-      } catch {}
-    }
-
-    return {
-      folder: [{ _id: "all", name: "All Notes", notesLength: notes.length, pinned: false }],
-      recentNote,
-      currentFolder: { _id: "all", name: "All Notes", notes },
-    };
-  } catch (err) {
-    console.error("notes:fetchNote error:", err);
-    return { folder: [], recentNote: null, currentFolder: null };
-  }
-});
-
-ipcMain.handle("notes:fetchFolder", async (event, { folderId }) => {
-  if (!getHubInfo().enabled) return { status: 500, data: { error: "Not configured" } };
-  try {
-    const result = await hubCommandFromElectron({ action: "list-openclaw-memory" });
-    const sources = Array.isArray(result) ? result : (result?.sources ?? []);
-
-    const allFiles = [];
-    for (const source of sources) {
-      if (Array.isArray(source.files)) allFiles.push(...source.files);
-    }
-    allFiles.sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""));
-
-    const notes = allFiles.map((f) => ({
-      _id: f.name?.replace(/\.md$/i, "") || f.path,
-      content: "",
-      createdAt: f.updatedAt || new Date().toISOString(),
-      updatedAt: f.updatedAt || new Date().toISOString(),
-      pinned: false,
-      folderId: folderId,
-    }));
-
-    return {
-      status: 200,
-      data: {
-        _id: folderId,
-        name: "All Notes",
-        notes: notes,
-        pinned: false,
-        notesLength: notes.length,
-      },
-    };
-  } catch (err) {
-    console.error("notes:fetchFolder error:", err);
-    return { status: 500, data: { error: err.message } };
-  }
-});
-
-ipcMain.handle("notes:fetchSingleNote", async (event, { folderId, noteId }) => {
-  if (!getHubInfo().enabled) return { status: 500, data: { error: "Not configured" } };
-  try {
-    const result = await hubCommandFromElectron({ action: "get-openclaw-doc", path: `workspace/memory/${noteId}.md` });
-    if (result?.success === false) return { status: 404, data: { error: result.error || "Note not found" } };
-    return {
-      status: 200,
-      data: {
-        _id: noteId,
-        content: result?.content || "",
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        pinned: false,
-        folderId: "all",
-      },
-    };
-  } catch (err) {
-    console.error("notes:fetchSingleNote error:", err);
-    return { status: 500, data: { error: err.message } };
-  }
-});
-
-ipcMain.handle("notes:createFolder", async (event, { _id, name }) => {
-  return { status: 200, data: { _id, name, notesLength: 0, pinned: false } };
-});
-
-ipcMain.handle("notes:createNote", async (event, { noteId, folderId }) => {
-  if (!getHubInfo().enabled) return { status: 500, data: { error: "Not configured" } };
-  try {
-    await hubCommandFromElectron({ action: "write-openclaw-doc", path: `workspace/memory/${noteId}.md`, content: "" });
-    return { status: 200, data: { noteId, folderId: "all" } };
-  } catch (err) {
-    console.error("notes:createNote error:", err);
-    return { status: 500, data: { error: err.message } };
-  }
-});
-
-ipcMain.handle("notes:updateNote", async (event, { folderId, noteId, content }) => {
-  if (!getHubInfo().enabled) return { status: 500, data: { error: "Not configured" } };
-  try {
-    await hubCommandFromElectron({ action: "write-openclaw-doc", path: `workspace/memory/${noteId}.md`, content });
-    return { status: 200, data: { success: true } };
-  } catch (err) {
-    console.error("notes:updateNote error:", err);
-    return { status: 500, data: { error: err.message } };
-  }
-});
-
-ipcMain.handle("notes:editFolderName", async () => {
-  return { status: 200, data: { success: true } };
-});
-
-ipcMain.handle("notes:deleteFolder", async () => {
-  return { status: 200, data: { success: true } };
-});
-
-ipcMain.handle("notes:deleteNote", async (event, { folderId, noteId }) => {
-  if (!getHubInfo().enabled) return { status: 500, data: { error: "Not configured" } };
-  try {
-    await hubCommandFromElectron({ action: "delete-openclaw-doc", path: `workspace/memory/${noteId}.md` });
-    return { status: 200, data: { success: true } };
-  } catch (err) {
-    console.error("notes:deleteNote error:", err);
-    return { status: 500, data: { error: err.message } };
-  }
-});
-
-ipcMain.handle("notes:searchNote", async (event, { searchQuery }) => {
-  if (!getHubInfo().enabled) return { status: 200, data: [] };
-  try {
-    const result = await hubCommandFromElectron({ action: "search-openclaw-memory-content", query: searchQuery });
-    return { status: 200, data: Array.isArray(result) ? result : (result?.results ?? []) };
-  } catch (err) {
-    console.error("notes:searchNote error:", err);
-    return { status: 500, data: [] };
-  }
-});
-
-ipcMain.handle("notes:reorderFolder", async () => {
-  return { status: 200, data: { success: true } };
-});
-
-ipcMain.handle("notes:uploadAttachment", async (event, { folderId, noteId, attachment }) => {
-  return { status: 200, data: { success: true, url: attachment } };
-});
-
-// ─── Bridge Invoke (catch-all: routes any action to Hub → Connector) ────────
+// ─── Bridge logging (for main-process diagnostics) ──────────────────────────
+// All bridge actions route through Hub → Connector via the renderer's
+// bridgeInvoke() → hubCommand() stack (see lib/hub-direct.ts). The Electron
+// main process no longer proxies bridge calls — it only writes diagnostic
+// logs for startup events.
 
 function getBridgeLogPath() {
   const os = require("os");
-  return path.join(os.homedir(), ".openclaw", "hyperclaw-bridge.log");
+  return path.join(os.homedir(), ".hyperclaw", "hyperclaw-bridge.log");
 }
 
 function writeToBridgeLog(message) {
@@ -1891,27 +1980,6 @@ function writeToBridgeLog(message) {
     fs.appendFileSync(logPath, `[${new Date().toISOString()}] ${message}\n`, "utf-8");
   } catch (_) {}
 }
-
-function logBridge(action, err) {
-  try {
-    const logPath = getBridgeLogPath();
-    const logDir = path.dirname(logPath);
-    if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
-    const line = err
-      ? `bridge-invoke error action=${action} ${err}`
-      : `bridge-invoke action=${action}`;
-    fs.appendFileSync(logPath, `[${new Date().toISOString()}] ${line}\n`, "utf-8");
-  } catch (_) {}
-}
-
-ipcMain.handle("hyperclaw:bridge-invoke", async (event, body) => {
-  const { action } = body || {};
-  logBridge(action);
-
-  // All bridge calls (including intel-*) route through the Hub → Connector
-  if (!getHubInfo().enabled) return hubNotConfiguredError();
-  return hubCommandFromElectron(body);
-});
 
 // ─── macOS Dock icon handler ────────────────────────────────────────────────
 
@@ -1959,9 +2027,6 @@ app.whenReady().then(() => {
 
   // Permissions are now handled in the onboarding wizard (GuidedStepPermissions)
 
-  // Start the bundled connector daemon (manages itself, restarts on crash)
-  startConnector();
-
   createTray();
   createWindow();
 
@@ -1975,7 +2040,6 @@ app.whenReady().then(() => {
 
 app.on("before-quit", () => {
   appIsQuiting = true;
-  stopConnector();
   if (tray) tray.destroy();
   globalShortcut.unregisterAll(); // Unregister all global shortcuts including voice hotkey
 });

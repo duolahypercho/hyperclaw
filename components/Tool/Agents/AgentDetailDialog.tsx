@@ -37,15 +37,97 @@ import { DeleteAgentDialog } from "./DeleteAgentDialog";
 
 /* ── Constants ─────────────────────────────────────────────── */
 
+// Hard cap on how much personality-file content we will load into a
+// <Textarea>. Native textareas store the value in the DOM and React re-sets
+// `.value` on every render; a multi-MB string pins the renderer process at
+// multi-GB RSS and 100% CPU. 256 KiB is 100x the size of any healthy
+// personality file and plenty for a manual edit. Anything larger is treated
+// as a runaway-write victim: we show a read-only banner and refuse to bind
+// it to a textarea.
+const MAX_EDITOR_BYTES = 256 * 1024; // 256 KiB
+
+/** Shared preview used when a personality file is too large to safely edit. */
+function OversizedFileBanner({
+  fileName,
+  size,
+}: {
+  fileName: string;
+  size: number;
+}) {
+  return (
+    <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-xs">
+      <p className="font-medium text-destructive">
+        {fileName} is {(size / 1024 / 1024).toFixed(1)} MB — too large to edit in the dashboard.
+      </p>
+      <p className="mt-1 text-muted-foreground">
+        Files over {(MAX_EDITOR_BYTES / 1024).toFixed(0)} KB are hidden to
+        keep the renderer responsive. This usually means a runaway-write
+        bug produced the file. Open it in a terminal or external editor
+        (e.g. <code>~/.hyperclaw/agents/{"{runtime}-{agentId}"}/{fileName}</code>),
+        inspect, then truncate it with <code>: &gt; path/to/{fileName}</code>.
+      </p>
+    </div>
+  );
+}
+
+// IDENTITY.md intentionally omitted — name/emoji/avatar/description are edited
+// through the structured form in InfoTab, which calls the identity editor hook.
+// Having a second raw-file editor for the same data was the source of write
+// conflicts and let the onboarding echo-loop bug hide for too long. The form
+// is the single source of truth; open the workspace folder for raw access.
 const TAB_FILES = [
   { key: "SOUL",      label: "SOUL",      desc: "Personality & behavior" },
-  { key: "IDENTITY",  label: "IDENTITY",  desc: "Agent identity — name, emoji, avatar" },
   { key: "USER",      label: "USER",      desc: "Context about the human" },
   { key: "AGENTS",    label: "AGENTS",    desc: "Team awareness" },
   { key: "TOOLS",     label: "TOOLS",     desc: "Tools & MCP servers" },
   { key: "HEARTBEAT", label: "HEARTBEAT", desc: "Periodic tasks & health checks" },
+  { key: "BOOTSTRAP", label: "BOOTSTRAP", desc: "Bootstrap instructions run on first contact" },
   { key: "MEMORY",    label: "MEMORY",    desc: "Persistent memory" },
 ] as const;
+
+type FileTabDef = {
+  key: string;
+  label: string;
+  desc: string;
+  placeholder?: string;
+  runtimeDocFileName?: string;
+};
+
+/**
+ * Returns only the file tab(s) relevant for a given runtime.
+ * Claude Code → SOUL plus the compiled CLAUDE.md startup file
+ * Codex        → AGENTS (displayed as AGENTS.md)
+ * OpenClaw / unknown → all 7 files
+ */
+function getFileTabsForRuntime(runtime: string | undefined): FileTabDef[] {
+  switch (runtime) {
+    case "claude-code":
+      return [
+        {
+          key: "SOUL",
+          label: "SOUL.md",
+          desc: "Canonical persona and operating style. Saving this refreshes Claude's compiled startup context.",
+          placeholder: "# Agent Soul\n\nDescribe the agent's role, temperament, operating style, and boundaries.",
+        },
+        {
+          key: "CLAUDE",
+          label: "CLAUDE.md",
+          desc: "Compiled startup instructions Claude reads at the beginning of coding sessions",
+          placeholder: "# Project Instructions\n\nThis project uses TypeScript and React.\n\nBe concise and prefer editing existing files over creating new ones.",
+          runtimeDocFileName: "CLAUDE.md",
+        },
+      ];
+    case "codex":
+      return [{
+        key: "AGENTS",
+        label: "AGENTS.md",
+        desc: "Agent instructions Codex reads from AGENTS.md — coding standards, context and task guidelines",
+        placeholder: "# Agent Instructions\n\nYou are working on a TypeScript codebase.\n\nFollow the existing code style and prefer small, focused edits.",
+      }];
+    default:
+      return [...TAB_FILES];
+  }
+}
 
 // Tabs shown only for Hermes runtime agents — maps to per-profile data in ~/.hermes/profiles/{id}/
 const HERMES_TABS = [
@@ -56,7 +138,7 @@ const HERMES_TABS = [
 ] as const;
 
 type HermesTabKey = "INFO" | (typeof HERMES_TABS)[number]["key"];
-type TabKey = "INFO" | (typeof TAB_FILES)[number]["key"] | (typeof HERMES_TABS)[number]["key"];
+type TabKey = string;
 
 /* ── Helpers ────────────────────────────────────────────────── */
 
@@ -66,6 +148,7 @@ export interface FooterSaveState {
   saving: boolean;
   saved: boolean;
   save: (() => Promise<void>) | null;
+  reset?: (() => void) | null;
 }
 
 /* ── Props ─────────────────────────────────────────────────── */
@@ -107,6 +190,8 @@ export function AgentDetailDialog({
   const avatarText = isAvatarText(identity?.avatar) ? identity!.avatar! : undefined;
   // agentRuntime (from live agents list) takes precedence over stale SQLite identity runtime.
   const effectiveRuntime = agentRuntime || identity?.runtime;
+  // Only the file tabs relevant to this agent's runtime
+  const visibleFileTabs = getFileTabsForRuntime(effectiveRuntime);
   const DialogRuntimeIcon = effectiveRuntime === "claude-code" ? ClaudeCodeIcon
     : effectiveRuntime === "codex" ? CodexIcon
     : effectiveRuntime === "hermes" ? HermesIcon
@@ -116,7 +201,8 @@ export function AgentDetailDialog({
   const isMain = agentId === "main" || agentId === "__main__";
 
   // Personality cache — fetched once per (agentId, open) so tab switches are instant.
-  // Keys are uppercase file keys: SOUL, IDENTITY, USER, AGENTS, TOOLS, HEARTBEAT, MEMORY.
+  // Keys are uppercase file keys: SOUL, USER, AGENTS, TOOLS, HEARTBEAT, MEMORY.
+  // IDENTITY is deliberately not cached here — the InfoTab form owns it.
   const [personalityCache, setPersonalityCache] = useState<Record<string, string> | null>(null);
 
   useEffect(() => {
@@ -128,14 +214,32 @@ export function AgentDetailDialog({
       (async () => {
         try {
           const p = (await bridgeInvoke("get-agent-personality", { agentId })) as Record<string, unknown>;
+          // Safety: never let a runaway-write file (multi-MB SOUL.md, etc.)
+          // enter React state. For oversized fields, we keep the length so
+          // the child tab can render the "too large to edit" banner, but
+          // drop the actual string so it can be garbage-collected after
+          // this tick. The child's own length check catches this via the
+          // sentinel-length string.
+          const safe = (v: unknown): string => {
+            const s = typeof v === "string" ? v : "";
+            if (s.length > MAX_EDITOR_BYTES) {
+              // Return a synthetic string of the same byte length so the
+              // child's `text.length > MAX_EDITOR_BYTES` check trips in the
+              // same way as reading a real oversized file, but the original
+              // huge string is released for GC as soon as this scope exits.
+              // We use a single repeated character so V8 can rope-compress
+              // (O(1) memory) while still reporting the correct .length.
+              return "\0".repeat(s.length > 1e9 ? 1e9 : s.length);
+            }
+            return s;
+          };
           setPersonalityCache({
-            SOUL:      (p?.soul      as string) ?? "",
-            IDENTITY:  (p?.identity  as string) ?? "",
-            USER:      (p?.user      as string) ?? "",
-            AGENTS:    (p?.agents    as string) ?? "",
-            TOOLS:     (p?.tools     as string) ?? "",
-            HEARTBEAT: (p?.heartbeat as string) ?? "",
-            MEMORY:    (p?.memory    as string) ?? "",
+            SOUL:      safe(p?.soul),
+            USER:      safe(p?.user),
+            AGENTS:    safe(p?.agents),
+            TOOLS:     safe(p?.tools),
+            HEARTBEAT: safe(p?.heartbeat),
+            MEMORY:    safe(p?.memory),
           });
         } catch {
           setPersonalityCache({});
@@ -189,7 +293,7 @@ export function AgentDetailDialog({
                       {tf.label}
                     </TabsTrigger>
                   ))
-                : TAB_FILES.map((tf) => (
+                : visibleFileTabs.map((tf) => (
                     <TabsTrigger key={tf.key} value={tf.key} className="text-xs">
                       {tf.label}
                     </TabsTrigger>
@@ -246,8 +350,8 @@ export function AgentDetailDialog({
               ) : null
             )}
 
-            {/* OpenClaw / Claude Code / default tabs */}
-            {effectiveRuntime !== "hermes" && TAB_FILES.map((tf) =>
+            {/* OpenClaw / Claude Code / Codex — only the file(s) relevant to this runtime */}
+            {effectiveRuntime !== "hermes" && visibleFileTabs.map((tf) =>
               tab === tf.key ? (
                 <TabsContent
                   key={tf.key}
@@ -258,11 +362,14 @@ export function AgentDetailDialog({
                   <FileEditorTab
                     agentId={agentId}
                     fileKey={tf.key}
+                    runtime={effectiveRuntime}
+                    runtimeDocFileName={tf.runtimeDocFileName}
                     onStateChange={setFooterState}
-                    preloaded={personalityCache ? (personalityCache[tf.key] ?? null) : undefined}
+                    preloaded={tf.runtimeDocFileName ? undefined : personalityCache ? (personalityCache[tf.key] ?? null) : undefined}
                     onAfterSave={(fileKey, newContent) =>
                       setPersonalityCache(prev => prev ? { ...prev, [fileKey]: newContent } : null)
                     }
+                    placeholder={tf.placeholder}
                   />
                 </TabsContent>
               ) : null
@@ -616,19 +723,26 @@ export function InfoTab({
 export function FileEditorTab({
   agentId,
   fileKey,
+  runtime,
+  runtimeDocFileName,
   onStateChange,
   className,
   preloaded,
   onAfterSave,
+  placeholder,
 }: {
   agentId: string;
   fileKey: string;
+  runtime?: string;
+  runtimeDocFileName?: string;
   onStateChange: (state: FooterSaveState) => void;
   className?: string;
   /** Pre-fetched content from parent cache. `null` = file not found. `undefined` = not yet loaded. */
   preloaded?: string | null;
   /** Called after a successful save so the parent can update its cache. */
   onAfterSave?: (fileKey: string, newContent: string) => void;
+  /** Custom placeholder shown in the textarea when the file is empty. */
+  placeholder?: string;
 }) {
   const [content, setContent] = useState<string | null>(null);
   const [originalContent, setOriginalContent] = useState<string | null>(null);
@@ -637,14 +751,35 @@ export function FileEditorTab({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [notFound, setNotFound] = useState(false);
+  // When content exceeds MAX_EDITOR_BYTES we keep the size but do NOT bind
+  // the string to a textarea — guards against a runaway-write file pinning
+  // the renderer at multi-GB RSS.
+  const [oversizedBytes, setOversizedBytes] = useState<number | null>(null);
+  const displayFileName = runtimeDocFileName ?? `${fileKey}.md`;
 
   useEffect(() => {
     setSaveError(null);
     setSaveSuccess(false);
+    setOversizedBytes(null);
+
+    const accept = (text: string | null): boolean => {
+      // `null` means file not found — allowed.
+      if (text === null) return true;
+      if (text.length > MAX_EDITOR_BYTES) {
+        setOversizedBytes(text.length);
+        setContent("");
+        setOriginalContent("");
+        setNotFound(false);
+        setLoading(false);
+        return false;
+      }
+      return true;
+    };
 
     // If the parent has already fetched personality data, use it directly —
     // no bridge round-trip needed on tab switch.
-    if (preloaded !== undefined) {
+    if (!runtimeDocFileName && preloaded !== undefined) {
+      if (!accept(preloaded)) return;
       const text = preloaded ?? "";
       setContent(text);
       setOriginalContent(preloaded === null ? null : text);
@@ -659,6 +794,27 @@ export function FileEditorTab({
     setNotFound(false);
     (async () => {
       try {
+        if (runtimeDocFileName) {
+          const res = (await bridgeInvoke("get-agent-identity-doc", {
+            agentId,
+            runtime,
+            fileName: runtimeDocFileName,
+          })) as { success?: boolean; content?: string; error?: string };
+          if (cancelled) return;
+          const fileContent = typeof res?.content === "string" ? res.content : "";
+          if (fileContent !== "") {
+            if (!accept(fileContent)) return;
+            setContent(fileContent);
+            setOriginalContent(fileContent);
+          } else {
+            setContent("");
+            setOriginalContent(null);
+            setNotFound(true);
+          }
+          if (!cancelled) setLoading(false);
+          return;
+        }
+
         const personality = (await bridgeInvoke("get-agent-personality", {
           agentId,
         })) as Record<string, string | boolean | undefined>;
@@ -666,6 +822,7 @@ export function FileEditorTab({
         const fieldName = fileKey.toLowerCase();
         const fileContent = personality?.[fieldName];
         if (typeof fileContent === "string" && fileContent !== "") {
+          if (!accept(fileContent)) return;
           setContent(fileContent);
           setOriginalContent(fileContent);
         } else {
@@ -683,9 +840,11 @@ export function FileEditorTab({
       if (!cancelled) setLoading(false);
     })();
     return () => { cancelled = true; };
-  }, [agentId, fileKey, preloaded]);
+  }, [agentId, fileKey, preloaded, runtime, runtimeDocFileName]);
 
-  const isDirty = notFound ? (content ?? "") !== "" : content !== originalContent;
+  const isDirty = oversizedBytes !== null
+    ? false
+    : notFound ? (content ?? "") !== "" : content !== originalContent;
 
   const handleSave = useCallback(async () => {
     if (content === null) return;
@@ -693,15 +852,21 @@ export function FileEditorTab({
     setSaveError(null);
     setSaveSuccess(false);
     try {
-      const res = (await bridgeInvoke("save-agent-file", {
-        agentId,
-        fileKey,
-        content,
-      })) as { success?: boolean; error?: string };
+      const res = (await bridgeInvoke(
+        runtimeDocFileName ? "write-agent-identity-doc" : "save-agent-file",
+        runtimeDocFileName
+          ? { agentId, runtime, fileName: runtimeDocFileName, content }
+          : { agentId, fileKey, content },
+      )) as { success?: boolean; error?: string };
       if (res?.success) {
         setOriginalContent(content);
         setNotFound(false);
         setSaveSuccess(true);
+        if (runtimeDocFileName === "IDENTITY.md" && typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent("openclaw-gateway-event", {
+            detail: { event: "agent.file.changed", data: { agentId, fileKey: "IDENTITY" } },
+          }));
+        }
         onAfterSave?.(fileKey, content);
         setTimeout(() => setSaveSuccess(false), 2000);
       } else {
@@ -711,12 +876,18 @@ export function FileEditorTab({
       setSaveError(e instanceof Error ? e.message : "Save failed");
     }
     setSaving(false);
-  }, [agentId, fileKey, content, onAfterSave]);
+  }, [agentId, fileKey, runtime, runtimeDocFileName, content, onAfterSave]);
+
+  const handleReset = useCallback(() => {
+    setContent(originalContent ?? "");
+    setSaveError(null);
+    setSaveSuccess(false);
+  }, [originalContent]);
 
   // Sync footer state
   useEffect(() => {
-    onStateChange({ isDirty, saving, saved: saveSuccess, save: handleSave });
-  }, [isDirty, saving, saveSuccess, handleSave, onStateChange]);
+    onStateChange({ isDirty, saving, saved: saveSuccess, save: handleSave, reset: handleReset });
+  }, [isDirty, saving, saveSuccess, handleSave, handleReset, onStateChange]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -736,28 +907,31 @@ export function FileEditorTab({
     );
   }
 
+  if (oversizedBytes !== null) {
+    return (
+      <div className={cn("flex flex-col gap-2", className)}>
+        <OversizedFileBanner fileName={displayFileName} size={oversizedBytes} />
+      </div>
+    );
+  }
+
   return (
-    <div className={cn("flex flex-col gap-2", className)} onKeyDown={handleKeyDown}>
-      {notFound && (
-        <p className="text-xs text-amber-500/80 italic">
-          This file doesn&apos;t exist yet. Start typing to create it.
-        </p>
-      )}
+    <div className={cn("flex flex-col gap-2 bg-secondary", className)} onKeyDown={handleKeyDown}>
       <Textarea
         value={content ?? ""}
         onChange={(e) => setContent(e.target.value)}
         className={cn(
-          "w-full text-xs font-mono leading-relaxed resize-none",
+          "w-full text-xs font-mono leading-relaxed resize-none border-none focus-visible:ring-0",
           className ? "flex-1 min-h-[120px]" : "min-h-[300px]"
         )}
         spellCheck={false}
-        placeholder={`Start writing ${fileKey}.md content...`}
+        placeholder={placeholder ?? `Start writing ${displayFileName} content...`}
       />
       <div className="flex items-center justify-end">
         {saveError && (
           <span className="text-[10px] text-destructive mr-auto">{saveError}</span>
         )}
-        <span className="text-[10px] text-muted-foreground/60">{fileKey}.md</span>
+        <span className="text-[10px] text-muted-foreground/60">{displayFileName}</span>
       </div>
     </div>
   );
@@ -786,19 +960,29 @@ export function HermesTextFileTab({
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [oversizedBytes, setOversizedBytes] = useState<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setSaveError(null);
     setSaveSuccess(false);
+    setOversizedBytes(null);
     (async () => {
       try {
         const res = (await bridgeInvoke(action, { agentId })) as { content?: string };
         if (!cancelled) {
           const c = res?.content ?? "";
-          setContent(c);
-          setOriginalContent(c);
+          if (c.length > MAX_EDITOR_BYTES) {
+            // Don't let a runaway-write file into React state — would pin
+            // the renderer at multi-GB RSS.
+            setOversizedBytes(c.length);
+            setContent("");
+            setOriginalContent("");
+          } else {
+            setContent(c);
+            setOriginalContent(c);
+          }
         }
       } catch {
         if (!cancelled) { setContent(""); setOriginalContent(""); }
@@ -808,7 +992,7 @@ export function HermesTextFileTab({
     return () => { cancelled = true; };
   }, [agentId, action]);
 
-  const isDirty = content !== originalContent;
+  const isDirty = oversizedBytes !== null ? false : content !== originalContent;
 
   const handleSave = useCallback(async () => {
     if (content === null) return;
@@ -830,9 +1014,15 @@ export function HermesTextFileTab({
     setSaving(false);
   }, [agentId, updateAction, content]);
 
+  const handleReset = useCallback(() => {
+    setContent(originalContent ?? "");
+    setSaveError(null);
+    setSaveSuccess(false);
+  }, [originalContent]);
+
   useEffect(() => {
-    onStateChange({ isDirty, saving, saved: saveSuccess, save: handleSave });
-  }, [isDirty, saving, saveSuccess, handleSave, onStateChange]);
+    onStateChange({ isDirty, saving, saved: saveSuccess, save: handleSave, reset: handleReset });
+  }, [isDirty, saving, saveSuccess, handleSave, handleReset, onStateChange]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -848,6 +1038,14 @@ export function HermesTextFileTab({
     return (
       <div className="flex items-center justify-center py-12 text-muted-foreground">
         <Loader2 className="h-5 w-5 animate-spin" />
+      </div>
+    );
+  }
+
+  if (oversizedBytes !== null) {
+    return (
+      <div className="flex flex-col gap-2 flex-1">
+        <OversizedFileBanner fileName="SOUL.md" size={oversizedBytes} />
       </div>
     );
   }

@@ -17,7 +17,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { cn } from "@/lib/utils";
-import { useGatewayChat, GatewayChatMessage, GatewayChatAttachment } from "@OS/AI/core/hook/use-gateway-chat";
+import { useGatewayChat, GatewayChatMessage, GatewayChatAttachment, seedHermesSession } from "@OS/AI/core/hook/use-gateway-chat";
 import { useClaudeCodeChat } from "@OS/AI/core/hook/use-claude-code-chat";
 import { useCodexChat } from "@OS/AI/core/hook/use-codex-chat";
 import { gatewayConnection } from "$/lib/openclaw-gateway-ws";
@@ -50,6 +50,7 @@ import { AgentDetailDialog } from "$/components/Tool/Agents/AgentDetailDialog";
 import SessionHistoryDropdown from "$/components/SessionHistoryDropdown";
 import type { BackendTab } from "./gateway-chat/GatewayChatHeader";
 import { OPEN_AGENT_CHAT_EVENT } from "./StatusWidget";
+import { useAgentStatus } from "$/components/ensemble";
 
 /* ── Panel event ─────────────────────────────────────────── */
 
@@ -109,6 +110,22 @@ export function AgentChatPanel({ open, agentId, sessionKey: initialSessionKey, o
   const avatarUrl = resolveAvatarUrl(identity?.avatar);
   const avatarText = isAvatarText(identity?.avatar) ? identity!.avatar! : undefined;
   const displayName = identity?.name || currentAgent.name;
+  const { state: agentState } = useAgentStatus(agentId, {
+    status: (currentAgent as { status?: string }).status,
+  });
+  const isDeleting = agentState === "deleting";
+  const isHiring = agentState === "hiring";
+  const sendDisabledReason = isHiring
+    ? `${displayName} is still being hired - chat unlocks when setup finishes.`
+    : isDeleting
+      ? `${displayName} is being fired - chat is locked.`
+      : undefined;
+
+  useEffect(() => {
+    if ((isDeleting || isHiring) && activeTab === "chat") {
+      setActiveTab("edit");
+    }
+  }, [activeTab, isDeleting, isHiring]);
 
   return (
     <AnimatePresence>
@@ -150,10 +167,15 @@ export function AgentChatPanel({ open, agentId, sessionKey: initialSessionKey, o
                 {/* Tab toggle */}
                 <div className="flex items-center bg-muted/40 rounded-md p-0.5 mr-1">
                   <button
-                    onClick={() => setActiveTab("chat")}
+                    onClick={() => !isDeleting && !isHiring && setActiveTab("chat")}
+                    disabled={isDeleting || isHiring}
+                    aria-disabled={isDeleting || isHiring}
+                    title={isHiring ? "Agent is still hiring - chat unlocks when setup finishes" : isDeleting ? "Agent is firing - chat is locked" : undefined}
                     className={cn(
                       "flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium transition-colors",
-                      activeTab === "chat"
+                      isDeleting || isHiring
+                        ? "text-muted-foreground/40 cursor-not-allowed"
+                      : activeTab === "chat"
                         ? "bg-background text-foreground shadow-sm"
                         : "text-muted-foreground hover:text-foreground"
                     )}
@@ -185,6 +207,7 @@ export function AgentChatPanel({ open, agentId, sessionKey: initialSessionKey, o
                 initialSessionKey={initialSessionKey}
                 backendTab={backendTab}
                 onBackendTabChange={setBackendTab}
+                sendDisabledReason={sendDisabledReason}
               />
             </div>
 
@@ -223,6 +246,12 @@ interface PanelChatViewProps {
   onBackendTabChange: (tab: BackendTab) => void;
   showSubHeader?: boolean;
   onSessionsUpdate?: (sessions: Array<{ key: string; label?: string; updatedAt?: number; status?: string; trigger?: string; preview?: string }>) => void;
+  /** Pre-populated sessions from parent cache — skips initial fetch and loading state */
+  initialSessions?: Array<{ key: string; label?: string; updatedAt?: number; status?: string; trigger?: string; preview?: string }>;
+  /** If true, the runtime is unavailable (uninstalled) and sending is disabled */
+  runtimeUnavailable?: boolean;
+  /** Optional lifecycle block, e.g. agent is being fired. Disables sending. */
+  sendDisabledReason?: string;
 }
 
 export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>(function PanelChatView({
@@ -232,6 +261,9 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
   onSessionsUpdate,
   onBackendTabChange,
   showSubHeader = true,
+  initialSessions,
+  runtimeUnavailable = false,
+  sendDisabledReason,
 }, ref) {
   const { agents } = useHyperclawContext();
   const currentAgent = agents.find((a) => a.id === agentId) || {
@@ -241,11 +273,13 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
     coverPhoto: "",
   };
 
-  // Sessions
-  const [sessions, setSessions] = useState<Array<{ key: string; label?: string; updatedAt?: number; status?: string; trigger?: string; preview?: string }>>([]);
+  // Sessions — initialize from parent cache if provided to avoid redundant fetches
+  const [sessions, setSessions] = useState<Array<{ key: string; label?: string; updatedAt?: number; status?: string; trigger?: string; preview?: string }>>(initialSessions ?? []);
   const [selectedSessionKey, setSelectedSessionKey] = useState<string | undefined>(initialSessionKey);
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const [sessionsError, setSessionsError] = useState<string | null>(null);
+  // Track if we received pre-populated sessions to skip redundant work
+  const hadInitialSessionsRef = useRef(!!initialSessions && initialSessions.length > 0);
 
   const inputHandleRef = useRef<InputContainerHandle | null>(null);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
@@ -257,8 +291,8 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
   // Dynamic model list
   const { models: runtimeModels, loading: runtimeModelsLoading } = useRuntimeModels(backendTab);
 
-  // Session key
-  const sessionKey = selectedSessionKey || `agent:${agentId}:main`;
+  // Session key — prefer the primary session key when provided
+  const sessionKey = selectedSessionKey || initialSessionKey || `agent:${agentId}:main`;
 
   // Determine effective provider
   const effectiveProvider = backendTab === "claude-code" ? "claude-code"
@@ -277,6 +311,7 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
     autoConnect: effectiveProvider === "gateway",
     backend: backendTab === "hermes" ? "hermes" : "openclaw",
     agentId: hermesProfileId,
+    statusAgentId: agentId,
   });
 
   const claudeCodeChat = useClaudeCodeChat({
@@ -290,11 +325,13 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
     sessionKey,
     autoConnect: effectiveProvider === "codex",
     agentId,
+    projectPath: sessionAgentIdentity?.project,
   });
 
   const activeChat = effectiveProvider === "claude-code" ? claudeCodeChat
     : effectiveProvider === "codex" ? codexChat
     : gatewayChat;
+  const inputBlocked = runtimeUnavailable || !!sendDisabledReason;
 
   const {
     messages,
@@ -320,9 +357,9 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
     setChatSessionKey(sessionKey);
   }, [sessionKey, setChatSessionKey]);
 
-  // Initial load
-  const initialLoadDoneRef = useRef(false);
-  const [initialReady, setInitialReady] = useState(false);
+  // Initial load — skip skeleton if parent provided cached sessions
+  const initialLoadDoneRef = useRef(hadInitialSessionsRef.current);
+  const [initialReady, setInitialReady] = useState(hadInitialSessionsRef.current);
 
   useEffect(() => {
     if (initialLoadDoneRef.current) return;
@@ -331,7 +368,10 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
       .catch(() => {})
       .finally(() => {
         setInitialReady(true);
-        fetchSessions();
+        // Only fetch sessions if parent didn't provide cached ones
+        if (!hadInitialSessionsRef.current) {
+          fetchSessions();
+        }
       });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -353,6 +393,20 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
 
   // Fetch sessions
   const fetchSessions = useCallback(async () => {
+    // A firing agent is read-only. Keep existing cached sessions intact.
+    if (sendDisabledReason) {
+      setSessionsLoading(false);
+      return;
+    }
+
+    // Skip fetching if runtime is unavailable — no sessions can be loaded.
+    if (runtimeUnavailable) {
+      setSessions([]);
+      onSessionsUpdate?.([]);
+      setSessionsLoading(false);
+      return;
+    }
+
     setSessionsLoading(true);
     setSessionsError(null);
     try {
@@ -369,7 +423,7 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
         }
       } else if (backendTab === "claude-code") {
         const projectPath = sessionAgentIdentity?.project;
-        const r = await bridgeInvoke("claude-code-list-sessions", { agentId, limit: 15, ...(projectPath ? { projectPath } : {}) }).catch(() => ({ sessions: [] })) as any;
+        const r = await bridgeInvoke("claude-code-list-sessions", { agentId, limit: 50, ...(projectPath ? { projectPath } : {}) }).catch(() => ({ sessions: [] })) as any;
         result = (r?.sessions || []).map((s: any) => ({
           key: s.key || `claude:${s.id}`,
           label: s.label || s.id?.slice(0, 8),
@@ -379,7 +433,8 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
           preview: s.preview,
         }));
       } else if (backendTab === "codex") {
-        const r = await bridgeInvoke("codex-list-sessions", { agentId }).catch(() => ({ sessions: [] })) as any;
+        const projectPath = sessionAgentIdentity?.project;
+        const r = await bridgeInvoke("codex-list-sessions", { agentId, limit: 50, ...(projectPath ? { projectPath } : {}) }).catch(() => ({ sessions: [] })) as any;
         result = (r?.sessions || []).map((s: any) => ({
           key: s.key || `codex:${s.id}`,
           label: s.label || s.id?.slice(0, 8),
@@ -393,8 +448,8 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
         const hermesProfileId = agentId.startsWith("hermes:") ? agentId.slice(7) : agentId;
         const r = await bridgeInvoke("hermes-sessions", { agentId: hermesProfileId }).catch(() => ({ sessions: [] })) as any;
         result = (r?.sessions || []).map((s: any) => ({
-          key: s.key || `hermes:${s.id}`,
-          label: s.label || s.id?.slice(0, 16),
+          key: `hermes:${s.key || s.id}`,
+          label: s.label || (s.key || s.id)?.slice(0, 16),
           updatedAt: s.updatedAt,
           status: s.status,
           trigger: s.kind || s.trigger,
@@ -402,8 +457,10 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
         }));
       }
       result.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-      // Cap inbox to 15 most recent — claude-code in particular accumulates many sessions
-      const capped = result.slice(0, 15);
+      // Safety cap at 100 — the dropdown is scrollable and has a built-in
+      // search filter, so we no longer need the aggressive 15-item cut-off
+      // that was previously hiding legitimate Codex/Claude history.
+      const capped = result.slice(0, 100);
       setSessions(capped);
       onSessionsUpdate?.(capped);
     } catch {
@@ -411,11 +468,20 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
     } finally {
       setSessionsLoading(false);
     }
-  }, [agentId, backendTab, sessionAgentIdentity]);
+  }, [agentId, backendTab, sessionAgentIdentity, runtimeUnavailable, sendDisabledReason, onSessionsUpdate]);
+
+  const prevInputBlockedRef = useRef(inputBlocked);
+  useEffect(() => {
+    const wasBlocked = prevInputBlockedRef.current;
+    prevInputBlockedRef.current = inputBlocked;
+    if (wasBlocked && !inputBlocked) {
+      fetchSessions();
+    }
+  }, [fetchSessions, inputBlocked]);
 
   // Re-fetch sessions once agent identity loads — the initial fetch fires before
-  // the async get-agent-identity call resolves, so projectPath is missing the
-  // first time around and the connector falls back to showing all sessions.
+  // the async get-agent-identity call resolves. If the agent has an explicit
+  // project path in IDENTITY.md, we need to re-fetch to scope to that project.
   const prevIdentityProjectRef = useRef<string | undefined>(undefined);
   useEffect(() => {
     if (!initialLoadDoneRef.current) return;
@@ -443,21 +509,65 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
   const fetchSessionsRef = useRef(fetchSessions);
   fetchSessionsRef.current = fetchSessions;
 
-  // Reset on agent change
+  // Sync primary session key when it arrives asynchronously from the connector
+  // Sync primary session key when it arrives asynchronously from the connector.
+  // Also triggers chat history load if it was deferred during agent-change reset.
+  const prevInitialSessionKeyRef = useRef(initialSessionKey);
+  useEffect(() => {
+    if (initialSessionKey && initialSessionKey !== prevInitialSessionKeyRef.current) {
+      prevInitialSessionKeyRef.current = initialSessionKey;
+      setSelectedSessionKey(initialSessionKey);
+      setChatSessionKey(initialSessionKey);
+      // Load chat history for the newly-arrived primary session key
+      loadChatHistory().catch(() => {});
+    }
+  }, [initialSessionKey, setChatSessionKey, loadChatHistory]);
+
+  // Sync sessions from parent when initialSessions prop changes (e.g., parent has cached sessions for new agent)
+  const prevInitialSessionsRef = useRef(initialSessions);
+  useEffect(() => {
+    if (initialSessions && initialSessions !== prevInitialSessionsRef.current) {
+      prevInitialSessionsRef.current = initialSessions;
+      setSessions(initialSessions);
+      hadInitialSessionsRef.current = initialSessions.length > 0;
+    }
+  }, [initialSessions]);
+
+  // Reset on agent change — skip skeleton and session fetch if parent provided cached sessions
   useEffect(() => {
     if (prevAgentRef.current === agentId) return;
     prevAgentRef.current = agentId;
-    const newKey = `agent:${agentId}:main`;
+    // Use the primary session key if provided, otherwise fall back to the default.
+    // When initialSessionKey is undefined (primary key still resolving from connector),
+    // use the fallback — the sync effect will update when the real key arrives.
+    const newKey = initialSessionKey || `agent:${agentId}:main`;
     setSelectedSessionKey(newKey);
     setChatSessionKey(newKey);
-    initialLoadDoneRef.current = false;
-    setInitialReady(false);
-    loadChatHistory().catch(() => {}).finally(() => {
+
+    // If parent provided fresh cached sessions, skip the skeleton and session fetch
+    const hasCachedSessions = initialSessions && initialSessions.length > 0;
+    if (hasCachedSessions) {
       initialLoadDoneRef.current = true;
+      hadInitialSessionsRef.current = true;
       setInitialReady(true);
-      fetchSessionsRef.current();
-    });
-  }, [agentId, setChatSessionKey, loadChatHistory]);
+      setSessions(initialSessions);
+      // Only load chat history if we have the real primary key — otherwise the sync
+      // effect will trigger it when initialSessionKey arrives.
+      if (initialSessionKey) {
+        loadChatHistory().catch(() => {});
+      }
+    } else {
+      // No cached sessions — show skeleton while loading
+      initialLoadDoneRef.current = false;
+      setInitialReady(false);
+      hadInitialSessionsRef.current = false;
+      loadChatHistory().catch(() => {}).finally(() => {
+        initialLoadDoneRef.current = true;
+        setInitialReady(true);
+        fetchSessionsRef.current();
+      });
+    }
+  }, [agentId, setChatSessionKey, loadChatHistory, initialSessions]);
 
   // Merge tool calls
   const mergeToolCalls = useMemo(() => createMergeToolCalls(), []);
@@ -471,25 +581,42 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
     alt: userInfo?.username || "User",
   };
 
-  // Agent identity for avatar
+  // Agent identity for avatar — always fetch so custom emoji/avatar is used
   const isProviderTab = backendTab === "claude-code" || backendTab === "codex" || backendTab === "hermes";
-  const agentIdentity = useAgentIdentity(isProviderTab ? undefined : agentId);
-  const agentNameStr = backendTab === "claude-code" ? "Claude Code"
-    : backendTab === "codex" ? "Codex"
-    : backendTab === "hermes" ? "Hermes Agent"
-    : agentIdentity?.name || (typeof currentAgent.name === "string" ? currentAgent.name : "");
-  const agentAvatarUrl = isProviderTab ? undefined : resolveAvatarUrl(agentIdentity?.avatar);
-  const agentAvatarText = isProviderTab ? undefined : (isAvatarText(agentIdentity?.avatar) ? agentIdentity!.avatar! : undefined);
+  const agentIdentity = useAgentIdentity(agentId);
+  // Use HyperclawProv agent data as an immediate synchronous fallback while
+  // agentIdentity is still loading from the bridge (avoids blank avatar on first render).
+  const hyperclawAgent = agents.find((a) => a.id === agentId);
+  const avatarSource = agentIdentity?.avatar ?? hyperclawAgent?.avatarData;
+  const agentAvatarUrl = resolveAvatarUrl(avatarSource);
+  const agentAvatarText = isAvatarText(avatarSource) ? avatarSource! : undefined;
+  // Use agent's custom name if available, otherwise default to runtime name
+  const agentNameStr = agentIdentity?.name
+    || hyperclawAgent?.name
+    || (backendTab === "claude-code" ? "Claude Code"
+      : backendTab === "codex" ? "Codex"
+      : backendTab === "hermes" ? "Hermes Agent"
+      : (typeof currentAgent.name === "string" ? currentAgent.name : ""));
 
+  // Default runtime icon paths
+  const runtimeIconSrc = backendTab === "hermes" ? "/assets/hermes-agent.png"
+    : backendTab === "claude-code" ? "/assets/claude-code.svg"
+    : backendTab === "codex" ? "/assets/codex.svg"
+    : undefined;
+
+  // Default runtime fallback text
+  const runtimeFallback = backendTab === "claude-code" ? "CC"
+    : backendTab === "codex" ? "CX"
+    : backendTab === "hermes" ? "H"
+    : undefined;
+
+  // Use custom avatar/emoji if agent has one, otherwise fall back to runtime defaults
+  const customEmoji = agentAvatarText || agentIdentity?.emoji || hyperclawAgent?.emoji;
   const assistantAvatar = {
-    src: backendTab === "hermes" ? "/assets/hermes-agent.png"
-      : backendTab === "claude-code" ? "/assets/claude-code.svg"
-      : backendTab === "codex" ? "/assets/codex.svg"
-      : agentAvatarUrl,
-    fallback: backendTab === "claude-code" ? "CC"
-      : backendTab === "codex" ? "CX"
-      : backendTab === "hermes" ? "H"
-      : agentAvatarText || agentIdentity?.emoji || agentNameStr.slice(0, 2).toUpperCase() || "AI",
+    // If agent has custom image avatar, use it; else if no custom emoji, use runtime icon
+    src: agentAvatarUrl || (!customEmoji ? runtimeIconSrc : undefined),
+    // If agent has custom emoji/text, use it; else use runtime fallback or initials
+    fallback: customEmoji || runtimeFallback || agentNameStr.slice(0, 2).toUpperCase() || "AI",
     alt: agentNameStr || "AI Assistant",
   };
 
@@ -586,17 +713,25 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
 
   // New chat
   const handleNewChat = useCallback(() => {
+    if (inputBlocked) return;
     const newKey = `agent:${agentId}:chat-${Date.now()}`;
     setSelectedSessionKey(newKey);
     setChatSessionKey(newKey);
     fetchSessions();
-  }, [agentId, setChatSessionKey, fetchSessions]);
+  }, [agentId, setChatSessionKey, fetchSessions, inputBlocked]);
 
   // Session change
   const handleSessionChange = useCallback((newSessionKey: string) => {
+    if (sendDisabledReason) return;
+    // For Hermes sessions (keyed as "hermes:<uuid>"), seed the session state
+    // so sendMessageViaHermes can resume the conversation instead of starting a new one.
+    if (backendTab === "hermes" && newSessionKey.startsWith("hermes:")) {
+      const hermesSessionId = newSessionKey.slice(7);
+      seedHermesSession(newSessionKey, hermesSessionId);
+    }
     setSelectedSessionKey(newSessionKey);
     setChatSessionKey(newSessionKey);
-  }, [setChatSessionKey]);
+  }, [backendTab, sendDisabledReason, setChatSessionKey]);
 
   // Export
   // Expose actions to parent via ref
@@ -644,6 +779,7 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
   // Send message
   const handleSend = useCallback(
     async (message: string, attachments?: AttachmentType[]) => {
+      if (inputBlocked) return;
       if (!message.trim() && (!attachments || attachments.length === 0)) return;
 
       const trimmed = message.trim();
@@ -675,7 +811,7 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
 
       await sendMessage(finalMessage, gatewayAttachments);
     },
-    [sendMessage, quotedMessage, isLoading, toGatewayAttachments, handleSlashCommand]
+    [sendMessage, quotedMessage, isLoading, toGatewayAttachments, handleSlashCommand, inputBlocked]
   );
 
   // Callbacks
@@ -727,9 +863,6 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
           <Button variant="ghost" size="iconSm" className="h-6 w-6" onClick={() => loadChatHistory()} title="Reload">
             <RefreshCw className="w-3 h-3" />
           </Button>
-          <Button variant="ghost" size="iconSm" className="h-6 w-6" onClick={handleNewChat} title="New chat">
-            <Plus className="w-3 h-3" />
-          </Button>
           <SessionHistoryDropdown
             sessions={sessions}
             isLoading={sessionsLoading}
@@ -738,6 +871,7 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
             onLoadSession={handleSessionChange}
             onNewChat={handleNewChat}
             onFetchSessions={fetchSessions}
+            disabled={!!sendDisabledReason}
           />
         </div>
       </div>}
@@ -758,28 +892,50 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
               <div className="p-4 min-w-0">
                 <div className="space-y-2 min-w-0 overflow-hidden">
                   {error && (
-                    <div className="p-2 rounded bg-red-50 border border-red-200 text-red-700 text-xs">
-                      {error}
+                    <div className="p-2 rounded bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800/40 text-red-700 dark:text-red-400 text-xs flex items-center justify-between gap-2">
+                      <span>{error}</span>
+                      <button
+                        onClick={() => loadChatHistory().catch(() => {})}
+                        className="shrink-0 px-2 py-0.5 rounded text-[10px] font-medium bg-red-100 dark:bg-red-900/40 hover:bg-red-200 dark:hover:bg-red-800/50 transition-colors"
+                      >
+                        Retry
+                      </button>
                     </div>
                   )}
 
                   {messages.length === 0 ? (
-                    <EmptyState
-                      userAvatar={userAvatar}
-                      assistantAvatar={assistantAvatar}
-                      onHintClick={() => {}}
-                      personality={{
-                        name: agentNameStr || currentAgent.name,
-                        coverPhoto: "",
-                        tag: backendTab === "hermes" ? "Hermes Agent"
-                          : backendTab === "claude-code" ? "ClaudNot just ae Code"
-                          : backendTab === "codex" ? "Codex"
-                          : "OpenClaw Agent",
-                      }}
-                      suggestions={[]}
-                      onSuggestionClick={() => {}}
-                      isLoadingSuggestions={false}
-                    />
+                    inputBlocked ? (
+                      <div className="flex-1 flex flex-col items-center justify-center gap-3 text-center px-6 py-12">
+                        <div className="w-12 h-12 rounded-full bg-muted/50 flex items-center justify-center grayscale">
+                          <MessageSquare className="w-6 h-6 text-muted-foreground" />
+                        </div>
+                        <div>
+                          <p className="text-sm font-medium text-foreground">
+                            {sendDisabledReason ? "Chat locked" : `${backendTab === "openclaw" ? "OpenClaw" : backendTab === "claude-code" ? "Claude Code" : backendTab === "hermes" ? "Hermes" : "Codex"} not installed`}
+                          </p>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            {sendDisabledReason || "Install the runtime to view chat history and send messages"}
+                          </p>
+                        </div>
+                      </div>
+                    ) : (
+                      <EmptyState
+                        userAvatar={userAvatar}
+                        assistantAvatar={assistantAvatar}
+                        onHintClick={() => {}}
+                        personality={{
+                          name: agentNameStr || currentAgent.name,
+                          coverPhoto: "",
+                          tag: backendTab === "hermes" ? "Hermes Agent"
+                            : backendTab === "claude-code" ? "Claude Code"
+                            : backendTab === "codex" ? "Codex"
+                            : "OpenClaw Agent",
+                        }}
+                        suggestions={[]}
+                        onSuggestionClick={() => {}}
+                        isLoadingSuggestions={false}
+                      />
+                    )
                   ) : (
                     <>
                       {hasMoreHistory && (
@@ -943,7 +1099,7 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
                                     </AvatarFallback>
                                   </Avatar>
                                 </div>
-                                <div className="flex items-center py-1.5">
+                                <div className="flex items-center px-3 py-1.5">
                                   <AnimatedThinkingText text={thinkingText} />
                                 </div>
                               </div>
@@ -1091,13 +1247,18 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
             />
             <InputContainer
               onSendMessage={handleSend}
-              placeholder={`Ask ${agentNameStr || currentAgent.name} anything...`}
+              placeholder={sendDisabledReason
+                ? sendDisabledReason
+                : runtimeUnavailable
+                ? `${backendTab === "openclaw" ? "OpenClaw" : backendTab === "claude-code" ? "Claude Code" : backendTab === "hermes" ? "Hermes" : "Codex"} is not installed — view only`
+                : `Ask ${agentNameStr || currentAgent.name} anything...`}
               isLoading={isLoading}
               isSending={isLoading}
-              showAttachments={true}
+              disabled={inputBlocked}
+              showAttachments={!inputBlocked}
               showVoiceInput={false}
               showEmojiPicker={false}
-              showActions={true}
+              showActions={!inputBlocked}
               autoResize={true}
               allowEmptySend={false}
               maxAttachments={5}

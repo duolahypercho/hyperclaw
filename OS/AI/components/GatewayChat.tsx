@@ -58,6 +58,9 @@ const memoizedMarkdownComponents = {
   assistant: createMarkdownComponents(false),
 };
 
+const getHermesAgentId = (agentId: string): string =>
+  agentId.startsWith("hermes:") ? agentId.slice("hermes:".length) : agentId;
+
 // Helper to check if avatar should be shown
 const shouldShowAvatar = (messages: GatewayChatMessage[], index: number): boolean => {
   if (index === 0) return true;
@@ -519,6 +522,9 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
     sessionKey: sessionKeyState,
     autoConnect: autoConnect && activeProvider !== "claude-code" && activeProvider !== "codex",
     backend,
+    agentId: isHermes
+      ? getHermesAgentId(currentAgentId)
+      : undefined,
   });
 
   const claudeCodeChat = useClaudeCodeChat({
@@ -565,7 +571,7 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
     setHookSessionKey(newSessionKey);
   }, [setHookSessionKey]);
 
-  // Fetch sessions callback — merges OpenClaw + Claude + Codex
+  // Fetch sessions callback — merges OpenClaw + runtime-backed sessions
   const fetchSessions = useCallback(async () => {
     setSessionsLoading(true);
     setSessionsError(null);
@@ -580,9 +586,9 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
         );
       }
 
-      // Claude Code sessions (via connector relay)
+      // Claude Code sessions (via connector relay) — scoped to current agent
       fetches.push(
-        bridgeInvoke("claude-code-list-sessions", {})
+        bridgeInvoke("claude-code-list-sessions", { agentId: currentAgentId })
           .then((r: any) => (r?.sessions || []).map((s: any) => ({
             key: s.key || `claude:${s.id}`,
             label: `[Claude] ${s.label || s.id?.slice(0, 8)}`,
@@ -591,9 +597,9 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
           .catch(() => [])
       );
 
-      // Codex sessions (via connector relay)
+      // Codex sessions (via connector relay) — scoped to current agent
       fetches.push(
-        bridgeInvoke("codex-list-sessions", {})
+        bridgeInvoke("codex-list-sessions", { agentId: currentAgentId })
           .then((r: any) => (r?.sessions || []).map((s: any) => ({
             key: s.key || `codex:${s.id}`,
             label: `[Codex] ${s.label || s.id?.slice(0, 8)}`,
@@ -601,6 +607,18 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
           })))
           .catch(() => [])
       );
+
+      if (isHermes) {
+        fetches.push(
+          bridgeInvoke("hermes-sessions", { agentId: getHermesAgentId(currentAgentId) })
+            .then((r: any) => (r?.sessions || []).map((s: any) => ({
+              key: `hermes:${s.key || s.id}`,
+              label: `[Hermes] ${s.label || (s.key || s.id)?.slice(0, 16)}`,
+              updatedAt: s.updatedAt,
+            })))
+            .catch(() => [])
+        );
+      }
 
       const results = await Promise.all(fetches);
       const merged = results.flat().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
@@ -611,7 +629,7 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
     } finally {
       setSessionsLoading(false);
     }
-  }, [currentAgentId]);
+  }, [currentAgentId, isHermes]);
 
   // Handle session switch
   const handleSessionChange = useCallback((newSessionKey: string) => {
@@ -1131,7 +1149,14 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
             maxFileSize={5 * 1024 * 1024}
             allowedFileTypes={["image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml", "image/bmp"]}
             sessionKey={sessionKeyState}
-            onStopGeneration={stopGeneration}
+            // Stop is only reliable for openclaw/hermes. For claude-code and codex,
+            // aborting the client-side send promise still lets the final response
+            // land — so we omit the handler to hide the stop button entirely.
+            onStopGeneration={
+              activeProvider === "claude-code" || activeProvider === "codex"
+                ? undefined
+                : stopGeneration
+            }
           />
         </div>
       </div>

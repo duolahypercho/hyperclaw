@@ -154,29 +154,27 @@ html {
 
 .customScrollbar2 {
   &::-webkit-scrollbar {
-    background: transparent;
-    width: 12px;
-  }
-
-  &::-webkit-scrollbar-thumb {
-    height: 50px;
-    border-radius: 8px;
-    border: 3px solid transparent;
-    background-clip: content-box;
-    background-color: hsla(var(--primary, 216 33% 35%) / 0.28);
-    transition: background 0.2s;
-  }
-
-  &::-webkit-scrollbar-thumb:hover {
-    background-color: hsla(var(--primary, 216 100% 66%) / 0.38);
-  }
-
-  &::-webkit-scrollbar-thumb:active {
-    background-color: hsla(var(--primary, 216 100% 66%) / 0.55);
+    width: 10px;
+    height: 10px;
   }
 
   &::-webkit-scrollbar-track {
     background: transparent;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    border-radius: 5px;
+    border: 2px solid var(--sb-track-bg);
+    background-color: var(--sb-thumb);
+    transition: background 0.2s;
+  }
+
+  &::-webkit-scrollbar-thumb:hover {
+    background-color: var(--sb-thumb-hover);
+  }
+
+  &::-webkit-scrollbar-thumb:active {
+    background-color: var(--sb-thumb-hover);
   }
 }
 

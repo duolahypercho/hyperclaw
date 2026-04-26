@@ -96,13 +96,6 @@
           "!cache",
           "!cache/**/*"
         ]
-      },
-      {
-        "from": "resources/connector",
-        "to": "connector",
-        "filter": [
-          "**/*"
-        ]
       }
     ]
   }

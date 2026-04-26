@@ -63,16 +63,16 @@ export async function cronAdd(params: CronAddParams): Promise<{ success: boolean
   return { success: data?.success === true, error: data?.error };
 }
 
-// Fire-and-forget cron run - triggers and returns immediately
+// Fire-and-forget cron run - triggers and returns immediately.
+// Works for all runtimes (openclaw, claude-code, codex, hermes) — the connector
+// dispatches to the correct CLI/API based on the job's runtime field.
 export async function cronRun(jobId: string, options?: { due?: boolean }): Promise<{ success: boolean; error?: string }> {
   try {
-    // Trigger the cron but don't wait for completion
-    // Use timeout to avoid hanging - if it takes >5s, consider it started
     const data = await Promise.race([
       bridgeInvoke("cron-run", { cronRunJobId: jobId, cronRunDue: options?.due === true }),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 5000))
+      new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 30_000))
     ]) as { success?: boolean; error?: string };
-    return { success: true, error: undefined }; // Assume success if triggered
+    return { success: true, error: undefined };
   } catch (e: unknown) {
     const err = e instanceof Error ? e : new Error(String(e));
     if (err.message === "timeout") {
@@ -80,6 +80,16 @@ export async function cronRun(jobId: string, options?: { due?: boolean }): Promi
     }
     return { success: false, error: err.message };
   }
+}
+
+/** Toggle a cron job's enabled state (works for all runtimes). */
+export async function cronToggle(jobId: string, enabled: boolean): Promise<{ success: boolean; enabled?: boolean; error?: string }> {
+  const data = (await bridgeInvoke("cron-toggle", { cronToggleJobId: jobId, cronToggleEnabled: enabled })) as {
+    success?: boolean;
+    enabled?: boolean;
+    error?: string;
+  };
+  return { success: data?.success === true, enabled: data?.enabled, error: data?.error };
 }
 
 /** Run `openclaw cron runs --id <jobId> --limit 1` to fetch/sync the latest run info for a job. */
@@ -102,6 +112,43 @@ export async function cronEdit(jobId: string, params: CronEditParams): Promise<{
 export async function cronDelete(jobId: string): Promise<{ success: boolean; error?: string }> {
   const data = (await bridgeInvoke("cron-delete", { cronDeleteJobId: jobId })) as { success?: boolean; error?: string };
   return { success: data?.success === true, error: data?.error };
+}
+
+/** Format a schedule expression for display. Handles cron, interval, and RRULE formats. */
+export function formatScheduleExpr(expr: string | undefined, kind?: string): string {
+  if (!expr) return "—";
+  // RRULE format (Codex automations)
+  if (expr.startsWith("RRULE:") || kind === "rrule") {
+    const params = new URLSearchParams(expr.replace("RRULE:", "").replace(/;/g, "&"));
+    const freq = params.get("FREQ");
+    const byDay = params.get("BYDAY");
+    const byHour = params.get("BYHOUR");
+    const byMinute = params.get("BYMINUTE");
+    const interval = params.get("INTERVAL");
+    const time = byHour != null ? `${byHour}:${(byMinute ?? "0").padStart(2, "0")}` : null;
+    const freqLabel: Record<string, string> = {
+      MINUTELY: "minute", HOURLY: "hour", DAILY: "day",
+      WEEKLY: "week", MONTHLY: "month", YEARLY: "year",
+    };
+    let label = freqLabel[freq ?? ""] ?? freq ?? "?";
+    if (interval && Number(interval) > 1) label = `${interval} ${label}s`;
+    const dayMap: Record<string, string> = {
+      MO: "Mon", TU: "Tue", WE: "Wed", TH: "Thu", FR: "Fri", SA: "Sat", SU: "Sun",
+    };
+    const days = byDay
+      ? byDay.split(",").map((d) => dayMap[d] ?? d).join(", ")
+      : null;
+    const allWeekdays = byDay === "MO,TU,WE,TH,FR" || byDay === "SU,MO,TU,WE,TH,FR,SA";
+    if (allWeekdays && byDay === "SU,MO,TU,WE,TH,FR,SA") {
+      return time ? `Daily at ${time}` : `Every ${label}`;
+    }
+    if (allWeekdays) return time ? `Weekdays at ${time}` : `Every weekday`;
+    if (days && time) return `${days} at ${time}`;
+    if (days) return `Every ${label} (${days})`;
+    if (time) return `Every ${label} at ${time}`;
+    return `Every ${label}`;
+  }
+  return expr;
 }
 
 /** Assume each cron run lasts 10 minutes for calendar display. */
@@ -189,6 +236,40 @@ export interface FetchCronsOptions {
   runtime?: string;
 }
 
+function hydrateUnifiedCronJob(item: Record<string, unknown>): OpenClawCronJobJson {
+  const runtime = (item.runtime as OpenClawCronJobJson["runtime"]) ?? "openclaw";
+  const fallback: OpenClawCronJobJson = {
+    id: item.id as string,
+    name: item.name as string,
+    enabled: Boolean(item.enabled),
+    runtime,
+  };
+
+  if (typeof item.agentId === "string" && item.agentId.trim()) {
+    fallback.agentId = item.agentId;
+  }
+
+  if (typeof item.rawJson !== "string") {
+    return fallback;
+  }
+
+  try {
+    const raw = JSON.parse(item.rawJson) as OpenClawCronJobJson;
+    return {
+      ...raw,
+      runtime,
+      agentId:
+        typeof raw.agentId === "string" && raw.agentId.trim()
+          ? raw.agentId
+          : typeof item.agentId === "string" && item.agentId.trim()
+            ? item.agentId
+            : raw.agentId,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
 export async function fetchCronsFromBridge(options?: FetchCronsOptions): Promise<OpenClawCronJobJson[]> {
   const { agentId, runtime } = options ?? {};
 
@@ -203,14 +284,7 @@ export async function fetchCronsFromBridge(options?: FetchCronsOptions): Promise
       const first = unified[0] as Record<string, unknown>;
       // If response has rawJson, it's from the unified store — parse each job's raw JSON
       if ("rawJson" in first && typeof first.rawJson === "string") {
-        return unified.map((item: Record<string, unknown>) => {
-          try {
-            const raw = JSON.parse(item.rawJson as string) as OpenClawCronJobJson;
-            return { ...raw, runtime: (item.runtime as OpenClawCronJobJson["runtime"]) ?? "openclaw" };
-          } catch {
-            return { id: item.id as string, name: item.name as string, enabled: Boolean(item.enabled), runtime: (item.runtime as OpenClawCronJobJson["runtime"]) ?? "openclaw" };
-          }
-        });
+        return unified.map((item: Record<string, unknown>) => hydrateUnifiedCronJob(item));
       }
       // Fallback: response is already in BridgeCron format (get-all-crons fell through to get-crons)
       return mapBridgeCronsToJobs(unified as BridgeCron[]);
@@ -231,6 +305,9 @@ export async function fetchCronsFromBridge(options?: FetchCronsOptions): Promise
 export async function fetchCronById(jobId: string): Promise<OpenClawCronJobJson | null> {
   if (!jobId?.trim()) return null;
   const raw = await bridgeInvoke("get-cron-by-id", { jobId: jobId.trim() });
+  if (raw && typeof raw === "object" && "rawJson" in (raw as object)) {
+    return hydrateUnifiedCronJob(raw as Record<string, unknown>);
+  }
   if (raw && typeof raw === "object" && "id" in (raw as object)) return raw as OpenClawCronJobJson;
   if (raw && typeof raw === "object" && "error" in (raw as object)) return null;
   return null;

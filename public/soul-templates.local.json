@@ -1,0 +1,50 @@
+{
+  "_readme": [
+    "Local SOUL template overrides for Hyperclaw.",
+    "",
+    "WHAT THIS FILE IS",
+    "  Templates added here are merged into the soul template gallery on top of",
+    "  /soul-templates.json (which is rebuilt from",
+    "  github.com/mergisi/awesome-openclaw-agents). Anything you put in this",
+    "  file wins by `slug`, so you can:",
+    "    1. Add brand-new in-house personalities (e.g. your own staff agents)",
+    "    2. Override an upstream template without forking the build script",
+    "",
+    "HOW TO ADD A TEMPLATE",
+    "  Append an object to the `templates` array. Required shape:",
+    "    {",
+    "      \"slug\":        \"unique-kebab-case\",       // primary key",
+    "      \"name\":        \"Display Name\",            // shown in card title",
+    "      \"role\":        \"Short job title\",          // shown next to name",
+    "      \"emoji\":       \"🦞\",                        // single glyph",
+    "      \"category\":    \"productivity\",             // free-form string; reused for filter chip",
+    "      \"description\": \"One-liner shown under the card title.\",",
+    "      \"tags\":        [\"calm\", \"async\"],          // free-form, surfaced as pills",
+    "      \"content\":     \"# Name\\n\\n…full SOUL.md markdown…\"",
+    "    }",
+    "",
+    "  Optional fields:",
+    "    \"sourcePath\":  upstream repo path. Leave OFF for fully local",
+    "                   templates — the gallery will hide the View source link",
+    "                   and stamp a \"Custom\" badge automatically.",
+    "",
+    "NOTES",
+    "  - The `_readme` field above is ignored by the loader.",
+    "  - The build script (scripts/build-soul-templates.mjs) only writes",
+    "    soul-templates.json, so this file is safe across regenerations.",
+    "  - Cache: the loader fetches this file with `cache: no-store` so edits",
+    "    show up on the next dialog open without a hard reload."
+  ],
+  "templates": [
+    {
+      "slug": "example-local-pair-programmer",
+      "name": "Pair Programmer",
+      "role": "Local example",
+      "emoji": "🧑‍💻",
+      "category": "engineering",
+      "description": "Delete or edit this template — it's just here so the file shape is obvious.",
+      "tags": ["example", "delete-me"],
+      "content": "# Pair Programmer\n\n## Mission\nPair with the user on engineering tasks. Stay terse, prefer code over prose, and surface tradeoffs early.\n\n## Style\n- Default to the user's existing patterns instead of inventing new ones.\n- When uncertain, ask one focused question rather than guessing.\n- Cite files/symbols by exact path, never paraphrased.\n\n## Boundaries\n- Never run destructive commands without explicit confirmation.\n- Treat secrets, credentials, and `.env*` files as read-only context.\n"
+    }
+  ]
+}

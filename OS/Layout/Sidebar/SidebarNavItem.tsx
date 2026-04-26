@@ -257,8 +257,8 @@ const SidebarNavItem: React.FC<{
             item.onClick?.();
           }}
           className={cn(
-            "w-full text-left flex justify-start items-center gap-2 py-2 px-2.5 rounded-md hover:bg-primary/10 h-fit transition-all duration-200 overflow-x-hidden font-medium text-xs border-l-2 border-transparent",
-            isActive && "bg-primary/10 text-primary border-primary",
+            "w-full text-left flex justify-start items-center gap-2 py-1.5 px-2 rounded-md hover:bg-muted/60 hover:text-foreground h-fit transition-colors overflow-x-hidden font-normal text-[13px] text-muted-foreground",
+            isActive && "bg-muted text-foreground font-medium",
             item.disabled && "text-muted-foreground/50 cursor-not-allowed"
           )}
         >
@@ -273,7 +273,7 @@ const SidebarNavItem: React.FC<{
           {item.contextMenu && (
             <div
               onClick={triggerContextMenu}
-              className="ml-auto h-fit w-fit py-0 px-1 hover:text-foreground/80 flex-shrink-0 transition-all duration-200 cursor-pointer rounded-sm hover:bg-primary/10"
+              className="ml-auto h-fit w-fit py-0 px-1 hover:text-foreground/80 flex-shrink-0 transition-all duration-200 cursor-pointer rounded-sm hover:bg-muted/60"
             >
               <MoreHorizontal className="w-4 h-4 text-muted-foreground" />
             </div>
@@ -296,8 +296,8 @@ const SidebarNavItem: React.FC<{
               item.onClick?.();
             }}
             className={cn(
-              "w-full text-left flex justify-start items-center gap-2 py-2 px-2.5 rounded-md hover:bg-primary/10 h-fit transition-all duration-200 overflow-x-hidden font-medium text-xs border-l-2 border-transparent",
-              isActive && "bg-primary/10 text-primary border-primary",
+              "w-full text-left flex justify-start items-center gap-2 py-1.5 px-2 rounded-md hover:bg-muted/60 hover:text-foreground h-fit transition-colors overflow-x-hidden font-normal text-[13px] text-muted-foreground",
+              isActive && "bg-muted text-foreground font-medium",
               item.disabled && "text-muted-foreground/50 cursor-not-allowed"
             )}
           >
@@ -312,7 +312,7 @@ const SidebarNavItem: React.FC<{
             {item.contextMenu && (
               <div
                 onClick={triggerContextMenu}
-                className="ml-auto h-fit w-fit py-0 px-1 hover:text-foreground/80 flex-shrink-0 transition-all duration-200 cursor-pointer rounded-sm hover:bg-primary/10"
+                className="ml-auto h-fit w-fit py-0 px-1 hover:text-foreground/80 flex-shrink-0 transition-all duration-200 cursor-pointer rounded-sm hover:bg-muted/60"
               >
                 <MoreHorizontal className="w-4 h-4 text-muted-foreground" />
               </div>
@@ -322,7 +322,7 @@ const SidebarNavItem: React.FC<{
       )}
       {open && (
         <div className="relative w-full pl-4">
-          <div className="absolute left-[13px] top-0 bottom-0 w-[1px] bg-primary/10" />
+          <div className="absolute left-[13px] top-0 bottom-0 w-[1px] bg-border" />
           <ul className="flex flex-col gap-1 w-full">
             {(item.items ?? []).map((sub, k) => (
               <SidebarNavItem key={sub.id ?? k} item={sub} className="pl-[10px]" dndEnabled={dndEnabled} />
@@ -355,10 +355,10 @@ const SidebarNavItem: React.FC<{
               item.onClick?.();
             }}
             className={cn(
-              "w-full text-left flex justify-start gap-2.5 py-2 px-2.5 rounded-md transition-all duration-200 overflow-x-hidden font-medium text-xs h-fit border-l-2 border-transparent",
+              "w-full text-left flex justify-start gap-2.5 py-1.5 px-2 rounded-md transition-colors overflow-x-hidden font-normal text-[13px] h-fit text-muted-foreground",
               item.subtitle ? "items-start" : "items-center",
-              "hover:bg-primary/10 hover:text-foreground",
-              isActive && "bg-primary/10 text-primary border-primary shadow-sm",
+              "hover:bg-muted/60 hover:text-foreground",
+              isActive && "bg-muted text-foreground font-medium",
               item.disabled && "text-muted-foreground/50 cursor-not-allowed hover:bg-transparent"
             )}
           >
@@ -374,7 +374,7 @@ const SidebarNavItem: React.FC<{
             {item.contextMenu && (
               <div
                 onClick={triggerContextMenu}
-                className="ml-auto h-fit w-fit py-0 px-1 hover:text-foreground/80 flex-shrink-0 transition-all duration-200 cursor-pointer rounded-sm hover:bg-primary/10"
+                className="ml-auto h-fit w-fit py-0 px-1 hover:text-foreground/80 flex-shrink-0 transition-all duration-200 cursor-pointer rounded-sm hover:bg-muted/60"
               >
                 <MoreHorizontal className="w-4 h-4 text-muted-foreground hover:text-foreground" />
               </div>

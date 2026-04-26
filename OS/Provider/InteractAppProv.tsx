@@ -279,10 +279,6 @@ export const InteractAppProvider = ({
     return validTabIds.length > 0 ? validTabIds[0] : "";
   }, [appSchema, currentAppSettings.currentActiveTab, getValidTabIds]);
 
-  if (!activeTool) {
-    return null;
-  }
-
   // Sidebar should be false if there's no sidebar content
   const effectiveSidebar = sidebarHasContent ? localSidebar : false;
 

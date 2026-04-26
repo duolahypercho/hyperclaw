@@ -1,0 +1,10 @@
+{
+  "mandatory": true,
+  "binaries": {
+    "darwin-arm64": {
+      "checksum": "sha256:b4a8408ec9c011415515846f8dfbdaef96bf6cf03e83415a60f630b89fe40fcb"
+    }
+  },
+  "minVersion": "0.5.10",
+  "releaseNotes": "v0.5.10-dev connector refresh."
+}

@@ -12,6 +12,11 @@ import {
 } from "$/lib/openclaw-gateway-ws";
 import { v4 as uuidv4 } from "uuid";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
+import {
+  extractAgentIdFromSessionKey,
+  markAgentRunFinished,
+  markAgentRunStarted,
+} from "$/components/ensemble/hooks/useAgentStreamingState";
 
 // Module-level registry: maps active runId → sessionKey.
 // Prevents cross-chat event bleed when multiple useGatewayChat instances
@@ -122,6 +127,8 @@ export interface UseGatewayChatOptions {
   autoConnect?: boolean;
   backend?: "openclaw" | "claude-code" | "codex" | "hermes";
   agentId?: string;
+  /** UI agent id for status dots when backend-specific ids differ. */
+  statusAgentId?: string;
 }
 
 type GatewayChatBackend = NonNullable<UseGatewayChatOptions["backend"]>;
@@ -697,6 +704,7 @@ export const _testHelpers = {
   getRuntimeHistorySessionId,
   seedHermesSession,
   usesGatewayHealthProbe,
+  isTransientGatewayStartupError,
 };
 
 function getRuntimeHistorySessionId(backend: GatewayChatBackend, sessionKey: string): string | null {
@@ -713,19 +721,44 @@ function getRuntimeHistorySessionId(backend: GatewayChatBackend, sessionKey: str
       return sessionId && sessionId !== "default" ? sessionId : null;
     }
     case "hermes": {
-      // Session keys arrive as "hermes:<uuid>" from the session list.
-      // Composite keys like "agent:<id>:main" or "agent:<id>:chat-<ts>"
-      // are UI-generated ephemeral keys — not resumable hermes sessions.
-      if (trimmedKey.startsWith("hermes:")) {
-        const sessionId = trimmedKey.slice(7);
-        return sessionId || null;
-      }
-      // Ephemeral UI keys (agent:xxx:main, agent:xxx:chat-123) are not hermes session IDs.
-      return null;
+      return getHermesHistorySessionId(trimmedKey);
     }
     default:
       return trimmedKey;
   }
+}
+
+function isPlaceholderHermesSessionId(sessionId: string): boolean {
+  return (
+    !sessionId ||
+    sessionId === "main" ||
+    sessionId === "default" ||
+    /^chat-\d+$/.test(sessionId) ||
+    sessionId.endsWith(":main") ||
+    /:chat-\d+$/.test(sessionId)
+  );
+}
+
+function getHermesHistorySessionId(sessionKey: string): string | null {
+  const trimmedKey = sessionKey.trim();
+  if (!trimmedKey) return null;
+
+  if (trimmedKey.startsWith("hermes:")) {
+    const sessionId = trimmedKey.slice("hermes:".length);
+    return isPlaceholderHermesSessionId(sessionId) ? null : sessionId;
+  }
+
+  // Historical Hermes keys can arrive embedded in agent session keys, for
+  // example "agent:ceo:hermes:session-9". UI placeholders such as
+  // "agent:hermes:rell:main" are intentionally rejected below.
+  const marker = ":hermes:";
+  const markerIndex = trimmedKey.lastIndexOf(marker);
+  if (markerIndex >= 0) {
+    const sessionId = trimmedKey.slice(markerIndex + marker.length);
+    return isPlaceholderHermesSessionId(sessionId) ? null : sessionId;
+  }
+
+  return null;
 }
 
 // Seed the hermesSessionState map when switching to a historical session,
@@ -739,6 +772,18 @@ function seedHermesSession(chatSessionKey: string, hermesSessionId: string): voi
 
 function usesGatewayHealthProbe(backend: GatewayChatBackend): boolean {
   return backend === "openclaw";
+}
+
+function getErrorMessage(err: unknown, fallback = "Gateway not reachable"): string {
+  return err instanceof Error ? err.message : typeof err === "string" ? err : fallback;
+}
+
+function isTransientGatewayStartupError(err: unknown): boolean {
+  const msg = getErrorMessage(err, "").toLowerCase();
+  return (
+    msg.includes("gateway not connected") ||
+    msg.includes("gateway not ready yet")
+  );
 }
 
 // Tracks hermes session state per chat session key for multi-turn conversations.
@@ -842,7 +887,8 @@ async function sendMessageViaHermes(
       ? localStorage.getItem(getHermesSessionStorageKey(chatSessionKey))
       : null;
     const state = chatSessionKey ? hermesSessionState.get(chatSessionKey) : undefined;
-    const effectiveSessionId = state?.sessionId || storedSessionId || undefined;
+    const keySessionId = getHermesHistorySessionId(activeSessionKey);
+    const effectiveSessionId = state?.sessionId || storedSessionId || keySessionId || undefined;
 
     // Use the chat session key as conversation name for API mode
     const conversation = chatSessionKey || undefined;
@@ -920,7 +966,7 @@ async function sendMessageViaHermes(
 export { seedHermesSession };
 
 export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayChatReturn {
-  const { sessionKey: initialSessionKey, autoConnect = true, backend = "openclaw", agentId } = options;
+  const { sessionKey: initialSessionKey, autoConnect = true, backend = "openclaw", agentId, statusAgentId } = options;
 
   // State
   const [messages, setMessages] = useState<GatewayChatMessage[]>([]);
@@ -1006,7 +1052,17 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
   const hermesAbortRef = useRef<AbortController | null>(null);
   const messagesRef = useRef<GatewayChatMessage[]>([]);
   const gatewayStartupRetryRef = useRef<number>(0);
+  const gatewayStartupRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const loadChatHistoryRef = useRef<(() => Promise<void>) | null>(null);
   useEffect(() => { messagesRef.current = messages; }, [messages]);
+
+  const clearGatewayStartupRetry = useCallback(() => {
+    if (gatewayStartupRetryTimerRef.current) {
+      clearTimeout(gatewayStartupRetryTimerRef.current);
+      gatewayStartupRetryTimerRef.current = null;
+    }
+    gatewayStartupRetryRef.current = 0;
+  }, []);
 
   const loadHistoryForBackend = useCallback(async (limit?: number): Promise<{ messages?: unknown[] }> => {
     if (backend === "openclaw") {
@@ -1027,6 +1083,13 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
 
     if (backend === "codex") {
       return await bridgeInvoke("codex-load-history", { sessionId }) as { messages?: unknown[] };
+    }
+
+    if (backend === "hermes") {
+      return await bridgeInvoke("hermes-load-history", {
+        sessionId,
+        ...(agentId ? { agentId } : {}),
+      }) as { messages?: unknown[] };
     }
 
     return { messages: [] };
@@ -1130,9 +1193,15 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       }
       // Adopt the first runId for text message association.
       if (!receivedEventRef.current && payload.runId) {
-        // Replace client-side runId registration with the server-side runId
+        // Replace client-side runId registration with the server-side runId.
+        // Finish the optimistic client run so the status dot transfers cleanly
+        // to the server run tracked by ensureSubscribed; without this the
+        // clientRunId lingers in activeRuns for the full OPTIMISTIC_RUN_TTL_MS.
         const oldRunId = currentRunIdRef.current;
-        if (oldRunId) runIdOwners.delete(oldRunId);
+        if (oldRunId) {
+          runIdOwners.delete(oldRunId);
+          markAgentRunFinished(oldRunId);
+        }
         currentRunIdRef.current = payload.runId;
         registerRunId(payload.runId, sessionKeyRef.current);
       }
@@ -1565,6 +1634,9 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
         return merged ?? prev;
       });
     } catch (err) {
+      if (usesGatewayHealthProbe(backend) && isTransientGatewayStartupError(err)) {
+        throw err;
+      }
       console.error("[GatewayChat] Failed to load history:", err);
       throw err; // propagate so loadChatHistory can set the error state
     }
@@ -1597,7 +1669,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
           // old banner was almost certainly from a prior disconnect window, and
           // waiting for the probe to resolve leaves it visible for 1-8s.
           setError(null);
-          gatewayStartupRetryRef.current = 0;
+          clearGatewayStartupRetry();
           if (usesGatewayHealthProbe(backend)) {
             probeGatewayHealth().then((probe) => {
               if (probe.healthy) {
@@ -1643,7 +1715,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
         previousConnected = true;
         // Same belt-and-suspenders: clear stale banners immediately.
         setError(null);
-        gatewayStartupRetryRef.current = 0;
+        clearGatewayStartupRetry();
         if (usesGatewayHealthProbe(backend)) {
           probeGatewayHealth().then((probe) => {
             if (probe.healthy) {
@@ -1659,7 +1731,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
     return () => {
       unsubscribe();
     };
-  }, [backend, fetchAndSetHistory]);
+  }, [backend, clearGatewayStartupRetry, fetchAndSetHistory]);
 
   // Self-heal transient "gateway not connected" / "not reachable" banners.
   // The underlying connector may flip to healthy moments after the banner
@@ -1689,7 +1761,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       if (cancelled) return;
       if (probe.healthy) {
         setError(null);
-        gatewayStartupRetryRef.current = 0;
+        clearGatewayStartupRetry();
         fetchAndSetHistory().catch(() => {});
       }
     };
@@ -1701,7 +1773,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       cancelled = true;
       clearInterval(interval);
     };
-  }, [error, backend, fetchAndSetHistory]);
+  }, [error, backend, clearGatewayStartupRetry, fetchAndSetHistory]);
 
   // Keep a stable ref to the latest handleChatEvent so the subscription
   // never tears down/re-subscribes (which caused a gap where events were lost).
@@ -1738,6 +1810,10 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       if (disconnectGraceRef.current) {
         clearTimeout(disconnectGraceRef.current);
         disconnectGraceRef.current = null;
+      }
+      if (gatewayStartupRetryTimerRef.current) {
+        clearTimeout(gatewayStartupRetryTimerRef.current);
+        gatewayStartupRetryTimerRef.current = null;
       }
       // Clean up runId registry to prevent stale entries (primary + sub-agent runIds)
       clearRunIdOwnership(sessionKeyRef.current);
@@ -1798,7 +1874,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       const storedSessionId = typeof window !== "undefined"
         ? localStorage.getItem(getHermesSessionStorageKey(key))
         : null;
-      const hermesSessionId = storedSessionId || key.replace(/^hermes:/, "").replace(/^agent:[^:]+:/, "");
+      const hermesSessionId = storedSessionId || getHermesHistorySessionId(key);
       if (hermesSessionId && hermesSessionId !== "main" && hermesSessionId !== "default") {
         try {
           const parsed = await loadHermesHistoryMessages(hermesSessionId, agentId);
@@ -1824,6 +1900,19 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
     }
     if (currentRunIdRef.current === null) setIsLoading(true);
     setError(null);
+    const scheduleGatewayStartupRetry = () => {
+      if (gatewayStartupRetryRef.current >= 5) return false;
+      if (gatewayStartupRetryTimerRef.current) return true;
+
+      gatewayStartupRetryRef.current += 1;
+      const delay = Math.min(2000 * gatewayStartupRetryRef.current, 8000);
+      gatewayStartupRetryTimerRef.current = setTimeout(() => {
+        gatewayStartupRetryTimerRef.current = null;
+        void loadChatHistoryRef.current?.();
+      }, delay);
+      return true;
+    };
+
     try {
       // For OpenClaw, probe gateway health first to avoid a 60s timeout on a
       // dead relay chain (dashboard → hub → connector → gateway). The probe
@@ -1839,31 +1928,37 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
         }
         const probe = await probeGatewayHealth();
         if (!probe.healthy) {
-          // "gateway not connected" means OpenClaw is still starting (connector
-          // hasn't established its local WS yet). Auto-retry up to 5 times with
-          // backoff instead of showing an error — the daemon is usually ready
-          // within a few seconds after onboarding.
-          const isStartingUp = probe.error?.includes("gateway not connected");
-          if (isStartingUp && (gatewayStartupRetryRef.current ?? 0) < 5) {
-            gatewayStartupRetryRef.current = (gatewayStartupRetryRef.current ?? 0) + 1;
-            const delay = Math.min(2000 * gatewayStartupRetryRef.current, 8000);
-            console.log(`[GatewayChat] OpenClaw starting up, retry ${gatewayStartupRetryRef.current}/5 in ${delay}ms`);
-            setTimeout(() => loadChatHistory(), delay);
+          // Startup/cooldown states are expected while the connector is still
+          // bringing up the local OpenClaw WS. Defer quietly instead of showing
+          // a red history-load error or stacking duplicate retry timers.
+          if (isTransientGatewayStartupError(probe.error)) {
+            if (scheduleGatewayStartupRetry()) {
+              return;
+            }
+            setError("OpenClaw is still starting. Check connector status and retry.");
             return;
           }
           throw new Error(probe.error || "Gateway not reachable");
         }
         // Gateway healthy — reset startup retry counter.
-        gatewayStartupRetryRef.current = 0;
+        clearGatewayStartupRetry();
       }
       await fetchAndSetHistory();
     } catch (err) {
+      if (usesGatewayHealthProbe(backend) && isTransientGatewayStartupError(err)) {
+        if (scheduleGatewayStartupRetry()) {
+          return;
+        }
+        setError("OpenClaw is still starting. Check connector status and retry.");
+        return;
+      }
       console.error("[GatewayChat] loadChatHistory error:", err);
       setError(err instanceof Error ? err.message : "Failed to load history");
     } finally {
       if (currentRunIdRef.current === null) setIsLoading(false);
     }
-  }, [backend, fetchAndSetHistory]);
+  }, [backend, clearGatewayStartupRetry, fetchAndSetHistory]);
+  loadChatHistoryRef.current = loadChatHistory;
 
   // Backend-change reset: when the consumer flips `backend` (e.g. Hermes ↔ OpenClaw
   // on the same agent/session in AgentChatPanel), clear messages and reload history
@@ -1872,13 +1967,14 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
   useEffect(() => {
     if (prevBackendRef.current === backend) return;
     prevBackendRef.current = backend;
+    clearGatewayStartupRetry();
     setMessages([]);
     setError(null);
     streamContentRef.current = "";
     currentRunIdRef.current = null;
     processedEventSeqRef.current.clear();
     void loadChatHistory();
-  }, [backend, loadChatHistory]);
+  }, [backend, clearGatewayStartupRetry, loadChatHistory]);
 
   // Load more (older) history — steps through tiers: 10 → 50 → 200 → 1000.
   // Re-fetches the full tail with a larger window; the gateway returns the last N
@@ -1925,12 +2021,14 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
 
     // Generate runId for this conversation
     const runId = uuidv4();
+    const resolvedStatusAgentId = statusAgentId || agentId || extractAgentIdFromSessionKey(sessionKeyRef.current);
 
     setIsLoading(true);
     setError(null);
 
     currentRunIdRef.current = runId;
     registerRunId(runId, sessionKeyRef.current);
+    markAgentRunStarted(runId, resolvedStatusAgentId);
     streamContentRef.current = "";
 
     if (backend === "hermes") {
@@ -2037,6 +2135,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
                 .catch(() => {});
             }
             currentRunIdRef.current = null;
+            markAgentRunFinished(runId);
             setIsLoading(false);
             hermesAbortRef.current = null;
           },
@@ -2051,6 +2150,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
               ...(existing?.attachments ? { attachments: existing.attachments } : {}),
             })));
             currentRunIdRef.current = null;
+            markAgentRunFinished(runId);
             setIsLoading(false);
             hermesAbortRef.current = null;
           },
@@ -2067,6 +2167,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
           setError(msg);
         }
         currentRunIdRef.current = null;
+        markAgentRunFinished(runId);
         setIsLoading(false);
         hermesAbortRef.current = null;
       }
@@ -2082,6 +2183,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
           setError("No hub configured");
           setIsLoading(false);
           currentRunIdRef.current = null;
+          markAgentRunFinished(runId);
           return;
         }
         connectGatewayWs(config.gatewayUrl, {
@@ -2103,6 +2205,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       } catch (e) {
         setError(e instanceof Error ? e.message : "Auto-connect failed");
         currentRunIdRef.current = null;
+        markAgentRunFinished(runId);
         setIsLoading(false);
         return;
       }
@@ -2122,7 +2225,9 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
     // Safety timeout: reset isLoading if no terminal event arrives within 5 min
     if (loadingTimeoutRef.current) clearTimeout(loadingTimeoutRef.current);
     loadingTimeoutRef.current = setTimeout(() => {
+      const timedOutRunId = currentRunIdRef.current;
       currentRunIdRef.current = null;
+      if (timedOutRunId) markAgentRunFinished(timedOutRunId);
       setIsLoading(false);
       mergeHistoryAndMaybeFinalize(false);
     }, 300_000);
@@ -2174,16 +2279,19 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       ]);
 
       currentRunIdRef.current = null;
+      markAgentRunFinished(runId);
       setIsLoading(false);
     }
-  }, [backend, getSessionKey, mergeHistoryAndMaybeFinalize]);
+  }, [agentId, backend, getSessionKey, mergeHistoryAndMaybeFinalize, statusAgentId]);
 
   // Stop generation
   const stopGeneration = useCallback(async () => {
     if (backend === "hermes" && hermesAbortRef.current) {
+      const runIdToAbort = currentRunIdRef.current;
       hermesAbortRef.current.abort();
       hermesAbortRef.current = null;
       currentRunIdRef.current = null;
+      if (runIdToAbort) markAgentRunFinished(runIdToAbort);
       setIsLoading(false);
       return;
     }
@@ -2213,6 +2321,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
     }
     streamContentRef.current = "";
     currentRunIdRef.current = null;
+    if (runIdToAbort) markAgentRunFinished(runIdToAbort);
     setIsLoading(false);
 
     // Best-effort: tell the gateway to abort (fire-and-forget)
@@ -2238,6 +2347,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
     setMessages([]);
     setError(null);
     streamContentRef.current = "";
+    if (currentRunIdRef.current) markAgentRunFinished(currentRunIdRef.current);
     currentRunIdRef.current = null;
     if (finalDebounceRef.current) {
       clearTimeout(finalDebounceRef.current);

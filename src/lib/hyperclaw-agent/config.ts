@@ -5,6 +5,7 @@ import type { HyperClawAgentConfig } from './types';
 
 export const DEFAULT_TIMEOUT = 60_000;
 export const LONG_TIMEOUT = 180_000;
+export const REPAIR_TIMEOUT = 15 * 60_000;
 export const RECONNECT_DELAYS = [1000, 2000, 4000, 8000, 16000, 30000] as const;
 export const PING_INTERVAL = 30_000;
 

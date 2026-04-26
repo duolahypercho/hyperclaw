@@ -10,17 +10,17 @@ import React, {
 } from "react";
 import { LuListTodo } from "react-icons/lu";
 import {
+  Workflow,
   ListTodo,
   Coffee,
   Settings,
-  FolderOpen,
-  Clock,
   LayoutGrid,
   FileText,
-  BarChart3,
   Database,
-  Network,
   MessageSquare,
+  Users,
+  Home,
+  FolderKanban,
 } from "lucide-react";
 import { useRouter } from "next/router";
 import { Button } from "@/components/ui/button";
@@ -46,7 +46,6 @@ export interface OSSettings {
   wallpaper: string;
   musicPlayer: boolean;
   todoList: boolean;
-  crons: boolean;
   copanion: boolean;
   menu: boolean;
   statistics: boolean;
@@ -134,7 +133,6 @@ interface CopanionChatContextType extends BaseWidgetContextType {
 // Use type aliases for consistency
 type MusicPlayerContextType = BaseWidgetContextType;
 type TodoListContextType = BaseWidgetContextType;
-type CronsContextType = BaseWidgetContextType;
 type StatisticsContextType = BaseWidgetContextType;
 
 export interface FloatingDocInstance {
@@ -185,7 +183,6 @@ const MusicPlayerContext = createContext<MusicPlayerContextType | undefined>(
 const TodoListContext = createContext<TodoListContextType | undefined>(
   undefined
 );
-const CronsContext = createContext<CronsContextType | undefined>(undefined);
 const MenuContext = createContext<MenuContextType | undefined>(undefined);
 const CopanionChatContext = createContext<CopanionChatContextType | undefined>(
   undefined
@@ -214,13 +211,11 @@ interface OSProviderProps {
 
 // Static tool definitions outside component to prevent recreation
 const STATIC_TOOL_ROUTES = [
+  "/Tool/Chat",
   "/Tool/TodoList",
-  "/Tool/Crons",
-  "/Tool/Memory",
   "/Tool/PixelOffice",
   "/Tool/Docs",
   "/Tool/Intelligence",
-  "/Tool/OrgChart",
   "/Settings",
 ];
 
@@ -266,14 +261,13 @@ export const OSProvider: React.FC<OSProviderProps> = ({ children }) => {
   }, [isMounted, Router]);
 
   const defaultOSSettings: OSSettings = {
-    theme: "light",
+    theme: "system",
     wallpaper: "/OS_wallpaper.jpg",
     musicPlayer: false,
     todoList: false,
-    crons: false,
     copanion: true,
     menu: false,
-    statistics: false,
+    statistics: false
   };
 
   const [osSettings, setOsSettings] = useLocalStorage<OSSettings>(
@@ -389,12 +383,6 @@ export const OSProvider: React.FC<OSProviderProps> = ({ children }) => {
         description: "Browse markdown docs from your OpenClaw workspace",
         icon: <FileText className="w-3.5 h-3.5" />,
       },
-      {
-        id: "usage",
-        name: "Token Usage",
-        description: "View token usage from OpenClaw agents and sessions",
-        icon: <BarChart3 className="w-3.5 h-3.5" />,
-      },
     ];
   }, []);
 
@@ -413,48 +401,45 @@ export const OSProvider: React.FC<OSProviderProps> = ({ children }) => {
         href: "/Tool/TodoList",
       }, */
       {
+        id: "home",
+        name: "Home",
+        description: "Home page to see all the status for your agents",
+        icon: <Home className="w-4 h-4" />,
+        onClick: () => {
+          updateOSSettings({ menu: false });
+          Router.push("/dashboard");
+        },
+        href: "/dashboard",
+      },
+      {
         id: "chat",
         name: "Chat",
-        description: "Chat with your OpenClaw AI agents",
+        description: "Chat with your AI agents",
         icon: <MessageSquare className="w-3.5 h-3.5" />,
         onClick: () => {
-          if (activeTool?.id === "chat") return;
-          createToolClickHandler("/Tool/Chat", "chat")();
+          updateOSSettings({ menu: false });
+          Router.push("/Tool/Chat");
         },
         href: "/Tool/Chat",
       },
       {
-        id: "crons",
-        name: "Crons",
-        description: "View and manage cron job schedules",
-        icon: <Clock className="w-3.5 h-3.5" />,
+        id: "team",
+        name: "Team",
+        description: "Your ensemble of AI employees — roster, roles, and live status",
+        icon: <Users className="w-3.5 h-3.5" />,
         onClick: () => {
-          if (activeTool?.id === "crons") return;
-          createToolClickHandler("/Tool/Crons", "crons")();
+          createToolClickHandler("/Tool/Team", "team")();
         },
-        href: "/Tool/Crons",
+        href: "/Tool/Team",
       },
       {
-        id: "memory",
-        name: "Memory",
-        description: "Browse and read memory files from your OpenClaw workspace",
-        icon: <FolderOpen className="w-3.5 h-3.5" />,
-        onClick: () => {
-          if (activeTool?.id === "memory") return;
-          createToolClickHandler("/Tool/Memory", "memory")();
-        },
-        href: "/Tool/Memory",
-      },
-      {
-        id: "org-chart",
-        name: "Org Chart",
-        description: "Visualize your AI agent team hierarchy and delegation",
-        icon: <Network className="w-3.5 h-3.5" />,
-        onClick: () => {
-          if (activeTool?.id === "org-chart") return;
-          createToolClickHandler("/Tool/OrgChart", "org-chart")();
-        },
-        href: "/Tool/OrgChart",
+        id: "agent",
+        name: "Agent",
+        description: "Agent profile — identity, soul, skills, and cost",
+        icon: <Users className="w-3.5 h-3.5" />,
+        onClick: () => {},
+        href: "/Tool/Agent/[id]",
+        hidden: true,
       },
       {
         id: "pixel-office",
@@ -462,43 +447,49 @@ export const OSProvider: React.FC<OSProviderProps> = ({ children }) => {
         description: "Retro pixel-art office view of your AI team",
         icon: <LayoutGrid className="w-3.5 h-3.5" />,
         onClick: () => {
-          if (activeTool?.id === "pixel-office") return;
           createToolClickHandler("/Tool/PixelOffice", "pixel-office")();
         },
         href: "/Tool/PixelOffice",
       },
       {
         id: "docs",
-        name: "Docs",
-        description: "Browse markdown docs from your OpenClaw workspace",
+        name: "Knowledge",
+        description: "Browse and manage company knowledge collections under ~/.hyperclaw",
         icon: <FileText className="w-3.5 h-3.5" />,
         onClick: () => {
-          if (activeTool?.id === "docs") return;
           createToolClickHandler("/Tool/Docs", "docs")();
         },
         href: "/Tool/Docs",
       },
       {
-        id: "usage",
-        name: "Token Usage",
-        description: "View token usage from OpenClaw agents and sessions",
-        icon: <BarChart3 className="w-3.5 h-3.5" />,
-        onClick: () => {
-          if (activeTool?.id === "usage") return;
-          createToolClickHandler("/Tool/Usage", "usage")();
-        },
-        href: "/Tool/Usage",
-      },
-      {
         id: "intelligence",
-        name: "Intelligence",
+        name: "Data",
         description: "Browse agent-created data tables, CRM pipelines, and live agent status",
         icon: <Database className="w-3.5 h-3.5" />,
         onClick: () => {
-          if (activeTool?.id === "intelligence") return;
           createToolClickHandler("/Tool/Intelligence", "intelligence")();
         },
         href: "/Tool/Intelligence",
+      },
+      {
+        id: "workflows",
+        name: "Workflows",
+        description: "Workspaces that group agents around a common goal",
+        icon: <Workflow className="w-3.5 h-3.5" />,
+        onClick: () => {
+          createToolClickHandler("/Tool/Workflows", "workflows")();
+        },
+        href: "/Tool/Workflows",
+      },
+      {
+        id: "projects",
+        name: "Projects",
+        description: "Wired crews of agents — workflow canvas for shipping work",
+        icon: <FolderKanban className="w-3.5 h-3.5" />,
+        onClick: () => {
+          createToolClickHandler("/Tool/Projects", "projects")();
+        },
+        href: "/Tool/Projects",
       },
       {
         id: "settings",
@@ -706,14 +697,6 @@ export const OSProvider: React.FC<OSProviderProps> = ({ children }) => {
     [memoizedOsSettings.menu]
   );
 
-  const cronsValue: CronsContextType = useMemo(
-    () => ({
-      showState: memoizedOsSettings.crons,
-      isMounted,
-    }),
-    [memoizedOsSettings.crons, isMounted]
-  );
-
   const CopanionChatValue: CopanionChatContextType = useMemo(
     () => ({
       showState: memoizedOsSettings.copanion,
@@ -760,13 +743,11 @@ export const OSProvider: React.FC<OSProviderProps> = ({ children }) => {
           <DocsFloatingContext.Provider value={docsFloatingValue}>
             <FloatingChatContext.Provider value={floatingChatValue}>
               <MenuContext.Provider value={menuValue}>
-                  <CronsContext.Provider value={cronsValue}>
                   <CopanionChatContext.Provider value={CopanionChatValue}>
                     <StatisticsContext.Provider value={statisticsValue}>
                       <NotificationProvider>{children}</NotificationProvider>
                     </StatisticsContext.Provider>
                   </CopanionChatContext.Provider>
-                  </CronsContext.Provider>
               </MenuContext.Provider>
             </FloatingChatContext.Provider>
           </DocsFloatingContext.Provider>
@@ -817,13 +798,6 @@ export const useTodoListOS = () => {
   return context;
 };
 
-export const useCronsOS = () => {
-  const context = useContext(CronsContext);
-  if (!context) {
-    throw new Error("useCronsOS must be used within an OSProvider");
-  }
-  return context;
-};
 
 export const useDocsFloatingOS = () => {
   const context = useContext(DocsFloatingContext);

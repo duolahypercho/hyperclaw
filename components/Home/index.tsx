@@ -1,12 +1,12 @@
 import React, { useState, useMemo, useEffect, useCallback } from "react";
+import { ArrowLeft } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Dashboard, Widget } from "./Dashboard";
 import {
   LogsWidget,
   KanbanWidget,
-  CronsWidget,
   DocsWidget,
   PixelOfficeWidget,
-  UsageWidget,
   GatewayChatWidget,
   StatusWidget,
   ChannelDashboardWidget,
@@ -15,6 +15,10 @@ import {
 } from "$/components/Home/widgets";
 import { useOS } from "@OS/Provider/OSProv";
 import { dashboardState } from "$/lib/dashboard-state";
+
+interface HomeProps {
+  onBackToProactive?: () => void;
+}
 
 // ── Layout Preset Definitions ─────────────────────────────
 // Each preset defines which widgets are visible and their grid positions.
@@ -45,8 +49,8 @@ export const LAYOUT_PRESETS: LayoutPreset[] = [
   {
     id: "ops",
     name: "Ops",
-    description: "Monitoring, logs, crons & usage",
-    widgetIds: ["agent-status", "logs", "crons", "usage"],
+    description: "Monitoring & logs",
+    widgetIds: ["agent-status", "logs"],
   },
 ];
 
@@ -62,10 +66,8 @@ const PRESET_POSITIONS: Record<LayoutPresetId, Record<string, { w: number; h: nu
     "agent-chat":      { w: 18, h: 12, x: 6,  y: 0 },
   },
   ops: {
-    "agent-status":    { w: 6,  h: 7,  x: 0,  y: 0 },
-    "logs":            { w: 18, h: 7,  x: 6,  y: 0 },
-    "crons":           { w: 12, h: 5,  x: 0,  y: 7 },
-    "usage":           { w: 12, h: 5,  x: 12, y: 7 },
+    "agent-status":    { w: 6,  h: 12, x: 0,  y: 0 },
+    "logs":            { w: 18, h: 12, x: 6,  y: 0 },
   },
 };
 
@@ -76,8 +78,6 @@ const WIDGET_MIN_SIZES: Record<string, { minW: number; minH: number }> = {
   "gateway-chat-1":  { minW: 6, minH: 4 },
   "kanban":          { minW: 8, minH: 6 },
   "logs":            { minW: 6, minH: 3 },
-  "usage":           { minW: 6, minH: 3 },
-  "crons":           { minW: 6, minH: 3 },
   "docs":            { minW: 4, minH: 3 },
   "pixel-office":    { minW: 4, minH: 3 },
   "intelligence":    { minW: 4, minH: 3 },
@@ -85,7 +85,7 @@ const WIDGET_MIN_SIZES: Record<string, { minW: number; minH: number }> = {
 
 const ACTIVE_PRESET_KEY = "dashboard-active-preset";
 
-export default function Home() {
+export default function Home({ onBackToProactive }: HomeProps = {}) {
   const { toolAbstracts } = useOS();
 
   // Active preset — persisted in dashboardState
@@ -134,10 +134,8 @@ export default function Home() {
 
   // Find tool definitions from OSProv
   const todoTool = toolAbstracts.find((t) => t.id === "todo-list");
-  const cronsTool = toolAbstracts.find((t) => t.id === "crons");
   const docsTool = toolAbstracts.find((t) => t.id === "docs");
   const pixelOfficeTool = toolAbstracts.find((t) => t.id === "pixel-office");
-  const usageTool = toolAbstracts.find((t) => t.id === "usage");
   const intelTool = toolAbstracts.find((t) => t.id === "intelligence");
 
   // All possible widgets — superset that presets select from
@@ -184,22 +182,6 @@ export default function Home() {
         defaultValue: { w: 12, h: 5, minW: 6, minH: 3, x: 0, y: 12 },
       },
       {
-        id: usageTool?.id || "usage",
-        type: "usage",
-        title: usageTool?.name || "Token Usage",
-        icon: usageTool?.icon || null,
-        component: UsageWidget,
-        defaultValue: { w: 12, h: 5, minW: 6, minH: 3, x: 12, y: 12 },
-      },
-      {
-        id: "crons",
-        type: "crons",
-        title: "Cron Jobs",
-        icon: cronsTool?.icon || null,
-        component: CronsWidget,
-        defaultValue: { w: 8, h: 5, minW: 6, minH: 3, x: 0, y: 17 },
-      },
-      {
         id: "docs",
         type: "docs",
         title: "Docs",
@@ -224,7 +206,7 @@ export default function Home() {
         defaultValue: { w: 8, h: 5, minW: 4, minH: 3, x: 0, y: 22 },
       },
     ],
-    [todoTool, cronsTool, docsTool, pixelOfficeTool, usageTool, intelTool]
+    [todoTool, docsTool, pixelOfficeTool, intelTool]
   );
 
   // Resolve active preset into the widget list with correct positions
@@ -251,13 +233,26 @@ export default function Home() {
 
   return (
     <div className="flex-1 w-full h-full flex flex-col overflow-hidden relative">
+      {/* Back to proactive home button */}
+      {onBackToProactive && (
+        <div className="absolute top-4 left-4 z-10">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onBackToProactive}
+            className="gap-1 bg-background/80 backdrop-blur-sm"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            Back to home
+          </Button>
+        </div>
+      )}
       <div
         className="flex-1 overflow-auto customScrollbar2 bg-card/70 backdrop-blur-xl"
         data-dashboard="true"
       >
         <Dashboard key={resetKey} widgets={widgets} />
       </div>
-
     </div>
   );
 }

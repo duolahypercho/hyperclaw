@@ -1,13 +1,15 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   History,
   MessageSquare,
   Check,
   X,
-  Loader2,
+  Search,
+  Pin,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -31,6 +33,11 @@ interface SessionHistoryDropdownProps {
   onFetchSessions: () => void;
   currentSessionKey?: string;
   error?: string | null;
+  disabled?: boolean;
+  /** The current primary session key — used to show a pin indicator */
+  primarySessionKey?: string;
+  /** Callback to designate a session as primary */
+  onSetPrimary?: (sessionKey: string) => void;
 }
 
 function formatDate(timestamp?: number) {
@@ -84,16 +91,54 @@ function ChatSessionsContent({
   onNewChat,
   onFetchSessions,
   onClose,
+  primarySessionKey,
+  onSetPrimary,
+  disabled = false,
 }: SessionHistoryDropdownProps & { onClose: () => void }) {
+  const [query, setQuery] = useState("");
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Filter sessions by query against label, preview, and key (UUID fallback).
+  // Kept lightweight — runs in-memory on the already-fetched session list.
+  const filteredSessions = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return sessions;
+    return sessions.filter((s) => {
+      const hay = [
+        s.label ?? "",
+        s.preview ?? "",
+        s.key,
+      ]
+        .join(" ")
+        .toLowerCase();
+      return hay.includes(q);
+    });
+  }, [sessions, query]);
+
+  // Only surface the search bar once the list is large enough to need it.
+  // Below 6 the grouped layout already fits in one screen of the dropdown.
+  const showSearch = sessions.length > 6;
+
   return (
     <>
-      <div className="p-3 border-b border-border/50 flex items-center justify-between">
-        <h3 className="font-medium text-xs">Recent Sessions</h3>
+      <div className="p-3 border-b border-border/50 flex items-center justify-between gap-2">
+        <div className="flex items-baseline gap-2 min-w-0">
+          <h3 className="font-medium text-xs">Recent Sessions</h3>
+          {sessions.length > 0 && (
+            <span className="text-[10px] text-muted-foreground/60 tabular-nums">
+              {filteredSessions.length === sessions.length
+                ? sessions.length
+                : `${filteredSessions.length} / ${sessions.length}`}
+            </span>
+          )}
+        </div>
         <Button
           variant="ghost"
           size="sm"
-          className="h-6 text-xs"
+          className="h-6 text-xs shrink-0"
+          disabled={disabled}
           onClick={() => {
+            if (disabled) return;
             onNewChat();
             onClose();
           }}
@@ -102,7 +147,36 @@ function ChatSessionsContent({
         </Button>
       </div>
 
-      <div className="max-h-80 overflow-y-auto customScrollbar2">
+      {showSearch && (
+        <div className="px-3 py-2 border-b border-border/40">
+          <div className="relative">
+            <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-muted-foreground/60 pointer-events-none" />
+            <input
+              ref={searchInputRef}
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search sessions…"
+              className="w-full h-7 pl-7 pr-7 rounded-md bg-muted/40 border border-border/40 text-[11px] placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-primary/40 focus:bg-background transition-colors"
+            />
+            {query && (
+              <button
+                type="button"
+                onClick={() => {
+                  setQuery("");
+                  searchInputRef.current?.focus();
+                }}
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-muted transition-colors"
+                aria-label="Clear search"
+              >
+                <X className="w-3 h-3 text-muted-foreground/60" />
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div className="max-h-96 overflow-y-auto customScrollbar2">
         {isLoading ? (
           <div className="p-4 text-center">
             <div className="animate-pulse">
@@ -146,9 +220,20 @@ function ChatSessionsContent({
               Start a new chat to see it here
             </p>
           </div>
+        ) : filteredSessions.length === 0 ? (
+          <div className="p-4 text-center">
+            <Search className="w-6 h-6 text-muted-foreground/40 mx-auto mb-2" />
+            <p className="text-xs text-muted-foreground">No matches for &ldquo;{query}&rdquo;</p>
+            <button
+              onClick={() => setQuery("")}
+              className="mt-2 text-[11px] text-primary hover:underline"
+            >
+              Clear search
+            </button>
+          </div>
         ) : (
           <div className="p-2">
-            {Object.entries(groupSessionsByTime(sessions)).map(
+            {Object.entries(groupSessionsByTime(filteredSessions)).map(
               ([timeGroup, groupSessions]) => (
                 <div key={timeGroup} className="mb-3">
                   <h4 className="text-xs font-medium text-muted-foreground mb-2 px-2">
@@ -165,12 +250,15 @@ function ChatSessionsContent({
                         key={session.key}
                         whileTap={{ scale: 0.98 }}
                         className={cn(
-                          "px-2 py-2 rounded-lg cursor-pointer transition-colors",
-                          session.key === currentSessionKey
+                          "group/session px-2 py-2 rounded-lg cursor-pointer transition-colors",
+                          disabled
+                            ? "cursor-not-allowed opacity-50"
+                          : session.key === currentSessionKey
                             ? "bg-primary/10 border border-primary/30"
                             : "hover:bg-muted/80"
                         )}
                         onClick={() => {
+                          if (disabled) return;
                           onLoadSession(session.key);
                           onClose();
                         }}
@@ -202,6 +290,17 @@ function ChatSessionsContent({
                           )}>
                             {title}
                           </p>
+                          {primarySessionKey === session.key && (
+                            <span title="Primary session"><Pin className="w-2.5 h-2.5 text-primary shrink-0" /></span>
+                          )}
+                          {onSetPrimary && primarySessionKey !== session.key && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); onSetPrimary(session.key); }}
+                              className="shrink-0 opacity-0 group-hover/session:opacity-100 transition-opacity px-1 py-0.5 rounded text-[9px] text-muted-foreground hover:text-primary hover:bg-primary/10"
+                            >
+                              <Pin className="w-2.5 h-2.5" />
+                            </button>
+                          )}
                           <span className="text-[10px] text-muted-foreground flex-shrink-0">
                             {formatDate(session.updatedAt)}
                           </span>
@@ -231,17 +330,30 @@ export const SessionHistoryDropdown: React.FC<SessionHistoryDropdownProps> = (
 ) => {
   const { onFetchSessions } = props;
   const [isOpen, setIsOpen] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const [pos, setPos] = useState({ top: 0, right: 0 });
+
+  const updatePosition = useCallback(() => {
+    if (!btnRef.current) return;
+    const rect = btnRef.current.getBoundingClientRect();
+    setPos({
+      top: rect.bottom + 4,
+      right: window.innerWidth - rect.right,
+    });
+  }, []);
 
   useEffect(() => {
     if (isOpen) {
+      updatePosition();
       onFetchSessions();
     }
-  }, [isOpen]);
+  }, [isOpen, onFetchSessions, updatePosition]);
 
   return (
     <div className="relative h-6 w-6 inline-block">
       <HyperchoTooltip value="Chat History">
         <Button
+          ref={btnRef}
           variant="ghost"
           size="iconSm"
           onClick={() => setIsOpen(!isOpen)}
@@ -250,39 +362,47 @@ export const SessionHistoryDropdown: React.FC<SessionHistoryDropdownProps> = (
         </Button>
       </HyperchoTooltip>
 
-      <AnimatePresence>
-        {isOpen && (
-          <motion.div
-            initial={{ opacity: 0, y: -10, scale: 0.95 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -10, scale: 0.95 }}
-            transition={{ duration: 0.2 }}
-            className="absolute right-0 top-full w-80 z-50"
-          >
-            <Card className="bg-background/95 backdrop-blur-sm border border-solid border-border shadow-lg">
-              <CardContent className="p-0">
-                <ChatSessionsContent
-                  {...props}
-                  onClose={() => setIsOpen(false)}
+      {typeof document !== "undefined" &&
+        createPortal(
+          <>
+            {/* Backdrop */}
+            <AnimatePresence>
+              {isOpen && (
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="fixed inset-0 z-[60]"
+                  onClick={() => setIsOpen(false)}
                 />
-              </CardContent>
-            </Card>
-          </motion.div>
-        )}
-      </AnimatePresence>
+              )}
+            </AnimatePresence>
 
-      {/* Backdrop */}
-      <AnimatePresence>
-        {isOpen && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-30"
-            onClick={() => setIsOpen(false)}
-          />
+            {/* Dropdown */}
+            <AnimatePresence>
+              {isOpen && (
+                <motion.div
+                  initial={{ opacity: 0, y: -10, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: -10, scale: 0.95 }}
+                  transition={{ duration: 0.2 }}
+                  className="fixed w-80 z-[70]"
+                  style={{ top: pos.top, right: pos.right }}
+                >
+                  <Card className="bg-background/95 backdrop-blur-sm border border-solid border-border shadow-lg">
+                    <CardContent className="p-0">
+                      <ChatSessionsContent
+                        {...props}
+                        onClose={() => setIsOpen(false)}
+                      />
+                    </CardContent>
+                  </Card>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </>,
+          document.body
         )}
-      </AnimatePresence>
     </div>
   );
 };

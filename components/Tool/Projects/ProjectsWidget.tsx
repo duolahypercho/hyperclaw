@@ -1,12 +1,14 @@
 "use client";
 
-import { useState, useCallback } from "react";
-import { Plus, Users, Trash2, UserMinus, Crown, Wrench, Eye, Loader2, FolderOpen, ChevronRight } from "lucide-react";
+import { useState, useCallback, useEffect } from "react";
+import { Plus, Users, Trash2, UserMinus, Crown, Wrench, Eye, Loader2, FolderOpen, ChevronRight, Brain, GitBranch, Play, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useProjects, type Project, type ProjectMember, ProjectsProvider } from "./provider/projectsProvider";
 import { CreateProjectDialog } from "./CreateProjectDialog";
 import { useHyperclawContext } from "$/Providers/HyperclawProv";
+import { AgentGlyph } from "$/components/ensemble";
+import { resolveProjectAgentDisplay } from "$/components/ensemble/views/project-agent-display";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -24,8 +26,11 @@ import {
 /* ── Helpers ──────────────────────────────────────────── */
 
 const ROLE_ICONS = {
-  owner: Crown,
-  contributor: Wrench,
+  lead: Crown,
+  builder: Wrench,
+  reviewer: Eye,
+  researcher: Brain,
+  ops: GitBranch,
   viewer: Eye,
 };
 
@@ -87,13 +92,12 @@ function MemberRow({
 }) {
   const { agents } = useHyperclawContext();
   const agent = agents.find((a) => a.id === member.agentId);
+  const display = resolveProjectAgentDisplay(agent, member.agentId);
   const RoleIcon = ROLE_ICONS[member.role] ?? Wrench;
 
   return (
     <div className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-white/5 group">
-      <div className="w-7 h-7 rounded-full bg-blue-500/20 flex items-center justify-center text-sm shrink-0">
-        {agent?.emoji ?? "🤖"}
-      </div>
+      <AgentGlyph agent={display} size={28} className="shrink-0" />
       <div className="flex-1 min-w-0">
         <p className="text-sm text-white truncate">{agent?.name ?? member.agentId}</p>
         <p className="text-xs text-white/40 capitalize">{agent?.runtime ?? "unknown"}</p>
@@ -106,8 +110,11 @@ function MemberRow({
           </div>
         </SelectTrigger>
         <SelectContent className="bg-[hsl(225,36%,16%)] border-white/10 text-white text-xs">
-          <SelectItem value="owner">Owner</SelectItem>
-          <SelectItem value="contributor">Contributor</SelectItem>
+          <SelectItem value="lead">Lead</SelectItem>
+          <SelectItem value="builder">Builder</SelectItem>
+          <SelectItem value="reviewer">Reviewer</SelectItem>
+          <SelectItem value="researcher">Researcher</SelectItem>
+          <SelectItem value="ops">Ops</SelectItem>
           <SelectItem value="viewer">Viewer</SelectItem>
         </SelectContent>
       </Select>
@@ -152,10 +159,10 @@ function AddAgentDropdown({
           available.map((a) => (
             <DropdownMenuItem
               key={a.id}
-              onClick={() => addMember(projectId, a.id)}
+              onClick={() => void addMember(projectId, a.id)}
               className="gap-2 cursor-pointer hover:bg-white/10 focus:bg-white/10"
             >
-              <span>{a.emoji ?? "🤖"}</span>
+              <AgentGlyph agent={resolveProjectAgentDisplay(a)} size={22} />
               <div className="min-w-0">
                 <p className="text-sm truncate">{a.name}</p>
                 <p className="text-xs text-white/40 capitalize">{a.runtime}</p>
@@ -171,17 +178,34 @@ function AddAgentDropdown({
 /* ── Project Detail Panel ─────────────────────────────── */
 
 function ProjectDetail({ project }: { project: Project }) {
-  const { removeMember, addMember, deleteProject, updateProject } = useProjects();
+  const {
+    removeMember,
+    addMember,
+    deleteProject,
+    updateProject,
+    listWorkflowTemplates,
+    createWorkflowTemplateFromPrompt,
+    listWorkflowRuns,
+    startWorkflowRun,
+  } = useProjects();
   const [deleting, setDeleting] = useState(false);
+  const [workflowTemplates, setWorkflowTemplates] = useState(project.workflowTemplates ?? []);
+  const [workflowRuns, setWorkflowRuns] = useState(project.workflowRuns ?? []);
+  const [creatingWorkflow, setCreatingWorkflow] = useState(false);
   const members = project.members ?? [];
+  const leadMember = members.find((member) => member.role === "lead") ?? (project.leadAgentId ? members.find((member) => member.agentId === project.leadAgentId) : undefined);
 
   const handleRemoveMember = useCallback(
-    (agentId: string) => removeMember(project.id, agentId),
+    (agentId: string) => {
+      void removeMember(project.id, agentId);
+    },
     [project.id, removeMember]
   );
 
   const handleRoleChange = useCallback(
-    (agentId: string, role: string) => addMember(project.id, agentId, role),
+    (agentId: string, role: string) => {
+      void addMember(project.id, agentId, role);
+    },
     [project.id, addMember]
   );
 
@@ -192,14 +216,49 @@ function ProjectDetail({ project }: { project: Project }) {
     setDeleting(false);
   };
 
-  const handleStatusCycle = () => {
+  const handleStatusCycle = async () => {
     const next: Record<string, "active" | "completed" | "archived"> = {
       active: "completed",
       completed: "archived",
       archived: "active",
     };
-    updateProject(project.id, { status: next[project.status] ?? "active" });
+    await updateProject(project.id, { status: next[project.status] ?? "active" });
   };
+
+  const refreshWorkflows = useCallback(async () => {
+    const [templates, runs] = await Promise.all([
+      listWorkflowTemplates(project.id),
+      listWorkflowRuns(project.id),
+    ]);
+    setWorkflowTemplates(templates);
+    setWorkflowRuns(runs);
+  }, [listWorkflowRuns, listWorkflowTemplates, project.id]);
+
+  const handleCreateWorkflow = useCallback(async () => {
+    const prompt = window.prompt("Describe the workflow you want this project to use.");
+    if (!prompt?.trim()) return;
+    setCreatingWorkflow(true);
+    try {
+      const template = await createWorkflowTemplateFromPrompt(project.id, prompt.trim(), `${project.name} workflow`);
+      if (template) {
+        if (!project.defaultWorkflowTemplateId) {
+          await updateProject(project.id, { defaultWorkflowTemplateId: template.id });
+        }
+        await refreshWorkflows();
+      }
+    } finally {
+      setCreatingWorkflow(false);
+    }
+  }, [createWorkflowTemplateFromPrompt, project.defaultWorkflowTemplateId, project.id, project.name, refreshWorkflows, updateProject]);
+
+  const handleRunWorkflow = useCallback(async (templateId: string) => {
+    await startWorkflowRun(templateId, "dashboard", undefined, project.id);
+    await refreshWorkflows();
+  }, [project.id, refreshWorkflows, startWorkflowRun]);
+
+  useEffect(() => {
+    void refreshWorkflows();
+  }, [refreshWorkflows]);
 
   return (
     <div className="flex flex-col h-full">
@@ -214,7 +273,7 @@ function ProjectDetail({ project }: { project: Project }) {
             )}
             <div className="flex items-center gap-2 mt-2">
               <button
-                onClick={handleStatusCycle}
+                onClick={() => void handleStatusCycle()}
                 className={`px-2 py-0.5 rounded text-xs font-medium capitalize transition-colors ${
                   project.status === "active"
                     ? "bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30"
@@ -226,10 +285,18 @@ function ProjectDetail({ project }: { project: Project }) {
                 {project.status}
               </button>
               <span className="text-xs text-white/30">Created {fmtDate(project.createdAt)}</span>
+              {project.teamModeEnabled !== false && (
+                <Badge variant="secondary" className="bg-blue-500/15 text-blue-200 border-blue-400/20">
+                  Team Mode
+                </Badge>
+              )}
             </div>
+            {leadMember && (
+              <p className="text-xs text-white/40 mt-2">Lead: {leadMember.agentId}</p>
+            )}
           </div>
           <button
-            onClick={handleDelete}
+            onClick={() => void handleDelete()}
             disabled={deleting}
             className="text-white/20 hover:text-red-400 transition-colors mt-0.5"
           >
@@ -267,6 +334,69 @@ function ProjectDetail({ project }: { project: Project }) {
             ))}
           </div>
         )}
+
+        <div className="mt-6 px-3">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2 text-white/40">
+              <Sparkles className="h-3.5 w-3.5" />
+              <span className="text-xs uppercase tracking-wider">Workflow Templates ({workflowTemplates.length})</span>
+            </div>
+            <Button size="sm" variant="ghost" onClick={() => void handleCreateWorkflow()} disabled={creatingWorkflow} className="h-7 px-2 text-white/60 hover:text-white hover:bg-white/10 gap-1.5">
+              {creatingWorkflow ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+              Create
+            </Button>
+          </div>
+          {workflowTemplates.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-white/10 px-3 py-4 text-xs text-white/35">
+              Describe a workflow in plain English and HyperClaw will save it as a reusable template.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {workflowTemplates.map((template) => (
+                <div key={template.id} className="rounded-lg border border-white/8 px-3 py-3 bg-white/5">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm text-white truncate">{template.name}</p>
+                      <p className="text-xs text-white/40 line-clamp-2">{template.description || "Reusable workflow template"}</p>
+                    </div>
+                    <Button size="sm" variant="ghost" onClick={() => void handleRunWorkflow(template.id)} className="h-7 px-2 text-white/60 hover:text-white hover:bg-white/10 gap-1.5">
+                      <Play className="h-3.5 w-3.5" />
+                      Run
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="mt-6 px-3">
+          <div className="flex items-center gap-2 text-white/40 mb-2">
+            <FolderOpen className="h-3.5 w-3.5" />
+            <span className="text-xs uppercase tracking-wider">Workflow Runs ({workflowRuns.length})</span>
+          </div>
+          {workflowRuns.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-white/10 px-3 py-4 text-xs text-white/35">
+              No workflow runs yet.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {workflowRuns.map((run) => (
+                <div key={run.id} className="rounded-lg border border-white/8 px-3 py-3 bg-white/5">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm text-white truncate">{run.id}</p>
+                      <p className="text-xs text-white/40 capitalize">{run.status.replaceAll("_", " ")}</p>
+                    </div>
+                    <Badge variant="secondary" className="bg-white/10 text-white/70 border-white/10 capitalize">
+                      {run.status}
+                    </Badge>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -352,7 +482,7 @@ function ProjectsWidgetInner() {
       {/* Right: Detail */}
       <div className="flex-1 min-w-0">
         {selectedProject ? (
-          <ProjectDetail project={selectedProject} />
+          <ProjectDetail key={selectedProject.id} project={selectedProject} />
         ) : (
           <EmptyState onNew={() => setCreateOpen(true)} />
         )}

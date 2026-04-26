@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { gatewayConnection } from "$/lib/openclaw-gateway-ws";
+import {
+  appendUniqueSuffix,
+  gatewayConnection,
+  resolveMergedStreamText,
+  stripCommittedPrefix,
+} from "$/lib/openclaw-gateway-ws";
 
 describe("gatewayConnection.getChatHistory", () => {
   beforeEach(() => {
@@ -49,5 +54,44 @@ describe("gatewayConnection.getChatHistory", () => {
     });
 
     expect(requestSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("gateway streaming merge helpers", () => {
+  it("prefers accumulated text over fragment delta when both are present", () => {
+    expect(
+      resolveMergedStreamText({
+        previousText: "Checking immediately.\n\n",
+        nextText: "Checking immediately.\n\nGood news: Nothing is actually gone.",
+        nextDelta: "Good news: Nothing is actually gone.",
+      })
+    ).toBe("Checking immediately.\n\nGood news: Nothing is actually gone.");
+  });
+
+  it("merges fragment deltas without duplicating overlap", () => {
+    expect(
+      resolveMergedStreamText({
+        previousText: "Current status:\n\nGateway: running",
+        nextDelta: "running\nAgents loaded",
+      })
+    ).toBe("Current status:\n\nGateway: running\nAgents loaded");
+  });
+
+  it("strips a committed pre-tool prefix from later accumulated text", () => {
+    expect(
+      stripCommittedPrefix(
+        "Before tool call\nAfter tool call",
+        "Before tool call"
+      )
+    ).toBe("\nAfter tool call");
+  });
+
+  it("avoids duplicating an already-present suffix", () => {
+    expect(
+      appendUniqueSuffix(
+        "What clips were these? If you fill me in, I can help.",
+        "If you fill me in, I can help."
+      )
+    ).toBe("What clips were these? If you fill me in, I can help.");
   });
 });

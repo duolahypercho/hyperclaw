@@ -8,9 +8,16 @@ const {
   extractText,
   stripProtocolMarkers,
   normalizeForCompare,
+  hasNormalizedContainment,
   normalizeMessage,
   deduplicateMessages,
   mergeHistoryIntoMessages,
+  isFinalTextAlreadyRepresented,
+  pruneContainedAssistantTextMessages,
+  applyFinalAssistantText,
+  getRuntimeHistorySessionId,
+  usesGatewayHealthProbe,
+  isTransientGatewayStartupError,
 } = _testHelpers;
 
 // isSilentReply is handled inline in the hook — not exported as a standalone function.
@@ -116,6 +123,65 @@ describe("normalizeForCompare", () => {
 
   it("normalizes newlines", () => {
     expect(normalizeForCompare("hello\n\nworld")).toBe("hello world");
+  });
+});
+
+describe("hasNormalizedContainment", () => {
+  it("detects when a later streaming snapshot is only a tail subset", () => {
+    expect(
+      hasNormalizedContainment(
+        "I genuinely don't know. What clips were these? If you fill me in, I can help.",
+        "What clips were these? If you fill me in, I can help."
+      )
+    ).toBe(true);
+  });
+
+  it("does not treat distinct segmented text as containment", () => {
+    expect(hasNormalizedContainment("Before tool call", "After tool call")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runtime history helpers
+// ---------------------------------------------------------------------------
+describe("runtime history helpers", () => {
+  it("extracts Claude session ids from prefixed keys", () => {
+    expect(getRuntimeHistorySessionId("claude-code", "claude:abc123")).toBe("abc123");
+  });
+
+  it("extracts Codex session ids from prefixed keys", () => {
+    expect(getRuntimeHistorySessionId("codex", "codex:rollout-42")).toBe("rollout-42");
+  });
+
+  it("strips Hermes agent/session prefixes", () => {
+    expect(getRuntimeHistorySessionId("hermes", "agent:ceo:hermes:session-9")).toBe("session-9");
+    expect(getRuntimeHistorySessionId("hermes", "hermes:session-10")).toBe("session-10");
+  });
+
+  it("rejects placeholder runtime session keys", () => {
+    expect(getRuntimeHistorySessionId("codex", "default")).toBeNull();
+    expect(getRuntimeHistorySessionId("hermes", "main")).toBeNull();
+    expect(getRuntimeHistorySessionId("hermes", "agent:hermes:rell:main")).toBeNull();
+    expect(getRuntimeHistorySessionId("hermes", "agent:hermes:rell:chat-123")).toBeNull();
+  });
+
+  it("only probes gateway health for OpenClaw", () => {
+    expect(usesGatewayHealthProbe("openclaw")).toBe(true);
+    expect(usesGatewayHealthProbe("codex")).toBe(false);
+    expect(usesGatewayHealthProbe("claude-code")).toBe(false);
+    expect(usesGatewayHealthProbe("hermes")).toBe(false);
+  });
+
+  it("treats OpenClaw startup and cooldown errors as transient", () => {
+    expect(isTransientGatewayStartupError("gateway not connected")).toBe(true);
+    expect(isTransientGatewayStartupError(new Error("Gateway not ready yet"))).toBe(true);
+  });
+
+  it("does not hide setup or unrelated gateway failures as startup", () => {
+    expect(isTransientGatewayStartupError("pairing required")).toBe(false);
+    expect(isTransientGatewayStartupError("WebSocket not connected")).toBe(false);
+    expect(isTransientGatewayStartupError("Request chat.history timed out")).toBe(false);
+    expect(isTransientGatewayStartupError(null)).toBe(false);
   });
 });
 
@@ -336,6 +402,137 @@ describe("mergeHistoryIntoMessages", () => {
     // Should use client reference (preserve reference)
     const result = mergeHistoryIntoMessages(current, history);
     expect(result).toBeNull(); // no changes — content matched, same length
+  });
+});
+
+// ---------------------------------------------------------------------------
+// final text reconciliation
+// ---------------------------------------------------------------------------
+describe("applyFinalAssistantText", () => {
+  const msg = (id: string, role: string, content: string): GatewayChatMessage => ({
+    id,
+    role: role as GatewayChatMessage["role"],
+    content,
+    timestamp: Date.now(),
+  });
+
+  it("detects when segmented assistant text already matches the final text", () => {
+    const messages: GatewayChatMessage[] = [
+      msg("user-1", "user", "hello"),
+      msg("seg-1", "assistant", "Before tool call"),
+      {
+        id: "tool-1",
+        role: "assistant" as GatewayChatMessage["role"],
+        content: "",
+        timestamp: Date.now(),
+        toolCalls: [{
+          id: "tool-1",
+          name: "search",
+          arguments: "{}",
+          function: { name: "search", arguments: "{}" },
+        }],
+      },
+      msg("seg-2", "assistant", "After tool call"),
+    ];
+
+    expect(
+      isFinalTextAlreadyRepresented(messages, "Before tool call\nAfter tool call")
+    ).toBe(true);
+  });
+
+  it("does not duplicate a segmented reply when final text matches the combined stream", () => {
+    const messages: GatewayChatMessage[] = [
+      msg("user-1", "user", "hello"),
+      msg("seg-1", "assistant", "Before tool call"),
+      {
+        id: "tool-1",
+        role: "assistant" as GatewayChatMessage["role"],
+        content: "",
+        timestamp: Date.now(),
+        toolCalls: [{
+          id: "tool-1",
+          name: "search",
+          arguments: "{}",
+          function: { name: "search", arguments: "{}" },
+        }],
+      },
+      msg("seg-2", "assistant", "After tool call"),
+    ];
+
+    const result = applyFinalAssistantText(
+      messages,
+      "Before tool call\nAfter tool call",
+      "run-1"
+    );
+
+    expect(result).toBe(messages);
+    expect(result.filter((m) => m.role === "assistant" && m.content.trim())).toHaveLength(2);
+  });
+
+  it("still upgrades a single streamed assistant message to the final text", () => {
+    const messages: GatewayChatMessage[] = [
+      msg("user-1", "user", "hello"),
+      msg("run-1", "assistant", "Hello"),
+    ];
+
+    const result = applyFinalAssistantText(messages, "Hello world", "run-1");
+
+    expect(result).not.toBe(messages);
+    expect(result[1].content).toBe("Hello world");
+  });
+
+  it("prunes duplicate tail fragments once the full final text is present", () => {
+    const messages: GatewayChatMessage[] = [
+      msg("user-1", "user", "hello"),
+      msg("full-1", "assistant", "I genuinely don't know.\n\nWhat clips were these?"),
+      msg("tail-1", "assistant", "What clips were these?"),
+    ];
+
+    const result = applyFinalAssistantText(
+      messages,
+      "I genuinely don't know.\n\nWhat clips were these?",
+      "run-1"
+    );
+
+    expect(result.filter((m) => m.role === "assistant")).toHaveLength(1);
+    expect(result[1].content).toBe("I genuinely don't know.\n\nWhat clips were these?");
+  });
+});
+
+describe("pruneContainedAssistantTextMessages", () => {
+  const msg = (id: string, role: string, content: string): GatewayChatMessage => ({
+    id,
+    role: role as GatewayChatMessage["role"],
+    content,
+    timestamp: Date.now(),
+  });
+
+  it("keeps tool-separated segmented text intact", () => {
+    const messages = [
+      msg("user-1", "user", "hello"),
+      msg("seg-1", "assistant", "Before tool call"),
+      {
+        id: "tool-1",
+        role: "assistant" as GatewayChatMessage["role"],
+        content: "",
+        timestamp: Date.now(),
+        toolCalls: [{
+          id: "tool-1",
+          name: "search",
+          arguments: "{}",
+          function: { name: "search", arguments: "{}" },
+        }],
+      },
+      msg("seg-2", "assistant", "After tool call"),
+    ];
+
+    const result = pruneContainedAssistantTextMessages(
+      messages,
+      "Before tool call\nAfter tool call",
+      "seg-1"
+    );
+
+    expect(result).toBe(messages);
   });
 });
 

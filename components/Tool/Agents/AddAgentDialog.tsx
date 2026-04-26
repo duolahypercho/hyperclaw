@@ -1,8 +1,9 @@
 "use client";
 
 import React, { useState, useCallback, useMemo, useEffect, useRef } from "react";
+import { useSession } from "next-auth/react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Sparkles, ImagePlus, X } from "lucide-react";
+import { Sparkles, ImagePlus, X, LibraryBig, Cable, MessageCircle } from "lucide-react";
 import {
   Sheet,
   SheetContent,
@@ -22,17 +23,42 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
+import { dashboardState } from "$/lib/dashboard-state";
 import {
   readOpenClawConfig,
   getAvailableModels,
   saveAgentModel,
-  resolveAgentFolder,
-  saveAvatarImage,
-  syncToIdentityMd,
+  toIdentityAvatarUrl,
+  updateIdentityField,
 } from "$/lib/identity-md";
-import { patchIdentityCache } from "$/hooks/useAgentIdentity";
-import { OpenClawIcon, HermesIcon } from "$/components/Onboarding/RuntimeIcons";
+import {
+  buildSoulMd as buildOpenClawSoulMd,
+  buildClaudeCodeMd,
+  buildRuntimeSoulMd,
+  buildUserMd as buildAgentUserMd,
+  buildAgentTemplates,
+  buildWorkspaceInstructionsMd,
+  type AgentUserProfile,
+} from "$/lib/agent-templates";
+import { patchIdentityCache, removeIdentityCache } from "$/hooks/useAgentIdentity";
+import { OpenClawIcon, HermesIcon, ClaudeCodeIcon, CodexIcon } from "$/components/Onboarding/RuntimeIcons";
+import { SoulTemplateGallery } from "$/components/Onboarding/SoulTemplateGallery";
+import {
+  renderTemplateForRuntime,
+  type SoulTemplate,
+} from "$/lib/soul-templates";
+import {
+  buildAddAgentProvisionPayload,
+  buildAgentIdentityUpdatePayload,
+  buildChannelProvisionPayloadFields,
+  buildGuidedChannelStateWithAgentConfigs,
+  buildScopedAgentChannelConfigs,
+  provisionAgentWithConfigConflictRetry,
+  scrubSensitiveTokens,
+} from "./add-agent-provisioning";
+import type { OnboardingChannelConfig } from "$/components/Onboarding/onboarding-agent-scoping";
 
 /* ── Runtime definitions ─────────────────────────────────────────── */
 
@@ -43,8 +69,6 @@ type RuntimeOption = {
   idNote: string;
 };
 
-// Only OpenClaw and Hermes are standalone agent platforms.
-// Claude Code and Codex are coding tools/runtimes, not agents.
 const RUNTIMES: RuntimeOption[] = [
   {
     id: "openclaw",
@@ -58,22 +82,89 @@ const RUNTIMES: RuntimeOption[] = [
     description: "Self-improving agent framework",
     idNote: "Used as the Hermes profile name.",
   },
+  {
+    id: "claude-code",
+    label: "Claude Code",
+    description: "Agentic coding assistant with custom instructions",
+    idNote: "Profile folder with CLAUDE.md and memory.",
+  },
+  {
+    id: "codex",
+    label: "Codex",
+    description: "OpenAI coding agent with sandboxed execution",
+    idNote: "Profile folder with AGENTS.md instructions.",
+  },
 ];
 
 const RUNTIME_ICONS: Record<string, React.ReactNode> = {
-  "openclaw": <OpenClawIcon className="w-5 h-5" />,
-  "hermes":   <HermesIcon className="w-5 h-5" />,
+  "openclaw":    <OpenClawIcon className="w-5 h-5" />,
+  "hermes":      <HermesIcon className="w-5 h-5" />,
+  "claude-code": <ClaudeCodeIcon className="w-5 h-5" />,
+  "codex":       <CodexIcon className="w-5 h-5" />,
 };
 
 const RUNTIME_ICONS_LG: Record<string, React.ReactNode> = {
-  "openclaw": <OpenClawIcon className="w-6 h-6" />,
-  "hermes":   <HermesIcon className="w-6 h-6" />,
+  "openclaw":    <OpenClawIcon className="w-6 h-6" />,
+  "hermes":      <HermesIcon className="w-6 h-6" />,
+  "claude-code": <ClaudeCodeIcon className="w-6 h-6" />,
+  "codex":       <CodexIcon className="w-6 h-6" />,
 };
 
 const EMOJI_OPTIONS = [
   "🤖", "🦾", "⚡", "🧠", "🎯", "🔮", "🦅", "🐉",
   "🦁", "🌊", "🔥", "💡", "🛸", "🎭", "🧬", "🦞",
   "💻", "🔍", "✍️", "🎨", "📊", "🚀", "🔧", "🛡️",
+];
+
+const CHANNEL_OPTIONS: Array<{
+  id: OnboardingChannelConfig["channel"];
+  label: string;
+  helper: string;
+  targetLabel: string;
+  targetPlaceholder: string;
+  botTokenLabel: string;
+  botTokenPlaceholder: string;
+  appTokenLabel?: string;
+  appTokenPlaceholder?: string;
+}> = [
+  {
+    id: "telegram",
+    label: "Telegram",
+    helper: "Bot chats, team rooms, or direct operator handoffs.",
+    targetLabel: "Chat or user ID",
+    targetPlaceholder: "e.g. 891861452",
+    botTokenLabel: "Bot token",
+    botTokenPlaceholder: "123456:ABC...",
+  },
+  {
+    id: "discord",
+    label: "Discord",
+    helper: "Route messages from a guild channel into this agent.",
+    targetLabel: "Channel ID",
+    targetPlaceholder: "e.g. 121234567890",
+    botTokenLabel: "Bot token",
+    botTokenPlaceholder: "Discord bot token",
+  },
+  {
+    id: "slack",
+    label: "Slack",
+    helper: "Connect a workspace channel with bot and app credentials.",
+    targetLabel: "Channel ID",
+    targetPlaceholder: "e.g. C0123ABCDE",
+    botTokenLabel: "Bot token",
+    botTokenPlaceholder: "xoxb-...",
+    appTokenLabel: "App token",
+    appTokenPlaceholder: "xapp-...",
+  },
+  {
+    id: "whatsapp",
+    label: "WhatsApp",
+    helper: "Use the OpenClaw/Hermes-compatible WhatsApp account target.",
+    targetLabel: "Phone or account ID",
+    targetPlaceholder: "e.g. +15551234567",
+    botTokenLabel: "Access token",
+    botTokenPlaceholder: "Optional provider token",
+  },
 ];
 
 /* ── ID slug helper ──────────────────────────────────────────────── */
@@ -86,10 +177,46 @@ function toSlug(name: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
+function createDefaultChannelDrafts(): OnboardingChannelConfig[] {
+  return CHANNEL_OPTIONS.map((channel) => ({
+    channel: channel.id,
+    target: "",
+    botToken: "",
+    appToken: "",
+  }));
+}
+
+function supportsAgentChannels(runtime: string | null): runtime is "openclaw" | "hermes" {
+  return runtime === "openclaw" || runtime === "hermes";
+}
+
+function getStringField(record: Record<string, unknown>, key: string): string {
+  const value = record[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function getSessionUserProfile(user: unknown): AgentUserProfile | undefined {
+  if (!user || typeof user !== "object") return undefined;
+  const record = user as Record<string, unknown>;
+  const firstName = getStringField(record, "Firstname");
+  const lastName = getStringField(record, "Lastname");
+  const name = [firstName, lastName].filter(Boolean).join(" ") || getStringField(record, "name");
+  const profile: AgentUserProfile = {
+    name,
+    email: getStringField(record, "email"),
+    username: getStringField(record, "username"),
+    // "aboutme" is not in the next-auth session shape; profile bio must come
+    // from UserProv or a separate API call — omit for now to avoid empty field.
+    about: undefined,
+  };
+  return Object.values(profile).some(Boolean) ? profile : undefined;
+}
+
 /* ── Personality file builders ───────────────────────────────────── */
 
-// OpenClaw: IDENTITY.md with metadata fields
-function buildIdentityMd(opts: {
+// OpenClaw: IDENTITY.md metadata block (distinct from lib/agent-templates buildIdentityMd,
+// which generates the full 7-file workspace set for OpenClaw agents)
+function buildLocalIdentityMd(opts: {
   name: string;
   emoji: string;
   role: string;
@@ -106,18 +233,33 @@ function buildIdentityMd(opts: {
   return `${header}\n`;
 }
 
-// Hermes: SOUL.md with name as H1 header and description as body
-function buildSoulMd(opts: {
+// Claude Code: CLAUDE.md carries workspace rules; SOUL.md carries persona.
+function buildClaudeMd(opts: {
   name: string;
+  emoji: string;
+  role: string;
+  description: string;
+  projectPath?: string;
+  soulContent: string;
+}): string {
+  return buildClaudeCodeMd(opts);
+}
+
+// Codex: AGENTS.md carries workspace rules; SOUL.md carries persona.
+function buildCodexAgentsMd(opts: {
+  name: string;
+  emoji: string;
+  role: string;
   description: string;
 }): string {
-  const lines: string[] = [];
-  lines.push(`# ${opts.name}`);
-  if (opts.description.trim()) {
-    lines.push("");
-    lines.push(opts.description.trim());
-  }
-  return lines.join("\n") + "\n";
+  return `${buildWorkspaceInstructionsMd("AGENTS.md").trimEnd()}
+
+---
+
+## Agent Identity
+
+${buildLocalIdentityMd(opts).trimEnd()}
+`;
 }
 
 /* ── Props ───────────────────────────────────────────────────────── */
@@ -125,14 +267,29 @@ function buildSoulMd(opts: {
 export interface AddAgentDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSuccess?: (agentId: string, runtime: string) => void;
+  onSuccess?: (
+    agentId: string,
+    runtime: string,
+    displayName: string,
+    details?: { role?: string; description?: string },
+  ) => void;
   existingAgents?: Array<{ id: string; name: string; runtime?: string }>;
+  /** Pre-select a runtime when the dialog opens */
+  initialRuntime?: string;
 }
 
 /* ── Component ───────────────────────────────────────────────────── */
 
-export function AddAgentDialog({ open, onOpenChange, onSuccess, existingAgents = [] }: AddAgentDialogProps) {
-  const [selectedRuntime, setSelectedRuntime] = useState("openclaw");
+interface RuntimeAvailability {
+  name: string;
+  available: boolean;
+  message?: string;
+}
+
+export function AddAgentDialog({ open, onOpenChange, onSuccess, existingAgents = [], initialRuntime }: AddAgentDialogProps) {
+  const { data: session } = useSession();
+  const [selectedRuntime, setSelectedRuntime] = useState<string | null>(initialRuntime ?? null);
+  const [activeTab, setActiveTab] = useState("agent");
   const [displayName, setDisplayName] = useState("");
   const [selectedEmoji, setSelectedEmoji] = useState("🤖");
   const [customEmoji, setCustomEmoji] = useState("");
@@ -141,7 +298,14 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess, existingAgents =
   const [description, setDescription] = useState("");
   const [model, setModel] = useState("__default__");
   const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [projectPath, setProjectPath] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [runtimeAvailability, setRuntimeAvailability] = useState<Record<string, boolean>>({});
+  const [loadingRuntimes, setLoadingRuntimes] = useState(true);
+  const [galleryOpen, setGalleryOpen] = useState(false);
+  const [stashedTemplate, setStashedTemplate] = useState<SoulTemplate | null>(null);
+  const [activeChannel, setActiveChannel] = useState<OnboardingChannelConfig["channel"]>("telegram");
+  const [channelDrafts, setChannelDrafts] = useState<OnboardingChannelConfig[]>(() => createDefaultChannelDrafts());
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const runtime = useMemo(
@@ -151,14 +315,82 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess, existingAgents =
 
   const agentId = useMemo(() => toSlug(displayName), [displayName]);
   const activeEmoji = customEmoji.trim() || selectedEmoji;
+  const channelSetupEnabled = supportsAgentChannels(selectedRuntime);
+  const configuredChannelCount = useMemo(
+    () => channelDrafts.filter((channel) => (
+      channel.target.trim() ||
+      channel.botToken.trim() ||
+      channel.appToken.trim()
+    )).length,
+    [channelDrafts],
+  );
+  const userProfile = useMemo(
+    () => getSessionUserProfile(session?.user),
+    [session?.user],
+  );
 
-  // Fetch available models when sheet opens
+  useEffect(() => {
+    if (activeTab === "channels" && !channelSetupEnabled) {
+      setActiveTab("agent");
+    }
+  }, [activeTab, channelSetupEnabled]);
+
+  // Apply initialRuntime when dialog opens
+  useEffect(() => {
+    if (open && initialRuntime) {
+      setSelectedRuntime(initialRuntime);
+    }
+  }, [open, initialRuntime]);
+
+  // Fetch available runtimes and models when sheet opens
   useEffect(() => {
     if (!open) return;
-    readOpenClawConfig().then((config) => {
-      if (config) setAvailableModels(getAvailableModels(config));
-    });
-  }, [open]);
+    let cancelled = false;
+
+    // Fetch runtime availability from connector
+    setLoadingRuntimes(true);
+    bridgeInvoke("list-available-runtimes", {})
+      .then((result) => {
+        if (cancelled) return;
+        const res = result as { runtimes?: RuntimeAvailability[] };
+        if (res?.runtimes) {
+          const availability: Record<string, boolean> = {};
+          for (const rt of res.runtimes) {
+            availability[rt.name] = rt.available;
+          }
+          setRuntimeAvailability(availability);
+
+          // Auto-select first available runtime only if no initialRuntime was provided
+          const firstAvailable = RUNTIMES.find((r) => availability[r.id]);
+          if (firstAvailable && !initialRuntime) {
+            setSelectedRuntime((current) => current ?? firstAvailable.id);
+          }
+        }
+      })
+      .catch(() => {
+        if (cancelled) return;
+        // Fallback: assume all are available if check fails
+        const fallback: Record<string, boolean> = {};
+        for (const r of RUNTIMES) fallback[r.id] = true;
+        setRuntimeAvailability(fallback);
+        if (!initialRuntime) setSelectedRuntime((current) => current ?? "openclaw");
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingRuntimes(false);
+      });
+
+    // Fetch available models for OpenClaw
+    readOpenClawConfig()
+      .then((config) => {
+        if (cancelled) return;
+        if (config) setAvailableModels(getAvailableModels(config));
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, initialRuntime]);
 
   const handleImageSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -189,8 +421,43 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess, existingAgents =
     setDescription("");
     setModel("__default__");
     setAvailableModels([]);
+    setProjectPath("");
     setError(null);
-    setSelectedRuntime("openclaw");
+    setSelectedRuntime(null);
+    setActiveTab("agent");
+    setActiveChannel("telegram");
+    setChannelDrafts(createDefaultChannelDrafts());
+    setRuntimeAvailability({});
+    setLoadingRuntimes(true);
+    setStashedTemplate(null);
+  }, []);
+
+  const updateChannelDraft = useCallback((
+    channelId: OnboardingChannelConfig["channel"],
+    field: keyof Pick<OnboardingChannelConfig, "target" | "botToken" | "appToken">,
+    value: string,
+  ) => {
+    setChannelDrafts((current) => current.map((channel) => (
+      channel.channel === channelId ? { ...channel, [field]: value } : channel
+    )));
+  }, []);
+
+  /**
+   * Apply a template picked from the gallery to the form fields. We stash
+   * the full template so the submit flow can render runtime-specific content
+   * via `renderTemplateForRuntime`. Users can still edit every field before
+   * submitting.
+   */
+  const applyTemplate = useCallback((template: SoulTemplate) => {
+    setStashedTemplate(template);
+    setDisplayName(template.name);
+    setRole(template.role);
+    setDescription(template.description);
+    if (template.emoji) {
+      setSelectedEmoji(template.emoji);
+      setCustomEmoji("");
+    }
+    setError(null);
   }, []);
 
   const handleOpenChange = useCallback(
@@ -204,6 +471,11 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess, existingAgents =
   const handleSubmit = useCallback(() => {
     setError(null);
 
+    if (!selectedRuntime) {
+      setError("Please select a runtime");
+      return;
+    }
+
     const name = displayName.trim();
     if (!name) { setError("Agent name is required"); return; }
     const id = toSlug(name);
@@ -213,17 +485,9 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess, existingAgents =
     }
 
     // Duplicate check: compare against existing agents for the same runtime.
-    const isDuplicate = existingAgents.some((a) => {
-      if (selectedRuntime === "openclaw") {
-        return a.runtime === "openclaw" && a.id === id;
-      }
-      if (selectedRuntime === "hermes") {
-        return a.runtime === "hermes" && a.id === id;
-      }
-      return false;
-    });
+    const isDuplicate = existingAgents.some((a) => a.runtime === selectedRuntime && a.id === id);
     if (isDuplicate) {
-      setError(`An agent named "${name}" already exists in ${runtime.label}`);
+      setError(`An agent named "${name}" already exists for the ${selectedRuntime} runtime`);
       return;
     }
 
@@ -231,98 +495,204 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess, existingAgents =
     patchIdentityCache(id, {
       name,
       emoji: activeEmoji,
+      role,
+      description,
       runtime: selectedRuntime,
       ...(avatarDataUri ? { avatar: avatarDataUri } : {}),
     });
 
     // Close dialog immediately and signal StatusWidget to show the Hiring badge.
     window.dispatchEvent(new CustomEvent("agent.hiring", {
-      detail: { agentId: id, name, emoji: activeEmoji, runtime: selectedRuntime },
+      detail: { agentId: id, name, emoji: activeEmoji, role, description, runtime: selectedRuntime },
     }));
-    onSuccess?.(id, selectedRuntime);
+    onSuccess?.(id, selectedRuntime, name, { role, description });
     handleOpenChange(false);
 
     // Fire bridge calls in the background.
-    // Build the appropriate personality file based on runtime:
-    // - OpenClaw: IDENTITY.md with metadata fields
-    // - Hermes: SOUL.md with name as header
-    const personalityContent = selectedRuntime === "hermes"
-      ? buildSoulMd({ name, description })
-      : buildIdentityMd({ name, emoji: activeEmoji, role, description });
+    // Build the actual files the agent should wake up with. SOUL.md stays the
+    // persona file; AGENTS.md / CLAUDE.md stay runtime startup rules.
+    const soulContent = stashedTemplate
+      ? renderTemplateForRuntime(
+          stashedTemplate,
+          selectedRuntime as "openclaw" | "hermes" | "claude-code" | "codex",
+          { name, emoji: activeEmoji, role, description },
+        )
+      : selectedRuntime === "openclaw"
+        ? buildOpenClawSoulMd({ name, role, description })
+        : buildRuntimeSoulMd({ name, role, description });
+    const baseIdentityContent = buildLocalIdentityMd({ name, emoji: activeEmoji, role, description });
+    const avatarUrl = toIdentityAvatarUrl(avatarDataUri);
+    const identityContent = avatarUrl
+      ? updateIdentityField(baseIdentityContent, "Avatar", avatarUrl)
+      : baseIdentityContent;
+    const userContent = buildAgentUserMd({
+      name,
+      role,
+      description,
+      userProfile,
+    });
+
+    const codexAgentsContent = buildCodexAgentsMd({ name, emoji: activeEmoji, role, description });
+    const claudeInstructionContent = buildClaudeMd({ name, emoji: activeEmoji, role, description, projectPath, soulContent });
+    const baseOpenClawFiles = buildAgentTemplates({
+      name,
+      emoji: activeEmoji,
+      role,
+      description,
+      soulContent,
+      userProfile,
+    });
+    const openClawFiles = avatarUrl && baseOpenClawFiles["IDENTITY.md"]
+      ? {
+          ...baseOpenClawFiles,
+          "IDENTITY.md": updateIdentityField(baseOpenClawFiles["IDENTITY.md"], "Avatar", avatarUrl),
+        }
+      : baseOpenClawFiles;
+    const scopedChannelConfigs = buildScopedAgentChannelConfigs({
+      runtime: selectedRuntime,
+      agentId: id,
+      agentName: name,
+      channels: channelDrafts,
+    });
+    if (scopedChannelConfigs.length > 0) {
+      dashboardState.set(
+        "guided-setup-state",
+        buildGuidedChannelStateWithAgentConfigs(
+          dashboardState.get("guided-setup-state"),
+          scopedChannelConfigs,
+        ),
+        { flush: true },
+      );
+    }
+    const channelProvisionFields = buildChannelProvisionPayloadFields(
+      selectedRuntime,
+      scopedChannelConfigs,
+    );
+
+    const provisionPayload = buildAddAgentProvisionPayload({
+      agentId: id,
+      runtime: selectedRuntime,
+      name,
+      role,
+      description,
+      emoji: activeEmoji,
+      avatarDataUri,
+      mainModel: model,
+      ...channelProvisionFields,
+      userProfile,
+    });
+    const identityUpdatePayload = buildAgentIdentityUpdatePayload({
+      agentId: id,
+      runtime: selectedRuntime,
+      name,
+      role,
+      description,
+      emoji: activeEmoji,
+      avatarDataUri,
+    });
 
     const run = async () => {
       try {
-        let result: { success?: boolean; error?: string };
+        type BridgeResult = { success?: boolean; error?: string };
 
+        const ensureSuccess = (res: unknown, label: string): BridgeResult => {
+          const r = res as BridgeResult;
+          if (!r?.success) {
+            throw new Error(`${label}: ${r?.error ?? "unknown error"}`);
+          }
+          return r;
+        };
+
+        const writeRuntimeDoc = async (fileName: string, content: string) => {
+          ensureSuccess(
+            await bridgeInvoke("write-agent-identity-doc", {
+              agentId: id,
+              runtime: selectedRuntime,
+              fileName,
+              content,
+            }),
+            `write ${fileName}`,
+          );
+        };
+
+        const provisionResult = await provisionAgentWithConfigConflictRetry(
+          (action, body) => bridgeInvoke(action, body),
+          provisionPayload,
+        );
+        ensureSuccess(provisionResult, "provision agent");
+
+        if (selectedRuntime === "openclaw" && model && model !== "__default__") {
+          await saveAgentModel(id, model);
+        }
+
+        try {
+          await bridgeInvoke("update-agent-config", {
+            agentId: id,
+            config: {
+              role,
+              description,
+              runtime: selectedRuntime,
+              ...(model && model !== "__default__" ? { mainModel: model } : {}),
+              ...(selectedRuntime === "claude-code" && projectPath.trim()
+                ? { projectPath: projectPath.trim() }
+                : {}),
+            },
+          });
+        } catch {
+          // Non-fatal — identity files and the local cache still carry this metadata.
+        }
         if (selectedRuntime === "openclaw") {
-          result = (await bridgeInvoke("add-agent", { agentName: id })) as typeof result;
-          if (result?.success) {
-            const folder = resolveAgentFolder(id);
-            await bridgeInvoke("write-openclaw-doc", {
-              relativePath: `${folder}/IDENTITY.md`,
-              content: personalityContent,
-            });
-            if (model && model !== "__default__") {
-              await saveAgentModel(id, model);
-            }
-          }
-        } else if (selectedRuntime === "hermes") {
-          // Hermes: use setup-agent with soul content instead of identity
-          result = (await bridgeInvoke("setup-agent", {
-            agentId: id,
-            runtime: "hermes",
-            name,
-            emoji: activeEmoji,
-            soul: personalityContent,
-          })) as typeof result;
+          await Promise.all(
+            Object.entries(openClawFiles).map(([fileName, content]) =>
+              writeRuntimeDoc(fileName, content),
+            ),
+          );
         } else {
-          result = (await bridgeInvoke("setup-agent", {
-            agentId: id,
-            runtime: selectedRuntime,
-            name,
-            emoji: activeEmoji,
-            identity: personalityContent,
-          })) as typeof result;
+          await Promise.all([
+            writeRuntimeDoc("IDENTITY.md", identityContent),
+            writeRuntimeDoc("SOUL.md", soulContent),
+            writeRuntimeDoc("USER.md", userContent),
+            selectedRuntime === "codex"
+              ? writeRuntimeDoc("AGENTS.md", codexAgentsContent)
+              : Promise.resolve(),
+            selectedRuntime === "claude-code"
+              ? writeRuntimeDoc("CLAUDE.md", claudeInstructionContent)
+              : Promise.resolve(),
+          ]);
         }
-
-        if (result?.success) {
-          // Persist avatar image through the connector after the agent exists.
-          if (avatarDataUri) {
-            try {
-              const fileName = await saveAvatarImage(id, avatarDataUri);
-              await bridgeInvoke("update-agent-identity", {
-                agentId: id,
-                avatarData: avatarDataUri,
-              });
-              if (selectedRuntime === "openclaw" && fileName) {
-                await syncToIdentityMd(id, { avatar: fileName });
-              }
-            } catch {
-              // Non-fatal — avatar save failure doesn't block agent creation
-            }
-          }
-          window.dispatchEvent(new CustomEvent("agent.hired", {
-            detail: { agentId: id, runtime: selectedRuntime },
-          }));
-          window.dispatchEvent(new CustomEvent("agent.file.changed"));
-        } else {
-          window.dispatchEvent(new CustomEvent("agent.hire.failed", { detail: { agentId: id } }));
-        }
-      } catch {
+        ensureSuccess(
+          await bridgeInvoke("update-agent-identity", identityUpdatePayload),
+          "update agent identity",
+        );
+        window.dispatchEvent(new CustomEvent("agent.hired", {
+          detail: { agentId: id, runtime: selectedRuntime },
+        }));
+        window.dispatchEvent(new CustomEvent("agent.file.changed"));
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error("[AddAgentDialog] Failed to hire agent:", scrubSensitiveTokens(message));
+        removeIdentityCache(id);
         window.dispatchEvent(new CustomEvent("agent.hire.failed", { detail: { agentId: id } }));
       }
     };
 
-    run();
-  }, [displayName, selectedRuntime, activeEmoji, avatarDataUri, role, description, model, onSuccess, handleOpenChange, existingAgents, runtime.label]);
+    void run();
+  }, [displayName, selectedRuntime, activeEmoji, avatarDataUri, role, description, model, projectPath, channelDrafts, onSuccess, handleOpenChange, existingAgents, stashedTemplate, userProfile]);
 
   return (
+    <>
+    <SoulTemplateGallery
+      open={galleryOpen}
+      onOpenChange={setGalleryOpen}
+      onSelect={applyTemplate}
+    />
     <Sheet open={open} onOpenChange={handleOpenChange}>
       <SheetContent side="right" className="w-[420px] sm:w-[420px] flex flex-col gap-0 p-0">
         <SheetHeader className="px-6 pt-6 pb-4 border-b border-border">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
-              {RUNTIME_ICONS_LG[selectedRuntime]}
+              {selectedRuntime && RUNTIME_ICONS_LG[selectedRuntime]}
+              {!selectedRuntime && <Sparkles className="w-6 h-6" />}
             </div>
             <div>
               <SheetTitle>New Agent</SheetTitle>
@@ -333,7 +703,22 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess, existingAgents =
           </div>
         </SheetHeader>
 
-        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 min-h-0 flex flex-col">
+          <div className="px-6 pt-4">
+            <TabsList className="grid w-full grid-cols-2 bg-muted/40">
+              <TabsTrigger value="agent">Agent</TabsTrigger>
+              <TabsTrigger value="channels" disabled={!channelSetupEnabled}>
+                Channels
+                {configuredChannelCount > 0 && (
+                  <span className="ml-1.5 rounded-full bg-primary/20 px-1.5 py-0.5 text-[10px] text-primary">
+                    {configuredChannelCount}
+                  </span>
+                )}
+              </TabsTrigger>
+            </TabsList>
+          </div>
+
+        <div className="flex-1 overflow-y-auto px-6 py-5">
           <AnimatePresence mode="wait">
             {error && (
               <motion.p
@@ -347,30 +732,97 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess, existingAgents =
             )}
           </AnimatePresence>
 
+          <TabsContent value="agent" className="mt-0 space-y-6">
+
+          {/* Start from template */}
+          <div>
+            <button
+              type="button"
+              onClick={() => setGalleryOpen(true)}
+              className="group w-full flex items-center gap-3 rounded-xl border border-dashed border-primary/40 bg-primary/[0.03] hover:bg-primary/[0.06] hover:border-primary/60 transition-all px-4 py-3 text-left"
+            >
+              <span className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center text-primary shrink-0 group-hover:scale-105 transition-transform">
+                <LibraryBig className="w-5 h-5" />
+              </span>
+              <span className="flex flex-col gap-0.5 min-w-0 flex-1">
+                <span className="text-xs font-medium text-foreground">
+                  {stashedTemplate ? `Using: ${stashedTemplate.name}` : "Start from a template"}
+                </span>
+                <span className="text-[10px] text-muted-foreground leading-tight">
+                  {stashedTemplate
+                    ? "Form prefilled — edit anything below, or pick another."
+                    : "Browse curated SOUL.md personalities — no prompt engineering needed."}
+                </span>
+              </span>
+              <span className="text-[10px] text-primary font-medium shrink-0">
+                {stashedTemplate ? "Change" : "Browse"}
+              </span>
+            </button>
+            {stashedTemplate && (
+              <button
+                type="button"
+                onClick={() => setStashedTemplate(null)}
+                className="mt-1.5 text-[10px] text-muted-foreground hover:text-foreground transition-colors inline-flex items-center gap-1"
+              >
+                <X className="w-3 h-3" />
+                Clear template
+              </button>
+            )}
+          </div>
+
           {/* Runtime */}
           <div className="space-y-2.5">
             <Label className="text-xs uppercase tracking-wider text-muted-foreground">Runtime</Label>
-            <div className="grid grid-cols-2 gap-1.5">
-              {RUNTIMES.map((r) => (
-                <button
-                  key={r.id}
-                  type="button"
-                  onClick={() => setSelectedRuntime(r.id)}
-                  className={[
-                    "flex items-start gap-2.5 rounded-xl px-3 py-2.5 text-left transition-all border",
-                    selectedRuntime === r.id
-                      ? "border-primary/60 bg-primary/8 ring-1 ring-primary/30"
-                      : "border-border/50 bg-muted/20 hover:bg-muted/40",
-                  ].join(" ")}
-                >
-                  <span className="leading-none mt-0.5 shrink-0 text-foreground/70">{RUNTIME_ICONS[r.id]}</span>
-                  <span className="flex flex-col gap-0.5 min-w-0">
-                    <span className="text-xs font-medium truncate">{r.label}</span>
-                    <span className="text-[10px] text-muted-foreground leading-tight line-clamp-2">{r.description}</span>
-                  </span>
-                </button>
-              ))}
-            </div>
+            {loadingRuntimes ? (
+              <div className="h-[140px] flex items-center justify-center text-sm text-muted-foreground">
+                Checking installed runtimes…
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-1.5">
+                {RUNTIMES.map((r) => {
+                  const isAvailable = runtimeAvailability[r.id] ?? false;
+                  const isSelected = selectedRuntime === r.id;
+                  return (
+                    <button
+                      key={r.id}
+                      type="button"
+                      onClick={() => isAvailable && setSelectedRuntime(r.id)}
+                      disabled={!isAvailable}
+                      title={!isAvailable ? `${r.label} is not installed` : undefined}
+                      className={[
+                        "flex items-start gap-2.5 rounded-xl px-3 py-2.5 text-left transition-all border relative",
+                        !isAvailable
+                          ? "border-border/30 bg-muted/10 opacity-50 cursor-not-allowed"
+                          : isSelected
+                            ? "border-primary/60 bg-primary/8 ring-1 ring-primary/30"
+                            : "border-border/50 bg-muted/20 hover:bg-muted/40",
+                      ].join(" ")}
+                    >
+                      <span className={[
+                        "leading-none mt-0.5 shrink-0",
+                        isAvailable ? "text-foreground/70" : "text-muted-foreground/40",
+                      ].join(" ")}>
+                        {RUNTIME_ICONS[r.id]}
+                      </span>
+                      <span className="flex flex-col gap-0.5 min-w-0">
+                        <span className={[
+                          "text-xs font-medium truncate",
+                          !isAvailable && "text-muted-foreground/60",
+                        ].filter(Boolean).join(" ")}>
+                          {r.label}
+                        </span>
+                        <span className={[
+                          "text-[10px] leading-tight line-clamp-2",
+                          isAvailable ? "text-muted-foreground" : "text-muted-foreground/40",
+                        ].join(" ")}>
+                          {isAvailable ? r.description : "Not installed"}
+                        </span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {/* Name */}
@@ -523,6 +975,29 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess, existingAgents =
             />
           </div>
 
+          {/* Project Path (Claude Code only — scopes sessions to this directory) */}
+          {selectedRuntime === "claude-code" && (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <Label htmlFor="add-agent-project" className="text-xs uppercase tracking-wider text-muted-foreground">
+                  Project Path
+                </Label>
+                <span className="text-xs text-muted-foreground/50">optional</span>
+              </div>
+              <Input
+                id="add-agent-project"
+                placeholder="e.g. /Users/you/Code/my-project"
+                value={projectPath}
+                onChange={(e) => setProjectPath(e.target.value)}
+                disabled={false}
+              />
+              <p className="text-[10px] text-muted-foreground leading-tight">
+                Point to an existing project directory.<br />
+                If empty, sessions are isolated to this agent automatically.
+              </p>
+            </div>
+          )}
+
           {/* Model (OpenClaw only — stored in openclaw.json) */}
           {selectedRuntime === "openclaw" && availableModels.length > 0 && (
             <div className="space-y-2">
@@ -543,7 +1018,155 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess, existingAgents =
               </Select>
             </div>
           )}
+          </TabsContent>
+
+          <TabsContent value="channels" className="mt-0 space-y-5">
+            <div className="rounded-2xl border border-primary/20 bg-primary/[0.04] p-4">
+              <div className="flex items-start gap-3">
+                <div className="mt-0.5 rounded-xl bg-primary/10 p-2 text-primary">
+                  <Cable className="h-4 w-4" />
+                </div>
+                <div className="min-w-0 space-y-1">
+                  <p className="text-sm font-medium text-foreground">
+                    Add channels while hiring
+                  </p>
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    {selectedRuntime === "hermes"
+                      ? "Hermes receives these channel secrets for its profile environment, so each agent can keep its own .env-style credentials."
+                      : "OpenClaw receives these as channel credentials and binds them to the new agent account during provisioning."}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {!channelSetupEnabled ? (
+              <div className="rounded-2xl border border-border/50 bg-muted/20 p-5 text-sm text-muted-foreground">
+                Channel setup is available for OpenClaw and Hermes agents.
+              </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-2 gap-2">
+                  {CHANNEL_OPTIONS.map((channel) => {
+                    const draft = channelDrafts.find((item) => item.channel === channel.id);
+                    const configured = !!(
+                      draft?.target.trim() ||
+                      draft?.botToken.trim() ||
+                      draft?.appToken.trim()
+                    );
+                    const selected = activeChannel === channel.id;
+                    return (
+                      <button
+                        key={channel.id}
+                        type="button"
+                        onClick={() => setActiveChannel(channel.id)}
+                        className={[
+                          "rounded-xl border px-3 py-2.5 text-left transition-all",
+                          selected
+                            ? "border-primary/60 bg-primary/10 ring-1 ring-primary/25"
+                            : "border-border/50 bg-muted/20 hover:bg-muted/40",
+                        ].join(" ")}
+                      >
+                        <span className="flex items-center justify-between gap-2">
+                          <span className="flex items-center gap-2 text-xs font-medium text-foreground">
+                            <MessageCircle className="h-3.5 w-3.5 text-primary/80" />
+                            {channel.label}
+                          </span>
+                          {configured && (
+                            <span className="h-1.5 w-1.5 rounded-full bg-primary" aria-label="Configured" />
+                          )}
+                        </span>
+                        <span className="mt-1 block text-[10px] leading-tight text-muted-foreground">
+                          {channel.helper}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {CHANNEL_OPTIONS.map((channel) => {
+                  if (channel.id !== activeChannel) return null;
+                  const draft = channelDrafts.find((item) => item.channel === channel.id);
+                  if (!draft) return null;
+
+                  return (
+                    <motion.div
+                      key={channel.id}
+                      initial={{ opacity: 0, y: 6 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="space-y-4 rounded-2xl border border-border/50 bg-card/40 p-4"
+                    >
+                      <div>
+                        <Label
+                          htmlFor={`add-agent-${channel.id}-target`}
+                          className="text-xs uppercase tracking-wider text-muted-foreground"
+                        >
+                          {channel.targetLabel}
+                        </Label>
+                        <Input
+                          id={`add-agent-${channel.id}-target`}
+                          value={draft.target}
+                          onChange={(event) => updateChannelDraft(channel.id, "target", event.target.value)}
+                          placeholder={channel.targetPlaceholder}
+                          className="mt-2"
+                          autoComplete="off"
+                        />
+                      </div>
+
+                      <div>
+                        <Label
+                          htmlFor={`add-agent-${channel.id}-token`}
+                          className="text-xs uppercase tracking-wider text-muted-foreground"
+                        >
+                          {channel.botTokenLabel}
+                        </Label>
+                        <Input
+                          id={`add-agent-${channel.id}-token`}
+                          value={draft.botToken}
+                          onChange={(event) => updateChannelDraft(channel.id, "botToken", event.target.value)}
+                          placeholder={channel.botTokenPlaceholder}
+                          className="mt-2"
+                          type="password"
+                          autoComplete="new-password"
+                        />
+                      </div>
+
+                      {channel.appTokenLabel && (
+                        <div>
+                          <Label
+                            htmlFor={`add-agent-${channel.id}-app-token`}
+                            className="text-xs uppercase tracking-wider text-muted-foreground"
+                          >
+                            {channel.appTokenLabel}
+                          </Label>
+                          <Input
+                            id={`add-agent-${channel.id}-app-token`}
+                            value={draft.appToken}
+                            onChange={(event) => updateChannelDraft(channel.id, "appToken", event.target.value)}
+                            placeholder={channel.appTokenPlaceholder}
+                            className="mt-2"
+                            type="password"
+                            autoComplete="new-password"
+                          />
+                        </div>
+                      )}
+
+                      <p className="rounded-xl bg-muted/25 px-3 py-2 text-[10px] leading-relaxed text-muted-foreground">
+                        Agent account:{" "}
+                        <code className="rounded bg-background/70 px-1 font-mono">
+                          {agentId || "set-name-first"}
+                        </code>
+                        {selectedRuntime === "hermes"
+                          ? " · saved into the Hermes profile environment during provisioning."
+                          : " · used for the OpenClaw channel account/binding during provisioning."}
+                      </p>
+                    </motion.div>
+                  );
+                })}
+              </>
+            )}
+          </TabsContent>
         </div>
+        </Tabs>
 
         <SheetFooter className="px-6 py-4 border-t border-border flex flex-row gap-2">
           <Button
@@ -556,13 +1179,14 @@ export function AddAgentDialog({ open, onOpenChange, onSuccess, existingAgents =
           </Button>
           <Button
             onClick={handleSubmit}
-            disabled={!displayName.trim() || !agentId}
+            disabled={!displayName.trim() || !agentId || !selectedRuntime}
             className="flex-1"
           >
-            {`Add to ${runtime.label}`}
+            {selectedRuntime ? `Add to ${runtime.label}` : "Select a runtime"}
           </Button>
         </SheetFooter>
       </SheetContent>
     </Sheet>
+    </>
   );
 }

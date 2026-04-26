@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { hubFetch } from "$/lib/hub-direct";
 
 export interface Device {
@@ -11,6 +11,10 @@ export interface Device {
   hostname: string;
   tags: string[];
   env: string;
+  // Populated once the guided setup wizard has fully finished for this device
+  // (runtimes installed, agents provisioned). Used by MainLayout together with
+  // status==="online" to decide whether to skip GuidedSetup on a fresh browser.
+  onboardingCompletedAt?: string | null;
 }
 
 /**
@@ -29,24 +33,34 @@ export function useDevices(authReady = true) {
   // the onboarding/setup screen.
   const [fetched, setFetched] = useState(false);
 
+  // AbortController ref prevents stale responses from overwriting fresh data
+  const abortRef = useRef<AbortController | null>(null);
+
   const fetchDevices = useCallback(async () => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     setLoading(true);
     setError(null);
     try {
-      const res = await hubFetch("/api/devices");
+      const res = await hubFetch("/api/devices", { signal: controller.signal });
+      if (controller.signal.aborted) return;
       if (!res.ok) {
         setDevices([]);
         setFetched(false);
         return;
       }
       const data = await res.json();
+      if (controller.signal.aborted) return;
       setDevices(Array.isArray(data) ? data : []);
       setFetched(true);
-    } catch {
+    } catch (err: unknown) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
       setDevices([]);
       setFetched(false);
     } finally {
-      setLoading(false);
+      if (!controller.signal.aborted) setLoading(false);
     }
   }, []);
 
@@ -54,11 +68,20 @@ export function useDevices(authReady = true) {
   // silently produce an empty device list and show the setup screen.
   useEffect(() => {
     if (authReady) fetchDevices();
+    return () => abortRef.current?.abort();
   }, [fetchDevices, authReady]);
 
   const neverConnected = new Set(["provisioning", "connecting"]);
   const needsSetup = fetched && !loading && (devices.length === 0 || devices.every((d) => neverConnected.has(d.status)));
   const hasOnlineDevice = devices.some((d) => d.status === "online");
+  // True only when at least one device is BOTH online AND has had its
+  // onboarding-complete flag stamped by the hub. This is the signal the
+  // dashboard uses to skip GuidedSetup: an online connector alone is not
+  // enough, because the wizard may still be mid-install of OpenClaw, Hermes,
+  // or the chosen agents.
+  const hasOnboardedDevice = devices.some(
+    (d) => d.status === "online" && !!d.onboardingCompletedAt
+  );
 
-  return { devices, loading, error, needsSetup, hasOnlineDevice, refetch: fetchDevices };
+  return { devices, loading, error, needsSetup, hasOnlineDevice, hasOnboardedDevice, refetch: fetchDevices };
 }

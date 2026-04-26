@@ -12,6 +12,8 @@ export interface AgentIdentity {
   name?: string;
   avatar?: string;
   emoji?: string;
+  role?: string;
+  description?: string;
   runtime?: string;
   project?: string;
 }
@@ -20,6 +22,7 @@ export interface AgentIdentity {
 // Entries are kept until the gateway reconnects (new OpenClaw config may change avatars).
 const identityCache = new Map<string, AgentIdentity>();
 const inflight = new Map<string, Promise<AgentIdentity | null>>();
+export const AGENT_IDENTITY_CACHE_PATCHED_EVENT = "agent.identity.cache-patched";
 
 // TTL for cached identities. Re-fetches are skipped if the cached entry was
 // populated within this window. Invalidated on reconnect and on IDENTITY.md change.
@@ -65,10 +68,24 @@ loadFromStorage();
 // --- Cache-update notification ---
 // When any hook instance (or fetchIdentity) populates the cache, all active
 // hook instances watching that agentId are notified so they can sync state.
-type CacheListener = (agentId: string, identity: AgentIdentity) => void;
+type CacheListener = (agentId: string, identity: AgentIdentity | null) => void;
 const cacheListeners = new Set<CacheListener>();
-function notifyCacheUpdate(agentId: string, identity: AgentIdentity) {
+function notifyCacheUpdate(agentId: string, identity: AgentIdentity | null) {
   for (const cb of cacheListeners) cb(agentId, identity);
+}
+
+function broadcastCacheUpdate(agentId: string, identity: AgentIdentity) {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(
+    new CustomEvent(AGENT_IDENTITY_CACHE_PATCHED_EVENT, {
+      detail: { agentId, identity },
+    }),
+  );
+}
+
+function publishCacheUpdate(agentId: string, identity: AgentIdentity) {
+  notifyCacheUpdate(agentId, identity);
+  broadcastCacheUpdate(agentId, identity);
 }
 
 // Reset cache on reconnect (but keep localStorage — it's the fallback)
@@ -93,7 +110,17 @@ export function patchIdentityCache(agentId: string, patch: Partial<AgentIdentity
   identityCache.set(agentId, updated);
   fetchedAtCache.set(agentId, Date.now()); // user edit is authoritative — treat as fresh
   saveToStorage();
-  notifyCacheUpdate(agentId, updated);
+  publishCacheUpdate(agentId, updated);
+}
+
+export function removeIdentityCache(agentId: string) {
+  identityCache.delete(agentId);
+  fetchedAtCache.delete(agentId);
+  saveToStorage();
+  // Local hook subscribers should clear their cached view. We intentionally do
+  // not broadcast the global patched event because there is no authoritative
+  // replacement identity for list-level consumers to apply.
+  notifyCacheUpdate(agentId, null);
 }
 
 async function fetchIdentity(agentId: string): Promise<AgentIdentity | null> {
@@ -112,24 +139,36 @@ async function fetchIdentity(agentId: string): Promise<AgentIdentity | null> {
     try {
       const res = (await bridgeInvoke("get-agent-identity", { agentId })) as {
         success?: boolean;
-        data?: { name?: string; avatarData?: string; emoji?: string; runtime?: string; projectPath?: string } | null;
+        data?: {
+          name?: string;
+          avatarData?: string;
+          emoji?: string;
+          role?: string;
+          description?: string;
+          runtime?: string;
+          projectPath?: string;
+        } | null;
       };
       if (!res?.success || !res.data) return null;
       // Preserve cached fields that DB doesn't have (e.g. file-based avatar converted
       // to a data URI by the editor, which isn't written back to SQLite avatar_data).
+      // NOTE: project is NOT preserved from cache — connector response is authoritative.
+      // This prevents stale project values from showing sessions for the wrong project.
       const cached = identityCache.get(agentId);
       const identity: AgentIdentity = {
         agentId,
         name: res.data.name || cached?.name || undefined,
         avatar: res.data.avatarData || cached?.avatar || undefined,
         emoji: res.data.emoji || cached?.emoji || undefined,
+        role: res.data.role || cached?.role || undefined,
+        description: res.data.description || cached?.description || undefined,
         runtime: res.data.runtime || cached?.runtime || undefined,
-        project: res.data.projectPath || cached?.project || undefined,
+        project: res.data.projectPath || undefined,
       };
       identityCache.set(agentId, identity);
       fetchedAtCache.set(agentId, Date.now());
       saveToStorage();
-      notifyCacheUpdate(agentId, identity);
+      publishCacheUpdate(agentId, identity);
       return identity;
     } finally {
       inflight.delete(agentId);
@@ -208,6 +247,8 @@ export function useAgentIdentity(agentId: string | undefined): AgentIdentity | n
 export function useAgentIdentities(agentIds: string[]): Map<string, AgentIdentity> {
   const [identities, setIdentities] = useState<Map<string, AgentIdentity>>(new Map());
   const prevIdsRef = useRef<string>("");
+  const agentIdsRef = useRef(agentIds);
+  agentIdsRef.current = agentIds;
 
   useEffect(() => {
     const key = agentIds.join(",");
@@ -244,17 +285,17 @@ export function useAgentIdentities(agentIds: string[]): Map<string, AgentIdentit
   // Subscribe to cache updates for watched agents
   useEffect(() => {
     const listener: CacheListener = (agentId, identity) => {
-      if (agentIds.includes(agentId)) {
-        setIdentities((prev) => {
-          const next = new Map(prev);
-          next.set(agentId, identity);
-          return next;
-        });
-      }
+      if (!agentIdsRef.current.includes(agentId)) return;
+      setIdentities((prev) => {
+        const next = new Map(prev);
+        if (identity) next.set(agentId, identity);
+        else next.delete(agentId);
+        return next;
+      });
     };
     cacheListeners.add(listener);
     return () => { cacheListeners.delete(listener); };
-  }, [agentIds]);
+  }, []);
 
   // Re-fetch ALL identities when the gateway connects (or reconnects).
   // The main fetch effect only runs when agentIds changes, so if the gateway
@@ -264,16 +305,15 @@ export function useAgentIdentities(agentIds: string[]): Map<string, AgentIdentit
   // reconnect handler reloads localStorage as a baseline — stale cache entries
   // (e.g. avatar: "") would otherwise block re-fetching indefinitely.
   useEffect(() => {
-    const agentIdsRef = { current: agentIds };
-    agentIdsRef.current = agentIds;
     return subscribeGatewayConnection(() => {
       const { connected: isConnected } = getGatewayConnectionState();
       if (!isConnected) return;
       if (agentIdsRef.current.length === 0) return;
-      // fetchIdentity calls notifyCacheUpdate on success → cache listener handles state update
+      // fetchIdentity publishes cache updates on success, updating hooks and
+      // list-level consumers (navbar/sidebar) through the shared event.
       Promise.all(agentIdsRef.current.map(id => fetchIdentity(id)));
     });
-  }, [agentIds]);
+  }, []);
 
   return identities;
 }
@@ -356,10 +396,8 @@ if (typeof window !== "undefined") {
       fetchedAtCache.delete(agentId);
       inflight.delete(agentId);
       // Re-fetch fresh identity immediately so the UI never goes blank.
-      // fetchIdentity calls notifyCacheUpdate internally on success.
-      fetchIdentity(agentId).then((result) => {
-        if (result) notifyCacheUpdate(agentId, result);
-      });
+      // fetchIdentity publishes cache updates internally on success.
+      void fetchIdentity(agentId);
     }
   });
 }

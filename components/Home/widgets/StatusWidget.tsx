@@ -51,6 +51,9 @@ import { AddAgentDialog } from "$/components/Tool/Agents/AddAgentDialog";
 import { ProjectsProvider, useProjects } from "$/components/Tool/Projects/provider/projectsProvider";
 import { CreateProjectDialog } from "$/components/Tool/Projects/CreateProjectDialog";
 import { ClaudeCodeIcon, CodexIcon, HermesIcon } from "$/components/Onboarding/RuntimeIcons";
+import { dispatchOpenProjectPanel } from "./ProjectWidgetEvents";
+import { ConnectorStatusIndicator } from "./ConnectorStatusIndicator";
+import { StatusDot, useAgentStatus, normalizeAgentState, type AgentState } from "$/components/ensemble";
 
 // Returns the branded React SVG icon for known runtimes, null otherwise.
 function getRuntimeIcon(runtime?: string): React.ComponentType<{ className?: string }> | null {
@@ -59,6 +62,14 @@ function getRuntimeIcon(runtime?: string): React.ComponentType<{ className?: str
   if (runtime === "hermes") return HermesIcon;
   return null;
 }
+
+// Runtime display names for orphaned runtime UI
+const RUNTIME_NAMES: Record<string, string> = {
+  openclaw: "OpenClaw",
+  hermes: "Hermes",
+  "claude-code": "Claude Code",
+  codex: "Codex",
+};
 
 // True if avatar is a user-uploaded image (PNG/JPG/HTTP) vs. the SVG seed or empty.
 function isCustomImageAvatar(avatarUrl: string | undefined): boolean {
@@ -69,19 +80,35 @@ function isCustomImageAvatar(avatarUrl: string | undefined): boolean {
 // ── Custom event for cross-widget communication ──
 // StatusWidget dispatches this; GatewayChatWidget listens.
 export const OPEN_AGENT_CHAT_EVENT = "open-agent-chat";
+
+// ── Pending agent for first-visit navigation ──
+// Set before navigating to Chat; consumed by EnsembleChat on mount.
+let _pendingOpenAgent: { agentId: string; runtime?: string } | null = null;
+export const setPendingOpenAgent = (agentId: string, runtime?: string) => {
+  _pendingOpenAgent = { agentId, runtime };
+};
+export const consumePendingOpenAgent = () => {
+  const p = _pendingOpenAgent;
+  _pendingOpenAgent = null;
+  return p;
+};
 // Dispatched by AgentChatWidget when the user actually opens a session — this is when we clear unread
 export const AGENT_READ_EVENT = "agent-read";
 
-export function dispatchOpenAgentChat(agentId: string, sessionKey?: string) {
+export function dispatchOpenAgentChat(
+  agentId: string,
+  sessionKey?: string,
+  meta?: { runtime?: string; runtimeUnavailable?: boolean; hiring?: boolean }
+) {
   window.dispatchEvent(
-    new CustomEvent(OPEN_AGENT_CHAT_EVENT, { detail: { agentId, sessionKey } })
+    new CustomEvent(OPEN_AGENT_CHAT_EVENT, { detail: { agentId, sessionKey, ...meta } })
   );
 }
 
 export function dispatchOpenAgentPanel(
   agentId: string,
   sessionKey?: string,
-  meta?: { sessionCount?: number; unreadCount?: number; lastSeenTs?: number; runtime?: string }
+  meta?: { sessionCount?: number; unreadCount?: number; lastSeenTs?: number; runtime?: string; runtimeUnavailable?: boolean; hiring?: boolean }
 ) {
   window.dispatchEvent(
     new CustomEvent(OPEN_AGENT_PANEL_EVENT, { detail: { agentId, sessionKey, ...meta } })
@@ -102,7 +129,7 @@ interface Agent {
 interface AgentStatus {
   agentId: string;
   name: string;
-  state: "idle" | "running" | "error";
+  state: AgentState;
   lastActivity?: number;
   unreadCount: number;
   recentMessages: string[];
@@ -126,6 +153,27 @@ interface InboxItem {
   created_at: number;
 }
 
+interface TeamRuntimeStatus {
+  runtime: string;
+  status: "available" | "needs_auth" | "missing" | "unsupported" | "sync_error" | string;
+  authStatus?: "ready" | "needs_auth" | "unknown" | string;
+  syncStatus?: "configured" | "pending" | "sync_error" | string;
+  message?: string;
+}
+
+function runtimeStatusTone(status: TeamRuntimeStatus): string {
+  if (status.status === "sync_error" || status.syncStatus === "sync_error") {
+    return "border-red-500/30 text-red-400/80";
+  }
+  if (status.authStatus === "needs_auth") {
+    return "border-amber-500/30 text-amber-400/80";
+  }
+  if (status.status === "available" && status.syncStatus === "configured") {
+    return "border-emerald-500/30 text-emerald-400/80";
+  }
+  return "border-border/40 text-muted-foreground";
+}
+
 const INBOX_KIND_ICONS: Record<string, React.ReactNode> = {
   approval: <Zap className="w-3 h-3 text-amber-500" />,
   question: <HelpCircle className="w-3 h-3 text-blue-500" />,
@@ -135,6 +183,9 @@ const INBOX_KIND_ICONS: Record<string, React.ReactNode> = {
 
 // ── Quiet hours: hide agents with no activity within this window ──
 const QUIET_HOURS = 48;
+const STATUS_WIDGET_BRIDGE_TIMEOUT_MS = 3500;
+const STATUS_WIDGET_SESSION_TIMEOUT_MS = 5000;
+const STATUS_WIDGET_CHAT_HISTORY_TIMEOUT_MS = 2500;
 
 // ── LocalStorage helpers ──
 
@@ -167,6 +218,31 @@ function setLastSeenLocal(agentId: string, ts: number, msgText?: string) {
   try {
     localStorage.setItem(LAST_SEEN_KEY, JSON.stringify(map));
   } catch { /* ignore */ }
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve(fallback);
+    }, timeoutMs);
+
+    promise
+      .then((value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      })
+      .catch(() => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(fallback);
+      });
+  });
 }
 
 // Fetch last-seen entries from SQLite via bridge; falls back to localStorage when offline.
@@ -232,7 +308,7 @@ function extractRecentAssistantTexts(
     }
 
     if (text && text.length > 0) {
-      results.unshift(text.slice(0, 120)); // newest last → unshift keeps chronological order
+      results.push(text.slice(0, 120)); // iterating backward → push keeps newest-first
     }
   }
   return results;
@@ -247,6 +323,7 @@ interface StatusHeaderProps extends CustomProps {
   className?: string;
   onRefresh?: () => void;
   refreshing?: boolean;
+  /** @deprecated Replaced by ConnectorStatusIndicator which derives state internally. */
   connected?: boolean;
   showHidden?: boolean;
   onToggleHidden?: () => void;
@@ -262,7 +339,6 @@ export const StatusCustomHeader: React.FC<StatusHeaderProps> = ({
   unreadTotal = 0,
   onRefresh,
   refreshing = false,
-  connected = false,
   showHidden = false,
   onToggleHidden,
 }) => (
@@ -290,13 +366,7 @@ export const StatusCustomHeader: React.FC<StatusHeaderProps> = ({
           {unreadTotal} new
         </Badge>
       )}
-      <span
-        className={cn(
-          "w-1.5 h-1.5 rounded-full shrink-0",
-          connected ? "bg-emerald-500" : "bg-muted-foreground/40"
-        )}
-        title={connected ? "Connected" : "Disconnected"}
-      />
+      <ConnectorStatusIndicator />
     </div>
     <div className="flex items-center gap-1 shrink-0">
       {hiddenCount > 0 && onToggleHidden && (
@@ -328,6 +398,18 @@ export const StatusCustomHeader: React.FC<StatusHeaderProps> = ({
   </div>
 );
 
+// Tiny hook-bridge: overlay live streaming "working" onto AgentStatus.state.
+function AgentRowStatusDot({
+  agentId,
+  baseState,
+}: {
+  agentId: string;
+  baseState: AgentState;
+}) {
+  const { state } = useAgentStatus(agentId, { state: baseState });
+  return <StatusDot state={state} size="sm" corner ringClassName="bg-card" />;
+}
+
 // ── Agent row (expanded — for running / unread / error / recent idle expanded) ──
 
 const AgentExpandedRow = React.forwardRef<HTMLDivElement, {
@@ -337,7 +419,8 @@ const AgentExpandedRow = React.forwardRef<HTMLDivElement, {
   isActive?: boolean;
   isHiring?: boolean;
   isDeleting?: boolean;
-}>(function AgentExpandedRow({ status, identity, onClick, isActive, isHiring, isDeleting }, ref) {
+  isUnavailable?: boolean;
+}>(function AgentExpandedRow({ status, identity, onClick, isActive, isHiring, isDeleting, isUnavailable }, ref) {
   const resolvedAvatarUrl = resolveAvatarUrl(identity?.avatar);
   const avatarUrl = isCustomImageAvatar(resolvedAvatarUrl) ? resolvedAvatarUrl : undefined;
   const avatarText = resolveAvatarText(identity?.avatar);
@@ -345,6 +428,11 @@ const AgentExpandedRow = React.forwardRef<HTMLDivElement, {
   const displayName = identity?.name || status.name || status.agentId;
   const runtime = identity?.runtime || status.runtime;
   const showRuntime = runtime && runtime !== "openclaw";
+  const visualState: AgentState = isDeleting ? "deleting" : status.state;
+  const isHiringVisual = isHiring || visualState === "hiring";
+  // Only deleting blocks clicking. Hiring agents can still be opened/checked
+  // while setup finishes; sending may be unavailable until the bridge is ready.
+  const isDisabled = visualState === "deleting";
 
   return (
     <motion.div
@@ -355,13 +443,14 @@ const AgentExpandedRow = React.forwardRef<HTMLDivElement, {
       exit={{ opacity: 0, height: 0 }}
       className={cn(
         "w-full min-w-0 flex items-start gap-2.5 px-2.5 py-2 rounded-none transition-colors overflow-hidden",
-        isHiring || isDeleting ? "opacity-60 cursor-not-allowed pointer-events-none" : "cursor-pointer",
-        !isHiring && !isDeleting && (isActive ? "bg-muted/50" : "hover:bg-muted/30")
+        isDisabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer",
+        !isDisabled && (isActive ? "bg-muted/50" : "hover:bg-muted/30")
       )}
-      onClick={() => !isHiring && !isDeleting && onClick(status.agentId)}
+      onClick={() => !isDisabled && onClick(status.agentId)}
+      title={isUnavailable ? `${RUNTIME_NAMES[runtime || ""] || runtime} is not installed — view only` : undefined}
     >
-      {/* Avatar */}
-      <div className="shrink-0 mt-0.5 relative">
+      {/* Avatar - grayed out when runtime unavailable */}
+      <div className={cn("shrink-0 mt-0.5 relative", isUnavailable && "grayscale opacity-60")}>
         <Avatar className="w-7 h-7">
           {avatarUrl && <AvatarImage src={avatarUrl} alt={displayName} />}
           <AvatarFallback className="bg-primary/10 text-primary text-[11px] select-none">
@@ -373,11 +462,17 @@ const AgentExpandedRow = React.forwardRef<HTMLDivElement, {
             }
           </AvatarFallback>
         </Avatar>
-        {status.unreadCount > 0 && (
+        {/* Suppress the red unread badge while the agent is mid-run or while
+            the user is actively viewing it — the "Running" pill conveys live
+            status, and the open panel is the read state. The badge reappears
+            once the agent is idle AND the user has moved away. */}
+        {status.unreadCount > 0 && status.state !== "running" && !isActive && (
           <span className="absolute -top-0.5 -right-0.5 min-w-[14px] h-3.5 px-0.5 rounded-full bg-red-500 border border-card flex items-center justify-center text-[8px] font-bold text-white leading-none">
             {status.unreadCount >= 99 ? "99+" : status.unreadCount}
           </span>
         )}
+        {/* Status ring — canonical primitive with live streaming overlay */}
+        <AgentRowStatusDot agentId={status.agentId} baseState={visualState} />
       </div>
 
       {/* Content */}
@@ -390,15 +485,15 @@ const AgentExpandedRow = React.forwardRef<HTMLDivElement, {
           </span>
 
           {/* Status badge — inline after name */}
-          {isHiring ? (
-            <span className="shrink-0 text-[9px] text-amber-500/80 border border-amber-500/30 rounded px-1 py-px leading-none flex items-center gap-0.5">
+          {isHiringVisual ? (
+            <span className="shrink-0 text-[9px] text-red-400/80 border border-red-400/30 rounded px-1 py-px leading-none flex items-center gap-0.5">
               <Loader2 className="w-2 h-2 animate-spin" />Hiring
             </span>
-          ) : isDeleting ? (
+          ) : visualState === "deleting" ? (
             <span className="shrink-0 text-[9px] text-red-400/80 border border-red-400/30 rounded px-1 py-px leading-none flex items-center gap-0.5">
               <Loader2 className="w-2 h-2 animate-spin" />Firing
             </span>
-          ) : status.state === "running" ? (
+          ) : visualState === "running" ? (
             <span className="shrink-0 text-[9px] text-emerald-500 border border-emerald-500/30 rounded px-1 py-px leading-none flex items-center gap-0.5">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse inline-block" />Running
             </span>
@@ -408,14 +503,14 @@ const AgentExpandedRow = React.forwardRef<HTMLDivElement, {
           <span className="flex-1" />
 
           {/* Runtime tag */}
-          {!isHiring && !isDeleting && showRuntime && (
+          {!isHiringVisual && visualState !== "deleting" && showRuntime && (
             <span className="shrink-0 text-[9px] text-muted-foreground/40 border border-border/20 rounded px-1 py-px leading-none">
               {runtime}
             </span>
           )}
 
           {/* Timestamp */}
-          {!isHiring && !isDeleting && status.lastActivity ? (
+          {!isHiringVisual && visualState !== "deleting" && status.lastActivity ? (
             <span className="shrink-0 text-[10px] text-muted-foreground/40">
               {timeAgo(status.lastActivity)}
             </span>
@@ -428,7 +523,7 @@ const AgentExpandedRow = React.forwardRef<HTMLDivElement, {
             <AlertTriangle className="w-2.5 h-2.5 shrink-0" />
             <span className="line-clamp-2 [overflow-wrap:anywhere]">{status.errorMessage}</span>
           </div>
-        ) : status.recentMessages.length > 0 && !isHiring && !isDeleting ? (
+        ) : status.recentMessages.length > 0 && !isHiringVisual && visualState !== "deleting" ? (
           <p className={cn(
             "text-[11px] line-clamp-2 [overflow-wrap:anywhere] overflow-hidden leading-snug",
             status.unreadCount > 0 ? "text-muted-foreground/80" : "text-muted-foreground/40"
@@ -458,6 +553,11 @@ function ProjectRow({ project }: { project: import("$/components/Tool/Projects/p
   const [expanded, setExpanded] = useState(false);
   const members = project.members ?? [];
 
+  const handleOpenProject = useCallback(() => {
+    selectProject(project.id);
+    dispatchOpenProjectPanel(project.id);
+  }, [project.id, selectProject]);
+
   const handleExpand = useCallback(() => {
     const next = !expanded;
     setExpanded(next);
@@ -466,10 +566,11 @@ function ProjectRow({ project }: { project: import("$/components/Tool/Projects/p
 
   return (
     <div>
-      <button
-        onClick={handleExpand}
-        className="w-full flex items-center gap-2 px-2.5 py-2 hover:bg-muted/30 rounded-md transition-colors"
-      >
+      <div className="w-full flex items-center gap-1">
+        <button
+          onClick={handleOpenProject}
+          className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2.5 py-2 text-left transition-colors hover:bg-muted/30"
+        >
         <span className="text-base shrink-0">{project.emoji}</span>
         <div className="flex-1 min-w-0 text-left">
           <div className="flex items-center gap-1.5">
@@ -483,9 +584,16 @@ function ProjectRow({ project }: { project: import("$/components/Tool/Projects/p
         <div className="flex items-center gap-1 shrink-0 text-muted-foreground/50">
           <span className="text-[10px]">{members.length}</span>
           <Users className="w-2.5 h-2.5" />
-          <ChevronDown className={cn("w-3 h-3 transition-transform duration-200", expanded && "rotate-180")} />
         </div>
-      </button>
+        </button>
+        <button
+          onClick={handleExpand}
+          aria-label={expanded ? "Collapse project members" : "Expand project members"}
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:bg-muted/30 hover:text-foreground"
+        >
+          <ChevronDown className={cn("w-3 h-3 transition-transform duration-200", expanded && "rotate-180")} />
+        </button>
+      </div>
 
       <AnimatePresence>
         {expanded && (
@@ -536,6 +644,8 @@ const StatusWidgetContent = memo((props: CustomProps) => {
   // ── Projects ──
   const { projects, loading: projectsLoading } = useProjects();
   const [createProjectOpen, setCreateProjectOpen] = useState(false);
+  const [teamRuntimeStatuses, setTeamRuntimeStatuses] = useState<TeamRuntimeStatus[]>([]);
+  const [teamModeSyncing, setTeamModeSyncing] = useState(false);
 
   // ── Inbox ──
   const [activeTab, setActiveTab] = useState<StatusTab>("agents");
@@ -552,11 +662,18 @@ const StatusWidgetContent = memo((props: CustomProps) => {
   const deletingAgentIdsRef = useRef<Set<string>>(new Set());
   useEffect(() => { deletingAgentIdsRef.current = deletingAgentIds; }, [deletingAgentIds]);
   const [inboxItems, setInboxItems] = useState<InboxItem[]>([]);
+  // Orphaned runtimes (uninstalled runtimes with agents still in DB)
+  const [orphanedRuntimes, setOrphanedRuntimes] = useState<Array<{ runtime: string; agentCount: number }>>([]);
+  const [orphanProcessing, setOrphanProcessing] = useState<string | null>(null);
+  // Orphaned agents (individual agents whose workspace was deleted)
+  const [orphanedAgents, setOrphanedAgents] = useState<Array<{ id: string; name: string; runtime: string; avatar?: string; emoji?: string }>>([]);
+  const [orphanedAgentProcessing, setOrphanedAgentProcessing] = useState<string | null>(null);
   const [inboxLoading, setInboxLoading] = useState(false);
 
-  const pendingInboxCount = useMemo(
-    () => inboxItems.filter((i) => i.status === "pending").length,
-    [inboxItems]
+  // Runtimes that need authentication (e.g., `codex login`)
+  const needsAuthRuntimes = useMemo(
+    () => teamRuntimeStatuses.filter((r) => r.authStatus === "needs_auth" && r.status === "available"),
+    [teamRuntimeStatuses]
   );
 
   const filteredStatuses = useMemo(() => {
@@ -594,6 +711,178 @@ const StatusWidgetContent = memo((props: CustomProps) => {
     } catch { /* ignore */ }
   }, []);
 
+  const fetchTeamRuntimeStatuses = useCallback(async () => {
+    try {
+      const result = await bridgeInvoke("get-team-mode-status", {}) as {
+        success?: boolean;
+        data?: TeamRuntimeStatus[];
+      };
+      if (result?.success && Array.isArray(result.data) && isMounted.current) {
+        setTeamRuntimeStatuses(result.data);
+      }
+    } catch {
+      if (isMounted.current) setTeamRuntimeStatuses([]);
+    }
+  }, []);
+
+  const syncTeamMode = useCallback(async () => {
+    setTeamModeSyncing(true);
+    try {
+      await bridgeInvoke("sync-team-mode", {});
+      await fetchTeamRuntimeStatuses();
+    } catch {
+      // ignore and let the next poll refresh status
+    } finally {
+      if (isMounted.current) setTeamModeSyncing(false);
+    }
+  }, [fetchTeamRuntimeStatuses]);
+
+  // ── Orphaned runtimes ──
+  const fetchOrphanedRuntimes = useCallback(async () => {
+    try {
+      const result = (await bridgeInvoke("check-orphaned-runtimes")) as {
+        success: boolean;
+        data?: { orphaned: Array<{ runtime: string; agentCount: number }> };
+      };
+      if (result.success && result.data?.orphaned && isMounted.current) {
+        setOrphanedRuntimes(result.data.orphaned);
+      }
+    } catch { /* connector offline */ }
+  }, []);
+
+  const handleOrphanExportAndDelete = useCallback(async (runtime: string) => {
+    setOrphanProcessing(runtime);
+    try {
+      // Export first
+      const exportResult = (await bridgeInvoke("runtime-cleanup-export", { runtime })) as {
+        success: boolean;
+        data?: { agents: unknown[]; count: number };
+        error?: string;
+      };
+      if (!exportResult.success) {
+        console.error("Export failed:", exportResult.error);
+        return;
+      }
+      // Download JSON
+      const blob = new Blob([JSON.stringify(exportResult.data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${runtime}-agents-backup-${new Date().toISOString().split("T")[0]}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      // Then delete
+      const deleteResult = (await bridgeInvoke("runtime-cleanup-delete", { runtime })) as {
+        success: boolean;
+        data?: { deleted: number };
+        error?: string;
+      };
+      if (deleteResult.success) {
+        setOrphanedRuntimes((prev) => prev.filter((o) => o.runtime !== runtime));
+      }
+    } catch (error) {
+      console.error("Orphan cleanup failed:", error);
+    } finally {
+      if (isMounted.current) setOrphanProcessing(null);
+    }
+  }, []);
+
+  const handleOrphanDeleteOnly = useCallback(async (runtime: string) => {
+    setOrphanProcessing(runtime);
+    try {
+      const result = (await bridgeInvoke("runtime-cleanup-delete", { runtime })) as {
+        success: boolean;
+        data?: { deleted: number };
+        error?: string;
+      };
+      if (result.success) {
+        setOrphanedRuntimes((prev) => prev.filter((o) => o.runtime !== runtime));
+      }
+    } catch (error) {
+      console.error("Orphan delete failed:", error);
+    } finally {
+      if (isMounted.current) setOrphanProcessing(null);
+    }
+  }, []);
+
+  const handleOrphanDismiss = useCallback((runtime: string) => {
+    setOrphanedRuntimes((prev) => prev.filter((o) => o.runtime !== runtime));
+  }, []);
+
+  // ── Orphaned Agents (individual workspace detection) ──
+  const fetchOrphanedAgents = useCallback(async () => {
+    try {
+      const result = (await bridgeInvoke("check-orphaned-agents")) as {
+        success: boolean;
+        data?: { orphanedAgents: Array<{ id: string; name: string; runtime: string; avatar?: string; emoji?: string }>; count: number };
+      };
+      if (result.success && result.data?.orphanedAgents && isMounted.current) {
+        setOrphanedAgents(result.data.orphanedAgents);
+      }
+    } catch { /* connector offline */ }
+  }, []);
+
+  const handleOrphanedAgentDelete = useCallback(async (agentId: string) => {
+    setOrphanedAgentProcessing(agentId);
+    try {
+      const result = (await bridgeInvoke("delete-orphaned-agent", { agentId })) as {
+        success: boolean;
+        error?: string;
+      };
+      if (result.success) {
+        setOrphanedAgents((prev) => prev.filter((a) => a.id !== agentId));
+        // Notify agent providers to refresh
+        gatewayConnection.emit("agents.changed");
+      }
+    } catch (error) {
+      console.error("Orphaned agent delete failed:", error);
+    } finally {
+      if (isMounted.current) setOrphanedAgentProcessing(null);
+    }
+  }, []);
+
+  const handleOrphanedAgentDeleteAllByRuntime = useCallback(async (runtime: string) => {
+    setOrphanedAgentProcessing(runtime);
+    try {
+      const result = (await bridgeInvoke("delete-all-orphaned-agents", { runtime })) as {
+        success: boolean;
+        data?: { deleted: string[]; count: number };
+        error?: string;
+      };
+      if (result.success && result.data?.deleted) {
+        const deletedSet = new Set(result.data.deleted);
+        setOrphanedAgents((prev) => prev.filter((a) => !deletedSet.has(a.id)));
+        // Notify agent providers to refresh
+        gatewayConnection.emit("agents.changed");
+      }
+    } catch (error) {
+      console.error("Orphaned agents bulk delete failed:", error);
+    } finally {
+      if (isMounted.current) setOrphanedAgentProcessing(null);
+    }
+  }, []);
+
+  const handleOrphanedAgentDismiss = useCallback((agentId: string) => {
+    setOrphanedAgents((prev) => prev.filter((a) => a.id !== agentId));
+  }, []);
+
+  // Derive unavailable runtimes set from orphaned runtimes AND missing runtimes from team status
+  const unavailableRuntimes = useMemo(() => {
+    const set = new Set(orphanedRuntimes.map((o) => o.runtime));
+    // Also include runtimes that are marked as "missing" in team status
+    for (const status of teamRuntimeStatuses) {
+      if (status.status === "missing") {
+        set.add(status.runtime);
+      }
+    }
+    return set;
+  }, [orphanedRuntimes, teamRuntimeStatuses]);
+  // Ref for use in callbacks
+  const unavailableRuntimesRef = useRef<Set<string>>(new Set());
+  useEffect(() => { unavailableRuntimesRef.current = unavailableRuntimes; }, [unavailableRuntimes]);
+
   // Fetch inbox on tab switch + poll every 60s for badge count
   useEffect(() => {
     if (activeTab === "inbox") fetchInbox();
@@ -604,6 +893,25 @@ const StatusWidgetContent = memo((props: CustomProps) => {
     const timer = setInterval(() => fetchInbox(), 60_000);
     return () => clearInterval(timer);
   }, [fetchInbox]);
+
+  useEffect(() => {
+    fetchTeamRuntimeStatuses();
+    const timer = setInterval(() => fetchTeamRuntimeStatuses(), 60_000);
+    return () => clearInterval(timer);
+  }, [fetchTeamRuntimeStatuses]);
+
+  // Runtime-level orphan detection disabled — individual agent detection is more accurate.
+  // The "check-orphaned-agents" action checks each agent's workspace directory.
+  // Keeping the state/handlers for backwards compatibility but not fetching.
+  // useEffect(() => {
+  //   fetchOrphanedRuntimes();
+  //   const handleUninstall = ...
+  // }, [fetchOrphanedRuntimes]);
+
+  // Fetch orphaned agents (individual workspace detection) on mount
+  useEffect(() => {
+    fetchOrphanedAgents();
+  }, [fetchOrphanedAgents]);
 
   // Track connection state
   useEffect(() => {
@@ -621,25 +929,47 @@ const StatusWidgetContent = memo((props: CustomProps) => {
     return openClawAgentsRef.current as Agent[];
   }, []);
 
-  // Fetch session/activity data for a single agent.
-  // OpenClaw agents use the gateway; all other runtimes use the bridge (SQLite-backed).
+  // Fetch session/activity data for a single agent, scoped to its primary session only.
+  // The primary session is resolved via the connector's "get-primary-session" bridge action.
+  // This ensures the StatusWidget only shows messages from the user's direct conversation,
+  // not background jobs or automated sessions.
   const fetchAgentSessions = useCallback(
     async (agent: Agent): Promise<{ sessionCount: number; lastActivity?: number; recentMessages: string[] }> => {
       const runtime = agent.runtime || "openclaw";
+      const empty = { sessionCount: 0, recentMessages: [] as string[] };
 
-      // Non-OpenClaw runtimes: read actual session history from disk via bridge
-      if (runtime !== "openclaw") {
-        try {
-          const result = await bridgeInvoke("get-runtime-sessions", { agentId: agent.id, limit: 20 }) as {
+      // Resolve the primary session key from the connector.
+      let primaryKey = "";
+      try {
+        const psResult = await withTimeout(
+          bridgeInvoke("get-primary-session", { agentId: agent.id, runtime }) as Promise<{
             success?: boolean;
-            data?: { sessionCount?: number; lastActiveMs?: number; recentMessages?: Array<{ role: string; content: string; timestamp: number }> };
-          };
+            data?: { sessionKey?: string };
+          }>,
+          STATUS_WIDGET_BRIDGE_TIMEOUT_MS,
+          { success: false }
+        );
+        primaryKey = psResult?.success ? (psResult.data?.sessionKey || "") : "";
+      } catch { /* connector offline */ }
+
+      // Non-OpenClaw runtimes: read messages from the primary session via bridge
+      if (runtime !== "openclaw") {
+        if (!primaryKey) return empty;
+        try {
+          const result = await withTimeout(
+            bridgeInvoke("get-runtime-sessions", { agentId: agent.id, runtime, primarySessionKey: primaryKey, limit: 20 }) as Promise<{
+              success?: boolean;
+              data?: { sessionCount?: number; lastActiveMs?: number; recentMessages?: Array<{ role: string; content: string; timestamp: number }> };
+            }>,
+            STATUS_WIDGET_SESSION_TIMEOUT_MS,
+            { success: false }
+          );
           if (result?.success && result.data) {
-            // Only count assistant messages — same behaviour as OpenClaw path
             const msgs = (result.data.recentMessages || [])
               .filter((m) => m.role === "assistant")
               .map((m) => m.content)
-              .filter(Boolean);
+              .filter(Boolean)
+              .reverse();
             return {
               sessionCount: result.data.sessionCount || 0,
               lastActivity: result.data.lastActiveMs || undefined,
@@ -647,68 +977,126 @@ const StatusWidgetContent = memo((props: CustomProps) => {
             };
           }
         } catch { /* ignore */ }
-        return { sessionCount: 0, recentMessages: [] };
+        return empty;
       }
 
-      // OpenClaw: fetch live sessions from gateway
-      if (!gatewayConnection.isConnected()) return { sessionCount: 0, recentMessages: [] };
+      // OpenClaw: fetch chat history from the primary session key only
+      if (!gatewayConnection.isConnected()) return empty;
+      const sessionKey = primaryKey || `agent:${agent.id}:main`;
       try {
-        const result = await gatewayConnection.listSessions(agent.id, 10);
-        const sessions = result.sessions || [];
-        const lastActivity = sessions.length > 0
-          ? Math.max(...sessions.map((s) => s.updatedAt || 0))
-          : undefined;
-
         let recentMessages: string[] = [];
-        if (sessions.length > 0) {
-          try {
-            const history = await gatewayConnection.getChatHistory(sessions[0].key, 20);
-            const messages = (history.messages || []) as Array<{ role?: string; content?: unknown }>;
-            recentMessages = extractRecentAssistantTexts(messages, 10);
-          } catch { /* ignore */ }
-        }
+        const history = await withTimeout(
+          gatewayConnection.getChatHistory(sessionKey, 20),
+          STATUS_WIDGET_CHAT_HISTORY_TIMEOUT_MS,
+          { messages: [] as Array<{ role?: string; content?: unknown }> }
+        );
+        const messages = (history.messages || []) as Array<{ role?: string; content?: unknown }>;
+        recentMessages = extractRecentAssistantTexts(messages, 10);
 
-        return { sessionCount: sessions.length, lastActivity, recentMessages };
+        // Derive lastActivity from the newest message timestamp if available
+        const lastActivity = messages.length > 0 ? Date.now() : undefined;
+
+        return { sessionCount: 1, lastActivity, recentMessages };
       } catch {
-        return { sessionCount: 0, recentMessages: [] };
+        return empty;
       }
     },
     []
   );
 
   // Build statuses
+  const refreshSeqRef = useRef(0);
   const refresh = useCallback(async () => {
     if (!isMounted.current) return;
+    const refreshSeq = ++refreshSeqRef.current;
     setLoading(true);
     setError(null);
     try {
       const rawAgentList = await fetchAgents();
       if (!isMounted.current) return;
-      // Exclude agents whose deletion is in-flight so refresh() can't re-add them
-      // before the context catches up to the server-side removal.
-      const agentList = rawAgentList.filter((a) => !deletingAgentIdsRef.current.has(a.id));
+      // Keep agents whose deletion is in flight visible so Chat can show the
+      // same red "Firing" state as the main sidebar.
+      const agentList = rawAgentList;
       setAgents(agentList);
-      // Clear hiring flags for agents now confirmed by the server
+      // Clear hiring flags only after the context row has left "hiring".
+      // Optimistic rows are intentionally merged into the context while setup
+      // runs, so mere presence in the list is not enough to clear the badge.
       setHiringAgentIds((prev) => {
         if (prev.size === 0) return prev;
-        const confirmedIds = new Set(agentList.map((a) => a.id));
+        const confirmedIds = new Set(
+          agentList
+            .filter((agent) => normalizeAgentState(agent.status) !== "hiring")
+            .map((a) => a.id),
+        );
         const next = new Set([...prev].filter((id) => !confirmedIds.has(id)));
         return next.size === prev.size ? prev : next;
       });
 
-      const [lastSeenMap, sessionInfos] = await Promise.all([
-        fetchLastSeenFromBridge(agentList.map((a) => a.id)),
-        Promise.all(agentList.map((a) => fetchAgentSessions(a))),
-      ]);
-      if (!isMounted.current) return;
+      // Render immediately with prior-known data, then hydrate in background.
+      const prevById = new Map(statusesRef.current.map((s) => [s.agentId, s] as const));
+      const baseStatuses: AgentStatus[] = agentList.map((agent) => {
+        const prev = prevById.get(agent.id);
+        const registryState = normalizeAgentState(agent.status);
+        return {
+          agentId: agent.id,
+          name: agent.name,
+          state: deletingAgentIdsRef.current.has(agent.id)
+            ? "deleting"
+            : registryState !== "idle"
+              ? registryState
+              : prev?.state || "idle",
+          lastActivity: prev?.lastActivity,
+          unreadCount: prev?.unreadCount || 0,
+          recentMessages: prev?.recentMessages || [],
+          sessionCount: prev?.sessionCount || 0,
+          lastSeenTs: prev?.lastSeenTs || 0,
+          runtime: agent.runtime,
+          errorMessage: prev?.errorMessage,
+        };
+      });
 
-      const newStatuses: AgentStatus[] = agentList.map((agent, i) => {
+      baseStatuses.sort((a, b) => {
+        if (a.state === "running" && b.state !== "running") return -1;
+        if (b.state === "running" && a.state !== "running") return 1;
+        if (a.unreadCount !== b.unreadCount) return b.unreadCount - a.unreadCount;
+        return (b.lastActivity || 0) - (a.lastActivity || 0);
+      });
+
+      setStatuses((prev) => {
+        const baseIds = new Set(baseStatuses.map((s) => s.agentId));
+        const pendingHiring = prev.filter(
+          (s) => hiringAgentIdsRef.current.has(s.agentId) && !baseIds.has(s.agentId)
+        );
+        return [...baseStatuses, ...pendingHiring];
+      });
+      if (isMounted.current) setLoading(false);
+
+      // Hydrate session/unread in background with strict time budgets.
+      const [lastSeenMap, sessionInfos] = await Promise.all([
+        withTimeout(
+          fetchLastSeenFromBridge(agentList.map((a) => a.id)),
+          STATUS_WIDGET_BRIDGE_TIMEOUT_MS,
+          {} as Record<string, LastSeenEntry>
+        ),
+        Promise.all(agentList.map((a) =>
+          withTimeout(
+            fetchAgentSessions(a),
+            STATUS_WIDGET_SESSION_TIMEOUT_MS,
+            { sessionCount: 0, recentMessages: [] as string[] }
+          )
+        )),
+      ]);
+      if (!isMounted.current || refreshSeq !== refreshSeqRef.current) return;
+
+      const enrichedStatuses: AgentStatus[] = agentList.map((agent, i) => {
         const info = sessionInfos[i];
         const activeRun = Array.from(activeRunsRef.current.values()).find(
           (r) => r.agentId === agent.id
         );
+        const registryState = normalizeAgentState(agent.status);
+        const previous = prevById.get(agent.id);
         const entry = lastSeenMap[agent.id];
-        const lastSeen = entry?.ts || 0;
+        const lastSeen = entry?.ts || previous?.lastSeenTs || 0;
         const lastSeenMsg = entry?.msgText;
         const lastActivity = info.lastActivity || 0;
         const latestMsg = info.recentMessages[0]; // index 0 = newest (array is newest-first)
@@ -726,22 +1114,34 @@ const StatusWidgetContent = memo((props: CustomProps) => {
           const seenIdx = lastSeenMsg ? info.recentMessages.indexOf(lastSeenMsg) : -1;
           unreadCount = seenIdx === -1 ? (info.recentMessages.length || 1) : seenIdx;
         }
+        // The currently-open agent panel is "always read" while focused — the
+        // user is literally looking at it. This keeps the badge from piling up
+        // count during an active chat.
+        const isActivelyViewing =
+          activeAgentIdRef.current === agent.id &&
+          (typeof document === "undefined" || document.visibilityState === "visible");
+        if (isActivelyViewing) unreadCount = 0;
 
         return {
           agentId: agent.id,
           name: agent.name,
-          state: activeRun ? "running" as const : "idle" as const,
-          lastActivity: lastActivity || undefined,
+          state: deletingAgentIdsRef.current.has(agent.id)
+            ? "deleting"
+            : registryState !== "idle"
+              ? registryState
+              : activeRun ? "running" : "idle",
+          lastActivity: lastActivity || previous?.lastActivity || undefined,
           unreadCount,
-          recentMessages: info.recentMessages,
+          recentMessages: info.recentMessages.length > 0 ? info.recentMessages : (previous?.recentMessages || []),
           sessionCount: info.sessionCount,
           lastSeenTs: lastSeen,
           runtime: agent.runtime,
+          errorMessage: previous?.errorMessage,
         };
       });
 
       // Sort: running first, then unread, then by lastActivity
-      newStatuses.sort((a, b) => {
+      enrichedStatuses.sort((a, b) => {
         if (a.state === "running" && b.state !== "running") return -1;
         if (b.state === "running" && a.state !== "running") return 1;
         if (a.unreadCount !== b.unreadCount) return b.unreadCount - a.unreadCount;
@@ -752,14 +1152,17 @@ const StatusWidgetContent = memo((props: CustomProps) => {
       // Once the connector confirms and context updates, the server list will include
       // them and the hiring flag will be cleared naturally.
       setStatuses((prev) => {
-        const serverIds = new Set(newStatuses.map((s) => s.agentId));
+        const serverIds = new Set(enrichedStatuses.map((s) => s.agentId));
         const pendingHiring = prev.filter(
           (s) => hiringAgentIdsRef.current.has(s.agentId) && !serverIds.has(s.agentId)
         );
-        return [...newStatuses, ...pendingHiring];
+        return [...enrichedStatuses, ...pendingHiring];
       });
-    } catch { /* ignore */ } finally {
-      if (isMounted.current) setLoading(false);
+    } catch {
+      if (isMounted.current) {
+        setError("Status load timed out. Showing cached/partial data.");
+        setLoading(false);
+      }
     }
   }, [fetchAgents, fetchAgentSessions]);
 
@@ -826,10 +1229,21 @@ const StatusWidgetContent = memo((props: CustomProps) => {
           (r) => r.agentId === agentId
         );
         if (!stillActive) {
+          // Suppress the unread bump when the user is actively looking at this
+          // agent's panel — they're already "reading" it. Hitting +1 anyway
+          // produces phantom unread badges as you chat.
+          const isActivelyViewing =
+            activeAgentIdRef.current === agentId &&
+            (typeof document === "undefined" || document.visibilityState === "visible");
           setStatuses((prev) =>
             prev.map((s) =>
               s.agentId === agentId
-                ? { ...s, state: "idle" as const, lastActivity: Date.now(), unreadCount: s.unreadCount + 1 }
+                ? {
+                    ...s,
+                    state: "idle" as const,
+                    lastActivity: Date.now(),
+                    unreadCount: isActivelyViewing ? 0 : s.unreadCount + 1,
+                  }
                 : s
             )
           );
@@ -844,6 +1258,15 @@ const StatusWidgetContent = memo((props: CustomProps) => {
                     s.agentId === agentId ? { ...s, recentMessages: info.recentMessages } : s
                   )
                 );
+                // If the user is actively viewing this agent, persist the latest
+                // message as "seen" so the next refresh() doesn't re-introduce
+                // the unread count we just zeroed above.
+                if (isActivelyViewing) {
+                  const latest = info.recentMessages[0];
+                  const ts = Date.now();
+                  bridgeInvoke("set-agent-last-seen", { agentId, ts, msgText: latest || "" })
+                    .catch(() => setLastSeenLocal(agentId, ts, latest));
+                }
               }
             }).catch(() => { /* ignore */ });
           }, 600);
@@ -888,9 +1311,11 @@ const StatusWidgetContent = memo((props: CustomProps) => {
     const unreadCount = current?.unreadCount ?? 0;
     const lastSeenTs = current?.lastSeenTs ?? 0;
     const runtime = current?.runtime;
+    const hiring = current?.state === "hiring";
+    const runtimeUnavailable = runtime ? unavailableRuntimesRef.current.has(runtime) : false;
 
     setActiveAgentId(agentId);
-    dispatchOpenAgentPanel(agentId, undefined, { sessionCount, unreadCount, lastSeenTs, runtime });
+    dispatchOpenAgentPanel(agentId, undefined, { sessionCount, unreadCount, lastSeenTs, runtime, runtimeUnavailable, hiring });
   }, []);
 
   // Decrement unread per session opened; persist + zero out when clearAll is true
@@ -926,12 +1351,16 @@ const StatusWidgetContent = memo((props: CustomProps) => {
       if (activeAgentIdRef.current === agentId) {
         const next = statusesRef.current.find((s) => s.agentId !== agentId);
         if (next) {
+          const runtimeUnavailable = next.runtime
+            ? unavailableRuntimesRef.current.has(next.runtime)
+            : false;
           setActiveAgentId(next.agentId);
           dispatchOpenAgentPanel(next.agentId, undefined, {
             sessionCount: next.sessionCount,
             unreadCount: next.unreadCount,
             lastSeenTs: next.lastSeenTs,
             runtime: next.runtime,
+            runtimeUnavailable,
           });
         } else {
           setActiveAgentId(null);
@@ -945,11 +1374,18 @@ const StatusWidgetContent = memo((props: CustomProps) => {
       setStatuses((prev) => prev.filter((s) => s.agentId !== agentId));
       refresh();
     };
+    const onDeleteFailed = (e: Event) => {
+      const { agentId } = (e as CustomEvent<{ agentId: string }>).detail ?? {};
+      if (!agentId) return;
+      setDeletingAgentIds((prev) => { const n = new Set(prev); n.delete(agentId); return n; });
+    };
     window.addEventListener("agent.deleting", onDeleting);
     window.addEventListener("agent.deleted", onDeleted);
+    window.addEventListener("agent.delete.failed", onDeleteFailed);
     return () => {
       window.removeEventListener("agent.deleting", onDeleting);
       window.removeEventListener("agent.deleted", onDeleted);
+      window.removeEventListener("agent.delete.failed", onDeleteFailed);
     };
   }, [refresh]);
 
@@ -961,12 +1397,24 @@ const StatusWidgetContent = memo((props: CustomProps) => {
       }>).detail ?? {};
       if (!agentId) return;
       setHiringAgentIds((prev) => new Set([...prev, agentId]));
+      hiringAgentIdsRef.current = new Set([...hiringAgentIdsRef.current, agentId]);
       setStatuses((prev) => {
-        if (prev.some((s) => s.agentId === agentId)) return prev;
+        if (prev.some((s) => s.agentId === agentId)) {
+          return prev.map((status) =>
+            status.agentId === agentId
+              ? {
+                  ...status,
+                  name: name || status.name,
+                  state: "hiring",
+                  runtime: runtime ?? status.runtime,
+                }
+              : status,
+          );
+        }
         return [...prev, {
           agentId,
           name: name || agentId,
-          state: "idle",
+          state: "hiring",
           unreadCount: 0,
           recentMessages: [],
           sessionCount: 0,
@@ -978,10 +1426,19 @@ const StatusWidgetContent = memo((props: CustomProps) => {
     const onHired = (e: Event) => {
       const { agentId } = (e as CustomEvent<{ agentId: string }>).detail ?? {};
       if (!agentId) return;
-      // Stagger refreshes to give the context time to pick up the new agent
-      // from SQLite. refresh() clears hiringAgentIds once the agent appears
-      // in the context list. The 6s safety net force-clears the badge if the
-      // context never updates (hub latency, SQLite write failure, etc.).
+      // Hired only fires after setup writes complete, so flip the row back to
+      // ready immediately, then stagger refreshes to catch SQLite indexing.
+      setStatuses((prev) =>
+        prev.map((status) =>
+          status.agentId === agentId ? { ...status, state: "idle" } : status,
+        ),
+      );
+      setHiringAgentIds((prev) => {
+        if (!prev.has(agentId)) return prev;
+        const next = new Set(prev);
+        next.delete(agentId);
+        return next;
+      });
       refresh();
       setTimeout(() => refresh(), 1500);
       setTimeout(() => refresh(), 3500);
@@ -1071,6 +1528,9 @@ const StatusWidgetContent = memo((props: CustomProps) => {
               Inbox
             </button>
           </div>
+          <div className="flex items-center gap-1 shrink-0">
+            <ConnectorStatusIndicator />
+          </div>
         </div>
 
         {/* Search bar — shown on agents and projects tabs */}
@@ -1096,13 +1556,22 @@ const StatusWidgetContent = memo((props: CustomProps) => {
                 <span className="text-[10px] text-muted-foreground">
                   {projects.length} project{projects.length !== 1 ? "s" : ""}
                 </span>
-                <button
-                  onClick={() => setCreateProjectOpen(true)}
-                  className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-colors"
-                >
-                  <Plus className="w-3 h-3" />
-                  New
-                </button>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => void syncTeamMode()}
+                    className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-colors"
+                  >
+                    {teamModeSyncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                    Team
+                  </button>
+                  <button
+                    onClick={() => setCreateProjectOpen(true)}
+                    className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-colors"
+                  >
+                    <Plus className="w-3 h-3" />
+                    New
+                  </button>
+                </div>
               </div>
               <ScrollArea className="flex-1 min-h-0">
                 {projectsLoading ? (
@@ -1171,7 +1640,7 @@ const StatusWidgetContent = memo((props: CustomProps) => {
                     </div>
                   ))}
                 </div>
-              ) : inboxItems.length === 0 ? (
+              ) : inboxItems.length === 0 && orphanedRuntimes.length === 0 && orphanedAgents.length === 0 && needsAuthRuntimes.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-8 gap-2">
                   <Inbox className="w-6 h-6 text-muted-foreground/30" />
                   <p className="text-xs text-muted-foreground/60">Inbox is clear</p>
@@ -1179,6 +1648,187 @@ const StatusWidgetContent = memo((props: CustomProps) => {
                 </div>
               ) : (
                 <div className="space-y-1 pr-1">
+                  {/* Orphaned runtime cleanup items */}
+                  {orphanedRuntimes.map((orphan) => {
+                    const runtimeName = RUNTIME_NAMES[orphan.runtime] || orphan.runtime;
+                    const isProcessing = orphanProcessing === orphan.runtime;
+                    const RuntimeIcon = getRuntimeIcon(orphan.runtime);
+                    return (
+                      <div
+                        key={`orphan-${orphan.runtime}`}
+                        className="p-2.5 rounded-md border border-amber-500/30 bg-amber-500/5"
+                      >
+                        <div className="flex items-start gap-2">
+                          <div className="shrink-0 mt-0.5">
+                            {RuntimeIcon ? (
+                              <RuntimeIcon className="w-4 h-4 text-amber-500" />
+                            ) : (
+                              <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
+                            )}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-xs font-medium text-foreground truncate">
+                                {runtimeName} uninstalled
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-muted-foreground leading-relaxed mt-0.5">
+                              {orphan.agentCount} {runtimeName} agent{orphan.agentCount !== 1 ? "s" : ""} still in database.
+                              {" "}Delete all {runtimeName} agents?
+                            </p>
+                            <div className="flex items-center gap-1 mt-1.5 flex-wrap">
+                              <button
+                                onClick={() => handleOrphanExportAndDelete(orphan.runtime)}
+                                disabled={isProcessing}
+                                className="flex items-center gap-0.5 px-2 py-0.5 rounded text-[10px] font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors disabled:opacity-50"
+                              >
+                                {isProcessing && <Loader2 className="w-2.5 h-2.5 animate-spin" />}
+                                Export & Delete All
+                              </button>
+                              <button
+                                onClick={() => handleOrphanDeleteOnly(orphan.runtime)}
+                                disabled={isProcessing}
+                                className="flex items-center gap-0.5 px-2 py-0.5 rounded text-[10px] font-medium bg-destructive/10 text-destructive hover:bg-destructive/20 transition-colors disabled:opacity-50"
+                              >
+                                Delete All
+                              </button>
+                              <button
+                                onClick={() => handleOrphanDismiss(orphan.runtime)}
+                                disabled={isProcessing}
+                                className="flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] text-muted-foreground hover:bg-muted/30 transition-colors ml-auto disabled:opacity-50"
+                              >
+                                Keep
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {/* Orphaned agents (workspace deleted but still in DB) */}
+                  {orphanedAgents.length > 0 && (
+                    <div className="p-2.5 rounded-md border border-amber-500/30 bg-amber-500/5">
+                      <div className="flex items-start gap-2">
+                        <div className="shrink-0 mt-0.5">
+                          <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs font-medium text-foreground truncate">
+                              {orphanedAgents.length} orphaned agent{orphanedAgents.length !== 1 ? "s" : ""} found
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-muted-foreground leading-relaxed mt-0.5">
+                            These agents were deleted but still exist in the database.
+                          </p>
+                          <div className="mt-2 space-y-1 max-h-32 overflow-y-auto">
+                            {orphanedAgents.map((agent) => {
+                              const isProcessing = orphanedAgentProcessing === agent.id;
+                              const RuntimeIcon = getRuntimeIcon(agent.runtime);
+                              return (
+                                <div
+                                  key={`orphan-agent-${agent.id}`}
+                                  className="flex items-center justify-between gap-2 py-1 px-1.5 rounded bg-background/50"
+                                >
+                                  <div className="flex items-center gap-1.5 min-w-0">
+                                    {RuntimeIcon && <RuntimeIcon className="w-3 h-3 text-muted-foreground shrink-0" />}
+                                    <span className="text-[11px] truncate">{agent.name || agent.id}</span>
+                                    <span className="text-[10px] text-muted-foreground/60">({agent.runtime})</span>
+                                  </div>
+                                  <div className="flex items-center gap-1 shrink-0">
+                                    <button
+                                      onClick={() => handleOrphanedAgentDelete(agent.id)}
+                                      disabled={isProcessing}
+                                      className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-destructive/10 text-destructive hover:bg-destructive/20 transition-colors disabled:opacity-50"
+                                    >
+                                      {isProcessing ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : "Delete"}
+                                    </button>
+                                    <button
+                                      onClick={() => handleOrphanedAgentDismiss(agent.id)}
+                                      disabled={isProcessing}
+                                      className="px-1 py-0.5 rounded text-[9px] text-muted-foreground hover:bg-muted/30 transition-colors disabled:opacity-50"
+                                    >
+                                      Keep
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                          {/* Bulk actions by runtime */}
+                          {(() => {
+                            const runtimeCounts = orphanedAgents.reduce((acc, a) => {
+                              acc[a.runtime] = (acc[a.runtime] || 0) + 1;
+                              return acc;
+                            }, {} as Record<string, number>);
+                            const runtimes = Object.keys(runtimeCounts);
+                            if (runtimes.length === 0) return null;
+                            return (
+                              <div className="flex items-center gap-1 mt-2 pt-2 border-t border-border/50 flex-wrap">
+                                {runtimes.map((runtime) => (
+                                  <button
+                                    key={runtime}
+                                    onClick={() => handleOrphanedAgentDeleteAllByRuntime(runtime)}
+                                    disabled={orphanedAgentProcessing === runtime}
+                                    className="flex items-center gap-0.5 px-2 py-0.5 rounded text-[10px] font-medium bg-destructive/10 text-destructive hover:bg-destructive/20 transition-colors disabled:opacity-50"
+                                  >
+                                    {orphanedAgentProcessing === runtime && <Loader2 className="w-2.5 h-2.5 animate-spin" />}
+                                    Delete all {RUNTIME_NAMES[runtime] || runtime} ({runtimeCounts[runtime]})
+                                  </button>
+                                ))}
+                              </div>
+                            );
+                          })()}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Runtimes needing authentication */}
+                  {needsAuthRuntimes.map((runtimeStatus) => {
+                    const runtimeName = RUNTIME_NAMES[runtimeStatus.runtime] || runtimeStatus.runtime;
+                    const RuntimeIcon = getRuntimeIcon(runtimeStatus.runtime);
+                    const loginCmd = runtimeStatus.runtime === "codex" ? "codex login" : `${runtimeStatus.runtime} login`;
+                    return (
+                      <div
+                        key={`auth-${runtimeStatus.runtime}`}
+                        className="p-2.5 rounded-md border border-amber-500/30 bg-amber-500/5"
+                      >
+                        <div className="flex items-start gap-2">
+                          <div className="shrink-0 mt-0.5">
+                            {RuntimeIcon ? (
+                              <RuntimeIcon className="w-4 h-4 text-amber-500" />
+                            ) : (
+                              <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
+                            )}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-xs font-medium text-foreground truncate">
+                                {runtimeName} login needed
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-muted-foreground leading-relaxed mt-0.5">
+                              Run <code className="px-1 py-0.5 bg-muted/50 rounded text-[10px] font-mono">{loginCmd}</code> in your terminal to authenticate.
+                            </p>
+                            <div className="flex items-center gap-1 mt-1.5">
+                              <button
+                                onClick={() => syncTeamMode()}
+                                disabled={teamModeSyncing}
+                                className="flex items-center gap-0.5 px-2 py-0.5 rounded text-[10px] font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors disabled:opacity-50"
+                              >
+                                {teamModeSyncing && <Loader2 className="w-2.5 h-2.5 animate-spin" />}
+                                Check Again
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {/* Regular inbox items */}
                   {inboxItems.map((item) => (
                     <div
                       key={item.id}
@@ -1302,8 +1952,9 @@ const StatusWidgetContent = memo((props: CustomProps) => {
                           identity={identities.get(status.agentId)}
                           onClick={handleAgentClick}
                           isActive={activeAgentId === status.agentId}
-                          isHiring={hiringAgentIds.has(status.agentId)}
+                          isHiring={hiringAgentIds.has(status.agentId) || status.state === "hiring"}
                           isDeleting={deletingAgentIds.has(status.agentId)}
+                          isUnavailable={unavailableRuntimes.has(status.runtime || "")}
                         />
                       ))}
                     </AnimatePresence>

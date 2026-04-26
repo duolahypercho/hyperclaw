@@ -7,7 +7,7 @@ import { X, Paperclip, Pencil, Loader2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { useGatewayChat, GatewayChatMessage, GatewayChatAttachment } from "@OS/AI/core/hook/use-gateway-chat";
+import { useGatewayChat, GatewayChatMessage, GatewayChatAttachment, seedHermesSession } from "@OS/AI/core/hook/use-gateway-chat";
 import { useClaudeCodeChat } from "@OS/AI/core/hook/use-claude-code-chat";
 import { useCodexChat } from "@OS/AI/core/hook/use-codex-chat";
 import { useAIProviderSafe } from "$/Providers/AIProviderProv";
@@ -41,6 +41,9 @@ import { OPEN_AGENT_CHAT_EVENT } from "./StatusWidget";
 
 export { GatewayChatCustomHeader };
 
+const getHermesAgentId = (agentId: string): string =>
+  agentId.startsWith("hermes:") ? agentId.slice("hermes:".length) : agentId;
+
 // GatewayChat Widget Content - matches CopilotChat UI
 const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
   const { widget, isEditMode, onConfigChange } = props;
@@ -54,6 +57,7 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
   const configAgentId = config?.agentId as string | undefined;
   const configSessionKey = config?.sessionKey as string | undefined;
   const configActiveTab = config?.activeTab as BackendTab | undefined;
+  const configHideHeader = config?.hideHeader === true;
 
   // Local state for selected agent - initialized from widget config
   const [selectedAgentId, setSelectedAgentId] = useState<string | undefined>(
@@ -75,15 +79,6 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
 
   // Dynamic model list for the active runtime
   const { models: runtimeModels, loading: runtimeModelsLoading } = useRuntimeModels(activeTab);
-
-  // Filter agents by active tab
-  const tabAgents = useMemo(() => {
-    return agents.filter((a) => {
-      const backend = (a as any).backend || "openclaw";
-      return backend === activeTab;
-    });
-  }, [agents, activeTab]);
-
 
   // Sessions state - initialize with configSessionKey if provided
   const [sessions, setSessions] = useState<Array<{ key: string; label?: string; updatedAt?: number; projectPath?: string }>>([]);
@@ -224,6 +219,7 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
     sessionKey,
     autoConnect: effectiveProvider === "gateway",
     backend: activeTab === "hermes" ? "hermes" : "openclaw",
+    agentId: activeTab === "hermes" ? getHermesAgentId(currentAgentId) : undefined,
   });
 
   const claudeCodeChat = useClaudeCodeChat({
@@ -321,15 +317,16 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
         }
       } else if (activeTab === "hermes") {
         // Hermes sessions via hub/connector relay
-        const r = await bridgeInvoke("hermes-list-sessions", {}).catch(() => ({ sessions: [] })) as any;
+        const hermesProfileId = getHermesAgentId(currentAgentId);
+        const r = await bridgeInvoke("hermes-sessions", { agentId: hermesProfileId }).catch(() => ({ sessions: [] })) as any;
         result = (r?.sessions || []).map((s: any) => ({
-          key: s.key || `hermes:${s.id}`,
-          label: s.label || s.id?.slice(0, 16),
+          key: `hermes:${s.key || s.id}`,
+          label: s.label || (s.key || s.id)?.slice(0, 16),
           updatedAt: s.updatedAt,
         }));
       } else if (activeTab === "claude-code") {
         // Claude Code sessions — relay through hub/connector
-        const r = await bridgeInvoke("claude-code-list-sessions", {}).catch(() => ({ sessions: [] })) as any;
+        const r = await bridgeInvoke("claude-code-list-sessions", { agentId: currentAgentId }).catch(() => ({ sessions: [] })) as any;
         result = (r?.sessions || []).map((s: any) => ({
           key: s.key || `claude:${s.id}`,
           label: s.label || s.id?.slice(0, 8),
@@ -435,10 +432,16 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
 
   // Handle session change - clear and prepare for new session
   const handleSessionChange = useCallback(async (newSessionKey: string) => {
+    // For Hermes sessions (keyed as "hermes:<uuid>"), seed the session state
+    // so sendMessageViaHermes can resume the conversation instead of starting a new one.
+    if (activeTab === "hermes" && newSessionKey.startsWith("hermes:")) {
+      const hermesSessionId = newSessionKey.slice(7);
+      seedHermesSession(newSessionKey, hermesSessionId);
+    }
     // Use hook's setSessionKey to properly clear state
     setSelectedSessionKey(newSessionKey);
     setSessionKey(newSessionKey);
-  }, [setSessionKey]);
+  }, [activeTab, setSessionKey]);
 
   // Drag and drop state
   const [isDragging, setIsDragging] = useState(false);
@@ -892,24 +895,26 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
           )}
         </AnimatePresence>
 
-        {/* Custom Header */}
-        <GatewayChatCustomHeader
-          {...props}
-          currentAgentId={currentAgentId}
-          onAgentChange={handleAgentChange}
-          selectedSessionKey={selectedSessionKey}
-          onSessionChange={handleSessionChange}
-          onNewChat={handleNewChat}
-          onReloadChat={handleReloadChat}
-          onExport={handleExport}
-          onFetchSessions={fetchSessions}
-          sessions={sessions}
-          sessionsLoading={sessionsLoading}
-          sessionsError={sessionsError}
-          isConnected={isConnected}
-          activeTab={activeTab}
-          onTabChange={handleTabChange}
-        />
+        {/* Custom Header (hidden when embedded in a surface that provides its own) */}
+        {!configHideHeader && (
+          <GatewayChatCustomHeader
+            {...props}
+            currentAgentId={currentAgentId}
+            onAgentChange={handleAgentChange}
+            selectedSessionKey={selectedSessionKey}
+            onSessionChange={handleSessionChange}
+            onNewChat={handleNewChat}
+            onReloadChat={handleReloadChat}
+            onExport={handleExport}
+            onFetchSessions={fetchSessions}
+            sessions={sessions}
+            sessionsLoading={sessionsLoading}
+            sessionsError={sessionsError}
+            isConnected={isConnected}
+            activeTab={activeTab}
+            onTabChange={handleTabChange}
+          />
+        )}
 
         <div className="flex flex-col w-full flex-1 p-0 overflow-hidden">
           <div className="flex flex-col w-full flex-1 p-0 overflow-hidden relative">
@@ -1155,7 +1160,7 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
                                     </AvatarFallback>
                                   </Avatar>
                                 </div>
-                                <div className="flex items-center py-1.5">
+                                <div className="flex items-center px-3 py-1.5">
                                   <AnimatedThinkingText text={thinkingText} />
                                 </div>
                               </div>

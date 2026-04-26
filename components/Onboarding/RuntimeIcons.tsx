@@ -74,3 +74,16 @@ export function HermesIcon({ className }: IconProps) {
     />
   );
 }
+
+/** Stripe — official "S" mark, white on Stripe purple (#635BFF). Fills container. */
+export function StripeIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+      <rect width="24" height="24" fill="#635BFF" />
+      <path
+        d="M13.479 9.883c-1.626-.604-2.512-1.067-2.512-1.803 0-.622.511-.977 1.423-.977 1.667 0 3.379.642 4.558 1.22l.666-4.111c-.935-.446-2.847-1.177-5.49-1.177-1.87 0-3.425.489-4.536 1.401-1.155.954-1.752 2.328-1.752 3.987 0 3.012 1.846 4.293 4.852 5.388 1.93.689 2.579 1.177 2.579 1.926 0 .732-.629 1.158-1.762 1.158-1.422 0-3.778-.696-5.331-1.583L5.512 19.85c1.319.741 3.745 1.484 6.275 1.484 1.974 0 3.624-.467 4.748-1.349 1.262-.99 1.913-2.439 1.913-4.347 0-3.082-1.892-4.378-4.962-5.51l-.007-.005z"
+        fill="white"
+      />
+    </svg>
+  );
+}

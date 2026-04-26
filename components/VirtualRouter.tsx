@@ -42,6 +42,13 @@ const VirtualRouter: React.FC<VirtualRouterProps> = ({ routes, children }) => {
   // Always keep the latest children for the active path
   childrenByPath.current[router.pathname] = children;
 
+  // Derive the full set of paths to render: always include the current pathname
+  // even before the effect below persists it, so the first visit to a new path
+  // never shows a blank frame.
+  const pathsToRender = cachedPaths.has(router.pathname)
+    ? cachedPaths
+    : new Set([...cachedPaths, router.pathname]);
+
   // Mark the current path as cached once it renders
   useEffect(() => {
     setCachedPaths((prev) => {
@@ -70,7 +77,10 @@ const VirtualRouter: React.FC<VirtualRouterProps> = ({ routes, children }) => {
         setVirtualRoute(matchingRoute);
         setIsVirtualNavigation(true);
         router.push(path, undefined, { scroll: false });
+        return;
       }
+
+      router.push(path, undefined, { scroll: false });
     };
 
     window.addEventListener(
@@ -97,9 +107,18 @@ const VirtualRouter: React.FC<VirtualRouterProps> = ({ routes, children }) => {
       }
     };
 
+    const handleRouteError = (err: Error & { cancelled?: boolean }) => {
+      if (err.cancelled && isVirtualNavigation) {
+        setIsVirtualNavigation(false);
+        setVirtualRoute(null);
+      }
+    };
+
     router.events.on("routeChangeComplete", handleRouteComplete);
+    router.events.on("routeChangeError", handleRouteError);
     return () => {
       router.events.off("routeChangeComplete", handleRouteComplete);
+      router.events.off("routeChangeError", handleRouteError);
     };
   }, [router.events, isVirtualNavigation]);
 
@@ -140,7 +159,7 @@ const VirtualRouter: React.FC<VirtualRouterProps> = ({ routes, children }) => {
   // Render all cached pages — active one visible, others hidden
   return (
     <>
-      {Array.from(cachedPaths).map((path) => (
+      {Array.from(pathsToRender).map((path) => (
         <div
           key={path}
           style={{

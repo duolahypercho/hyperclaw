@@ -920,7 +920,6 @@ export class HyperClawBridge {
 
   private _intelDb: any = null;
   private _intelDbFailed = false;
-  private _fts5Available = false;
 
   getIntelDb(): any {
     if (this._intelDb) return this._intelDb;
@@ -936,7 +935,7 @@ export class HyperClawBridge {
       this._intelDb.pragma("busy_timeout = 5000");
       this._intelDb.pragma("foreign_keys = ON");
 
-      // Seeded schema — only contacts + research as starting tables;
+      // Seeded schema — contacts as the starting table;
       // agents can CREATE TABLE for anything else they need.
       this._intelDb.exec(`
         CREATE TABLE IF NOT EXISTS contacts (
@@ -953,46 +952,7 @@ export class HyperClawBridge {
           updated_at  INTEGER NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_contacts_status ON contacts(status);
-
-        CREATE TABLE IF NOT EXISTS research (
-          id          INTEGER PRIMARY KEY AUTOINCREMENT,
-          topic       TEXT NOT NULL,
-          finding     TEXT NOT NULL,
-          evidence    TEXT,
-          source      TEXT,
-          source_url  TEXT,
-          confidence  TEXT DEFAULT 'medium',
-          created_by  TEXT,
-          created_at  INTEGER NOT NULL,
-          updated_at  INTEGER NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_research_topic ON research(topic);
-        CREATE INDEX IF NOT EXISTS idx_research_agent ON research(created_by);
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_research_dedup ON research(topic, finding);
       `);
-
-      // Try to set up FTS5 (graceful degradation)
-      try {
-        this._intelDb.exec(`
-          CREATE VIRTUAL TABLE IF NOT EXISTS research_fts USING fts5(
-            finding, content=research, content_rowid=id
-          );
-          CREATE TRIGGER IF NOT EXISTS research_ai AFTER INSERT ON research BEGIN
-            INSERT INTO research_fts(rowid, finding) VALUES (new.id, new.finding);
-          END;
-          CREATE TRIGGER IF NOT EXISTS research_ad AFTER DELETE ON research BEGIN
-            INSERT INTO research_fts(research_fts, rowid, finding) VALUES('delete', old.id, old.finding);
-          END;
-          CREATE TRIGGER IF NOT EXISTS research_au AFTER UPDATE ON research BEGIN
-            INSERT INTO research_fts(research_fts, rowid, finding) VALUES('delete', old.id, old.finding);
-            INSERT INTO research_fts(rowid, finding) VALUES (new.id, new.finding);
-          END;
-        `);
-        this._fts5Available = true;
-      } catch {
-        // FTS5 not available — exact dedup only
-        this._fts5Available = false;
-      }
 
       return this._intelDb;
     } catch {
@@ -1042,7 +1002,7 @@ export class HyperClawBridge {
         indexes: indexes.map((i) => ({ name: i.name, unique: !!i.unique })),
       };
     }
-    return { tables: result, fts5_available: this._fts5Available };
+    return { tables: result };
   }
 
   // ── Intel: Read-only query (stmt.reader enforcement) ───────────────────────
@@ -1153,31 +1113,6 @@ export class HyperClawBridge {
     if (validCols.has("created_at") && !data.created_at) data.created_at = now;
     if (validCols.has("updated_at") && !data.updated_at) data.updated_at = now;
 
-    // FTS5 fuzzy dedup check for research table
-    if (table === "research" && this._fts5Available && data.finding) {
-      try {
-        const matches = db.prepare(
-          `SELECT r.id, r.finding, r.topic FROM research r
-           JOIN research_fts f ON f.rowid = r.id
-           WHERE research_fts MATCH ? LIMIT 3`
-        ).all(String(data.finding).replace(/['"]/g, ""));
-        if (matches.length > 0) {
-          // Check if any match is very similar (same topic + company)
-          const exact = (matches as any[]).find(
-            (m) => m.topic === data.topic
-          );
-          if (exact) {
-            return {
-              warning: "Similar finding already exists",
-              similar_to: exact,
-              inserted: false,
-            };
-          }
-        }
-      } catch {
-        // FTS match failed — proceed with insert
-      }
-    }
 
     try {
       const cols = Object.keys(data);

@@ -23,7 +23,6 @@ import {
   createDocOps,
   createIntelOps,
   createCredentialOps,
-  createOrgChartOps,
   createSystemOps,
   createLayoutOps,
   createAppStateOps,
@@ -33,7 +32,6 @@ import {
   type DocOperations,
   type IntelOperations,
   type CredentialOperations,
-  type OrgChartOperations,
   type SystemOperations,
   type LayoutOperations,
 } from './bridge';
@@ -53,7 +51,6 @@ export class HyperClawAgent extends EventEmitter {
   readonly docs: DocOperations;
   readonly intel: IntelOperations;
   readonly credentials: CredentialOperations;
-  readonly orgChart: OrgChartOperations;
   readonly system: SystemOperations;
   readonly layouts: LayoutOperations;
   readonly appState: AppStateOperations;
@@ -90,7 +87,6 @@ export class HyperClawAgent extends EventEmitter {
     this.docs = createDocOps(this.connection, getDeviceId);
     this.intel = createIntelOps(this.connection, getDeviceId);
     this.credentials = createCredentialOps(this.connection, getDeviceId);
-    this.orgChart = createOrgChartOps(this.connection, getDeviceId);
     this.system = createSystemOps(this.connection, getDeviceId);
     this.layouts = createLayoutOps(this.connection, getDeviceId);
     this.appState = createAppStateOps(this.connection, getDeviceId);

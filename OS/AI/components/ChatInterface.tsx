@@ -401,7 +401,7 @@ const MessageBubble = ({
           components={{
             pre: ({ node, ...props }) => (
               <div
-                className={`overflow-auto w-full my-2 bg-black/10 p-2 rounded-lg customScrollbar2 transition-opacity duration-1000`}
+                className={`overflow-auto w-full my-2 bg-background p-2 rounded-lg customScrollbar2 transition-opacity duration-1000`}
               >
                 <pre {...props} />
               </div>

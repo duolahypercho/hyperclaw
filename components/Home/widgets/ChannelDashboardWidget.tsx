@@ -43,6 +43,9 @@ import {
 import { dispatchOpenAgentChat } from "./StatusWidget";
 import { cronRun, fetchCronsFromBridge } from "$/components/Tool/Crons/utils";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
+import { OpenClawSetupPrompt } from "$/components/shared/OpenClawSetupPrompt";
+import { useHyperclawContext } from "$/Providers/HyperclawProv";
+import { normalizeAgentState } from "$/components/ensemble/primitives";
 
 const MAX_BUFFER = 500;
 
@@ -656,6 +659,7 @@ interface ChannelDashboardContentProps extends CustomProps {
 const ChannelDashboardContent = memo((props: ChannelDashboardContentProps) => {
   const { widget, onConfigChange, soundEnabled, onToggleSound } = props;
   const { isFocusModeActive } = useFocusMode();
+  const { agents } = useHyperclawContext();
   const config = (widget.config || {}) as WidgetConfig;
   const [allCrons, setAllCrons] = useState<CronJob[]>([]);
   const [cronsLoading, setCronsLoading] = useState(true);
@@ -1189,8 +1193,11 @@ const ChannelDashboardContent = memo((props: ChannelDashboardContentProps) => {
 
   const handleDeepLink = useCallback((entry: EventEntry) => {
     const agentId = extractAgentId(entry.sessionKey);
-    if (agentId) dispatchOpenAgentChat(agentId, entry.sessionKey);
-  }, []);
+    if (!agentId) return;
+    const agent = agents.find((candidate) => candidate.id === agentId);
+    const hiring = normalizeAgentState(agent?.status) === "hiring";
+    dispatchOpenAgentChat(agentId, entry.sessionKey, { runtime: agent?.runtime, hiring });
+  }, [agents]);
 
   const handleToggleCron = useCallback((cronId: string) => {
     userChangedCronsRef.current = true;
@@ -1267,7 +1274,18 @@ const ChannelDashboardContent = memo((props: ChannelDashboardContentProps) => {
       />
 
       <div className="flex-1 relative overflow-hidden">
-        {selectedCronIds.size === 0 ? (
+        {!connected && allCrons.length === 0 && !cronsLoading ? (
+          <div className="h-full flex items-center justify-center">
+            <OpenClawSetupPrompt
+              icon={<Radio className="w-5 h-5 text-primary" />}
+              title="Connect OpenClaw"
+              description="Monitor real-time announcements from your scheduled tasks."
+              onRetry={loadCrons}
+              retrying={cronsLoading}
+              size="sm"
+            />
+          </div>
+        ) : selectedCronIds.size === 0 ? (
           <div className="h-full flex flex-col items-center justify-center gap-3 px-6 text-center">
             <Radio className="w-8 h-8 text-muted-foreground/30" />
             <p className="text-xs text-muted-foreground">No cron jobs selected.</p>

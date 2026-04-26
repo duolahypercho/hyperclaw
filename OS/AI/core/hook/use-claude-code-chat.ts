@@ -4,12 +4,18 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
 import { getActiveSkillsContent } from "$/components/Home/widgets/AgentSkillsTab";
+import {
+  extractAgentIdFromSessionKey,
+  markAgentRunFinished,
+  markAgentRunStarted,
+} from "$/components/ensemble/hooks/useAgentStreamingState";
 import type {
   GatewayChatMessage,
   GatewayChatAttachment,
   UseGatewayChatReturn,
   ChatMessageRole,
 } from "./use-gateway-chat";
+import { mergeRuntimeResponseMessages } from "./runtime-chat-dedupe";
 
 /**
  * useClaudeCodeChat — drop-in replacement for useGatewayChat that routes
@@ -366,6 +372,7 @@ export function useClaudeCodeChat(
   const sendMessage = useCallback(
     async (content: string, attachments?: GatewayChatAttachment[]) => {
       if (!content.trim() && (!attachments || attachments.length === 0)) return;
+      if (activeRequestIdRef.current) return;
 
       const now = Date.now();
       const userMessage: GatewayChatMessage = {
@@ -388,7 +395,9 @@ export function useClaudeCodeChat(
 
       // Generate a unique requestId for streaming event correlation
       const requestId = `cc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const statusAgentId = agentId || extractAgentIdFromSessionKey(currentSessionKey);
       activeRequestIdRef.current = requestId;
+      markAgentRunStarted(requestId, statusAgentId);
 
       try {
         const activeSkills = agentId ? getActiveSkillsContent(agentId) : "";
@@ -430,7 +439,8 @@ export function useClaudeCodeChat(
           persistSessionIdMap(sessionIdMap);
         }
 
-        // Replace streaming placeholder with final messages
+        // Replace streaming placeholder with final messages. Connector responses
+        // may include the echoed user message or the full transcript.
         if (result.messages && result.messages.length > 0) {
           const newMessages: GatewayChatMessage[] = result.messages.map((m) => ({
             id: m.id || uuidv4(),
@@ -457,11 +467,12 @@ export function useClaudeCodeChat(
           }));
 
           setMessages((prev) => {
-            // Remove streaming placeholder
-            const filtered = prev.filter(
-              (m) => m.id !== "stream-active"
+            return mergeRuntimeResponseMessages(
+              prev,
+              newMessages,
+              content.trim(),
+              ["stream-active"]
             );
-            return [...filtered, ...newMessages];
           });
         } else {
           // No final messages but streaming may have added content — keep it
@@ -488,11 +499,12 @@ export function useClaudeCodeChat(
           ];
         });
       } finally {
+        markAgentRunFinished(requestId);
         activeRequestIdRef.current = null;
         setIsLoading(false);
       }
     },
-    []
+    [agentId]
   );
 
   const stopGeneration = useCallback(async () => {
@@ -505,6 +517,8 @@ export function useClaudeCodeChat(
     } catch {
       // Ignore abort errors
     }
+    const requestId = activeRequestIdRef.current;
+    if (requestId) markAgentRunFinished(requestId);
     activeRequestIdRef.current = null;
     setIsLoading(false);
   }, []);

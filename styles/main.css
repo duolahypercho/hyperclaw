@@ -13,26 +13,23 @@ body {
 }
 
 .customScrollbar2::-webkit-scrollbar {
-  background: transparent;
-  width: 12px;
-}
-.customScrollbar2::-webkit-scrollbar-thumb {
-  height: 50px;
-  border-radius: 8px;
-  border: 3px solid transparent;
-  background-clip: content-box;
-  background-color: hsla(var(--primary, 216 33% 35%)/0.28);
-  -webkit-transition: background 0.2s;
-  transition: background 0.2s;
-}
-.customScrollbar2::-webkit-scrollbar-thumb:hover {
-  background-color: hsla(var(--primary, 216 100% 66%)/0.38);
-}
-.customScrollbar2::-webkit-scrollbar-thumb:active {
-  background-color: hsla(var(--primary, 216 100% 66%)/0.55);
+  width: 10px;
+  height: 10px;
 }
 .customScrollbar2::-webkit-scrollbar-track {
   background: transparent;
+}
+.customScrollbar2::-webkit-scrollbar-thumb {
+  border-radius: 5px;
+  border: 2px solid var(--sb-track-bg);
+  background-color: var(--sb-thumb);
+  transition: background 0.2s;
+}
+.customScrollbar2::-webkit-scrollbar-thumb:hover {
+  background-color: var(--sb-thumb-hover);
+}
+.customScrollbar2::-webkit-scrollbar-thumb:active {
+  background-color: var(--sb-thumb-hover);
 }
 
 /* Docs editor: scrollbar track matches content background for seamless alignment */

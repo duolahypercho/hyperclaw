@@ -18,20 +18,8 @@ interface GuidedStep1Props {
 }
 
 export default function GuidedStep1({ onComplete }: GuidedStep1Props) {
-  const [companyName, setCompanyName] = useState(() => {
-    const saved = dashboardState.get("hyperclaw-company");
-    if (saved) {
-      try { return JSON.parse(saved).name || ""; } catch { /* ignore */ }
-    }
-    return "";
-  });
-  const [mission, setMission] = useState(() => {
-    const saved = dashboardState.get("hyperclaw-company");
-    if (saved) {
-      try { return JSON.parse(saved).mission || ""; } catch { /* ignore */ }
-    }
-    return "";
-  });
+  const [companyName, setCompanyName] = useState("");
+  const [mission, setMission] = useState("");
 
   const handleSubmit = () => {
     if (!companyName.trim()) return;

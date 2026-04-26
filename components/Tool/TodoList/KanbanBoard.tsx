@@ -905,7 +905,7 @@ const BoardTeamPanel: React.FC<{
           Add Agent
         </button>
         <a
-          href="/Tool/OrgChart"
+          href="/Tool/Team"
           className="w-full flex items-center justify-center gap-1 px-2 py-1 rounded text-[10px] text-muted-foreground hover:text-foreground hover:bg-card/60 transition-colors"
         >
           <ExternalLink className="w-3 h-3" />

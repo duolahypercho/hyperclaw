@@ -4,12 +4,18 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
 import { getActiveSkillsContent } from "$/components/Home/widgets/AgentSkillsTab";
+import {
+  extractAgentIdFromSessionKey,
+  markAgentRunFinished,
+  markAgentRunStarted,
+} from "$/components/ensemble/hooks/useAgentStreamingState";
 import type {
   GatewayChatMessage,
   GatewayChatAttachment,
   UseGatewayChatReturn,
   ChatMessageRole,
 } from "./use-gateway-chat";
+import { mergeRuntimeResponseMessages } from "./runtime-chat-dedupe";
 
 /**
  * useCodexChat — drop-in replacement for useGatewayChat that routes
@@ -24,6 +30,12 @@ export interface UseCodexChatOptions {
   autoConnect?: boolean;
   defaultModel?: string;
   agentId?: string;
+  /**
+   * Project path (agent's configured project). When set, it is forwarded to
+   * the connector so the persisted session row gets tagged with cwd, enabling
+   * the session picker to scope by current project.
+   */
+  projectPath?: string;
 }
 
 // Map HyperClaw session keys → Codex thread IDs for resume
@@ -32,7 +44,7 @@ const sessionIdMap = new Map<string, string>();
 export function useCodexChat(
   options: UseCodexChatOptions = {}
 ): UseGatewayChatReturn {
-  const { sessionKey: initialSessionKey, defaultModel, agentId } = options;
+  const { sessionKey: initialSessionKey, defaultModel, agentId, projectPath } = options;
 
   const [messages, setMessages] = useState<GatewayChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -44,6 +56,8 @@ export function useCodexChat(
   const [sessionKeyState, setSessionKeyState] = useState<string>(
     initialSessionKey || "default"
   );
+  const pendingSendRef = useRef(false);
+  const activeStatusRunIdRef = useRef<string | null>(null);
 
   // Sync session key from prop
   const prevPropKeyRef = useRef<string>(initialSessionKey || "default");
@@ -100,6 +114,8 @@ export function useCodexChat(
   const sendMessage = useCallback(
     async (content: string, attachments?: GatewayChatAttachment[]) => {
       if (!content.trim() && (!attachments || attachments.length === 0)) return;
+      if (pendingSendRef.current) return;
+      pendingSendRef.current = true;
 
       const now = Date.now();
       const userMessage: GatewayChatMessage = {
@@ -116,6 +132,10 @@ export function useCodexChat(
 
       const currentSessionKey = sessionKeyRef.current;
       const codexThreadId = sessionIdMap.get(currentSessionKey);
+      const statusRunId = `codex-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const statusAgentId = agentId || extractAgentIdFromSessionKey(currentSessionKey);
+      activeStatusRunIdRef.current = statusRunId;
+      markAgentRunStarted(statusRunId, statusAgentId);
 
       try {
         const activeSkills = agentId ? getActiveSkillsContent(agentId) : "";
@@ -126,6 +146,7 @@ export function useCodexChat(
           sessionKey: currentSessionKey,
           ...(model && { model }),
           ...(agentId && { agentId }),
+          ...(projectPath && { projectPath }),
           ...(activeSkills && { appendSystemPrompt: activeSkills }),
         })) as {
           success?: boolean;
@@ -150,7 +171,8 @@ export function useCodexChat(
           sessionIdMap.set(currentSessionKey, result.sessionId);
         }
 
-        // Add assistant messages from the response
+        // Add assistant messages from the response. The connector may return the
+        // echoed user message or full transcript, so keep only this turn's reply.
         if (result.messages && result.messages.length > 0) {
           const newMessages: GatewayChatMessage[] = result.messages.map((m) => ({
             id: m.id || uuidv4(),
@@ -161,7 +183,9 @@ export function useCodexChat(
             ...(m.toolResults && { toolResults: m.toolResults }),
           }));
 
-          setMessages((prev) => [...prev, ...newMessages]);
+          setMessages((prev) =>
+            mergeRuntimeResponseMessages(prev, newMessages, content.trim())
+          );
         }
       } catch (err) {
         const errorMessage =
@@ -179,10 +203,13 @@ export function useCodexChat(
           },
         ]);
       } finally {
+        markAgentRunFinished(statusRunId);
+        activeStatusRunIdRef.current = null;
+        pendingSendRef.current = false;
         setIsLoading(false);
       }
     },
-    []
+    [agentId, model, projectPath]
   );
 
   const stopGeneration = useCallback(async () => {
@@ -191,6 +218,11 @@ export function useCodexChat(
     } catch {
       // Ignore abort errors
     }
+    if (activeStatusRunIdRef.current) {
+      markAgentRunFinished(activeStatusRunIdRef.current);
+      activeStatusRunIdRef.current = null;
+    }
+    pendingSendRef.current = false;
     setIsLoading(false);
   }, []);
 

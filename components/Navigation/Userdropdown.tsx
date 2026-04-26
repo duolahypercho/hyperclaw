@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useUser } from "$/Providers/UserProv";
 import { useHyperclawContext } from "$/Providers/HyperclawProv";
-import { useDevices } from "$/hooks/useDevices";
+import { useSharedDevices } from "$/Providers/DevicesProv";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   DropdownMenu,
@@ -21,6 +21,7 @@ import { getBillingPortalUrl } from "$/services/user";
 import { useToast } from "@/components/ui/use-toast";
 import { Badge } from "@/components/ui/badge";
 import { useDoctorTerminal } from "$/components/Tool/DoctorTerminal/DoctorTerminalContext";
+import { useConnectorStatus, type ConnectorState } from "$/hooks/useConnectorStatus";
 import {
   Tooltip,
   TooltipContent,
@@ -28,10 +29,48 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 
-const Userdropdown = () => {
+interface UserdropdownProps {
+  connectorStatus?: ConnectorState;
+}
+
+function getConnectorHealthLabel(status: ConnectorState): string {
+  switch (status.state) {
+    case "connected":
+      return `Connector online: ${status.deviceName}`;
+    case "unauthenticated":
+      return "Connector offline: session expired";
+    case "no-device":
+      return "Connector offline: no device paired";
+    case "connecting":
+      return "Connector offline: connecting";
+    case "permanently-failed":
+      return "Connector offline: connection failed";
+    case "hub-disconnected":
+      return "Connector offline: hub disconnected";
+    case "connector-offline":
+      return `Connector offline: ${status.deviceName}`;
+    case "revoked":
+      return `Connector offline: ${status.deviceName} revoked`;
+  }
+}
+
+const Userdropdown = ({ connectorStatus }: UserdropdownProps) => {
+  if (!connectorStatus) {
+    return <LiveUserdropdown />;
+  }
+
+  return <UserdropdownContent connectorStatus={connectorStatus} />;
+};
+
+const LiveUserdropdown = () => {
+  const { status } = useConnectorStatus();
+  return <UserdropdownContent connectorStatus={status} />;
+};
+
+const UserdropdownContent = ({ connectorStatus }: { connectorStatus: ConnectorState }) => {
   const { userInfo, membership, logout } = useUser();
   const { gatewayHealthy, gatewayHealthError, refreshAll } = useHyperclawContext();
-  const { hasOnlineDevice, loading: devicesLoading } = useDevices();
+  const { refetch: refetchDevices } = useSharedDevices();
   const [reconnecting, setReconnecting] = useState(false);
   const [restartingGateway, setRestartingGateway] = useState(false);
   const { runDoctorFix, isRunning: fixingOpenClaw } = useDoctorTerminal();
@@ -50,6 +89,7 @@ const Userdropdown = () => {
       } else {
         toast({ title: "Gateway restarted", description: "OpenClaw gateway has been restarted." });
         refreshAll();
+        refetchDevices();
       }
     } catch (err: any) {
       toast({ title: "Gateway restart failed", description: err?.message || "Could not reach connector.", variant: "destructive" });
@@ -62,11 +102,14 @@ const Userdropdown = () => {
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
-      if (detail?.success) refreshAll();
+      if (detail?.success) {
+        refreshAll();
+        refetchDevices();
+      }
     };
     window.addEventListener("openclaw-doctor-done", handler);
     return () => window.removeEventListener("openclaw-doctor-done", handler);
-  }, [refreshAll]);
+  }, [refreshAll, refetchDevices]);
 
   // Check if user has an active paid membership
   const hasActiveMembership = membership && !membership.isFreePlan;
@@ -121,17 +164,12 @@ const Userdropdown = () => {
     }
   };
 
-  // Connector health: online = green, offline = red, loading = amber
-  const healthDot = devicesLoading
-    ? "bg-amber-500/80 animate-pulse"
-    : hasOnlineDevice
-      ? "bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.6)]"
-      : "bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.6)]";
-  const healthLabel = devicesLoading
-    ? "Connector status checking..."
-    : hasOnlineDevice
-      ? "Connector online"
-      : "Connector offline";
+  // Connector health is driven by the live hub WS + device/probe status.
+  const connectorConnected = connectorStatus.state === "connected";
+  const healthDot = connectorConnected
+    ? "bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.6)]"
+    : "bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.7)] animate-pulse";
+  const healthLabel = getConnectorHealthLabel(connectorStatus);
 
   return (
     <>
@@ -276,7 +314,7 @@ const Userdropdown = () => {
               onClick={async (e) => {
                 e.preventDefault();
                 setReconnecting(true);
-                try { await refreshAll(); } finally { setReconnecting(false); }
+                try { await refreshAll(); refetchDevices(); } finally { setReconnecting(false); }
               }}
               disabled={reconnecting}
               className="cursor-pointer text-amber-600 focus:text-amber-600"

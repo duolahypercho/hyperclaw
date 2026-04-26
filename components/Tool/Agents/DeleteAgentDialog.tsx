@@ -51,21 +51,32 @@ export function DeleteAgentDialog({
 
   const handleConfirm = useCallback(() => {
     // Close the dialog immediately — don't block the UI on the delete operation.
+    // The agent stays visible but stamped "deleting" (red firing dot) until the
+    // bridge confirms. If the bridge fails, we drop the stamp so the agent
+    // returns to its normal state rather than vanishing silently.
     window.dispatchEvent(new CustomEvent("agent.deleting", { detail: { agentId } }));
     onDeleteStart?.();
     handleOpenChange(false);
 
-    // Fire bridge call in the background.
     bridgeInvoke("delete-agent", { agentId })
       .then((result) => {
         const r = result as { success?: boolean; error?: string };
         if (r?.success) {
           window.dispatchEvent(new CustomEvent("agent.deleted", { detail: { agentId } }));
           onSuccess?.();
+        } else {
+          window.dispatchEvent(
+            new CustomEvent("agent.delete.failed", {
+              detail: { agentId, error: r?.error ?? "delete failed" },
+            }),
+          );
         }
       })
-      .catch(() => {
-        // Silently ignore; the connector will log the failure.
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : "bridge error";
+        window.dispatchEvent(
+          new CustomEvent("agent.delete.failed", { detail: { agentId, error: message } }),
+        );
       });
   }, [agentId, onSuccess, onDeleteStart, handleOpenChange]);
 

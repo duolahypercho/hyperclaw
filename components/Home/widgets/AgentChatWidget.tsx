@@ -1,6 +1,7 @@
 "use client";
 
 import React, { memo, useState, useCallback, useEffect, useRef, useMemo } from "react";
+import { useRouter } from "next/router";
 import { motion } from "framer-motion";
 import { CustomProps } from "$/components/Home/widgets/types/widgets";
 import {
@@ -17,6 +18,8 @@ import {
   ChevronDown,
   Check,
   X,
+  Database,
+  ArrowUpRight,
 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -37,7 +40,7 @@ import {
   resolveAvatarUrl,
   resolveAvatarText,
 } from "$/hooks/useAgentIdentity";
-import { ClaudeCodeIcon, CodexIcon, HermesIcon } from "$/components/Onboarding/RuntimeIcons";
+import { ClaudeCodeIcon, CodexIcon, HermesIcon, OpenClawIcon } from "$/components/Onboarding/RuntimeIcons";
 import {
   InfoTab,
   FileEditorTab,
@@ -61,6 +64,16 @@ import { EditCronDialog } from "$/components/Tool/Crons/EditCronDialog";
 import { getJobPalette, getStatusColor } from "$/components/Tool/Crons/utils";
 import { formatDistanceToNow } from "date-fns";
 import type { OpenClawCronJobJson } from "$/types/electron";
+import { ProjectsProvider, useProjects } from "$/components/Tool/Projects/provider/projectsProvider";
+import { ProjectPanel } from "./ProjectPanel";
+import { OPEN_PROJECT_PANEL_EVENT } from "./ProjectWidgetEvents";
+import { StatusDot, normalizeAgentState, useAgentStatus } from "$/components/ensemble";
+import {
+  MEMORY_SEARCH_CONFIG_KEYS,
+  MEMORY_SEARCH_PROVIDERS,
+  resolveMemorySearchSettings,
+  unwrapOpenClawConfigValue,
+} from "./openclaw-memory-search";
 
 /* ── Helpers ──────────────────────────────────────────────── */
 
@@ -103,6 +116,7 @@ const TAB_FILES = [
 
 type FileTabKey = (typeof TAB_FILES)[number]["key"];
 type WidgetTab = "CHAT" | "OVERVIEW" | "INFO" | "FILES" | "CRONS" | "SKILLS" | "MCPS";
+type WidgetMode = "agent" | "project";
 
 /* ── Agent Crons Tab ──────────────────────────────────────── */
 
@@ -111,7 +125,7 @@ type WidgetTab = "CHAT" | "OVERVIEW" | "INFO" | "FILES" | "CRONS" | "SKILLS" | "
  * Fetches directly from the bridge with agentId filter instead of using the global CronsProvider.
  * This ensures we only load crons for this agent.
  */
-function AgentCronsTab({ agentId, runtime }: { agentId: string; runtime?: string }) {
+export function AgentCronsTab({ agentId, runtime }: { agentId: string; runtime?: string }) {
   const [jobs, setJobs] = useState<OpenClawCronJobJson[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedJob, setSelectedJob] = useState<OpenClawCronJobJson | null>(null);
@@ -125,14 +139,14 @@ function AgentCronsTab({ agentId, runtime }: { agentId: string; runtime?: string
     setLoading(true);
     try {
       const { fetchCronsFromBridge } = await import("$/components/Tool/Crons/utils");
-      const data = await fetchCronsFromBridge({ agentId });
+      const data = await fetchCronsFromBridge({ agentId, runtime });
       setJobs(data);
     } catch {
       setJobs([]);
     } finally {
       setLoading(false);
     }
-  }, [agentId]);
+  }, [agentId, runtime]);
 
   useEffect(() => {
     fetchAgentCrons();
@@ -283,20 +297,180 @@ function AgentCronsTab({ agentId, runtime }: { agentId: string; runtime?: string
   );
 }
 
+/* ── Empty state onboarding ────────────────────────────────── */
+
+interface RuntimeCardProps {
+  id: string;
+  label: string;
+  description: string;
+  icon: React.ReactNode;
+  installed: boolean;
+  onAdd: () => void;
+}
+
+function RuntimeCard({ id, label, description, icon, installed, onAdd }: RuntimeCardProps) {
+  return (
+    <motion.button
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      whileHover={{ scale: 1.02 }}
+      whileTap={{ scale: 0.98 }}
+      onClick={onAdd}
+      className={cn(
+        "flex items-start gap-3 p-4 rounded-lg border text-left transition-colors w-full",
+        "bg-card/50 hover:bg-card/80 border-border/50 hover:border-primary/30"
+      )}
+    >
+      <div className="shrink-0 w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
+        {icon}
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2">
+          <h4 className="text-sm font-medium">{label}</h4>
+          {!installed && (
+            <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-500 font-medium">
+              Not installed
+            </span>
+          )}
+        </div>
+        <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{description}</p>
+      </div>
+    </motion.button>
+  );
+}
+
+interface EmptyAgentsStateProps {
+  onAddAgent: (runtime?: string) => void;
+}
+
+function EmptyAgentsState({ onAddAgent }: EmptyAgentsStateProps) {
+  const [runtimeStatus, setRuntimeStatus] = useState<Record<string, boolean> | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [connectorAvailable, setConnectorAvailable] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const result = await bridgeInvoke("list-available-runtimes", {}) as {
+          runtimes?: Array<{ name: string; available: boolean }>;
+        };
+        const status: Record<string, boolean> = {};
+        for (const rt of result?.runtimes ?? []) {
+          status[rt.name] = rt.available;
+        }
+        setRuntimeStatus(status);
+        setConnectorAvailable(true);
+      } catch {
+        // Connector not available - don't show install status
+        setRuntimeStatus(null);
+        setConnectorAvailable(false);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  const runtimes = [
+    {
+      id: "claude-code",
+      label: "Claude Code",
+      description: "Anthropic's agentic coding assistant. Works in any directory with custom instructions and memory.",
+      icon: <ClaudeCodeIcon className="w-5 h-5" />,
+    },
+    {
+      id: "codex",
+      label: "Codex",
+      description: "OpenAI's coding agent with sandboxed execution. Great for code generation and automation.",
+      icon: <CodexIcon className="w-5 h-5" />,
+    },
+    {
+      id: "hermes",
+      label: "Hermes",
+      description: "Self-improving agent framework with skill management. Learns and adapts over time.",
+      icon: <HermesIcon className="w-5 h-5" />,
+    },
+    {
+      id: "openclaw",
+      label: "OpenClaw",
+      description: "Multi-channel AI gateway for WhatsApp, Slack, Discord, and more. Connect AI to your messaging apps.",
+      icon: <OpenClawIcon className="w-5 h-5" />,
+    },
+  ];
+
+  if (loading) {
+    return (
+      <div className="flex-1 flex items-center justify-center">
+        <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex-1 flex flex-col items-center justify-center px-6 py-8">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        className="text-center mb-6"
+      >
+        <div className="w-14 h-14 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-4">
+          <Plus className="w-7 h-7 text-primary" />
+        </div>
+        <h3 className="text-base font-semibold mb-1">Add your first agent</h3>
+        <p className="text-sm text-muted-foreground max-w-xs">
+          Connect an AI runtime to get started. Each agent can have its own personality and tools.
+        </p>
+      </motion.div>
+
+      <div className="grid gap-3 w-full max-w-md">
+        {runtimes.map((rt, i) => (
+          <motion.div
+            key={rt.id}
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: i * 0.05 }}
+          >
+            <RuntimeCard
+              {...rt}
+              installed={runtimeStatus?.[rt.id] ?? true}
+              onAdd={() => onAddAgent(rt.id)}
+            />
+          </motion.div>
+        ))}
+      </div>
+
+      {!connectorAvailable ? (
+        <p className="text-[10px] text-amber-500 mt-6 text-center max-w-xs">
+          Connector offline — install status unavailable. You can still add agents manually.
+        </p>
+      ) : (
+        <p className="text-[10px] text-muted-foreground mt-6 text-center max-w-xs">
+          Don&apos;t have any installed? Run <code className="px-1 py-0.5 rounded bg-muted text-[10px]">npm i -g @anthropics/claude-code</code> to get started with Claude Code.
+        </p>
+      )}
+    </div>
+  );
+}
+
 /* ── Widget content ────────────────────────────────────────── */
 
 const AgentChatWidgetContent = memo((props: CustomProps) => {
   const { widget, isEditMode, isMaximized, onMaximize, onConfigChange, className } = props;
   const { isFocusModeActive } = useFocusMode();
   const { agents } = useHyperclawContext();
+  const { selectProject } = useProjects();
+  const router = useRouter();
 
   // Persisted config
   const config = widget.config as Record<string, unknown> | undefined;
   const configAgentId = config?.agentId as string | undefined;
   const configBackendTab = config?.backendTab as BackendTab | undefined;
+  const configHideTabs = config?.hideTabs === true;
 
   // Local state
   const [selectedAgentId, setSelectedAgentId] = useState<string | undefined>(configAgentId);
+  const selectedAgentIdRef = useRef<string | undefined>(configAgentId);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | undefined>();
+  const [widgetMode, setWidgetMode] = useState<WidgetMode>("agent");
   const [backendTab, setBackendTab] = useState<BackendTab>(configBackendTab ?? "openclaw");
   const [activeTab, setActiveTab] = useState<WidgetTab>("CHAT");
   const [selectedFileKey, setSelectedFileKey] = useState<FileTabKey>("SOUL");
@@ -308,8 +482,17 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
   const [personalityCache, setPersonalityCache] = useState<Record<string, string> | null>(null);
   const personalityCacheAgentRef = useRef<string | undefined>(undefined);
 
+  // Lazy-mount tabs: only mount when first visited, stay mounted thereafter.
+  // Data survives tab switches; explicit refresh remounts via key change.
+  const [mountedTabs, setMountedTabs] = useState<Set<WidgetTab>>(new Set(["CHAT"]));
+  const [refreshCounter, setRefreshCounter] = useState(0);
+
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const [memoryEnabled, setMemoryEnabled] = useState<boolean | null>(null);
+  const [memoryProvider, setMemoryProvider] = useState<string | null>(null);
+  const [memoryToggling, setMemoryToggling] = useState(false);
   const [addAgentOpen, setAddAgentOpen] = useState(false);
+  const [addAgentInitialRuntime, setAddAgentInitialRuntime] = useState<string | undefined>();
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   // Snapshot captured when the dialog opens — prevents deleting the wrong agent
   // if currentAgentId changes while the confirmation dialog is visible.
@@ -317,8 +500,8 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
   const chatRef = useRef<PanelChatViewHandle>(null);
   // Keyed by "agentId:backendTab" — avoids refetching when re-opening the same agent
   const sessionsCacheRef = useRef<Map<string, Session[]>>(new Map());
-  // Set to true when switching agents so onSessionsUpdate auto-selects the latest session
-  const autoSelectSessionRef = useRef(false);
+  // Primary session key — resolved from the connector for the current agent
+  const [primarySessionKey, setPrimarySessionKey] = useState<string | undefined>();
 
   // Inbox state
   const [chatView, setChatView] = useState<"inbox" | "chat">("chat");
@@ -326,6 +509,7 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
   const [inboxLoading, setInboxLoading] = useState(false);
   const [inboxLastSeenTs, setInboxLastSeenTs] = useState(0);
   const [inboxUnreadCount, setInboxUnreadCount] = useState(0);
+  const [runtimeUnavailable, setRuntimeUnavailable] = useState(false);
   const [activeSessionLabel, setActiveSessionLabel] = useState<string | undefined>();
   // Per-session read tracking — only sessions in this set show as read in the inbox
   const [readSessions, setReadSessions] = useState<Set<string>>(new Set());
@@ -335,9 +519,45 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
 
   // Sync config on late hydration
   useEffect(() => {
-    if (configAgentId && !selectedAgentId) setSelectedAgentId(configAgentId);
+    if (configAgentId && !selectedAgentId) {
+      selectedAgentIdRef.current = configAgentId;
+      setSelectedAgentId(configAgentId);
+    }
   }, [configAgentId, selectedAgentId]);
+  useEffect(() => { selectedAgentIdRef.current = selectedAgentId; }, [selectedAgentId]);
 
+  // Resolve agent
+  const currentAgentId = selectedAgentId || configAgentId || agents[0]?.id || "main";
+  const currentAgent = agents.find((a) => a.id === currentAgentId) || {
+    id: currentAgentId,
+    name: currentAgentId === "main" ? "General Assistant" : currentAgentId,
+  };
+
+  // Agent identity
+  const identity = useAgentIdentity(currentAgentId);
+  const resolvedAvatarUrl = resolveAvatarUrl(identity?.avatar);
+  // Only use img for custom uploads (PNG/JPG/HTTP); SVG data URIs are the seed defaults.
+  const avatarUrl = resolvedAvatarUrl && !resolvedAvatarUrl.startsWith("data:image/svg+xml") ? resolvedAvatarUrl : undefined;
+  const avatarText = resolveAvatarText(identity?.avatar);
+  // agentListRuntime is authoritative for OpenClaw agents — a stale SQLite
+  // identity record (e.g. runtime="hermes") must not override it.
+  const agentListRuntime = (currentAgent as { runtime?: string }).runtime;
+  const effectiveRuntime = agentListRuntime || identity?.runtime;
+  const RuntimeIcon = effectiveRuntime === "claude-code" ? ClaudeCodeIcon
+    : effectiveRuntime === "codex" ? CodexIcon
+    : effectiveRuntime === "hermes" ? HermesIcon
+    : null;
+  const displayName = identity?.name || currentAgent.name;
+  const { state: currentAgentState } = useAgentStatus(currentAgentId, {
+    status: (currentAgent as { status?: string }).status,
+  });
+  const isCurrentAgentDeleting = currentAgentState === "deleting";
+  const isCurrentAgentHiring = currentAgentState === "hiring";
+  const sendDisabledReason = isCurrentAgentHiring
+    ? `${displayName} is still being hired - chat unlocks when setup finishes.`
+    : isCurrentAgentDeleting
+      ? `${displayName} is being fired - chat is locked.`
+      : undefined;
 
   // Lazily fetch last assistant message for each inbox session
   useEffect(() => {
@@ -357,7 +577,11 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
             // claude-code-load-history expects sessionId, not sessionKey
             // session keys are formatted as "claude:<sessionId>"
             const sessionId = s.key.startsWith("claude:") ? s.key.slice(7) : s.key;
-            const r = await bridgeInvoke("claude-code-load-history", { sessionId }) as any;
+            const r = await bridgeInvoke("claude-code-load-history", {
+              sessionId,
+              agentId: currentAgentId,
+              ...(identity?.project ? { projectPath: identity.project } : {}),
+            }) as any;
             messages = r?.messages || [];
           } else if (backendTab === "codex") {
             // codex-load-history expects sessionId (without the "codex:" prefix)
@@ -386,30 +610,13 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
         });
       }
     });
-  }, [inboxSessions, backendTab]);
+  }, [inboxSessions, backendTab, currentAgentId, identity?.project]);
 
-  // Resolve agent
-  const currentAgentId = selectedAgentId || configAgentId || agents[0]?.id || "main";
-  const currentAgent = agents.find((a) => a.id === currentAgentId) || {
-    id: currentAgentId,
-    name: currentAgentId === "main" ? "General Assistant" : currentAgentId,
-  };
-
-  // Agent identity
-  const identity = useAgentIdentity(currentAgentId);
-  const resolvedAvatarUrl = resolveAvatarUrl(identity?.avatar);
-  // Only use img for custom uploads (PNG/JPG/HTTP); SVG data URIs are the seed defaults.
-  const avatarUrl = resolvedAvatarUrl && !resolvedAvatarUrl.startsWith("data:image/svg+xml") ? resolvedAvatarUrl : undefined;
-  const avatarText = resolveAvatarText(identity?.avatar);
-  // agentListRuntime is authoritative for OpenClaw agents — a stale SQLite
-  // identity record (e.g. runtime="hermes") must not override it.
-  const agentListRuntime = (currentAgent as { runtime?: string }).runtime;
-  const effectiveRuntime = agentListRuntime || identity?.runtime;
-  const RuntimeIcon = effectiveRuntime === "claude-code" ? ClaudeCodeIcon
-    : effectiveRuntime === "codex" ? CodexIcon
-    : effectiveRuntime === "hermes" ? HermesIcon
-    : null;
-  const displayName = identity?.name || currentAgent.name;
+  useEffect(() => {
+    if ((isCurrentAgentDeleting || isCurrentAgentHiring) && activeTab === "CHAT") {
+      setActiveTab("OVERVIEW");
+    }
+  }, [activeTab, isCurrentAgentDeleting, isCurrentAgentHiring]);
 
   // Sync backendTab with the agent's runtime whenever the agent or its
   // identity changes. The agents list (HyperclawProv) is authoritative for
@@ -427,9 +634,67 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentAgentId, agentListRuntime, identity?.runtime]);
 
+  // Fetch memory search state for OpenClaw agents. Onboarding writes the
+  // OpenClaw default memory-search keys, so this menu mirrors that scope.
+  useEffect(() => {
+    if (effectiveRuntime !== "openclaw") {
+      setMemoryEnabled(null);
+      setMemoryProvider(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const [enabledRes, providerRes] = await Promise.all([
+          bridgeInvoke("openclaw-config-get", { key: MEMORY_SEARCH_CONFIG_KEYS.enabled }),
+          bridgeInvoke("openclaw-config-get", { key: MEMORY_SEARCH_CONFIG_KEYS.provider }),
+        ]);
+        if (cancelled) return;
+        const settings = resolveMemorySearchSettings({
+          enabledValue: unwrapOpenClawConfigValue(enabledRes),
+          providerValue: unwrapOpenClawConfigValue(providerRes),
+          modelValue: null,
+        });
+        setMemoryEnabled(settings.enabled);
+        setMemoryProvider(settings.provider);
+      } catch {
+        if (!cancelled) {
+          setMemoryEnabled(null);
+          setMemoryProvider(null);
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [currentAgentId, effectiveRuntime]);
+
+  const handleMemoryToggle = useCallback(async () => {
+    if (memoryEnabled === null) return;
+    const next = !memoryEnabled;
+    setMemoryEnabled(next);
+    setMemoryToggling(true);
+    try {
+      if (next && !memoryProvider) {
+        const provider = MEMORY_SEARCH_PROVIDERS[0].id;
+        await bridgeInvoke("openclaw-config-set", {
+          key: MEMORY_SEARCH_CONFIG_KEYS.provider,
+          value: provider,
+        });
+        setMemoryProvider(provider);
+      }
+      await bridgeInvoke("openclaw-config-set", {
+        key: MEMORY_SEARCH_CONFIG_KEYS.enabled,
+        value: String(next),
+      });
+    } catch {
+      setMemoryEnabled(!next);
+    } finally {
+      setMemoryToggling(false);
+    }
+  }, [memoryEnabled, memoryProvider]);
+
   // Listen for agent-click events from StatusWidget
   useEffect(() => {
-    const handler = (e: Event) => {
+    const handleAgentPanelOpen = (e: Event) => {
       const detail = (e as CustomEvent).detail as {
         agentId?: string;
         sessionKey?: string;
@@ -437,10 +702,17 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
         unreadCount?: number;
         lastSeenTs?: number;
         runtime?: string;
+        runtimeUnavailable?: boolean;
+        hiring?: boolean;
       };
       if (!detail?.agentId) return;
-      const { agentId, sessionKey, lastSeenTs = 0, unreadCount = 0, runtime } = detail;
+      const { agentId, sessionKey, lastSeenTs = 0, unreadCount = 0, runtime, runtimeUnavailable: unavailable = false, hiring = false } = detail;
+      const targetAgent = agents.find((agent) => agent.id === agentId);
+      const targetIsHiring = hiring || normalizeAgentState((targetAgent as { status?: string } | undefined)?.status) === "hiring";
+      setWidgetMode("agent");
+      setSelectedProjectId(undefined);
       setInboxUnreadCount(unreadCount);
+      setRuntimeUnavailable(unavailable);
 
       // Set the correct backend tab immediately so fetchSessions queries the right endpoint
       if (runtime === "claude-code") setBackendTab("claude-code");
@@ -448,17 +720,37 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
       else if (runtime === "hermes") setBackendTab("hermes");
       else setBackendTab("openclaw");
 
+      selectedAgentIdRef.current = agentId;
       setSelectedAgentId(agentId);
-      setActiveTab("CHAT");
+      // Default to OVERVIEW when the agent is not chat-ready.
+      setActiveTab(unavailable || targetIsHiring ? "OVERVIEW" : "CHAT");
       setInboxLastSeenTs(lastSeenTs);
       setActiveSessionLabel(undefined);
       setReadSessions(new Set());
 
-      // Check cache first so we never show a spinner for a previously loaded agent
+      // Resolve the primary session key from the connector
       const tabForRuntime = runtime === "claude-code" ? "claude-code"
         : runtime === "codex" ? "codex"
         : runtime === "hermes" ? "hermes"
         : "openclaw";
+
+      // Fetch primary session key (non-blocking — chat opens immediately)
+      // Guard against stale async resolve when user switches agents quickly
+      const resolveForAgentId = agentId;
+      setPrimarySessionKey(undefined);
+      bridgeInvoke("get-primary-session", { agentId, runtime: tabForRuntime })
+        .then((result) => {
+          const r = result as { success?: boolean; data?: { sessionKey?: string } };
+          if (!r?.success || !r.data?.sessionKey) return;
+          // Verify this agent is still the selected one
+          if (selectedAgentIdRef.current === resolveForAgentId) {
+            setPrimarySessionKey(r.data.sessionKey);
+            setTimeout(() => chatRef.current?.onSessionChange(r.data!.sessionKey!), 0);
+          }
+        })
+        .catch(() => { /* connector offline — PanelChatView uses its default */ });
+
+      // Check cache for session list (inbox dropdown)
       const cacheKey = `${agentId}:${tabForRuntime}`;
       const cached = sessionsCacheRef.current.get(cacheKey);
 
@@ -466,36 +758,50 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
         setInboxSessions(cached);
         setInboxLoading(false);
         setChatView("chat");
-        // Auto-select the latest session immediately
-        if (cached.length > 0) {
-          const latest = cached[0];
-          setTimeout(() => {
-            chatRef.current?.onSessionChange(latest.key);
-            setActiveSessionLabel(latest.label || latest.key.split(":").pop() || latest.key);
-          }, 0);
-        }
       } else {
-        // First open — show spinner while PanelChatView fetches
         setInboxSessions([]);
         setChatView("chat");
         setInboxLoading(true);
-        autoSelectSessionRef.current = true;
-        // Kick off the fetch after React commits the new backendTab/agentId
-        setTimeout(() => chatRef.current?.fetchSessions(), 0);
       }
     };
-    window.addEventListener(OPEN_AGENT_CHAT_EVENT, handler);
-    window.addEventListener(OPEN_AGENT_PANEL_EVENT, handler);
-    return () => {
-      window.removeEventListener(OPEN_AGENT_CHAT_EVENT, handler);
-      window.removeEventListener(OPEN_AGENT_PANEL_EVENT, handler);
+
+    const handleProjectPanelOpen = (e: Event) => {
+      const detail = (e as CustomEvent<{ projectId?: string }>).detail;
+      if (!detail?.projectId) return;
+      setWidgetMode("project");
+      setSelectedProjectId(detail.projectId);
+      void selectProject(detail.projectId);
     };
-  }, []);
+
+    window.addEventListener(OPEN_AGENT_CHAT_EVENT, handleAgentPanelOpen);
+    window.addEventListener(OPEN_AGENT_PANEL_EVENT, handleAgentPanelOpen);
+    window.addEventListener(OPEN_PROJECT_PANEL_EVENT, handleProjectPanelOpen);
+    return () => {
+      window.removeEventListener(OPEN_AGENT_CHAT_EVENT, handleAgentPanelOpen);
+      window.removeEventListener(OPEN_AGENT_PANEL_EVENT, handleAgentPanelOpen);
+      window.removeEventListener(OPEN_PROJECT_PANEL_EVENT, handleProjectPanelOpen);
+    };
+  }, [agents, selectProject]);
 
   // Reset footer state when switching tabs
   useEffect(() => {
     setFooterState({ isDirty: false, saving: false, saved: false, save: null });
   }, [activeTab, currentAgentId]);
+
+  // Expand mounted-tabs set on first visit so the component stays alive across tab switches.
+  useEffect(() => {
+    setMountedTabs(prev => {
+      if (prev.has(activeTab)) return prev;
+      return new Set([...prev, activeTab]);
+    });
+  }, [activeTab]);
+
+  // Reset mounted tabs on agent change — only CHAT and the active tab survive.
+  // Other tabs will mount lazily when visited again, fetching for the new agent.
+  useEffect(() => {
+    setMountedTabs(new Set<WidgetTab>(["CHAT", activeTab]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentAgentId]);
 
   // Prefetch personality when FILES tab opens or agent changes — keeps tab switches instant.
   useEffect(() => {
@@ -547,6 +853,24 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
     setPersonalityCache(prev => prev ? { ...prev, [fileKey]: newContent } : null);
   }, []);
 
+  /** Refresh all mounted data tabs — remounts via key change, clears personality cache. */
+  const handleRefreshAll = useCallback(() => {
+    setRefreshCounter(c => c + 1);
+    personalityCacheAgentRef.current = undefined;
+    setPersonalityCache(null);
+  }, []);
+
+  /** Stable callback for fetching sessions — prevents infinite loop in SessionHistoryDropdown.
+   *  Only shows loading spinner if we don't have cached sessions — otherwise shows stale data
+   *  immediately while refreshing in the background (stale-while-revalidate). */
+  const handleFetchSessions = useCallback(() => {
+    // Only show loading if cache is empty — otherwise show cached sessions immediately
+    if (inboxSessions.length === 0) {
+      setInboxLoading(true);
+    }
+    chatRef.current?.fetchSessions();
+  }, [inboxSessions.length]);
+
   const isEditorTab = activeTab === "INFO" || activeTab === "FILES";
   const showChatActions = activeTab === "CHAT";
   const showSaveButton = isEditorTab;
@@ -567,6 +891,17 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
           className,
         )}
       >
+        {widgetMode === "project" ? (
+          <ProjectPanel projectId={selectedProjectId} />
+        ) : agents.length === 0 ? (
+          <EmptyAgentsState
+            onAddAgent={(runtime) => {
+              setAddAgentInitialRuntime(runtime);
+              setAddAgentOpen(true);
+            }}
+          />
+        ) : (
+          <>
         {/* ── Header: avatar + tabs + actions ── */}
         <div className="shrink-0 border-b border-border/50">
           {/* Top row: agent info + maximize */}
@@ -577,22 +912,39 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
                   <GripVertical className="w-3.5 h-3.5 text-muted-foreground" />
                 </div>
               ) : null}
-              <Avatar key={currentAgentId} className="h-8 w-8 shrink-0">
-                {avatarUrl && <AvatarImage src={avatarUrl} alt={displayName} />}
-                <AvatarFallback className="bg-primary/10 text-primary text-sm">
-                  {(avatarText || identity?.emoji)
-                    ? (avatarText || identity?.emoji)
-                    : RuntimeIcon
-                    ? <RuntimeIcon className="w-5 h-5" />
-                    : "🤖"
-                  }
-                </AvatarFallback>
-              </Avatar>
+              <div className="relative shrink-0">
+                <Avatar
+                  key={currentAgentId}
+                  className={cn("h-8 w-8", runtimeUnavailable && "grayscale opacity-60")}
+                  title={runtimeUnavailable ? `${backendTab === "claude-code" ? "Claude Code" : backendTab === "codex" ? "Codex" : backendTab === "hermes" ? "Hermes" : "OpenClaw"} is not installed` : undefined}
+                >
+                  {avatarUrl && <AvatarImage src={avatarUrl} alt={displayName} />}
+                  <AvatarFallback className="bg-primary/10 text-primary text-sm">
+                    {(avatarText || identity?.emoji)
+                      ? (avatarText || identity?.emoji)
+                      : RuntimeIcon
+                      ? <RuntimeIcon className="w-5 h-5" />
+                      : "🤖"
+                    }
+                  </AvatarFallback>
+                </Avatar>
+                <StatusDot state={currentAgentState} size="sm" corner />
+              </div>
               <div className="min-w-0">
                 <div className="flex items-center gap-1.5">
                   <h3 className="text-xs font-semibold truncate">
                     {activeSessionLabel ?? displayName}
                   </h3>
+                  {isCurrentAgentDeleting && (
+                    <span className="shrink-0 text-[9px] text-red-400/80 border border-red-400/30 rounded px-1 py-px leading-none flex items-center gap-0.5">
+                      <Loader2 className="w-2 h-2 animate-spin" />Firing
+                    </span>
+                  )}
+                  {isCurrentAgentHiring && (
+                    <span className="shrink-0 text-[9px] text-red-400/80 border border-red-400/30 rounded px-1 py-px leading-none flex items-center gap-0.5">
+                      <Loader2 className="w-2 h-2 animate-spin" />Hiring
+                    </span>
+                  )}
                 </div>
                 <p className="text-[10px] text-muted-foreground truncate">
                   {activeSessionLabel
@@ -606,7 +958,7 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
             </div>
             <div className="flex items-center gap-1 shrink-0">
               {/* Chat actions — only on Chat tab */}
-              {showChatActions && (
+              {showChatActions && !isCurrentAgentDeleting && !isCurrentAgentHiring && (
                 <>
                   <Button variant="ghost" size="iconSm" className="h-6 w-6" onClick={() => chatRef.current?.reload()} title="Reload chat">
                     <RefreshCw className="w-3 h-3" />
@@ -615,19 +967,38 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
                     <Plus className="w-3 h-3" />
                   </Button>
                   <SessionHistoryDropdown
-                    sessions={chatRef.current?.sessions || []}
-                    isLoading={chatRef.current?.sessionsLoading || false}
-                    error={chatRef.current?.sessionsError || null}
+                    sessions={inboxSessions}
+                    isLoading={inboxLoading}
+                    error={null}
                     currentSessionKey={chatRef.current?.selectedSessionKey}
+                    primarySessionKey={primarySessionKey}
                     onLoadSession={(key) => {
                       chatRef.current?.onSessionChange(key);
                       const s = inboxSessions.find((s) => s.key === key);
                       setActiveSessionLabel(s?.label || key.split(":").pop() || key);
                     }}
                     onNewChat={() => { chatRef.current?.newChat(); setActiveSessionLabel(undefined); }}
-                    onFetchSessions={() => chatRef.current?.fetchSessions()}
+                    onFetchSessions={handleFetchSessions}
+                    onSetPrimary={(key) => {
+                      const prevKey = primarySessionKey;
+                      setPrimarySessionKey(key);
+                      bridgeInvoke("set-primary-session", {
+                        agentId: currentAgentId,
+                        runtime: backendTab,
+                        sessionKey: key,
+                      }).catch(() => {
+                        // Rollback on failure (connector offline)
+                        setPrimarySessionKey(prevKey);
+                      });
+                    }}
                   />
                 </>
+              )}
+              {/* Refresh button — visible on data tabs (overview, runs, skills, MCPs) */}
+              {!showChatActions && !isEditorTab && (
+                <Button variant="ghost" size="iconSm" className="h-6 w-6" onClick={handleRefreshAll} title="Refresh">
+                  <RefreshCw className="w-3 h-3" />
+                </Button>
               )}
               {/* Save button — only on editor tabs when dirty */}
               {showSaveButton && (
@@ -653,6 +1024,17 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
                     )}
                   </Button>
                 </div>
+              )}
+              {currentAgentId && (
+                <Button
+                  variant="ghost"
+                  size="iconSm"
+                  className="h-6 w-6"
+                  title="View agent profile"
+                  onClick={() => router.push(`/Tool/Agent/${currentAgentId}`)}
+                >
+                  <ArrowUpRight className="w-3 h-3" />
+                </Button>
               )}
               <DropdownMenu open={moreMenuOpen} onOpenChange={setMoreMenuOpen}>
                 <DropdownMenuTrigger asChild>
@@ -680,6 +1062,25 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
                     <Check className="w-3.5 h-3.5" />
                     Mark all as read
                   </DropdownMenuItem>
+                  {effectiveRuntime === "openclaw" && memoryEnabled !== null && (
+                    <DropdownMenuItem
+                      className="gap-2 text-xs"
+                      disabled={memoryToggling}
+                      onSelect={(e) => {
+                        e.preventDefault();
+                        handleMemoryToggle();
+                      }}
+                    >
+                      <Database className="w-3.5 h-3.5" />
+                      Memory Search
+                      <span className={cn(
+                        "ml-auto text-[10px] font-medium",
+                        memoryEnabled ? "text-emerald-500" : "text-muted-foreground",
+                      )}>
+                        {memoryEnabled ? "On" : "Off"}
+                      </span>
+                    </DropdownMenuItem>
+                  )}
                   <DropdownMenuItem
                     className="text-destructive focus:text-destructive focus:bg-destructive/10 gap-2 text-xs"
                     onSelect={(e) => {
@@ -697,15 +1098,27 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
             </div>
           </div>
 
-          {/* Tab row */}
-          <div className="flex items-center gap-0.5 px-3 pb-1 -mb-px overflow-x-auto">
+          {/* Tab row — hidden when embedded as a pure chat surface */}
+          {!configHideTabs && <div className="flex items-center gap-0.5 px-3 pb-1 -mb-px overflow-x-auto">
             <button
-              onClick={() => setActiveTab("CHAT")}
+              onClick={() => !runtimeUnavailable && !isCurrentAgentDeleting && !isCurrentAgentHiring && setActiveTab("CHAT")}
+              disabled={runtimeUnavailable || isCurrentAgentDeleting || isCurrentAgentHiring}
+              title={
+                isCurrentAgentHiring
+                  ? "Agent is still hiring - chat unlocks when setup finishes"
+                  : isCurrentAgentDeleting
+                  ? "Agent is firing - chat is locked"
+                  : runtimeUnavailable
+                    ? "Runtime not installed"
+                    : undefined
+              }
               className={cn(
                 "px-2 py-1 text-[10px] font-medium rounded-md transition-all duration-200 shrink-0",
-                activeTab === "CHAT"
-                  ? "border-border text-foreground bg-primary/5"
-                  : "border-transparent text-muted-foreground hover:text-foreground/70 hover:bg-muted/30"
+                runtimeUnavailable || isCurrentAgentDeleting || isCurrentAgentHiring
+                  ? "text-muted-foreground/40 cursor-not-allowed"
+                  : activeTab === "CHAT"
+                    ? "border-border text-foreground bg-primary/5"
+                    : "border-transparent text-muted-foreground hover:text-foreground/70 hover:bg-muted/30"
               )}
             >
               Chat
@@ -776,7 +1189,7 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
             >
               MCPs
             </button>
-          </div>
+          </div>}
         </div>
 
         {/* ── Content area ── */}
@@ -790,28 +1203,25 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
             <PanelChatView
               ref={chatRef}
               agentId={currentAgentId}
+              initialSessionKey={primarySessionKey}
               backendTab={backendTab}
               onBackendTabChange={setBackendTab}
               showSubHeader={false}
+              initialSessions={inboxSessions}
+              runtimeUnavailable={runtimeUnavailable}
+              sendDisabledReason={sendDisabledReason}
               onSessionsUpdate={(sessions) => {
                 setInboxSessions(sessions);
                 setInboxLoading(false);
-                // Persist to cache so subsequent opens are instant
                 sessionsCacheRef.current.set(`${currentAgentId}:${backendTab}`, sessions);
-                // Auto-select the latest session when switching agents
-                if (autoSelectSessionRef.current && sessions.length > 0) {
-                  autoSelectSessionRef.current = false;
-                  const latest = sessions[0];
-                  chatRef.current?.onSessionChange(latest.key);
-                  setActiveSessionLabel(latest.label || latest.key.split(":").pop() || latest.key);
-                }
               }}
             />
           </div>
 
-          {activeTab === "INFO" && (
-            <div className="flex-1 min-h-0 overflow-y-auto customScrollbar2 px-4 py-4">
+          {mountedTabs.has("INFO") && (
+            <div className={cn("flex-1 min-h-0 overflow-y-auto customScrollbar2 px-4 py-4", activeTab !== "INFO" && "hidden")}>
               <InfoTab
+                key={`info-${refreshCounter}`}
                 agentId={currentAgentId}
                 identity={identity}
                 onStateChange={setFooterState}
@@ -819,9 +1229,10 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
             </div>
           )}
 
-          {activeTab === "OVERVIEW" && (
-            <div className="flex-1 min-h-0 overflow-y-auto customScrollbar2 px-3 py-3">
+          {mountedTabs.has("OVERVIEW") && (
+            <div className={cn("flex-1 min-h-0 overflow-y-auto customScrollbar2 px-3 py-3", activeTab !== "OVERVIEW" && "hidden")}>
               <AgentOverviewTab
+                key={`overview-${refreshCounter}`}
                 agentId={currentAgentId}
                 agentRuntime={agentListRuntime || identity?.runtime}
                 sessions={inboxSessions.map((s) => ({
@@ -832,7 +1243,7 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
                 lastSeenTs={inboxLastSeenTs}
                 readSessions={readSessions}
                 unreadCount={inboxUnreadCount}
-                onOpenSession={(key) => {
+                onOpenSession={runtimeUnavailable || isCurrentAgentHiring || isCurrentAgentDeleting ? undefined : (key) => {
                   const session = inboxSessions.find((s) => s.key === key);
                   setActiveSessionLabel(session?.label || key);
                   setChatView("chat");
@@ -840,18 +1251,19 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
                   chatRef.current?.onSessionChange(key);
                   setReadSessions((prev) => new Set([...prev, key]));
                 }}
-                onNewChat={() => {
+                onNewChat={runtimeUnavailable || isCurrentAgentHiring || isCurrentAgentDeleting ? undefined : () => {
                   setActiveTab("CHAT");
                   setChatView("chat");
                   chatRef.current?.newChat();
                   setActiveSessionLabel(undefined);
                 }}
+                runtimeUnavailable={runtimeUnavailable}
               />
             </div>
           )}
 
-          {activeTab === "FILES" && (
-            <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+          {mountedTabs.has("FILES") && (
+            <div className={cn("flex-1 min-h-0 flex flex-col overflow-hidden", activeTab !== "FILES" && "hidden")}>
               {/* File selector bar */}
               <div className="shrink-0 flex items-center gap-2 px-3 py-2 border-b border-border/30">
                 <DropdownMenu>
@@ -898,15 +1310,16 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
               </div>
             </div>
           )}
-          {activeTab === "CRONS" && (
-            <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-              <AgentCronsTab agentId={currentAgentId} runtime={effectiveRuntime} />
+          {mountedTabs.has("CRONS") && (
+            <div className={cn("flex-1 min-h-0 flex flex-col overflow-hidden", activeTab !== "CRONS" && "hidden")}>
+              <AgentCronsTab key={`crons-${refreshCounter}`} agentId={currentAgentId} runtime={effectiveRuntime} />
             </div>
           )}
 
-          {activeTab === "SKILLS" && (
-            <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+          {mountedTabs.has("SKILLS") && (
+            <div className={cn("flex-1 min-h-0 flex flex-col overflow-hidden", activeTab !== "SKILLS" && "hidden")}>
               <AgentSkillsTab
+                key={`skills-${refreshCounter}`}
                 agentId={currentAgentId}
                 runtime={effectiveRuntime ?? backendTab}
                 projectPath={identity?.project}
@@ -914,18 +1327,24 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
             </div>
           )}
 
-          {activeTab === "MCPS" && (
-            <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-              <AgentMcpsTab agentId={currentAgentId} runtime={effectiveRuntime} />
+          {mountedTabs.has("MCPS") && (
+            <div className={cn("flex-1 min-h-0 flex flex-col overflow-hidden", activeTab !== "MCPS" && "hidden")}>
+              <AgentMcpsTab key={`mcps-${refreshCounter}`} agentId={currentAgentId} runtime={effectiveRuntime} />
             </div>
           )}
 
         </div>
+          </>
+        )}
       </Card>
 
       <AddAgentDialog
         open={addAgentOpen}
-        onOpenChange={setAddAgentOpen}
+        onOpenChange={(open) => {
+          setAddAgentOpen(open);
+          if (!open) setAddAgentInitialRuntime(undefined);
+        }}
+        initialRuntime={addAgentInitialRuntime}
         onSuccess={(id, runtime) => {
             setSelectedAgentId(id);
             if (runtime === "claude-code") setBackendTab("claude-code");
@@ -945,6 +1364,15 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
           // StatusWidget shows the Firing… badge for that.
           const next = agents.find((a) => a.id !== pendingDeleteAgentId);
           setSelectedAgentId(next?.id);
+          // If deleting the last agent, reset to agent mode so EmptyAgentsState shows
+          if (!next) {
+            setWidgetMode("agent");
+            setSelectedProjectId(undefined);
+            setActiveTab("CHAT");
+            setActiveSessionLabel(undefined);
+            setInboxSessions([]);
+            setReadSessions(new Set());
+          }
         }}
         onSuccess={() => { /* context refresh handled by agent.deleted event */ }}
       />
@@ -957,7 +1385,11 @@ AgentChatWidgetContent.displayName = "AgentChatWidgetContent";
 export const AgentChatCustomHeader = () => null;
 
 const AgentChatWidget = memo((props: CustomProps) => {
-  return <AgentChatWidgetContent className={props.className} {...props} />;
+  return (
+    <ProjectsProvider>
+      <AgentChatWidgetContent className={props.className} {...props} />
+    </ProjectsProvider>
+  );
 });
 
 AgentChatWidget.displayName = "AgentChatWidget";

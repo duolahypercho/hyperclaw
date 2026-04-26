@@ -52,7 +52,7 @@ const ToolLayout = ({ children, className }: ToolLayoutProps) => {
         duration: 0.3,
       }}
     >
-      <div className="flex-1 flex flex-col border border-solid border-primary/10 bg-secondary overflow-hidden relative">
+      <div className="flex-1 flex flex-col border-0 bg-background overflow-hidden relative">
         <SiteHeader />
         <div className="flex-1 flex flex-row w-full h-full overflow-hidden">
           <AnimatePresence>
@@ -79,7 +79,7 @@ const ToolLayout = ({ children, className }: ToolLayoutProps) => {
           </AnimatePresence>
           <div
             className={cn(
-              "flex-1 h-full bg-background overflow-y-auto customScrollbar2 transition-all duration-150 ease-out",
+              "flex-1 h-full overflow-y-auto customScrollbar2 transition-all duration-150 ease-out",
               className
             )}
             ref={bodyRef}

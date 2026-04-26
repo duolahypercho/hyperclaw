@@ -78,6 +78,7 @@ export function AddCronDialog({ open, onOpenChange, onSuccess, defaultAgent, def
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [agent, setAgent] = useState(defaultAgent ?? "");
+  const [announceChannel, setAnnounceChannel] = useState("");
   const [agentOptions, setAgentOptions] = useState<AgentOption[]>([]);
   const [agentsLoading, setAgentsLoading] = useState(false);
 
@@ -98,6 +99,7 @@ export function AddCronDialog({ open, onOpenChange, onSuccess, defaultAgent, def
     setDeleteAfterRun(false);
     setError(null);
     setAgent(defaultAgent ?? "");
+    setAnnounceChannel("");
   }, [defaultAgent, defaultRuntime]);
 
   // Sync agents from context
@@ -151,6 +153,10 @@ export function AddCronDialog({ open, onOpenChange, onSuccess, defaultAgent, def
       if (model.trim() && (runtime === "claude-code" || runtime === "codex")) {
         params.model = model.trim();
       }
+    }
+    if (announceChannel.trim()) {
+      params.channel = announceChannel.trim();
+      params.announce = true;
     }
     setSubmitting(true);
     try {
@@ -411,6 +417,22 @@ export function AddCronDialog({ open, onOpenChange, onSuccess, defaultAgent, def
                 Delete after run
               </label>
             )}
+
+            {/* Announce channel (all runtimes) */}
+            <div className="space-y-2">
+              <Label htmlFor="add-cron-announce" className="text-xs uppercase tracking-wider text-muted-foreground">
+                Announce channel <span className="text-muted-foreground/60 normal-case">(optional)</span>
+              </Label>
+              <Input
+                id="add-cron-announce"
+                placeholder="e.g. telegram, whatsapp, slack"
+                value={announceChannel}
+                onChange={(e) => setAnnounceChannel(e.target.value)}
+              />
+              <p className="text-[11px] text-muted-foreground">
+                Post run results to this messaging channel when the job completes.
+              </p>
+            </div>
           </div>
 
           <SheetFooter className="px-6 py-4 border-t border-border flex flex-row gap-2">

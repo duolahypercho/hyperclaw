@@ -32,6 +32,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
     detectLocal: () => ipcRenderer.invoke("runtimes:detect-local"),
     detectProviderKeys: () => ipcRenderer.invoke("runtimes:detect-provider-keys"),
     importProviderKey: (params) => ipcRenderer.invoke("runtimes:import-provider-key", params),
+    installLocalConnector: (params) => ipcRenderer.invoke("runtimes:install-local-connector", params),
   },
 
   // Permissions
@@ -72,49 +73,30 @@ contextBridge.exposeInMainWorld("electronAPI", {
   setProgressBar: (progress) =>
     ipcRenderer.invoke("set-progress-bar", progress),
 
-  // OpenClaw CLI bridge — all commands execute in the main process
+  // OpenClaw — only sign-connect-challenge needs Electron IPC (Ed25519 key access).
+  // All other OpenClaw commands route through Hub → Connector via bridgeInvoke().
   openClaw: {
-    checkInstalled: () => ipcRenderer.invoke("openclaw:check-installed"),
-    getStatus: () => ipcRenderer.invoke("openclaw:status"),
-    getGatewayHealth: () => ipcRenderer.invoke("openclaw:gateway-health"),
-    sendMessage: (params) => ipcRenderer.invoke("openclaw:message-send", params),
-    getGatewayConnectUrl: () => ipcRenderer.invoke("openclaw:get-gateway-connect-url"),
-    getDeviceIdentity: () => ipcRenderer.invoke("openclaw:get-device-identity"),
     signConnectChallenge: (params) => ipcRenderer.invoke("openclaw:sign-connect-challenge", params),
-    getCronList: () => ipcRenderer.invoke("openclaw:cron-list"),
-    getCronListJson: () => ipcRenderer.invoke("openclaw:cron-list-json"),
-    getAgentList: () => ipcRenderer.invoke("openclaw:agent-list"),
-    runCommand: (args) => ipcRenderer.invoke("openclaw:run-command", args),
-    cronEnable: (id) => ipcRenderer.invoke("openclaw:cron-enable", id),
-    cronDisable: (id) => ipcRenderer.invoke("openclaw:cron-disable", id),
   },
 
-  // Claude Code & Codex: routed through Hub → Connector relay (no local IPC).
-  // See hyperclaw-connector/internal/bridge/claude.go for implementation.
-
-  // Hermes Agent bridge — reads sessions from ~/.hermes/sessions/
+  // Hermes — only save-profile-model needs Electron IPC (local YAML write).
+  // All other Hermes commands route through Hub → Connector via bridgeInvoke().
   hermes: {
-    listSessions: () => ipcRenderer.invoke("hermes:list-sessions"),
-    loadHistory: (params) => ipcRenderer.invoke("hermes:load-history", params),
-    listModels: (profileId) => ipcRenderer.invoke("hermes:list-models", { profileId }),
     saveProfileModel: (profileId, model) => ipcRenderer.invoke("hermes:save-profile-model", { profileId, model }),
   },
 
-  // HyperClaw Bridge — two-way relay with OpenClaw plugin via ~/.hyperclaw/
-  // invoke(action, body): used by production desktop app so all bridge calls run locally (no Vercel).
+  // OAuth — PKCE flow for AI runtime providers (Codex, Claude Code)
+  oauth: {
+    startFlow: (providerId) => ipcRenderer.invoke("oauth:start-flow", { providerId }),
+  },
+
+  // HyperClaw Bridge — config-only surface.
+  // All bridge actions route through Hub → Connector via bridgeInvoke() in
+  // the renderer (see lib/hyperclaw-bridge-client.ts). We deliberately do NOT
+  // expose an IPC invoke() here — that path skipped the local-connector
+  // fastpath + gateway WS streaming and broke cross-machine support.
   hyperClawBridge: {
-    invoke: (action, body = {}) =>
-      ipcRenderer.invoke("hyperclaw:bridge-invoke", { action, ...body }),
-
-    getTasks: () => ipcRenderer.invoke("hyperclaw:get-tasks"),
-    addTask: (task) => ipcRenderer.invoke("hyperclaw:add-task", task),
-    updateTask: (id, patch) => ipcRenderer.invoke("hyperclaw:update-task", { id, patch }),
-    deleteTask: (id) => ipcRenderer.invoke("hyperclaw:delete-task", id),
-    sendCommand: (command) => ipcRenderer.invoke("hyperclaw:send-command", command),
-    triggerProcessCommands: () => ipcRenderer.invoke("hyperclaw:trigger-process-commands"),
-    spawnAgentForTask: (params) => ipcRenderer.invoke("hyperclaw:spawn-agent-for-task", params),
-
-    // Gateway configuration
+    // Gateway configuration (Electron-local config for direct OpenClaw connection)
     setGatewayConfig: (host, port, token) => ipcRenderer.invoke("hyperclaw:set-gateway-config", { host, port, token }),
     getGatewayConfig: () => ipcRenderer.invoke("hyperclaw:get-gateway-config"),
     testGatewayConnection: (host, port) => ipcRenderer.invoke("hyperclaw:test-gateway-connection", { host, port }),
@@ -122,35 +104,6 @@ contextBridge.exposeInMainWorld("electronAPI", {
     // Hub configuration (thin client mode)
     getHubConfig: () => ipcRenderer.sendSync("hyperclaw:get-hub-config-sync"),
     setHubConfig: (config) => ipcRenderer.invoke("hyperclaw:set-hub-config", config),
-
-    onEvent: (callback) => {
-      if (typeof callback !== "function") return;
-      ipcRenderer.on("hyperclaw:event", (event, data) => callback(data));
-    },
-    onTasksChanged: (callback) => {
-      if (typeof callback !== "function") return;
-      ipcRenderer.on("hyperclaw:tasks-changed", (event, data) => callback(data));
-    },
-    removeAllBridgeListeners: () => {
-      ipcRenderer.removeAllListeners("hyperclaw:event");
-      ipcRenderer.removeAllListeners("hyperclaw:tasks-changed");
-    },
-  },
-
-  // Note File System Storage — reads/writes notes from ~/.openclaw/workspace/memory
-  noteFS: {
-    fetchNote: () => ipcRenderer.invoke("notes:fetchNote"),
-    fetchFolder: (folderId) => ipcRenderer.invoke("notes:fetchFolder", { folderId }),
-    fetchSingleNote: (folderId, noteId) => ipcRenderer.invoke("notes:fetchSingleNote", { folderId, noteId }),
-    createFolder: (_id, name) => ipcRenderer.invoke("notes:createFolder", { _id, name }),
-    createNote: (noteId, folderId) => ipcRenderer.invoke("notes:createNote", { noteId, folderId }),
-    updateNote: (folderId, noteId, content) => ipcRenderer.invoke("notes:updateNote", { folderId, noteId, content }),
-    editFolderName: (folderId, name) => ipcRenderer.invoke("notes:editFolderName", { folderId, name }),
-    deleteFolder: (folderId) => ipcRenderer.invoke("notes:deleteFolder", { folderId }),
-    deleteNote: (folderId, noteId) => ipcRenderer.invoke("notes:deleteNote", { folderId, noteId }),
-    searchNote: (searchQuery) => ipcRenderer.invoke("notes:searchNote", { searchQuery }),
-    reorderFolder: (folderId, newIndex) => ipcRenderer.invoke("notes:reorderFolder", { folderId, newIndex }),
-    uploadAttachment: (folderId, noteId, attachment) => ipcRenderer.invoke("notes:uploadAttachment", { folderId, noteId, attachment }),
   },
 
 });

@@ -21,6 +21,8 @@ import {
 } from "$/lib/openclaw-gateway-ws";
 import { useFocusMode } from "./hooks/useFocusMode";
 import { cn } from "@/lib/utils";
+import { useHyperclawContext } from "$/Providers/HyperclawProv";
+import { OpenClawSetupPrompt } from "$/components/shared/OpenClawSetupPrompt";
 
 // ── Types & Constants ────────────────────────────────
 const LOGS_LIMIT = 500;
@@ -155,6 +157,7 @@ export const LogsCustomHeader: React.FC<LogsCustomHeaderProps> = ({
 const LogsWidgetContent = memo((props: CustomProps) => {
   const { widget, onConfigChange } = props;
   const { isFocusModeActive } = useFocusMode();
+  const { gatewayHealthy, fetchGatewayHealth } = useHyperclawContext();
 
   const config = widget.config as Record<string, unknown> | undefined;
   const savedLevels = config?.levelFilters as LevelFilters | undefined;
@@ -253,13 +256,17 @@ const LogsWidgetContent = memo((props: CustomProps) => {
           totalCount={isFiltering ? logs.length : undefined}
         />
         <div className="flex-1 overflow-hidden flex flex-col min-h-0 min-w-0 px-2 pb-2">
-          {error && logs.length === 0 ? (
-            <div className="flex-1 rounded-md bg-destructive/10 border border-destructive/20 p-3 overflow-auto">
-              <p className="text-sm text-destructive font-mono whitespace-pre-wrap">{error}</p>
-              <Button variant="outline" size="sm" className="mt-2 h-7 text-sm"
-                onClick={() => doFetchLogs(false)} disabled={loading}>
-                <RefreshCw className={cn("w-3 h-3 mr-1", loading && "animate-spin")} /> Retry
-              </Button>
+          {gatewayHealthy === false && logs.length === 0 ? (
+            <div className="flex-1 flex items-center justify-center">
+              <OpenClawSetupPrompt
+                icon={<ScrollText className="w-5 h-5 text-primary" />}
+                title="Connect OpenClaw"
+                description="View real-time logs from your OpenClaw gateway."
+                error={error}
+                onRetry={() => { fetchGatewayHealth(); doFetchLogs(false); }}
+                retrying={loading}
+                size="sm"
+              />
             </div>
           ) : loading && logs.length === 0 ? (
             <div className="flex-1 flex items-center justify-center gap-2">

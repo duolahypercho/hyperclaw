@@ -102,7 +102,32 @@ async function deviceBridgeCommand(
     throw new Error(`Device command failed (${res.status}): ${text}`);
   }
 
-  return res.json();
+  // Hub forwards the connector's protocol envelope:
+  //   { requestId, status: "ok" | "error", data: <actual payload> }
+  // Unwrap to match what callers expect (the inner data object).
+  const raw = (await res.json()) as unknown;
+  if (!raw || typeof raw !== "object") return raw;
+  const envelope = raw as Record<string, unknown>;
+
+  if (envelope.status === "error") {
+    const errMsg =
+      (envelope.data as { error?: string } | undefined)?.error ||
+      (envelope.error as string) ||
+      "Device command failed";
+    return { success: false, error: errMsg };
+  }
+
+  // Envelope with inner data — unwrap one level.
+  if (
+    "data" in envelope &&
+    envelope.data &&
+    typeof envelope.data === "object" &&
+    !Array.isArray(envelope.data)
+  ) {
+    return envelope.data;
+  }
+
+  return raw;
 }
 
 /**

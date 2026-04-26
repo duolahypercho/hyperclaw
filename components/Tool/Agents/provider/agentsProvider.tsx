@@ -28,6 +28,7 @@ export interface Agent {
   name: string;
   status: string;
   role?: string;
+  description?: string;
   lastActive?: string;
   /** Folder name under OPENCLAW_HOME for this agent's workspace (from getTeam workspace path). */
   workspaceFolder?: string;
@@ -64,7 +65,7 @@ interface AgentsContextValue {
   /** The agent ID marked as the HyperClaw orchestrator (CEO), or null if none */
   ceoAgentId: string | null;
   /** Optimistically add an agent before server confirms */
-  addOptimisticAgent: (name: string) => void;
+  addOptimisticAgent: (name: string, id?: string, runtime?: Agent["runtime"], details?: Pick<Agent, "role" | "description">) => void;
   /** Refresh with retry delay for post-mutation sync */
   refreshAfterMutation: () => Promise<void>;
   /** Agent IDs that have a background delete in flight */
@@ -95,7 +96,7 @@ interface AgentsUIContextValue {
   saving: boolean;
   error: string | null;
   saveError: string | null;
-  addOptimisticAgent: (name: string) => void;
+  addOptimisticAgent: (name: string, id?: string, runtime?: Agent["runtime"], details?: Pick<Agent, "role" | "description">) => void;
   refreshAfterMutation: () => Promise<void>;
   deletingAgentIds: Set<string>;
   saveDoc: () => Promise<boolean>;
@@ -170,6 +171,22 @@ const FILE_ICONS: Record<string, typeof FileText> = {
   "HEARTBEAT.md": Heart,
 };
 
+// Allowed personality files per runtime (strict filtering).
+const RUNTIME_FILES: Record<string, Set<string>> = {
+  openclaw: new Set(["IDENTITY.md", "SOUL.md", "AGENTS.md", "TOOLS.md", "USER.md", "HEARTBEAT.md", "MEMORY.md"]),
+  hermes: new Set(["SOUL.md"]),
+  "claude-code": new Set(["SOUL.md"]), // stored as SOUL.md, compiled into CLAUDE.md by connector
+  codex: new Set(["AGENTS.md"]),
+};
+
+const AGENT_RUNTIMES: Agent["runtime"][] = ["openclaw", "hermes", "claude-code", "codex"];
+
+function toAgentRuntime(runtime: string): Agent["runtime"] | undefined {
+  return AGENT_RUNTIMES.includes(runtime as Agent["runtime"])
+    ? runtime as Agent["runtime"]
+    : undefined;
+}
+
 export function AgentsProvider({ children }: { children: React.ReactNode }) {
   const { agents: openClawAgents, fetchAgents } = useHyperclawContext();
   // Keep a ref so refresh() always calls the latest fetchAgents without
@@ -208,12 +225,6 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
   }, [loading]);
 
   // handleDeployOrchestrator is defined after refreshAfterMutation / addOptimisticAgent (below)
-
-  // Allowed personality files per runtime (strict filtering)
-  const RUNTIME_FILES: Record<string, Set<string>> = {
-    openclaw: new Set(["IDENTITY.md", "SOUL.md", "AGENTS.md", "TOOLS.md", "USER.md", "HEARTBEAT.md", "MEMORY.md"]),
-    hermes: new Set(["SOUL.md"]),
-  };
 
   // Files belonging to the selected agent: match by workspace folder from getTeam()
   // Then filter by runtime — only show files relevant to the agent's runtime
@@ -254,9 +265,19 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
 
       // Patch the identity cache so useAgentIdentity returns the correct runtime.
       for (const agent of allAgents) {
-        if (agent.runtime) patchIdentityCache(agent.id, { runtime: agent.runtime });
+        patchIdentityCache(agent.id, {
+          runtime: agent.runtime,
+          name: agent.name,
+          role: agent.role,
+          description: agent.description,
+        });
       }
-      setAgents(allAgents);
+      setAgents((prev) => {
+        const freshIds = new Set(allAgents.map((agent) => agent.id));
+        const pendingHiring = prev.filter((agent) => agent.status === "hiring" && !freshIds.has(agent.id));
+        const nextAgents = [...allAgents, ...pendingHiring];
+        return nextAgents;
+      });
       setAgentFiles(filesResponse.files);
       setWorkspaceLabels(filesResponse.workspaceLabels);
     } catch (err: unknown) {
@@ -275,13 +296,15 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
   }, [refresh]);
 
   /** Optimistically add an agent to the list before server confirms */
-  const addOptimisticAgent = useCallback((name: string) => {
-    const normalizedId = name.toLowerCase().replace(/[^a-z0-9_.-]/g, "");
+  const addOptimisticAgent = useCallback((name: string, id?: string, runtime?: Agent["runtime"], details?: Pick<Agent, "role" | "description">) => {
+    const normalizedId = id || name.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9_.-]/g, "");
     const optimistic: Agent = {
       id: normalizedId,
       name,
       status: "hiring",
-      role: "",
+      role: details?.role || "",
+      description: details?.description || "",
+      runtime,
     };
     setAgents((prev) => {
       if (prev.some((a) => a.id === normalizedId)) return prev;
@@ -396,6 +419,24 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
     return unsub;
   }, [refresh]);
 
+  useEffect(() => {
+    const onAgentHired = (event: Event) => {
+      const agentId = (event as CustomEvent).detail?.agentId as string | undefined;
+      void refresh();
+    };
+    const onAgentHireFailed = (event: Event) => {
+      const agentId = (event as CustomEvent).detail?.agentId as string | undefined;
+      if (!agentId) return;
+      setAgents((prev) => prev.filter((agent) => agent.id !== agentId));
+    };
+    window.addEventListener("agent.hired", onAgentHired);
+    window.addEventListener("agent.hire.failed", onAgentHireFailed);
+    return () => {
+      window.removeEventListener("agent.hired", onAgentHired);
+      window.removeEventListener("agent.hire.failed", onAgentHireFailed);
+    };
+  }, [refresh]);
+
   // When options load, default to first agent; fix selection if missing from list
   useEffect(() => {
     if (loading || agents.length === 0) return;
@@ -423,7 +464,7 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
       filteredAgentFiles.some((f) => f.relativePath === selectedFile.relativePath);
     if (currentInList) return;
     const defaultFile =
-      filteredAgentFiles.find((f) => f.name === "agents.md") ?? filteredAgentFiles[0] ?? null;
+      filteredAgentFiles.find((f) => f.name === "AGENTS.md") ?? filteredAgentFiles[0] ?? null;
     setSelectedFile(defaultFile);
   }, [selectedAgentId, filteredAgentFiles, selectedFile]);
 
@@ -690,6 +731,7 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
       saving,
       error,
       saveError,
+      setContent,
       addOptimisticAgent,
       refreshAfterMutation,
       deletingAgentIds,
@@ -712,9 +754,8 @@ export function AgentsProvider({ children }: { children: React.ReactNode }) {
             open={addAgentDialogOpen}
             onOpenChange={setAddAgentDialogOpen}
             existingAgents={agents}
-            onSuccess={(name) => {
-              addOptimisticAgent(name);
-              refreshAfterMutation();
+            onSuccess={(agentId, runtime, displayName, details) => {
+              addOptimisticAgent(displayName || agentId, agentId, toAgentRuntime(runtime), details);
             }}
           />
           <DeleteAgentDialog

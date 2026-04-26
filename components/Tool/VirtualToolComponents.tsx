@@ -4,19 +4,21 @@ import { HiMusicalNote } from "react-icons/hi2";
 import { LuListTodo } from "react-icons/lu";
 import { FaXTwitter } from "react-icons/fa6";
 import {
+  Activity,
   Building,
   Library,
   CheckCircle,
   Loader2,
   FolderOpen,
-  Clock,
   LayoutGrid,
   FileText,
-  BarChart3,
   Database,
   Monitor,
-  Network,
   MessageSquare,
+  Users,
+  FolderGit2,
+  BookOpen,
+  User as UserIcon,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
@@ -326,13 +328,6 @@ const VirtualToolBase: React.FC<VirtualToolProps> = ({
         { text: "Validating settings" },
         { text: "Ready to configure" },
       ],
-      "Org Chart": [
-        { text: "Loading agent hierarchy" },
-        { text: "Resolving team structure" },
-        { text: "Syncing task assignments" },
-        { text: "Building organization view" },
-        { text: "Ready to visualize" },
-      ],
     };
 
     return toolSpecificStates[tool] || baseStates;
@@ -472,21 +467,6 @@ export const VirtualSettings: React.FC = () => (
   />
 );
 
-export const VirtualMemory: React.FC = () => (
-  <VirtualToolBase
-    toolName="Memory"
-    description="Browse and read memory files from your OpenClaw workspace"
-    icon={<FolderOpen />}
-  />
-);
-
-export const VirtualCrons: React.FC = () => (
-  <VirtualToolBase
-    toolName="Cron Jobs"
-    description="Monitor and manage your OpenClaw cron jobs"
-    icon={<Clock />}
-  />
-);
 
 export const VirtualPixelOffice: React.FC = () => (
   <VirtualToolBase
@@ -504,13 +484,6 @@ export const VirtualDocs: React.FC = () => (
   />
 );
 
-export const VirtualUsage: React.FC = () => (
-  <VirtualToolBase
-    toolName="Token Usage"
-    description="View token usage from OpenClaw agents and sessions"
-    icon={<BarChart3 />}
-  />
-);
 
 export const VirtualIntelligence: React.FC = () => (
   <VirtualToolBase
@@ -536,18 +509,67 @@ export const VirtualDevices: React.FC = () => (
   />
 );
 
-export const VirtualOrgChart: React.FC = () => (
-  <VirtualToolBase
-    toolName="Org Chart"
-    description="Visualize your AI agent team hierarchy and delegation"
-    icon={<Network />}
-  />
-);
 
 export const VirtualChat: React.FC = () => (
   <VirtualToolBase
     toolName="Chat"
-    description="Chat with your OpenClaw AI agents in real time"
+    description="Rooms and DMs with every agent on your team"
     icon={<MessageSquare />}
+  />
+);
+
+export const VirtualTeam: React.FC = () => (
+  <VirtualToolBase
+    toolName="Team"
+    description="Your ensemble of AI employees"
+    icon={<Users />}
+  />
+);
+
+export const VirtualProjects: React.FC = () => (
+  <VirtualToolBase
+    toolName="Workflows"
+    description="Crews, triggers, and guardrails"
+    icon={<FolderGit2 />}
+  />
+);
+
+export const VirtualProjectEditor: React.FC = () => (
+  <VirtualToolBase
+    toolName="Workflow Editor"
+    description="Configure identity, trigger, crew, and guardrails"
+    icon={<FolderGit2 />}
+  />
+);
+
+export const VirtualKnowledge: React.FC = () => (
+  <VirtualToolBase
+    toolName="Knowledge"
+    description="Company folders every agent reads from"
+    icon={<BookOpen />}
+  />
+);
+
+export const VirtualData: React.FC = () => (
+  <VirtualToolBase
+    toolName="Data"
+    description="Shared tables, schemas, and permissions"
+    icon={<Database />}
+  />
+);
+
+export const VirtualMissionControl: React.FC = () => (
+  <VirtualToolBase
+    toolName="Workflows"
+    description="Live canvas of running agent workflows"
+    icon={<Activity />}
+  />
+);
+
+export const VirtualAgent: React.FC = () => (
+  <VirtualToolBase
+    toolName="Agent"
+    description="Identity, soul, memory, and cost"
+    icon={<UserIcon />}
   />
 );

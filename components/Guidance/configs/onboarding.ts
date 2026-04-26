@@ -16,35 +16,8 @@ export const onboardingConfig: GuidanceConfig = {
       offset: { x: 0, y: 0 },
     },
     {
-      id: "navbar-tools",
-      target: "[data-guidance='navbar-tools']",
-      title: "Your Tools",
-      description:
-        "Explore all your available tools here. If you prefer, launch any tool directly—no need to enter the main dashboard.",
-      position: "bottom",
-      offset: { x: 0, y: 0 },
-    },
-    {
-      id: "navbar-dock",
-      target: "[data-guidance='navbar-dock']",
-      title: "Dock Tools",
-      description:
-        "Quick access to frequently used features. These tools stay accessible from anywhere.",
-      position: "bottom",
-      offset: { x: -10, y: 0 },
-    },
-    {
-      id: "navbar-user",
-      target: "[data-guidance='navbar-user']",
-      title: "Your Profile",
-      description:
-        "Access your profile, settings, and account options from here.",
-      position: "bottom",
-      offset: { x: 0, y: -10 },
-    },
-    {
       id: "sidebar",
-      target: "[data-guidance='sidebar']",
+      target: "[data-guidance='navbar-tools']",
       title: "Todo Sidebar",
       description:
         "Your task management hub. Keep track of todos, notes, and organize your workflow. Toggle it with the home button.",
@@ -65,6 +38,15 @@ export const onboardingConfig: GuidanceConfig = {
         );
         await new Promise((resolve) => setTimeout(resolve, 300));
       },
+    },
+    {
+      id: "navbar-user",
+      target: "[data-guidance='navbar-user']",
+      title: "Your Profile",
+      description:
+        "Access your profile, settings, and account options from here.",
+      position: "right",
+      offset: { x: 8, y: -100 },
     },
     {
       id: "center-display",
