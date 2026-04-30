@@ -3,6 +3,7 @@
  *
  *   node scripts/set-config.js local    # Community / OSS build (default)
  *   node scripts/set-config.js remote   # Cloud build pointing at HYPERCLAW_REMOTE_URL
+ *   BUILD_FLAVOR=cloud node scripts/set-config.js
  *
  * Remote mode requires HYPERCLAW_REMOTE_URL to be set in the environment so
  * the open-source repo never carries a hard-coded production hostname.
@@ -11,9 +12,26 @@
 const fs = require('fs');
 const path = require('path');
 
-const mode = process.argv[2] || 'local';
+const rawFlavor = process.argv[2] || process.env.BUILD_FLAVOR || process.env.HYPERCLAW_BUILD_FLAVOR || 'local';
+const modeAliases = {
+  community: 'local',
+  oss: 'local',
+  local: 'local',
+  cloud: 'remote',
+  commercial: 'remote',
+  remote: 'remote',
+};
+const mode = modeAliases[String(rawFlavor).toLowerCase()];
 const configPath = path.join(__dirname, '..', 'app-config.json');
 const packageJsonPath = path.join(__dirname, '..', 'package.json');
+
+if (!mode) {
+  console.error(
+    `set-config.js: unknown build flavor "${rawFlavor}".\n` +
+    'Use one of: community, local, oss, cloud, remote.'
+  );
+  process.exit(1);
+}
 
 const remoteUrl = process.env.HYPERCLAW_REMOTE_URL || '';
 if (mode === 'remote' && !remoteUrl) {

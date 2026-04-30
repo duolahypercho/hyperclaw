@@ -49,7 +49,7 @@ function getConnectorDownloadName() {
       : "hyperclaw-connector-linux";
   }
   if (plat === "win32") {
-    return arch === "arm64"
+    return arch === "arm64"Captions by GetTranscribed.com
       ? "hyperclaw-connector-win-arm64.exe"
       : "hyperclaw-connector-win.exe";
   }
@@ -373,7 +373,7 @@ if (!gotTheLock) {
 // Defaults are local-only so a fresh checkout of the open-source repo runs
 // against http://localhost:1000 without contacting any remote service. The
 // official Hyperclaw Cloud build overrides `mode` and `remoteUrl` via
-// electron/app-config.json before packaging.
+// electron/app-config.json or BUILD_FLAVOR=cloud before packaging.
 let appConfig = {
   mode: "local",
   remoteUrl: "",
@@ -390,6 +390,15 @@ try {
     appConfig = JSON.parse(fs.readFileSync(configPath, "utf8"));
   }
 } catch (error) {
+}
+
+const buildFlavor = String(process.env.BUILD_FLAVOR || process.env.HYPERCLAW_BUILD_FLAVOR || "").toLowerCase();
+if (["community", "oss", "local"].includes(buildFlavor)) {
+  appConfig.mode = "local";
+}
+if (["cloud", "commercial", "remote"].includes(buildFlavor)) {
+  appConfig.mode = "remote";
+  appConfig.remoteUrl = process.env.HYPERCLAW_REMOTE_URL || appConfig.remoteUrl || "";
 }
 
 // Auto-load hub config from ~/.hyperclaw/hub-config.json if not in app-config.json

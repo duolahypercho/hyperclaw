@@ -1,0 +1,56 @@
+name: Bug report
+description: Report something broken in Hyperclaw Community Edition.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please include enough detail for someone else
+        to reproduce it from a fresh checkout.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. Run `npm run dev`
+        2. Open ...
+        3. Click ...
+        4. See ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Paste `git rev-parse --short HEAD` if you are running from source.
+  - type: dropdown
+    id: flavor
+    attributes:
+      label: Build flavor
+      options:
+        - Community / local
+        - Cloud / remote
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: macOS 15.4, Ubuntu 24.04, Windows 11 + WSL2
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Paste relevant logs after removing tokens, keys, device IDs, and personal paths.
+      render: shell
