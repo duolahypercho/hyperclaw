@@ -160,8 +160,6 @@ Everything left blank in `.env.example` is genuinely optional. If a feature surf
 | `npm run build` | Production Next.js build |
 | `npm run start` | Run the production build on port 1000 |
 | `npm run lint` | ESLint |
-| `npm test` | Vitest, single run |
-| `npm run test:watch` | Vitest in watch mode |
 | `npm run electron:dev` | Electron in dev mode (loads `localhost:1000`) |
 | `npm run electron:build:mac:local` | Build the macOS desktop app |
 | `npm run electron:build:win:local` | Build the Windows desktop app |
@@ -186,8 +184,7 @@ hyperclaw_app/
 ├── electron/              # Electron wrapper + build pipeline
 ├── connector/             # Vendored Go daemon (Hub <-> AI runtime relay)
 ├── docs/                  # Architecture, design, and integration docs
-├── public/                # Static assets, fonts, downloads/install.sh
-└── __tests__/             # Vitest suites
+└── public/                # Static assets, fonts, downloads/install.sh
 ```
 
 Path aliases:
@@ -204,20 +201,16 @@ In Community Edition, the connector talks only to localhost. In Cloud Edition, i
 
 ---
 
-## Testing
+## Validation
+
+The public OSS tree does not ship test suites. For now, use install/build
+sanity checks plus focused manual verification of the local-first flow:
 
 ```bash
-npm test           # one-shot
-npm run test:watch # watch mode
-```
-
-Vitest, jsdom for component tests. Right now: **41 test files, 366 tests, all passing**. New features should land with at least one test that covers the public contract.
-
-For Go connector tests:
-
-```bash
-cd connector
-go test ./...
+npm ci
+npm run lint
+npm run build
+cd connector && go build -o hyperclaw-connector ./cmd
 ```
 
 ---
@@ -229,8 +222,8 @@ PRs and issues welcome. The repo is moving fast — open a draft PR or an issue 
 A few house rules:
 - **Keep the local-first path working.** Any feature that requires the hub must degrade cleanly when `NEXT_PUBLIC_HUB_URL` is empty.
 - **No new hardcoded `hypercho.com`, personal paths, or org-specific identifiers.** Read them from env.
-- **Tests for the contract.** UI tweaks don’t need tests; new lib / service / hook surfaces do.
-- **Prettier + ESLint pass before pushing.** `npm run lint`.
+- **Keep changes easy to verify.** Include manual verification steps in PRs.
+- **ESLint before pushing.** `npm run lint` is currently advisory while legacy lint debt is cleaned up.
 
 A full `CONTRIBUTING.md` is on the way.
 
@@ -250,4 +243,4 @@ Found a security issue? Please don’t open a public issue. Email the maintainer
 
 ## Acknowledgements
 
-Hyperclaw stands on the shoulders of [Next.js](https://nextjs.org), [Electron](https://www.electronjs.org), [shadcn/ui](https://ui.shadcn.com), [Tailwind CSS](https://tailwindcss.com), [Framer Motion](https://www.framer.com/motion/), [Zustand](https://github.com/pmndrs/zustand), [Vitest](https://vitest.dev), and the agent-runtime CLIs from Anthropic, OpenAI, and the OpenClaw community.
+Hyperclaw stands on the shoulders of [Next.js](https://nextjs.org), [Electron](https://www.electronjs.org), [shadcn/ui](https://ui.shadcn.com), [Tailwind CSS](https://tailwindcss.com), [Framer Motion](https://www.framer.com/motion/), [Zustand](https://github.com/pmndrs/zustand), and the agent-runtime CLIs from Anthropic, OpenAI, and the OpenClaw community.

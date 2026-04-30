@@ -2,11 +2,11 @@
 
 <!-- What changed and why? -->
 
-## Test Plan
+## Validation Plan
 
-- [ ] `npm test`
-- [ ] `npm run lint`
-- [ ] `cd connector && go test ./...` (if connector changed)
+- [ ] `npm run lint` (advisory while legacy lint debt is cleaned up)
+- [ ] `npm run build` (if web/runtime code changed)
+- [ ] `cd connector && go build -o hyperclaw-connector ./cmd` (if connector changed)
 - [ ] Manual local-first smoke test (if user-facing)
 
 ## Checklist

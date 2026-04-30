@@ -14,7 +14,7 @@ in a good change.
 - [Development setup](#development-setup)
 - [Project layout](#project-layout)
 - [Making a change](#making-a-change)
-- [Tests](#tests)
+- [Validation](#validation)
 - [Lint and formatting](#lint-and-formatting)
 - [Commit style](#commit-style)
 - [Pull request checklist](#pull-request-checklist)
@@ -38,7 +38,7 @@ once we have community traction. Until then, the highest-leverage areas are:
 - Dashboard widgets in `components/Home/widgets/`.
 - Connector daemon improvements in `connector/internal/`.
 - Documentation gaps in `docs/` or `README.md`.
-- Test coverage — see `__tests__/` and `vitest.config.ts`.
+- First-run setup and local connector documentation.
 
 Before doing significant work, please open an issue describing the change so we
 can sanity-check direction and avoid duplicate effort.
@@ -87,7 +87,6 @@ See [`SETUP.md`](./SETUP.md) for a longer walkthrough including troubleshooting.
 | `lib/` | Shared client + server utilities (env, hub relay, openai, etc.) |
 | `connector/` | Vendored Go daemon — bridges local CLIs to the dashboard |
 | `electron/` | Desktop wrapper (main, preload, packaging config) |
-| `__tests__/` | Vitest unit and integration tests |
 | `public/` | Static assets shipped with the dashboard |
 | `docs/` | Architecture, design notes, OSS plan |
 
@@ -101,29 +100,27 @@ For the bigger picture see [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md).
    ```
 2. **Keep diffs small.** One concern per PR. If you find unrelated cleanup
    along the way, open a separate PR for it.
-3. **Update tests** in the same commit as the behavior change. New code
-   without tests is unlikely to land unless the path is genuinely untestable.
-4. **Update docs** if you change a public-facing behavior, env var, or script.
-5. **Sanity-check on the OSS path.** The default build flavor is local-only
+3. **Update docs** if you change a public-facing behavior, env var, or script.
+4. **Sanity-check on the OSS path.** The default build flavor is local-only
    (no hub). Make sure your change still works when the hub is unreachable.
 
-## Tests
+## Validation
 
 ```bash
-npm test                  # run vitest once
-npm run test:watch        # interactive
-npm test -- path/to.test  # run a single file
+npm ci
+npm run lint              # advisory while legacy lint debt is cleaned up
+npm run build
 ```
 
-Connector tests live under `connector/`:
+Connector build sanity check:
 
 ```bash
 cd connector
-go test ./...
+go build -o hyperclaw-connector ./cmd
 ```
 
-Aim for tests that exercise the actual contract (HTTP / WS / store interface)
-rather than internal implementation details — that keeps refactoring cheap.
+Include manual verification steps in PRs, especially for local-first runtime
+flows that depend on the connector.
 
 ## Lint and formatting
 
@@ -143,7 +140,6 @@ We don't require Conventional Commits but we love them. Useful prefixes:
 - `fix:` bug fix
 - `chore:` housekeeping, deps, configs
 - `docs:` README / docs only
-- `test:` tests only
 - `refactor:` no behavior change
 
 Keep the subject line ≤ 72 chars and explain the *why* in the body if it isn't
@@ -152,8 +148,9 @@ obvious from the diff.
 ## Pull request checklist
 
 - [ ] Branch is up to date with `main`
-- [ ] `npm test` passes locally
-- [ ] `npm run lint` passes locally
+- [ ] `npm run lint` checked locally (advisory)
+- [ ] `npm run build` checked for web/runtime changes
+- [ ] `cd connector && go build -o hyperclaw-connector ./cmd` checked for connector changes
 - [ ] Updated docs / `.env.example` if needed
 - [ ] No personal paths, secrets, or hardcoded production URLs
 - [ ] No `console.log` left for debugging (use `lib/logger`-style helpers when available)
@@ -167,8 +164,7 @@ contains the **client** for those features but never the **server**.
 
 If you change anything that talks to the hub, check the local-first path still
 degrades gracefully (see `lib/hub-direct.ts` and `lib/openclaw-gateway-ws.ts`
-for examples of how we fall back to the local connector). Tests covering
-unavailable-hub paths are especially welcome.
+for examples of how we fall back to the local connector).
 
 ## Security disclosures
 

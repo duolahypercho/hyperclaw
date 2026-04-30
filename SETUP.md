@@ -139,7 +139,6 @@ Full details (env vars, plugin packing, OTA updates) live in
 | `npm run build` | Production Next.js build |
 | `npm run start` | Run the production build on port 1000 |
 | `npm run lint` | ESLint |
-| `npm test` / `npm run test:watch` | Vitest |
 | `npm run electron` | Run the packaged Electron build locally |
 | `npm run electron:dev` | Electron pointing at the dev server |
 | `npm run electron:build:mac:local` | Build macOS desktop app |

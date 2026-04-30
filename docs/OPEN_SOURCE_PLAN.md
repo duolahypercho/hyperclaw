@@ -53,7 +53,7 @@ The repository previously included:
 - `electron/whisper-service.js`
 - `electron/python/whisper_server.py`
 - `electron/python/models/whisper-tiny/*.onnx`
-- `electron/whisper-service.test.js`
+- the old Whisper service helper coverage
 
 That path was not wired through `electron/main.js` or `preload.js`, and the live
 voice feature uses Web Speech API where available. The bundled ONNX weights
@@ -72,18 +72,16 @@ Future local transcription should be opt-in:
 These are real product tasks, not blockers for opening the repository:
 
 - Harden first-run onboarding for local connector install failures.
-- Add more tests for local connector fallback and gateway reconnect behavior.
 - Split cloud-only upsells from local-first settings UI where the distinction is
   still visually unclear.
-- Add E2E coverage for the guided onboarding path.
 - Publish real connector release artifacts and update
   `NEXT_PUBLIC_CONNECTOR_RELEASES_URL` for Cloud builds only.
 
 ## Release Checklist
 
-- [ ] `npm test`
-- [ ] `npm run lint`
-- [ ] `cd connector && go test ./...`
+- [ ] `npm ci`
+- [ ] `npm run lint` (advisory until legacy lint debt is cleaned up)
+- [ ] `cd connector && go build -o hyperclaw-connector ./cmd`
 - [ ] Fresh clone quick-start smoke test
 - [ ] Secret scan before public push
 - [ ] Confirm `.env.example` contains placeholders only

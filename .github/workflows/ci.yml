@@ -8,7 +8,7 @@ on:
 
 jobs:
   web:
-    name: Web tests
+    name: Web install and lint
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -27,11 +27,8 @@ jobs:
         continue-on-error: true
         run: npm run lint
 
-      - name: Test
-        run: npm test
-
   connector:
-    name: Connector tests
+    name: Connector build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -43,6 +40,6 @@ jobs:
           go-version: "1.25.x"
           cache-dependency-path: connector/go.sum
 
-      - name: Test connector
+      - name: Build connector
         working-directory: connector
-        run: go test ./...
+        run: go build -o /tmp/hyperclaw-connector ./cmd

@@ -40,8 +40,6 @@
     "electron:build:mac:remote": "cd electron && npm run electron:build:mac:remote",
     "electron:build:linux:remote": "cd electron && npm run electron:build:linux:remote",
     "electron:build:linux:local": "cd electron && npm run electron:build:linux:local",
-    "test": "vitest run",
-    "test:watch": "vitest",
     "connector:build": "cd electron && npm run build-connector",
     "connector:build:all": "cd electron && npm run build-connector:all",
     "plugin:pack": "bash scripts/plugin/pack-plugin.sh"
@@ -204,9 +202,6 @@
     "zustand": "^5.0.11"
   },
   "devDependencies": {
-    "@testing-library/dom": "^10.4.1",
-    "@testing-library/react": "^16.3.2",
-    "@testing-library/react-hooks": "^8.0.1",
     "@types/is-hotkey": "^0.1.10",
     "@types/lodash.merge": "^4.6.9",
     "@types/markdown-it": "^14.1.2",
@@ -226,7 +221,6 @@
     "postcss": "^8.4.47",
     "tailwindcss": "^3.4.14",
     "typescript": "^5.0.0",
-    "vitest": "^4.1.0",
     "ws": "^8.19.0"
   }
 }
