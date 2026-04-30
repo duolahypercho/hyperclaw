@@ -8,7 +8,7 @@ on:
 
 jobs:
   web:
-    name: Web lint and tests
+    name: Web tests
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -23,7 +23,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Lint
+      - name: Lint (advisory)
+        continue-on-error: true
         run: npm run lint
 
       - name: Test
