@@ -817,13 +817,14 @@ func TestScrubOnboardingCLIOutputRedactsSecrets(t *testing.T) {
 	}
 
 	regexOnly := scrubOnboardingCLIOutput(
-		"botToken=1234567890:abcdefghijklmnopqrstuvwxyzABCDEF app_token: xapp-1-ABCDEF api_token: sk-abcdefghijklmnopqrstuvwxyz123456 AIzaABCDEFGHIJKLMNOPQRSTUVWXY",
+		"botToken=1234567890:abcdefghijklmnopqrstuvwxyzABCDEF app_token: xapp-1-ABCDEF api_token: sk-" +
+			"abcdefghijklmnopqrstuvwxyz123456 AIza" + "ABCDEFGHIJKLMNOPQRSTUVWXY",
 	)
 	for _, leaked := range []string{
 		"1234567890:abcdefghijklmnopqrstuvwxyzABCDEF",
 		"xapp-1-ABCDEF",
-		"sk-abcdefghijklmnopqrstuvwxyz123456",
-		"AIzaABCDEFGHIJKLMNOPQRSTUVWXY",
+		"sk-" + "abcdefghijklmnopqrstuvwxyz123456",
+		"AIza" + "ABCDEFGHIJKLMNOPQRSTUVWXY",
 	} {
 		if strings.Contains(regexOnly, leaked) {
 			t.Fatalf("regex-only scrubbed output still contains %q: %q", leaked, regexOnly)

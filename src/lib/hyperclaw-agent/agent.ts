@@ -5,7 +5,7 @@
  * operations into a single agent instance.
  *
  * Usage:
- *   const agent = new HyperClawAgent({ hubUrl: 'wss://hub.hypercho.com', jwtToken: '...' });
+ *   const agent = new HyperClawAgent({ hubUrl: 'wss://your-hub.example.com', jwtToken: '...' });
  *   await agent.connect();
  *   const agents = await agent.agents.list();
  *   const tasks = await agent.todos.getTasks();

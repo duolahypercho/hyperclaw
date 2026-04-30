@@ -279,8 +279,9 @@ function AddDeviceDialog({
     }
   };
 
+  const hubWsUrl = process.env.NEXT_PUBLIC_HUB_URL || "wss://your-hub.example.com";
   const setupCommand = pairing
-    ? `./connector --hub-url wss://hub.hypercho.com --token ${pairing.token} --device-id ${pairing.deviceId}`
+    ? `./connector --hub-url ${hubWsUrl} --token ${pairing.token} --device-id ${pairing.deviceId}`
     : "";
 
   const copyCommand = () => {

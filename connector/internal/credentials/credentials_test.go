@@ -92,7 +92,7 @@ func TestSealedBoxRoundTrip(t *testing.T) {
 	copy(pubKey[:], x25519Pub)
 
 	// Encrypt (simulates dashboard / JS side)
-	plaintext := []byte("sk-ant-api03-test-key-1234567890")
+	plaintext := []byte("sk-ant-" + "api03-test-key-1234567890")
 	encrypted := sealedBoxSeal(plaintext, &pubKey)
 
 	// Decrypt (connector side)

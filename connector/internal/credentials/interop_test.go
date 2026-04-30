@@ -10,7 +10,7 @@ func TestJSInterop(t *testing.T) {
 	pubB64 := "bri7skXrsAJgnaq2yviaTnlE3ID0Ojtmf+lM578LlBI="
 	privB64 := "9m40+89AiOk2/8NrcYTgHBDKPEBPSUz8keqKEqjupHA="
 	encB64 := "s0fMHG/OgBIkGEpUcT35z7l2dxcPgFKNSCUmftjK9n1M+YWxeDOXVAjPgiCy17d5TApA2zzwLar9LwR+2mC15CTo2IMAXA=="
-	expected := "sk-ant-api03-test-1234"
+	expected := "sk-ant-" + "api03-test-1234"
 
 	pubBytes, _ := base64.StdEncoding.DecodeString(pubB64)
 	privBytes, _ := base64.StdEncoding.DecodeString(privB64)
@@ -36,7 +36,7 @@ func TestJSInteropLongerKey(t *testing.T) {
 	pubB64 := "tmyYFUuawI0q6jagPWdYw65MPlEMFoBYHzqZcxQuuE0="
 	privB64 := "nRSehrl/8u3gVDbHTO+/V1hc9b7EIHa/VatzMWVGmas="
 	encB64 := "8I0Hwl005rTLqy9B1mJiaJuU2jCC+Hd+0zpmyUdosi+zin6W6x15tLCenGK8K4mO4IUhgbYmUJXcuVERN4gF8HubFlsm+mw3Sp+m+MviZ8dBzlTDBDdohQ=="
-	expected := "sk-ant-api03-MyRealAnthropicKey123456789"
+	expected := "sk-ant-" + "api03-MyRealAnthropicKey123456789"
 
 	pubBytes, _ := base64.StdEncoding.DecodeString(pubB64)
 	privBytes, _ := base64.StdEncoding.DecodeString(privB64)

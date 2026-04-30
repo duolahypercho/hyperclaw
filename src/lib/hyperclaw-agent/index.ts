@@ -5,7 +5,7 @@
  *   import { HyperClawOrchestrator, OrchestratorChat } from '@/lib/hyperclaw-agent';
  *
  *   const orch = new HyperClawOrchestrator({
- *     hubUrl: 'wss://hub.hypercho.com',
+ *     hubUrl: 'wss://your-hub.example.com',
  *     jwtToken: '<jwt>',
  *   });
  *   await orch.connect();
