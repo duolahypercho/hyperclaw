@@ -31,7 +31,7 @@ participating you agree to uphold it. Report unacceptable behavior privately
 ## Where to start
 
 Good first issues are tagged
-[`good first issue`](https://github.com/your-fork/hyperclaw_app/labels/good%20first%20issue)
+[`good first issue`](https://github.com/duolahypercho/HyperClaw/labels/good%20first%20issue)
 once we have community traction. Until then, the highest-leverage areas are:
 
 - Local-first onboarding polish (`components/Onboarding/`).
@@ -55,8 +55,8 @@ Requirements:
 Quick start:
 
 ```bash
-git clone https://github.com/your-fork/hyperclaw_app.git
-cd hyperclaw_app
+git clone https://github.com/duolahypercho/HyperClaw.git
+cd HyperClaw
 cp .env.example .env.local        # most defaults are fine for local-only use
 npm install
 npm run dev                       # http://localhost:1000

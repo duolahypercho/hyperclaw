@@ -85,8 +85,8 @@ For the deeper version of this picture (event flow, message types, store layout)
 ### Run the dashboard from source (60 seconds)
 
 ```bash
-git clone https://github.com/<your-fork>/hyperclaw_app.git
-cd hyperclaw_app
+git clone https://github.com/duolahypercho/HyperClaw.git
+cd HyperClaw
 
 # 1. Install dependencies
 npm install

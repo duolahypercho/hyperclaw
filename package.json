@@ -4,13 +4,13 @@
   "private": true,
   "description": "Open, local-first dashboard for orchestrating AI coding agents (Claude Code, Codex, OpenClaw, Hermes) and multi-channel messaging gateways.",
   "license": "MIT",
-  "homepage": "https://github.com/your-fork/hyperclaw_app#readme",
+  "homepage": "https://github.com/duolahypercho/HyperClaw#readme",
   "bugs": {
-    "url": "https://github.com/your-fork/hyperclaw_app/issues"
+    "url": "https://github.com/duolahypercho/HyperClaw/issues"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/your-fork/hyperclaw_app.git"
+    "url": "https://github.com/duolahypercho/HyperClaw.git"
   },
   "keywords": [
     "ai",

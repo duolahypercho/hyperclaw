@@ -18,8 +18,8 @@ SQLite store under `~/.hyperclaw/`.
 ## Clone and install
 
 ```bash
-git clone https://github.com/<your-fork>/hyperclaw_app.git
-cd hyperclaw_app
+git clone https://github.com/duolahypercho/HyperClaw.git
+cd HyperClaw
 npm install
 ```
 

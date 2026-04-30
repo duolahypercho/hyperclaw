@@ -45,8 +45,8 @@ individual is officially representing the project in public spaces.
 ## Enforcement
 
 Report abusive, harassing, or otherwise unacceptable behavior to the maintainers
-at `security@hyperclaw.local` until a public project contact is published.
-Reports will be handled respectfully and privately.
+privately through the repository owner account. Reports will be handled
+respectfully and privately.
 
 ## Attribution
 

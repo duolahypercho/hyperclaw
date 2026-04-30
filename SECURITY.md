@@ -19,9 +19,14 @@ branch unless a release branch is explicitly marked as supported.
 
 Please do **not** open a public GitHub issue for suspected vulnerabilities.
 
-Until a dedicated security mailbox is published, send reports to:
+Use GitHub's private vulnerability reporting for this repository if it is
+enabled:
 
-`security@hyperclaw.local`
+https://github.com/duolahypercho/HyperClaw/security/advisories/new
+
+If private reporting is not available yet, contact the maintainers privately
+through the repository owner account and avoid posting exploit details in a
+public issue.
 
 Include:
 
