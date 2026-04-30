@@ -1,5 +1,6 @@
 import type { HyperclawAgent } from "$/Providers/HyperclawProv";
 import type { EnsembleAgent, RuntimeKind } from "$/components/ensemble";
+import { normalizeRealAgentEmoji } from "../primitives/agent-avatar-utils";
 
 type ProjectAgentInput = Partial<HyperclawAgent> & Partial<Pick<EnsembleAgent, "kind">>;
 
@@ -13,12 +14,14 @@ const RUNTIME_KIND_BY_ID: Record<string, RuntimeKind> = {
 
 export function resolveProjectAgentDisplay(agent: ProjectAgentInput | undefined, fallbackId?: string) {
   const id = agent?.id || fallbackId || "agent";
+  const name = agent?.name || id;
   const kind = agent?.kind ?? (agent?.runtime ? RUNTIME_KIND_BY_ID[agent.runtime] : undefined);
 
   return {
     id,
-    name: agent?.name || id,
-    emoji: agent?.emoji || "🤖",
+    name,
+    emoji: agent ? normalizeRealAgentEmoji(agent.emoji, name) : "🤖",
     kind,
+    real: Boolean(agent),
   };
 }

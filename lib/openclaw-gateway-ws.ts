@@ -88,6 +88,17 @@ export function buildGatewayWsUrl(gatewayUrl: string, token?: string | null): st
 
 export type GatewayConnectionState = { connected: boolean; error: string | null };
 
+export interface ConnectorHealth {
+  ok?: boolean;
+  connectorOnline?: boolean;
+  gatewayConnected?: boolean;
+  gatewayState?: "connected" | "disconnected" | "unknown" | string;
+  bridge?: string;
+  version?: string;
+  uptime?: string;
+  ts?: number;
+}
+
 // Chat event types
 export type ChatEventState = "delta" | "final" | "aborted" | "error";
 
@@ -117,6 +128,8 @@ const MAX_RECONNECT_ATTEMPTS = RECONNECT_BACKOFF_MS.length;
 const GATEWAY_UNAVAILABLE_COOLDOWN_MS = 15_000;
 const DEFAULT_MODELS_TIMEOUT_MS = 25_000;
 const DEFAULT_SESSIONS_LIST_TIMEOUT_MS = 25_000;
+const DEFAULT_CONNECTOR_HEALTH_TIMEOUT_MS = 5_000;
+const GATEWAY_CLIENT_CAPS = ["tool-events"] as const;
 
 function randomId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 11)}`;
@@ -134,8 +147,10 @@ function isGatewayMethod(method: string): boolean {
   );
 }
 
-function isGatewayUnavailableErrorMessage(message: string): boolean {
-  return /gateway not connected|pairing required|not paired|failed to communicate with device/i.test(message);
+export function isGatewayUnavailableErrorMessage(message: string): boolean {
+  return /gateway not connected|pairing required|not paired|failed to communicate with device|device not connected|connector is offline/i.test(
+    message
+  );
 }
 
 /** Sign a connect challenge using Electron API or server-side API fallback */
@@ -150,10 +165,12 @@ async function signConnectChallenge(params: {
   // Priority 1: Electron IPC (desktop app)
   if (typeof window !== "undefined" && (window as unknown as { electronAPI?: { openClaw?: { signConnectChallenge?: (params: unknown) => Promise<{ device: unknown; client: unknown; role: string; scopes: string[]; deviceToken?: string | null; error?: string }> } } }).electronAPI?.openClaw?.signConnectChallenge) {
     try {
-      return await (window as unknown as { electronAPI: { openClaw: { signConnectChallenge: (params: unknown) => Promise<{ device: unknown; client: unknown; role: string; scopes: string[]; deviceToken?: string | null; error?: string }> } } }).electronAPI.openClaw.signConnectChallenge(params);
+      const signed = await (window as unknown as { electronAPI: { openClaw: { signConnectChallenge: (params: unknown) => Promise<{ device: unknown; client: unknown; role: string; scopes: string[]; deviceToken?: string | null; error?: string }> } } }).electronAPI.openClaw.signConnectChallenge(params);
+      if (signed && !signed.error && signed.device && signed.client) {
+        return signed;
+      }
     } catch (e) {
       console.error("[Gateway WS] Sign challenge error:", e);
-      return null;
     }
   }
   // Priority 2: Hub direct (browser mode — sign challenge via hub command)
@@ -432,6 +449,7 @@ export const gatewayConnection = {
               device: signed.device,
               role: signed.role,
               scopes: signed.scopes,
+              caps: [...GATEWAY_CLIENT_CAPS],
               auth: authToken ? { token: authToken } : {},
               locale: "en-US",
               userAgent: "hypercho/1.0",
@@ -769,6 +787,14 @@ export const gatewayConnection = {
         }
       }
 
+      if (event === "connector.health") {
+        const health = normalizeConnectorHealth(
+          (msg.payload as Record<string, unknown> | undefined)?.data ??
+            (msg.data as Record<string, unknown> | undefined)
+        );
+        connectorHealthCache = { data: health, ts: Date.now() };
+      }
+
       // Dispatch agent file change events so identity caches auto-invalidate
       // (useAgentIdentity listens for "openclaw-gateway-event").
       if (typeof window !== "undefined" && event === "agent.file.changed") {
@@ -884,6 +910,22 @@ export const gatewayConnection = {
   _chatHistoryInflight: new Map<string, Promise<{ messages?: unknown[] }>>(),
   _chatHistoryCache: new Map<string, { data: { messages?: unknown[] }; ts: number }>(),
   _chatHistoryCacheTTL: 30000, // 30s TTL — chat history is mostly append-only
+  invalidateChatHistoryCache(sessionKey: string): void {
+    for (const key of this._chatHistoryCache.keys()) {
+      if (key.startsWith(`${sessionKey}::`)) {
+        this._chatHistoryCache.delete(key);
+      }
+    }
+    for (const key of this._chatHistoryInflight.keys()) {
+      if (key.startsWith(`${sessionKey}::`)) {
+        this._chatHistoryInflight.delete(key);
+      }
+    }
+  },
+  clearChatHistory(params: { sessionKey: string }): Promise<unknown> {
+    this.invalidateChatHistoryCache(params.sessionKey);
+    return this.request("chat.clear", { sessionKey: params.sessionKey }, 30_000);
+  },
   getChatHistory(sessionKey: string, limit: number = 200): Promise<{ messages?: unknown[] }> {
     const cacheKey = `${sessionKey}::${limit}`;
     const cached = this._chatHistoryCache.get(cacheKey);
@@ -1111,6 +1153,8 @@ export const gatewayConnection = {
     this.agentDeltaBuffer = null;
     this._activeTextSource = null;
     if (this._activeTextSourceTimer) { clearTimeout(this._activeTextSourceTimer); this._activeTextSourceTimer = null; }
+    this._deltaSourceOwner?.clear();
+    this._committedSegments?.clear();
 
     this.wsUrl = wsUrl;
     this.token = token;
@@ -1257,6 +1301,10 @@ export const gatewayConnection = {
     if (this._activeTextSourceTimer) { clearTimeout(this._activeTextSourceTimer); this._activeTextSourceTimer = null; }
     this._sessionsListInflight = null;
     this._sessionsListCache = null;
+    this._deltaSourceOwner?.clear();
+    this._deltaSourceOwner = null;
+    this._committedSegments?.clear();
+    this._committedSegments = null;
     this.setState(false, null);
   },
 
@@ -1369,36 +1417,107 @@ export function resetGatewayConnection(): void {
   gatewayConnection.reconnectAttempt = 0;
 }
 
+let connectorHealthInflight: Promise<ConnectorHealth> | null = null;
+let connectorHealthCache: { data: ConnectorHealth; ts: number } | null = null;
+const CONNECTOR_HEALTH_CACHE_TTL_MS = 3_000;
+
+function normalizeConnectorHealth(value: unknown): ConnectorHealth {
+  if (!value || typeof value !== "object") {
+    return { ok: false, connectorOnline: false, gatewayConnected: false, gatewayState: "unknown" };
+  }
+  const data = value as Record<string, unknown>;
+  return {
+    ok: data.ok === true || data.connectorOnline === true,
+    connectorOnline: data.connectorOnline === true || data.ok === true,
+    gatewayConnected:
+      typeof data.gatewayConnected === "boolean" ? data.gatewayConnected : undefined,
+    gatewayState: typeof data.gatewayState === "string" ? data.gatewayState : "unknown",
+    bridge: typeof data.bridge === "string" ? data.bridge : undefined,
+    version: typeof data.version === "string" ? data.version : undefined,
+    uptime: typeof data.uptime === "string" ? data.uptime : undefined,
+    ts: typeof data.ts === "number" ? data.ts : undefined,
+  };
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const timeout = new Promise<T>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+  promise.catch(() => {
+    // The race may have already timed out. Keep the original request from
+    // surfacing as an unhandled rejection when it eventually completes.
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
+export async function probeConnectorHealth(
+  timeoutMs = DEFAULT_CONNECTOR_HEALTH_TIMEOUT_MS
+): Promise<{ healthy: boolean; error?: string; health?: ConnectorHealth }> {
+  const cached = connectorHealthCache;
+  if (cached && Date.now() - cached.ts < CONNECTOR_HEALTH_CACHE_TTL_MS) {
+    const health = cached.data;
+    return {
+      healthy: health.connectorOnline === true,
+      health,
+      error: health.connectorOnline ? undefined : "connector is offline",
+    };
+  }
+
+  if (!connectorHealthInflight) {
+    connectorHealthInflight = import("$/lib/hyperclaw-bridge-client")
+      .then(({ bridgeInvoke }) => bridgeInvoke("connector-health"))
+      .then(normalizeConnectorHealth)
+      .then((health) => {
+        connectorHealthCache = { data: health, ts: Date.now() };
+        return health;
+      })
+      .finally(() => {
+        connectorHealthInflight = null;
+      });
+  }
+
+  try {
+    const health = await withTimeout(
+      connectorHealthInflight,
+      timeoutMs,
+      "connector health timed out"
+    );
+    return {
+      healthy: health.connectorOnline === true,
+      health,
+      error: health.connectorOnline ? undefined : "connector is offline",
+    };
+  } catch (e) {
+    return {
+      healthy: false,
+      error: e instanceof Error ? e.message : "connector health failed",
+    };
+  }
+}
+
 /**
- * Verify end-to-end connectivity through the full relay chain
- * (dashboard → hub → connector → OpenClaw gateway).
+ * Verify connector reachability through the full relay chain
+ * (dashboard → hub → connector) and ask the connector whether its local
+ * OpenClaw gateway socket is open.
  * The hub WS being connected only means the dashboard can talk to the cloud —
- * this probe verifies OpenClaw is actually running and reachable on the device.
+ * this probe avoids expensive models.list calls while still checking the
+ * connector-owned gateway state.
  */
 export async function probeGatewayHealth(timeoutMs = 25000): Promise<{ healthy: boolean; error?: string }> {
   if (!gatewayConnection.connected) {
     return { healthy: false, error: "WebSocket not connected" };
   }
-  // Use listModels() which deduplicates and caches — avoids firing a separate
-  // models.list request when refreshAll already calls listModels in parallel.
-  // Retry once on timeout — the relay chain (dashboard → hub → connector → device)
-  // can be slow under load, causing false-negative health readings that make the
-  // status banner flap. A single retry eliminates most transient timeouts.
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      await gatewayConnection.listModels(timeoutMs);
-      return { healthy: true };
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : "Gateway not reachable";
-      if (attempt === 0 && msg.includes("timed out")) {
-        // Invalidate the cached inflight promise so the retry gets a fresh request
-        gatewayConnection._modelsInflight = null;
-        continue;
-      }
-      return { healthy: false, error: msg };
-    }
+  const connector = await probeConnectorHealth(Math.min(timeoutMs, DEFAULT_CONNECTOR_HEALTH_TIMEOUT_MS));
+  if (!connector.healthy) {
+    return { healthy: false, error: connector.error ?? "connector is offline" };
   }
-  return { healthy: false, error: "Gateway not reachable (timed out)" };
+  if (connector.health?.gatewayConnected === false) {
+    return { healthy: false, error: "gateway not connected" };
+  }
+  return { healthy: true };
 }
 
 export function getGatewayConnectionState(): GatewayConnectionState {
@@ -1409,13 +1528,69 @@ export function subscribeGatewayConnection(cb: () => void): () => void {
   return gatewayConnection.subscribe(cb);
 }
 
-/** Get gateway config — always returns hub connection info (no direct local gateway). */
+async function getLocalGatewayConfig(): Promise<{ gatewayUrl: string; token: string | null } | null> {
+  if (typeof window === "undefined") return null;
+  const w = window as unknown as {
+    electronAPI?: {
+      hyperClawBridge?: {
+        getGatewayConfig?: () => Promise<{ host?: string; port?: number; token?: string | null } | null>;
+      };
+    };
+  };
+
+  try {
+    const config = await w.electronAPI?.hyperClawBridge?.getGatewayConfig?.();
+    if (config?.host && config.port) {
+      return {
+        gatewayUrl: `http://${config.host}:${config.port}`,
+        token: config.token ?? null,
+      };
+    }
+  } catch {
+    // Fall back to the default local OpenClaw gateway below.
+  }
+
+  const host = window.location.hostname;
+  const isLocalHost =
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host === "::1" ||
+    host.endsWith(".localhost");
+
+  if (isLocalHost || w.electronAPI?.hyperClawBridge) {
+    return { gatewayUrl: "http://127.0.0.1:18789", token: null };
+  }
+
+  return null;
+}
+
+/** Get gateway config — prefers direct local gateway when the connector is available. */
 export async function getGatewayConfig(): Promise<{ gatewayUrl: string; token: string | null; hubMode?: boolean; hubDeviceId?: string }> {
-  // Short-circuit when auth is expired — avoid spamming 401 requests
+  let authExpired = false;
   try {
     const { isAuthExpired } = await import("$/lib/hub-direct");
-    if (isAuthExpired()) return { gatewayUrl: "", token: null };
+    authExpired = isAuthExpired();
   } catch { /* ok */ }
+
+  try {
+    const { getBridgeMode } = await import("$/lib/hub-direct");
+    const mode = await getBridgeMode();
+    if (mode.mode === "local") {
+      const localConfig = await getLocalGatewayConfig();
+      if (localConfig?.gatewayUrl) {
+        return {
+          gatewayUrl: localConfig.gatewayUrl,
+          token: localConfig.token,
+          hubMode: false,
+        };
+      }
+    }
+  } catch {
+    /* local mode unavailable */
+  }
+
+  // Short-circuit hub mode when auth is expired — avoid spamming 401 requests.
+  if (authExpired) return { gatewayUrl: "", token: null };
 
   let hubUrl: string | null = null;
   let token: string | null = null;
