@@ -1,0 +1,284 @@
+@import "./tailwind.css";
+* {
+  padding: 0;
+  margin: 0;
+  outline: none;
+  border: none;
+  -webkit-tap-highlight-color: transparent;
+  scroll-behavior: smooth;
+}
+
+body {
+  overflow: hidden;
+}
+
+.customScrollbar2::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.customScrollbar2::-webkit-scrollbar-track {
+  background: transparent;
+}
+.customScrollbar2::-webkit-scrollbar-thumb {
+  border-radius: 5px;
+  border: 2px solid var(--sb-track-bg);
+  background-color: var(--sb-thumb);
+  transition: background 0.2s;
+}
+.customScrollbar2::-webkit-scrollbar-thumb:hover {
+  background-color: var(--sb-thumb-hover);
+}
+.customScrollbar2::-webkit-scrollbar-thumb:active {
+  background-color: var(--sb-thumb-hover);
+}
+
+/* Docs editor: scrollbar track matches content background for seamless alignment */
+.docs-editor-scroll::-webkit-scrollbar {
+  width: 10px;
+  background: hsl(var(--background));
+}
+.docs-editor-scroll::-webkit-scrollbar-track {
+  background: hsl(var(--background));
+}
+.docs-editor-scroll::-webkit-scrollbar-thumb {
+  border-radius: 5px;
+  border: 2px solid hsl(var(--background));
+  background-clip: content-box;
+  background-color: hsl(var(--muted-foreground) / 0.25);
+}
+.docs-editor-scroll::-webkit-scrollbar-thumb:hover {
+  background-color: hsl(var(--muted-foreground) / 0.4);
+}
+
+.glassmorphism {
+  background-color: rgba(107, 114, 128, 0.1);
+  border-radius: 0.5rem;
+  background-clip: padding-box;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  border: 1px solid rgba(243, 244, 246, 0.1);
+}
+
+.pageLoading {
+  width: 100vw;
+  height: 100vh;
+  /* Transparent Overlay */
+  /* :not(:required) hides these rules from IE9 and below */
+}
+.pageLoading .loading {
+  position: fixed;
+  z-index: 999;
+  height: 2em;
+  width: 2em;
+  overflow: visible;
+  margin: auto;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  right: 0;
+}
+.pageLoading .loading:before {
+  content: "";
+  display: block;
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.174);
+}
+.pageLoading .loading:not(:required) {
+  /* hide "loading..." text */
+  font: 0/0 a;
+  color: transparent;
+  text-shadow: none;
+  background-color: transparent;
+  border: 0;
+}
+.pageLoading .loading:not(:required):after {
+  content: "";
+  display: block;
+  font-size: 10px;
+  width: 1em;
+  height: 1em;
+  margin-top: -0.5em;
+  animation: spinner 1500ms infinite linear;
+  border-radius: 0.5em;
+  box-shadow: clr(primary, 1) 1.5em 0 0 0, clr(primary, 1) 1.1em 1.1em 0 0, clr(primary, 1) 0 1.5em 0 0, clr(primary, 1) -1.1em 1.1em 0 0, clr(primary, 1) -1.5em 0 0 0, clr(primary, 1) -1.1em -1.1em 0 0, clr(primary, 1) 0 -1.5em 0 0, clr(primary, 1) 1.1em -1.1em 0 0;
+}
+@keyframes spinner {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+.hamButton {
+  width: 4rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.hamButton .hamburger {
+  background: transparent;
+  height: 28px;
+  position: fixed;
+  width: 21px;
+  cursor: pointer;
+}
+.hamButton .hamburger:hover {
+  outline: none;
+}
+.hamButton .hamburger:focus {
+  outline: none;
+}
+.hamButton .hamburger:active {
+  outline: none;
+}
+.hamButton .hamburger.is-closed:before {
+  transform: translate3d(0, 0, 0);
+  transition: all 0.3s ease-in-out;
+  -webkit-transition: all 0.3s ease-in-out;
+  color: #ffffff;
+  content: "";
+  display: block;
+  font-size: 14px;
+  line-height: 32px;
+  opacity: 0;
+  text-align: center;
+  width: 100px;
+}
+.hamButton .hamburger.is-closed:hover before {
+  transform: translate3d(-100px, 0, 0);
+  transition: all 0.3s ease-in-out;
+  -webkit-transition: all 0.3s ease-in-out;
+  display: block;
+  opacity: 1;
+}
+.hamButton .hamburger.is-closed:hover .hamb-top {
+  transition: all 0.3s ease-in-out;
+  background-color: dark(sidebar, font-hover);
+  top: 2px;
+}
+.hamButton .hamburger.is-closed:hover .hamb-bottom {
+  transition: all 0.3s ease-in-out;
+  background-color: dark(sidebar, font-hover);
+  bottom: 2px;
+}
+.hamButton .hamburger.is-closed:hover .hamb-middle {
+  background-color: dark(sidebar, font-hover);
+  transition: all 0.3s ease-in-out;
+}
+.hamButton .hamburger.is-closed .hamb-top {
+  transition: all 0.3s ease-in-out;
+  -webkit-transition: all 0.3s ease-in-out;
+  background-color: dark(sidebar, font);
+  top: 5px;
+}
+.hamButton .hamburger.is-closed .hamb-middle {
+  transition: all 0.3s ease-in-out;
+  -webkit-transition: all 0.3s ease-in-out;
+  background-color: dark(sidebar, font);
+  margin-top: -2px;
+  top: 50%;
+}
+.hamButton .hamburger.is-closed .hamb-bottom {
+  transition: all 0.3s ease-in-out;
+  -webkit-transition: all 0.3s ease-in-out;
+  background-color: dark(sidebar, font);
+  bottom: 6px;
+}
+.hamButton .hamburger.is-closed .hamb-top,
+.hamButton .hamburger.is-closed .hamb-middle,
+.hamButton .hamburger.is-closed .hamb-bottom,
+.hamButton .hamburger.is-open .hamb-top,
+.hamButton .hamburger.is-open .hamb-middle,
+.hamButton .hamburger.is-open .hamb-bottom {
+  height: 3px;
+  left: 0;
+  position: absolute;
+  width: 100%;
+}
+.hamButton .hamburger.is-open .hamb-top {
+  transform: rotate(45deg);
+  -webkit-transform: rotate(45deg);
+  transition: transform 0.2s cubic-bezier(0.73, 1, 0.28, 0.08);
+  -webkit-transition: -webkit-transform 0.2s cubic-bezier(0.73, 1, 0.28, 0.08);
+  background-color: #fff;
+  margin-top: -2px;
+  top: 50%;
+}
+.hamButton .hamburger.is-open .hamb-middle {
+  background-color: #fff;
+  display: none;
+}
+.hamButton .hamburger.is-open .hamb-bottom {
+  transform: rotate(-45deg);
+  -webkit-transform: rotate(-45deg);
+  transition: transform 0.2s cubic-bezier(0.73, 1, 0.28, 0.08);
+  -webkit-transition: -webkit-transform 0.2s cubic-bezier(0.73, 1, 0.28, 0.08);
+  background-color: #fff;
+  margin-top: -2px;
+  top: 50%;
+}
+.hamButton .hamburger.is-open:before {
+  transform: translate3d(0, 0, 0);
+  transition: all 0.35s ease-in-out;
+  -webkit-transform: translate3d(0, 0, 0);
+  -webkit-transition: all 0.35s ease-in-out;
+  color: #ffffff;
+  content: "";
+  display: block;
+  font-size: 14px;
+  line-height: 32px;
+  opacity: 0;
+  text-align: center;
+  width: 100px;
+}
+.hamButton .hamburger.is-open:hover before {
+  transform: translate3d(-100px, 0, 0);
+  transition: all 0.35s ease-in-out;
+  -webkit-transition: all 0.35s ease-in-out;
+  display: block;
+  opacity: 1;
+}
+
+.nonselect,
+.nonselect * {
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  user-select: none !important;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.nonselect {
+  /* Performance optimizations for dragging */
+  will-change: transform;
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+.navbarInfo {
+  width: 100%;
+  display: flex;
+  top: 0;
+  z-index: 1000;
+  background-color: dark(primary, 1);
+  scrollbar-gutter: stable;
+  justify-content: center;
+  transition: all 0.3s ease-in-out;
+  position: fixed;
+  background-color: transparent;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+@media screen and (max-width: 1200px) and (min-width: 1px) {
+  .navbarInfo .container {
+    width: 100%;
+  }
+}/*# sourceMappingURL=main.css.map */

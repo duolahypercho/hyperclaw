@@ -1,0 +1,323 @@
+%inputField {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  border: 1px solid #d1d5db;
+  height: 2.7rem;
+  padding-left: 0.25rem;
+  border-radius: 0.5rem;
+  font-size: 0.9rem;
+
+  &:focus {
+    border-color: #6b7280;
+  }
+}
+
+%button1 {
+  padding: 0.5rem;
+  outline: none;
+  color: #ffffff;
+  font-size: 1.25rem;
+  line-height: 1.75rem;
+  font-weight: 500;
+  width: 100%;
+  max-width: 28rem;
+  border-radius: 0.375rem;
+  border: none;
+  cursor: pointer;
+  background-color: #7c3aed;
+}
+
+%active {
+  background-color: #a67eec;
+  color: #fff;
+}
+%passed {
+  background-color: #56b572;
+  color: #fff;
+}
+
+@mixin authPages() {
+
+  //signup
+
+  //login
+  .loginPage {
+    width: 100vw;
+    min-height: 100vh;
+    .container {
+      padding-left: 0.5rem;
+      padding-right: 0.5rem;
+      padding-top: 0.75rem;
+      padding-bottom: 0.75rem;
+      background-color: #ffffff;
+      width: 60%;
+      max-width: 28rem;
+      border-radius: 0.375rem;
+      border-width: 1px;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+      border: 1px solid #8b8b8b4f;
+      transition: 0.3s all ease;
+
+      .logo {
+        width: fit-content;
+        border-radius: 10px;
+        overflow: hidden;
+        width: 40px;
+        height: 40px;
+        margin: 0 auto;
+
+        img {
+          object-fit: contain;
+        }
+      }
+
+      h1 {
+        margin-bottom: 0.1rem;
+        font-size: 1.5rem;
+        line-height: 2rem;
+        font-weight: 500;
+        text-align: center;
+        width: 100%;
+
+        @media (min-width: 768px) {
+          font-size: 1.5rem;
+          line-height: 2rem;
+        }
+      }
+      .info {
+        margin-top: 0.1rem;
+        font-weight: 400;
+        text-align: center;
+        width: 100%;
+        color: #475569;
+      }
+
+      form {
+        padding: 0.25rem;
+        margin-top: 0.5rem;
+        width: 100%;
+
+        .field {
+          width: 100%;
+          display: flex;
+          justify-content: center;
+          flex-direction: column;
+          margin-bottom: 0.75rem;
+
+          & > label {
+            margin-top: 0.5rem;
+            margin-bottom: 0.25rem;
+            font-size: 1.1rem;
+            line-height: 1.5rem;
+            font-weight: 500;
+            color: rgb(55 65 81);
+          }
+
+          & > p {
+            margin: 0 0 4px 0;
+            font-size: 0.875rem;
+            line-height: 1.25rem;
+            color: #db2777;
+          }
+          & > input {
+            @extend %inputField;
+          }
+        }
+
+        .passwordField {
+          @extend .field;
+
+          .innercontainer {
+            width: 100%;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: relative;
+
+            & > label {
+              margin-top: 0.5rem;
+              margin-bottom: 0.25rem;
+              font-size: 1.1rem;
+              line-height: 1.5rem;
+              font-weight: 500;
+              color: clr(neutral, 3);
+            }
+
+            & > p {
+              margin: 0 0 4px 0;
+              font-size: 0.875rem;
+              line-height: 1.25rem;
+              color: #db2777;
+            }
+
+            .icon {
+              cursor: pointer;
+              transform: scale(1.1);
+            }
+          }
+        }
+
+        .loginBtn {
+          @extend %button1;
+        }
+        .loginActive {
+          @extend %active;
+        }
+        .loginPassed {
+          @extend %passed;
+        }
+
+        .text {
+          font-weight: 500;
+          text-align: center;
+          color: #475569;
+        }
+        .highlight {
+          cursor: pointer;
+          &:hover {
+            text-decoration: underline;
+          }
+          color: #7c3aed;
+        }
+      }
+
+      @media screen and (max-width:600px) {
+        width: 80%;
+      }
+      @media screen and (max-width:400px) {
+        width: 100%;
+      }
+    }
+  }
+  .error {
+    border-color: #db2777 !important;
+  }
+
+  //reset Password
+
+  //verify
+  .verifyPage {
+    display: flex;
+    height: auto;
+    min-height: 100vh;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    padding: 0.5rem 0;
+    background-color: #fff;
+
+    .inner {
+      border-spacing: 0.25rem;
+      border-radius: 10px;
+      padding: 0.75rem 0.5rem;
+      width: 75%;
+      max-width: 28rem;
+      height: fit-content;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+      border: 1px solid #8b8b8b4f;
+
+      h1 {
+        font-size: 1.5rem;
+        line-height: 2rem;
+        font-weight: 500;
+        margin: 0.5rem auto 0.1rem auto;
+        text-align: center;
+        width: 100%;
+      }
+      p {
+        color: clr(neutral, 3);
+
+        text-align: center;
+        width: 100%;
+      }
+
+      form {
+        width: 100%;
+        padding: 0.25rem;
+        margin-top: 0.5rem;
+
+        //for the input section
+        & > div {
+          width: 100%;
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          flex-direction: column;
+          margin-bottom: 0.75rem;
+          & > label {
+            font-size: 1.3rem;
+            line-height: 2.5rem;
+            font-weight: 500;
+            color: #29313e;
+          }
+          & > p {
+            color: #db2777;
+            font-size: 0.875rem;
+            margin-top: 0.5rem;
+          }
+
+          & > input {
+            @extend %inputField;
+            width: 50%;
+            letter-spacing: 10px;
+            text-align: center;
+          }
+        }
+
+        button {
+          @extend %button1;
+        }
+
+        .active {
+          @extend %active;
+        }
+        .passed {
+          @extend %passed;
+          background-color: #56b572;
+        }
+
+        .text {
+          font-weight: 500;
+          text-align: center;
+          color: clr(neutral, 3);
+
+          margin-top: 0.75rem;
+        }
+        .loading {
+          font-weight: 500;
+          text-align: center;
+          color: #7c3aed;
+        }
+        .or {
+          font-weight: 100;
+          cursor: pointer;
+          text-align: center;
+          color: #94a3b8;
+          margin: 0;
+        }
+
+        .sent {
+          text-align: center;
+          font-weight: 500;
+        }
+        .request {
+          font-weight: 500;
+          text-align: center;
+          color: #7c3aed;
+          cursor: pointer;
+          margin-top: 0.25rem;
+          &:hover {
+            text-decoration: underline;
+            opacity: 0.9;
+          }
+        }
+      }
+      @media screen and (max-width: 639px) {
+        width: 98%;
+      }
+    }
+    @media screen and (min-width: 768px) {
+      padding: 0.5rem;
+    }
+  }
+}

@@ -1,0 +1,41 @@
+@use "../abstracts" as *;
+
+@mixin Checkbox() {
+    .customeCheckBox{
+        position: relative;
+        margin: 0 12px 0 12px;
+        width:1.2rem;
+        height: 1.2rem;
+        & > input{
+            position: absolute;
+            cursor: pointer;
+        }
+        & > input[type="checkbox"]{
+        appearance: none;
+        -webkit-appearance: none;
+        height: 1.2rem;
+        width: 1.2rem;
+        background-color: dark(container,container-checkbox);
+        border-radius: 5px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        outline:none;
+        }
+        & > input[type="checkbox"]:hover{
+        background-color: dark(container,container-checkbox-hover);
+
+        }
+        & > input[type="checkbox"]:active{
+        background-color: dark(container,container-checkbox-active);
+        }
+        .checks{
+            position: absolute;
+            color: dark(container,container-checkbox-check);
+            font-weight: 500;
+        }
+        .checkBoxActive{
+            background-color: dark(container,container-checkbox-active) !important;
+        }
+    }
+}

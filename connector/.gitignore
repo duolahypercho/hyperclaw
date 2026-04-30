@@ -1,0 +1,14 @@
+tmp/
+dist/
+air.log
+*.db
+*.sqlite
+*.sqlite3
+hyperclaw
+hyperclaw-connector
+hyperclaw-connector-*
+hyperclaw-connector-bin
+connector
+.env
+.DS_Store
+.context/

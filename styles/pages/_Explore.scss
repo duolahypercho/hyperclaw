@@ -1,0 +1,175 @@
+@use "../abstracts" as *;
+
+@mixin Explore() {
+  .ExplorePage {
+    .category {
+      align-items: center;
+      padding: 10px;
+      color: dark(sidebar, font);
+      width: 100%;
+      margin: 12px 0 0 12px;
+      border-radius: 10px;
+      max-width: 97%;
+      width: fit-content;
+      background-color: dark(sidebar, 1);
+      position: relative;
+      overflow: hidden;
+      &::-webkit-scrollbar {
+        display: none;
+      }
+      .slider{
+        display: none;
+        .slider_button{
+          display: none;
+          position: absolute;
+          width: 35px;
+          height: 35px;
+          top: 50%;
+          background-color: clr(neutral, 3);
+          backdrop-filter: blur(4px);
+          background-color: rgba(255, 255, 255, 0.45);
+          color: black;
+          border-radius: 50%;
+          align-items: center;
+          justify-content: center;
+          cursor: pointer;
+          @media screen and (min-width: 1201px) and (max-width:1479px) {
+            display: flex;
+          }
+          &:hover{
+            background-color: rgba(131, 130, 130, 0.45);
+          }
+          &:active{
+            background-color: rgba(0, 0, 0, 0.45);
+          }
+          &:visited{
+            outline: 0;
+            border: 0;
+          }
+        }
+      }
+      .overflow_container{
+        display: flex;
+        overflow-x: auto;
+        gap: 10px;
+        .child {
+          cursor: pointer;
+          width: 140px;
+          background-color: dark(sidebar, 1);
+          height: 100px;
+          border-radius: 5px;
+          overflow: hidden;
+          flex-shrink: 0;
+          display: flex;
+          align-items: center;
+          flex-direction: column;
+          text-align: center;
+          transition: 0.3s all ease;
+
+          &:hover {
+            background-color: dark(sidebar, element-hover);
+            color: dark(sidebar,font-hover)
+          }
+          .icon {
+            width: 40px;
+            height: 40px;
+            overflow: hidden;
+            margin: 0;
+            padding: 0;
+            margin-top: 20px;
+          }
+          p {
+            padding: 10%;
+            text-align: center;
+            font-weight: 500;
+          }
+          @media screen and (min-width: 1201px) and (max-width:1479px) {
+            width: 180px;
+            height: 120px;
+          }
+          @media screen and (max-width: 711px) {
+            width: 120px;
+            height: 115px;
+          }
+          @media screen and (max-width: 481px) {
+            width: 80px;
+            height: 80px;
+
+            .icon {
+              width: 20px;
+              height: 20px;
+            }
+          }
+        }
+
+        .child-active {
+          background-color: clr(primary, 2);
+          color: clr(primary, 4);
+          .icon {
+            scale: 1.35;
+          }
+
+          &:hover {
+            background-color: clr(primary, 2);
+            color: clr(primary, 4);
+          }
+        }
+
+        &::-webkit-scrollbar {
+          display: none;
+        }
+      }
+      &:hover{
+        .slider{
+          display: block;
+        }
+      }
+      @media screen and (min-width: 1201px) and (max-width:1479px) {       
+        .overflow_container{
+          overflow-x: auto;
+        }
+      }
+
+
+      @media screen and (max-width: 491px) {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        margin: auto;
+        max-width: none;
+        width: 97%;
+        scroll-snap-type: inline mandatory;
+        margin-top: 5px;
+        border: 1px solid clr(neutral, 3a);
+        & > * {
+          scroll-margin: 0 10px;
+          scroll-snap-align: start;
+        }
+      }
+    }
+
+    .videoList {
+      margin-top: 20px;
+      border-radius: 10px;
+      padding-left: 10px;
+      .current_category {
+        padding: 10px;
+        color: clr(neutral, 0);
+        background: transparent;
+        font-weight: 500;
+        font-size: 2rem;
+        letter-spacing: 1.3px;
+        margin: 0 0 5px 0;
+      }
+
+      @media screen and (max-width: 682px) {
+        padding-left: 5px;
+      }
+      @media screen and (max-width: 432px) {
+        padding-right: 5px;
+      }
+    }
+  }
+  .ExplorePage_mobile {
+    min-height: calc(100vh - 7rem);
+  }
+}

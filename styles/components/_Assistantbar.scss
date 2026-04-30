@@ -1,0 +1,483 @@
+@use "../abstracts" as *;
+@use "./Logo";
+@keyframes assistantExpandRotate {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(90deg);
+  }
+}
+@mixin Assistantbar() {
+  .assistantContainer {
+    display: flex;
+    background-color: dark(assistant, container);
+    justify-content: flex-end;
+    overflow: hidden;
+    width: 100%;
+    .assistantBar {
+      width: fit-content;
+      display: flex;
+      width: 100%;
+      .main {
+        display: flex;
+        width: 100%;
+        height: 100vh;
+        opacity: 1;
+        right: 0;
+        z-index: 1;
+        .ChatbotPage {
+          width: 100%;
+          display: flex;
+          flex-direction: column;
+          .header {
+            width: 100%;
+            gap: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+            background-color: dark(container, container-subheader);
+            padding: 12px;
+            border-bottom: 2px solid
+              dark(container, container-subheader-hover-color);
+            .titleContainer {
+              display: flex;
+              flex-grow: 1;
+              flex-direction: row;
+              user-select: none;
+              .textContainer {
+                display: flex;
+                flex-direction: column;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+                width: 80%;
+                .titleSpan {
+                  font-size: 1.2rem;
+                  font-weight: 600;
+                  color: rgb(231, 231, 231);
+                }
+                .descriptionSpan {
+                  font-size: 0.6rem;
+                  font-weight: 500;
+                  color: dark(container, container-subheader-color);
+                }
+              }
+              .imageContainer {
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                margin-right: 0.6rem;
+                .image,
+                .picPlaceholder {
+                  width: 2.1rem;
+                  height: 2.1rem;
+                  border-radius: 50%;
+                }
+                .picPlaceholder {
+                  & > img {
+                    width: 100%;
+                    height: 100%;
+                    object-fit: cover;
+                    border-radius: 50%;
+                  }
+                }
+              }
+            }
+            .showAssistantButton {
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              border-radius: 50%;
+              color: dark(container, container-subheader-color);
+              font-size: 21px;
+              position: relative;
+              cursor: pointer;
+              &:hover {
+                color: dark(container, container-subheader-hover-color);
+              }
+              &:active {
+                color: dark(container, container-subheader-color);
+              }
+              &[aria-disabled="true"] {
+                //make th animation to turn the icon left side right
+                animation: assistantExpandRotate 0.3s ease-in-out reverse
+                  forwards; /* 'forwards' will keep it at the final state */
+              }
+              &[aria-disabled="false"] {
+                //make th animation to turn the icon right side left
+                animation: assistantExpandRotate 0.3s ease-in-out forwards; /* 'forwards' will keep it at the final state */
+              }
+            }
+            .backButton {
+              display: none;
+              align-items: center;
+              justify-content: center;
+              border-radius: 50%;
+              color: dark(container, container-subheader-color);
+              font-size: 18px;
+              position: relative;
+              cursor: pointer;
+              &:hover {
+                color: dark(container, container-subheader-hover-color);
+              }
+              &:active {
+                scale: 0.9;
+              }
+            }
+          }
+
+
+              .chatbotBody {
+                flex-grow: 1;
+                width: 100%;
+                padding: 12px;
+                overflow-y: auto;
+                overflow-x: hidden;
+                flex-direction: column-reverse;
+                box-shadow: inset 0px 10px 10px 0px rgba(0, 0, 0, 0.2);
+                .userChatbotContainer {
+                  display: flex;
+                  justify-content: flex-end;
+                  padding-top: 10px;
+                  padding-bottom: 10px;
+                  .userPic {
+                    object-fit: cover;
+                    border-radius: 50%;
+                    width: 36px;
+                    height: 36px;
+                    border: none;
+                    position: relative;
+                    overflow: hidden;
+                    transition: border-radius ease-out 0.3s;
+
+                    .wrapper {
+                      width: 100%;
+                      height: 100%;
+
+                      .picPlaceholder > .icon2 {
+                        width: 53%;
+                      }
+
+                      .image {
+                        height: 100%;
+                        width: auto;
+                        object-fit: cover;
+                      }
+                    }
+                    &:hover {
+                      border-radius: 35%;
+                    }
+                  }
+                  .textContainer {
+                    display: flex;
+                    flex-direction: row;
+                    justify-content: flex-end;
+                    margin-right: 6px;
+                    max-width: calc(90% - 36px);
+                    .chatbotText {
+                      padding: 9px;
+                      border-radius: 6px;
+                      background-color: dark(assistant, userContainer);
+                      color: #fefefe;
+                      width: 100%; /* Add this line */
+                      overflow-y: auto; /* Add this line */
+                      overflow-x: hidden; /* Add this line */
+                      .chatbotSpan {
+                        white-space: normal;
+                        word-wrap: break-word;
+                      }
+                    }
+                    .triangle {
+                      margin-top: 13px;
+                      width: 0;
+                      height: 0;
+                      border-top: 6px solid transparent;
+                      border-bottom: 6px solid transparent;
+                      border-left: 6px solid dark(assistant, userContainer);
+                    }
+                  }
+                }
+                .botChatbotContainer {
+                  display: flex;
+                  justify-content: flex-start;
+                  padding-top: 10px;
+                  padding-bottom: 10px;
+                  .userPic {
+                    object-fit: cover;
+                    border-radius: 50%;
+                    width: 36px;
+                    height: 36px;
+                    border: none;
+                    position: relative;
+                    overflow: hidden;
+                    transition: border-radius ease-out 0.3s;
+
+                    .wrapper {
+                      width: 100%;
+                      height: 100%;
+
+                      .picPlaceholder > .icon2 {
+                        width: 53%;
+                      }
+                      .picPlaceholder {
+                        & > img {
+                          width: 100%;
+                          height: 100%;
+                          object-fit: cover;
+                          border-radius: 50%;
+                          transition: border-radius ease-out 0.3s;
+                          &:hover {
+                            border-radius: 35%;
+                          }
+                        }
+                      }
+                      .image {
+                        height: 100%;
+                        width: auto;
+                        object-fit: cover;
+                      }
+                    }
+                    &:hover {
+                      border-radius: 35%;
+                    }
+                  }
+                  .textContainer {
+                    display: flex;
+                    flex-direction: row;
+                    justify-content: flex-start;
+                    margin-left: 6px;
+                    max-width: calc(90% - 36px);
+                    .chatbotText {
+                      padding: 9px;
+                      border-radius: 6px;
+                      background-color: dark(assistant, assistantContainer);
+                      color: #f1f1e1;
+                      width: 100%;
+                      overflow-y: auto;
+                      overflow-x: hidden;
+                      .chatbotSpan {
+                        white-space: normal; /* Allows text to wrap and preserves whitespace */
+                        word-break: break-word; /* Allows words to break and wrap to the next line */
+                        overflow-wrap: break-word; /* Allows the text to wrap to the next line */
+                      }
+                    }
+                    .triangle {
+                      margin-top: 13px;
+                      width: 0;
+                      height: 0;
+                      border-top: 6px solid transparent;
+                      border-bottom: 6px solid transparent;
+                      border-right: 6px solid
+                        dark(assistant, assistantContainer);
+                    }
+                  }
+                }
+                .confirmationBox {
+                  display: flex;
+                  flex-direction: column;
+                  justify-content: center;
+                  align-items: center;
+                  padding: 9px;
+                  border-radius: 6px;
+                  background-color: dark(assistant, confirmContainer);
+                  //background-color: ;
+                  .confirmationText {
+                    font-size: 1rem;
+                    font-weight: 500;
+                    text-align: center;
+                  }
+                  .confirmationButtonContainer {
+                    display: flex;
+                    flex-direction: row;
+                    justify-content: center;
+                    align-items: center;
+                    gap: 1rem;
+                    margin-top: 1rem;
+                    .confirmationButton {
+                      display: flex;
+                      justify-content: center;
+                      align-items: center;
+                      padding: 0.5rem 1rem;
+                      border-radius: 8px;
+                      font-size: 1rem;
+                      font-weight: 500;
+                      cursor: pointer;
+                      background-color: dark(assistant, confirmButton);
+                      &:hover {
+                        background-color: dark(assistant, confirmButton-hover);
+                      }
+                    }
+                  }
+                }
+                .bottomLine {
+                  height: 6%;
+                }
+              }
+
+              .assistantFooter {
+                padding: 15px;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                padding-top: 0;
+                .inputPromptContainer {
+                  display: flex;
+                  max-width: 540px;
+                  width: 100%;
+                  box-shadow: 1px 1px 5px 1px rgba(0, 0, 0, 0.2);
+                  border-radius: 12px;
+                  overflow: hidden;
+                  background-color: dark(container, container-input-background);
+                  padding: 10px;
+                  .typingContainer {
+                    width: 100%;
+
+                    & > textarea {
+                      width: 100%;
+                      border: none;
+                      resize: none;
+                      font-size: 0.9rem;
+                      color: white;
+                      background: transparent;
+                      transition: none;
+                      &::placeholder {
+                        color: dark(primary, font);
+                      }
+                    }
+                  }
+                  .typingrightSide {
+                    width: 15%;
+                    background-color: dark(
+                      container,
+                      container-input-background
+                    );
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    .sendButton {
+                      display: flex;
+                      justify-content: center;
+                      align-items: center;
+                      font-size: 1.2rem;
+                      font-weight: 600;
+                      padding: 5.1px;
+                      border-radius: 3px;
+                      cursor: pointer;
+
+                      background-color: dark(assistant, sendButton);
+                      opacity: 1;
+                      pointer-events: auto;
+                      user-select: auto;
+                      transition: all 0.2s ease-in-out;
+                      &:disabled {
+                        opacity: 0;
+                        pointer-events: none;
+                        user-select: none;
+                      }
+                      &:hover {
+                        background-color: dark(button, 2-hover);
+                      }
+                      &:active {
+                        background-color: dark(button, 2-active);
+                      }
+                      .icon {
+                        color: #c1c0c0;
+                      }
+                      .fillicon {
+                        color: dark(assistant, sendButtonIcon);
+                      }
+                    }
+                  }
+                }
+                .footerPolicy {
+                  padding: 6px 6px 0 6px;
+                  display: flex;
+                  flex-direction: column;
+                  align-items: center;
+                  justify-content: center;
+                  span {
+                    width: 100%;
+                    font-size: 0.6rem;
+                    color: dark(container, container-subheader-color);
+                    text-align: center;
+                    a {
+                      color: dark(container, container-subheader-color);
+                      text-decoration: none;
+                      cursor: pointer;
+                      &:hover {
+                        color: dark(container, container-subheader-hover-color);
+                        text-decoration: underline;
+                      }
+                      padding-right: 6px;
+                    }
+                  }
+                }
+              }
+            }
+          
+        
+      }
+    }
+  }
+  .mobileAssistantContainer {
+    @extend .assistantContainer;
+    width: 0;
+    height: 100svh;
+    z-index: 1001;
+    .assistantBar {
+      .main {
+        height: 100%;
+        .ChatbotPage {
+          .header {
+            .showAssistantButton {
+              display: none;
+            }
+            .function {
+              display: flex;
+            }
+            .backButton {
+              display: flex;
+            }
+            .titleContainer {
+              .textContainer {
+                .titleSpan {
+                  font-size: 0.9rem;
+                }
+                .descriptionSpan {
+                  font-size: 0.6rem;
+                }
+              }
+            }
+          }
+          .assistantBody {
+            .sidebarContainer {
+              display: none;
+            }
+            .chatbotBodyContainer {
+              .assistantFooter {
+                .inputPromptContainer {
+                  .typingContainer {
+                    .typingTextarea {
+                      padding: 9px;
+                      & > textarea {
+                        font-size: 0.9rem;
+                      }
+                    }
+                  }
+                  .typingrightSide {
+                    .sendButton {
+                      font-size: 1rem;
+                      padding: 5px;
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

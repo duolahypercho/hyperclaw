@@ -1,0 +1,110 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.js
+.prettierrc
+.prettierignore
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# local env files
+.env
+.env.local
+.env.*.local
+.env.production
+.env.development
+.env.test
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# electron build artifacts
+electron/dist-electron/
+electron/build/
+electron/node_modules/
+electron/*.exe
+electron/*.blockmap
+electron/*.dmg
+electron/*.AppImage
+electron/*.deb
+electron/*.rpm
+
+# plugin tarball (build manually when publishing plugin releases)
+public/hyperclaw-plugin.tgz
+
+# extension subdirectory node_modules and build artifacts
+extensions/*/node_modules/
+extensions/*/dist/
+
+# Agent / harness scratch directories — never commit these
+.claude/
+.context/
+.cursor/
+.github/
+.stack/
+.gstack/
+.superpowers/
+.codex/
+.factory/
+.opencode/
+.openclaw/
+.gbrain/
+.hermes/
+.kiro/
+.slate/
+.aider*/
+
+# IDE / editor scratch
+.cursor/debug-*.log
+.cursor/**/*.log
+.idea/
+.vscode/
+
+# secrets / credentials (defense in depth)
+*.key
+*.pfx
+*.p12
+*.crt
+credentials.json
+service-account*.json
+
+# ML model weights — keep them out of git, fetch on demand instead.
+# The Whisper local-transcription path was removed; if a future contributor
+# brings it back, ship a downloader rather than committing 70+MB of weights.
+*.onnx
+*.safetensors
+*.gguf
+*.bin
+*.pt
+*.pth
+electron/python/models/
+
+# encrypted/local private payloads
+.enc
+.enc/
+*.enc
+

@@ -1,0 +1,136 @@
+@use "../abstracts" as *;
+
+@mixin MutiSelect() {
+  .mutiSelectContainer {
+    position: relative;
+    display: flex;
+    min-height: 3rem;
+    border: 2px solid transparent;
+    align-items: center;
+    gap: 0.5em;
+    padding: 0.5em;
+    border-radius: 0.5rem;
+    outline: none;
+    border-color: clr(primary, 10);
+    background-color: dark(input, 1) !important;
+
+    &:focus {
+      border-color: clr(primary, 9) !important;
+    }
+    &:hover {
+      border-color: clr(primary, 2) !important;
+    }
+    .mutiSelectValue {
+      display: flex;
+      flex-grow: 1;
+      gap: 0.5em;
+      width: 100%;
+      flex-wrap: wrap;
+      .option-badge {
+        display: flex;
+        align-items: center;
+        border: 0.05em solid #777;
+        border-radius: 0.25em;
+        padding: 0.15em 0.25em;
+        gap: 0.25em;
+        cursor: pointer;
+        background: dark(button, 2-active);
+        color: dark(button, 3-font);
+        outline: none;
+        &:hover {
+          background: dark(button, 3-hover);
+        }
+      }
+
+      &:hover > .remove-btn,
+      &:focus > .remove-btn {
+        color: hsl(0, 100%, 50%);
+      }
+
+      & > .remove-btn {
+        font-size: 1.25em;
+        color: #777;
+      }
+    }
+    .clear-btn {
+      background: none;
+      color: #777;
+      border: none;
+      outline: none;
+      cursor: pointer;
+      padding: 0;
+      font-size: 1.25em;
+      &:focus,
+      &:hover {
+        color: #333;
+      }
+    }
+    .divider {
+      background-color: #777;
+      align-self: stretch;
+      width: 0.05em;
+    }
+    .icon {
+      width: 1.2rem;
+      height: 1.2rem;
+      &:hover {
+        color: rgb(129, 186, 251);
+      }
+    }
+    .options {
+      position: absolute;
+      list-style: none;
+      max-height: 15em;
+      overflow-y: auto;
+      border: 0.05em solid #777;
+      border-radius: 0.25em;
+      width: 100%;
+      left: 0;
+      top: calc(100% + 0.25em);
+      background-color: dark(auth, dropdownMenu);
+      gap: 0.25rem;
+      padding: 0.45rem;
+      border-color: clr(primary, 10);
+      opacity: 0;
+      z-index: 100;
+      pointer-events: none;
+      transition: all 0.2s ease-in-out;
+      .mutiOption {
+        display: flex;
+        text-decoration: none;
+        padding-left: 9px;
+        margin-bottom: 1px;
+        cursor: pointer;
+        min-height: 2.6rem;
+        border-radius: 8px;
+        font-size: 1rem;
+        line-height: 2rem;
+        font-weight: 400;
+        flex-shrink: 0;
+        width: 100%;
+        align-items: center;
+        color: dark(auth, font-placeholder);
+        background-color: transparent;
+        z-index: 999;
+        &:hover {
+          background-color: dark(auth, dropdown-hover);
+          color: clr(neutral, 1);
+        }
+      }
+
+      .selected {
+        background-color: dark(auth, dropdown-active);
+        color: white;
+      }
+
+      .highlighted {
+        background-color: dark(auth, dropdown-highlight);
+        color: white;
+      }
+    }
+    .showOption {
+      opacity: 1;
+      pointer-events: all;
+    }
+  }
+}

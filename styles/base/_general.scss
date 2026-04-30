@@ -1,0 +1,294 @@
+@use "../abstracts" as *;
+@use "../components";
+@use "../pages";
+
+html {
+  scroll-behavior: smooth;
+}
+
+//for animation
+@mixin animate($animation, $duration, $method, $times) {
+  animation: $animation $duration $method $times;
+}
+
+//for keyframes
+@mixin keyframes($name) {
+  @keyframes #{$name} {
+    @content;
+  }
+}
+
+* {
+  padding: 0;
+  margin: 0;
+  outline: none;
+  border: none;
+  -webkit-tap-highlight-color: transparent;
+  scroll-behavior: smooth;
+
+  // overscroll-behavior: contain;
+}
+
+.Empty {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  flex-direction: column;
+
+  p {
+    margin: auto;
+    color: clr(neutral, 0);
+    font-weight: 800;
+    font-size: 1.5rem;
+  }
+}
+
+.errorPage {
+  width: 100%;
+  height: 100%;
+  min-height: calc(100vh - 7rem);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  text-align: center;
+  color: #fff;
+  h1 {
+    margin: 0.5rem auto;
+    font-size: 1.5rem;
+    line-height: 2rem;
+    font-weight: 500;
+    text-align: center;
+    width: 100%;
+    color: clr(neutral, 1);
+
+    @media (min-width: 768px) {
+      font-size: 1.5rem;
+      line-height: 2rem;
+    }
+  }
+  .info {
+    margin-top: 0.1rem;
+    font-weight: 500;
+    font-size: 1rem;
+    text-align: center;
+    width: 100%;
+    margin: 0.5rem auto;
+    text-align: center;
+    color: clr(neutral, 3);
+  }
+  button {
+    padding: 10px 10px;
+    border-radius: 10px;
+    background-color: clr(primary, 2);
+    color: clr(primary, 4);
+    cursor: pointer;
+    margin-top: 0.6rem;
+    transition: 0.3s all ease;
+    width: 100px;
+    &:hover {
+      &:active {
+        background-color: clr(primary, 1);
+      }
+    }
+
+    @media screen and (max-width: 500px) {
+      width: 150px;
+      border-radius: 23px;
+      padding: 5px 0;
+      height: 2rem;
+    }
+  }
+}
+
+.skeleton {
+  cursor: default !important;
+  * {
+    cursor: default !important;
+  }
+}
+
+.customeScrollbar {
+  //scrollbars
+
+  &::-webkit-scrollbar {
+    background: transparent;
+    width: 16px;
+  }
+  &::-webkit-scrollbar-thumb {
+    height: 50px;
+    border-radius: 8px;
+    border: 4px solid transparent;
+    background-clip: content-box;
+    background-color: hsla(0, 0%, 100%, 0.239);
+  }
+}
+
+.customScrollbar {
+  overflow: auto;
+  scrollbar-gutter: stable; /* Prevent layout shift */
+  &::-webkit-scrollbar {
+    background: transparent;
+    width: 0;
+    height: 0;
+  }
+  /* Firefox specific rule to hide the scrollbar */
+  -ms-overflow-style: none; /* IE and Edge */
+  scrollbar-width: none; /* Firefox */
+  &::-webkit-scrollbar-thumb {
+    height: 50px;
+    border-radius: 8px;
+    border: 4px solid transparent;
+    background-clip: content-box;
+    background-color: hsla(0, 0%, 100%, 0.239);
+  }
+  &::-webkit-scrollbar-thumb:hover {
+    background-color: hsla(0, 0%, 86%, 0.239);
+  }
+  &::-webkit-scrollbar-thumb:active {
+    background-color: hsla(0, 0%, 71%, 0.239);
+  }
+}
+
+.customScrollbar2 {
+  &::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    border-radius: 5px;
+    border: 2px solid var(--sb-track-bg);
+    background-color: var(--sb-thumb);
+    transition: background 0.2s;
+  }
+
+  &::-webkit-scrollbar-thumb:hover {
+    background-color: var(--sb-thumb-hover);
+  }
+
+  &::-webkit-scrollbar-thumb:active {
+    background-color: var(--sb-thumb-hover);
+  }
+}
+
+body {
+  .lightOne {
+    width: 110px;
+    height: 2.2rem;
+    line-height: 2.4rem;
+    border-radius: 7px;
+    display: flex;
+    align-items: center;
+    border: none;
+    font-weight: 500;
+    background-color: clr(primary, 1);
+    color: clr(primary, 3);
+    justify-content: space-evenly;
+    font-size: 1rem;
+
+    .icon {
+      font-size: 20px !important;
+      margin: 0 !important;
+    }
+
+    @media screen and (max-width: 700px) {
+      width: 100px;
+      height: 2rem;
+      font-size: 0.8rem;
+    }
+    @media screen and (max-width: 500px) {
+      width: 90px;
+      height: 1.8rem;
+      font-size: 0.7rem;
+    }
+  }
+
+  @media screen and (max-width: 481px) {
+    &::-webkit-scrollbar {
+      display: none;
+    }
+  }
+
+  .truncate {
+    overflow: hidden;
+    line-clamp: 2;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    text-overflow: ellipsis;
+    white-space: normal;
+    width: 100%;
+  }
+
+  @media screen and (max-width: 481px) {
+    &::-webkit-scrollbar {
+      display: none;
+    }
+  }
+}
+
+.picPlaceholder {
+  background-color: #3f4143;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  border-radius: 50%;
+  transition: border-radius ease-out 0.3s;
+
+  .avatar {
+    display: flex;
+    justify-content: center;
+    background-color: rgb(11, 81, 193);
+    position: relative;
+
+    span {
+      position: absolute;
+      font-weight: 500;
+      bottom: 15%;
+      color: #ffffffc3;
+    }
+  }
+  &:hover {
+    border-radius: 35%;
+  }
+}
+
+.loadingCont {
+  display: flex;
+  justify-content: center;
+  flex-direction: column;
+  align-items: center;
+  .loading {
+    color: #fff;
+    font-size: 5rem;
+    font-weight: 900;
+    @include keyframes(spin) {
+      from {
+        transform: rotate(0deg);
+      }
+      to {
+        transform: rotate(360deg);
+      }
+    }
+    @include animate(spin, 1s, ease, infinite);
+  }
+
+  .loading_button {
+    width: 60% !important;
+    color: clr(primary, 4);
+  }
+
+  p {
+    color: #fff;
+    font-size: 2rem;
+  }
+}

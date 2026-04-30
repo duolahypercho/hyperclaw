@@ -1,0 +1,12 @@
+export { default as Logo } from "./Logo";
+export { default as NotificationComp } from "./NotificationComp";
+export { default as UserModal } from "./UserModal";
+export { default as UserPic } from "./UserPic";
+export { default as AssistantPic } from "./AssistantPic";
+export { default as SignIn } from "./SignIn";
+export { default as SignUp } from "./SignUp";
+export { default as Dropdown } from "./Userdropdown";
+export { default as DropdownElements } from "./Dropdownelements";
+export { default as DocumentSidebar } from "./DocumentSidebar";
+export { default as ContactSales } from "./ContactSales";
+export { default as StartForFree } from "./StartForFree";

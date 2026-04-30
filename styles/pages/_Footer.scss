@@ -1,0 +1,336 @@
+@use "../abstracts" as *;
+@use "../components/Logo";
+
+@mixin Footer() {
+  .footer {
+    width: 100vw;
+    color: dark(
+      footer,
+      footer-font
+    ); // Light grey text color for better readability
+    background-color: dark(
+      footer,
+      footer-background
+    ); // A slightly lighter shade of dark for contrast
+    box-shadow: 0 -6px 0px 0 rgba(0, 0, 0, 0.1);
+    z-index: 1;
+    .footerContainer {
+      display: flex;
+      flex-direction: column;
+      padding: 12px 24px 12px 24px;
+      .footerHeader {
+        .newsletter{
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
+          align-items: center;
+          margin-bottom: 3%;
+          margin-top: 3%;
+          h3{
+            color: dark(
+              footer,
+              titleFont
+            ); // White color for headers for readability
+            margin-bottom: 10px; // Space between the header and the list
+            font-size: xx-large;
+            text-align: center;
+            font-family: "Roboto Mono", monospace;
+            font-optical-sizing: auto;
+            font-weight: 600;
+            font-style: normal;
+            letter-spacing: -1px;
+          }
+          .description{
+            text-align: center;
+            font-size: 1em;
+            font-family: "Roboto Mono", monospace;
+            font-weight: 400;
+            margin-bottom: 10px;
+            text-align: center;
+            width: 50%;
+          }
+          .newsletterForm{
+            display: flex;
+            width: 30%;
+            gap: 10px;
+            .emailInputField {
+              margin-top: 3%;
+              position: relative;
+              margin-bottom: 3%;
+              width: 80%;
+              .emailInput {
+                @extend %inputField;
+                border-color: dark(primary, 1);
+                width: 100%;
+                padding-left: 1rem;
+                padding-right: 10%;
+                color: dark(
+                  footer,
+                  footer-font
+                ); // Light grey text color for better readability
+                background-color: transparent !important;
+                &::-webkit-calendar-picker-indicator {
+                  filter: invert(1);
+                }
+                &:hover{
+                  border-color: #6b7280;
+
+                }
+              }
+              .emailLabel {
+                position: absolute;
+                font-size: 1rem;
+                pointer-events: none;
+                color: clr(neutral, 2);
+                left: 0;
+                margin: 12px;
+                margin-left: 1rem;
+                padding-left: 3px;
+                padding-right: 3px;
+                transition:0.2s,
+                font-size 200ms ease-in,
+                font-weight 200ms ease;
+                background-color: dark(
+                  footer,
+                  footer-background
+                ); // A slightly lighter shade of dark for contrast
+              }
+              .emailInput:focus ~ .emailLabel,
+              .emailInput:not(:placeholder-shown).emailInput:not(:focus) ~ .emailLabel {
+                color: clr(primary,1);
+                font-size:0.9rem;
+                transform: translateX(-0.3rem) translateY(-1.5rem);
+                background-color: none;
+                font-weight: 500;
+                pointer-events: none;
+              }
+      
+            }
+            .submitButton{
+              @extend %button1;
+              width: 20%;
+              margin-left: 0;
+              margin-top: 3%;
+              margin-bottom: 3%;
+              background-color: dark(primary, 1);
+              font-size: 1em;
+              color: dark(
+                footer,
+                footer-font
+              ); // Light grey text color for better readability
+              &:hover{
+                //background color on hover
+                background-color: #6b7280;
+              }
+            }
+            .loadingButton{
+              background-color: rgb(224, 224, 88) !important;
+              color: black !important; // Light grey text color for better readability
+            }
+            .successButton{
+              background-color: rgb(79, 192, 79) !important;
+              color: black !important; // Light grey text color for better readability
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              &:hover{
+                background-color: rgb(70, 159, 70) !important;
+              }
+              .icon{
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                color: black !important; // Light grey text color for better readability
+                font-size: 1.2em;
+              }
+            }
+          }
+          @media (max-width: 1270px){
+            .description{
+              width: 60%;
+            }
+            .newsletterForm{
+              width: 60%;
+            }
+          }
+          //mobile view
+          @media (max-width: 768px) {
+            .newsletterForm{
+              width: 100%;
+              .submitButton{
+                width: 30%;
+              }
+            }
+            .description{
+              width: 100%;
+            }
+          }
+        }
+        border-bottom: 2px solid dark(footer, splitter); // Add a subtle border for separation
+      }
+
+      .footerBody {
+        display: flex;
+        justify-content: space-around;
+        padding: 20px 0; // Padding top and bottom only
+        border-bottom: 2px solid dark(footer, splitter); // Add a subtle border for separation
+        .about {
+          width: 21%;
+          .businessIcon{
+            @include Logo.Logo();
+            margin-bottom: 10%;
+            .logoCont{
+              img{
+                margin-left: 0;
+              }
+            }
+          }
+          .socialMedia{
+            display: flex;
+            justify-content: flex-start;
+            margin-top: 10%;
+            margin-bottom: 10%;
+            gap: 10px;
+            a{
+              display: flex;
+              justify-content: center;
+              align-items: center;
+              border-radius: 50%;
+              width: 2em;
+              height: 2em;
+              text-decoration: none;
+              background-color: dark(primary, 1);
+              color: dark(button, font);
+              .icon{
+                font-size: 1.2em;
+              }
+              /* Twitter icon hover color */
+              &[title="Twitter"]:hover,
+              &[title="Twitter"]:focus {
+                .icon{
+                  color: white;
+                }
+                background-color: black; /* Twitter's brand color */
+              }
+
+              /* LinkedIn icon hover color */
+              &[title="LinkedIn"]:hover,
+              &[title="LinkedIn"]:focus{
+                .icon{
+                  color: white;
+                }
+                background-color: #0077B5; /* LinkedIn's brand color */
+              }
+
+              /* Facebook icon hover color */
+              &[title="Facebook"]:hover,
+              &[title="Facebook"]:focus{
+                .icon{
+                  color: white;
+                }
+                background-color: #4267B2; /* Facebook's brand color */
+              }
+
+              /* Discord icon hover color */
+              &[title="Discord"]:hover,
+              &[title="Discord"]:focus{
+                .icon{
+                  color: white;
+                }
+                background-color: #5865F2; /* Discord's brand color */
+              }
+            }
+          }
+          h1 {
+            color: dark(
+              footer,
+              titleFont
+            ); // White color for headers for readability
+            margin-bottom: 10px; // Space between the header and the list
+            font-weight: 600;
+            font-size: 24px;
+            font-family: "Poppins", sans-serif;
+          }
+          .description {
+            font-weight: 600;
+            margin-bottom: 10%;
+          }
+        }
+        gap: 12px;
+        .section{
+          h3 {
+            color: dark(
+              footer,
+              titleFont
+            ); // White color for headers for readability
+            margin-bottom: 10px; // Space between the header and the list
+            font-weight: 600;
+            font-family: "Poppins", sans-serif;
+          }
+
+          ul {
+            list-style: none;
+            padding: 0;
+            li {
+              text-align: left;
+              line-height: 1.6;
+              cursor: pointer;
+              .link{
+                  text-decoration: none;
+                  color: dark(footer, itemFont); // Light grey for list items
+              }
+              &:hover {
+                //zoom out the text on hover
+                transform: scale(1.01);
+                //underline the text on hover
+                text-decoration: underline;
+                color: dark(
+                  footer,
+                  itemFont-Hover
+                ); // Add a hover effect for interaction
+              }
+            }
+          }
+        }
+        //mobile view
+        @media (max-width: 768px) {
+          flex-direction: column;
+          .about {
+            width: 100%;
+            
+            .businessIcon{
+              margin-bottom: 5%;
+            }
+            .socialMedia{
+              margin-top: 5%;
+              margin-bottom: 5%;
+            }
+          }
+        }
+      }
+
+      .footerBottom {
+        color: dark(footer, itemFont-Hover);
+        padding: 12px;
+        text-align: center;
+        font-size: 0.75em; // Smaller font size for the bottom text
+      }
+    }
+    .backtoTopbutton{
+      width: 100%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 12px;
+      background-color: dark(
+        footer,
+        backtop-bg
+      ); // A slightly lighter shade of dark for contrast
+      cursor: pointer;
+      font-weight: 500;
+      &:hover{
+        background-color: dark(footer,backtop-hover);
+      }
+    }
+  }
+}

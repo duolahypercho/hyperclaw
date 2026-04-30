@@ -1,0 +1,88 @@
+.dashboardRoot :global(.react-grid-item.react-draggable-dragging),
+.dashboardRoot :global(.react-grid-item.resizing) {
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+}
+
+.dashboardRoot :global(.react-grid-item.react-draggable-dragging *),
+.dashboardRoot :global(.react-grid-item.resizing *) {
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+}
+
+.dashboardRoot:global(.dashboard-edit-mode) {
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+}
+
+.dashboardRoot :global(.react-grid-item[data-resizable="false"] .react-resizable-handle) {
+  display: none !important;
+}
+
+.dashboardRoot :global(.react-grid-item [data-radix-scroll-area-viewport]),
+.dashboardRoot :global(.react-grid-item .overflow-auto),
+.dashboardRoot :global(.react-grid-item .overflow-y-auto),
+.dashboardRoot :global(.react-grid-item .customScrollbar2) {
+  overscroll-behavior: contain;
+}
+
+.dashboardRoot :global(.react-grid-layout) {
+  position: relative;
+}
+
+.dashboardRoot :global(.react-grid-item) {
+  transition: all 200ms ease;
+  transition-property: left, top, width, height;
+}
+
+.dashboardRoot :global(.react-grid-item.cssTransforms) {
+  transition-property: transform, width, height;
+}
+
+.dashboardRoot :global(.react-grid-item.resizing),
+.dashboardRoot :global(.react-grid-item.react-draggable-dragging) {
+  transition: none;
+  z-index: 100;
+}
+
+.dashboardRoot :global(.react-grid-item.dropping) {
+  visibility: hidden;
+}
+
+.dashboardRoot :global(.react-grid-item.react-grid-placeholder) {
+  background: hsl(var(--primary) / 0.2);
+  opacity: 0.2;
+  transition-duration: 100ms;
+  z-index: 2;
+  border-radius: 1rem;
+  border: 2px dashed hsl(var(--primary));
+}
+
+.dashboardRoot :global(.react-resizable-handle) {
+  position: absolute;
+  width: 20px;
+  height: 20px;
+}
+
+.dashboardRoot :global(.react-resizable-handle-se) {
+  bottom: 0;
+  right: 0;
+  cursor: se-resize;
+}
+
+.dashboardRoot :global(.react-resizable-handle::after) {
+  content: "";
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 5px;
+  height: 5px;
+  border-right: 2px solid hsl(var(--muted-foreground) / 0.4);
+  border-bottom: 2px solid hsl(var(--muted-foreground) / 0.4);
+}

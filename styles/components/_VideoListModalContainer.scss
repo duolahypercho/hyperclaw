@@ -1,0 +1,264 @@
+@use "../abstracts" as *;
+
+/* changing variables for the video list modal, 
+most of the important layout changes can happen here in one media query without doing a lot of them in different places
+add more variables if needed to reduce duplication
+*/
+
+@mixin videoListContainer() {
+  .videoListModalContainer {
+    background: inherit, clr(neutral, 9);
+    padding: 15px;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    gap: var(--gap);
+    padding: 0;
+    .videoListModal {
+      display: flex;
+      flex-direction: column;
+      // outline: 1px solid lime;
+      margin-bottom: 0.5rem;
+      width: calc((100% / var(--column)) - var(--gap));
+      overflow: hidden;
+      padding: 6px;
+      border-radius: 12px;
+      cursor: pointer;
+      .inner1 {
+        width: 100%;
+        aspect-ratio: 1/1;
+        position: relative;
+        border-radius: 10px;
+        overflow: hidden;
+        margin-bottom: 2.5px;
+        min-height: var(--minHeight);
+        cursor: pointer;
+        background-color: clr(neutral, 5a);
+        .image,
+        .empty {
+          border: none;
+          outline: none;
+          -webkit-user-drag: none;
+
+          height: 100%;
+          width: stretch;
+          object-fit: cover;
+        }
+        .functionsoverlay {
+          height: 100%;
+          position: absolute;
+          top: 0;
+          right: 0;
+          padding: 10px 10px 0 0;
+          z-index: 14;
+          overflow: hidden;
+          display: none;
+          align-items: flex-end;
+          flex-direction: column;
+          gap: 10px;
+          overflow: hidden;
+          transition: 0.3s all ease;
+          .func {
+            color: clr(neutral, 0);
+            background-color: #2d2d2da9;
+            backdrop-filter: blur(7px);
+            border-radius: 5px;
+            display: flex;
+            align-items: center;
+            padding: 5px;
+            line-height: 30px;
+            height: 30px;
+            cursor: pointer;
+            .icon {
+              line-height: 30px;
+              flex-shrink: 0;
+              font-size: 1.3rem;
+              // margin-left: 10px;
+            }
+            p {
+              font-size: 0.8rem;
+              width: 0;
+              visibility: hidden;
+            }
+
+            &:hover {
+              p {
+                padding: 5px;
+                width: fit-content;
+                visibility: visible;
+              }
+            }
+            @media screen and (max-width: 700px) {
+              padding: 3px;
+              height: 30px;
+
+              .icon {
+                font-size: 1.1rem;
+              }
+            }
+          }
+          @media screen and (max-width: 400px) {
+            display: none;
+          }
+        }
+
+        &:hover {
+          .functionsoverlay {
+            display: flex;
+            @media screen and (max-width: 400px) {
+              display: none;
+            }
+          }
+        }
+      }
+      .inner2 {
+        display: flex;
+        flex-direction: column;
+        gap: 9px;
+        width: 100%;
+        padding: 6px;
+        .header {
+          display: flex;
+          flex-direction:row;
+          justify-content: flex-end; // Align items to the bottom
+          align-items: center;
+          gap:6px;
+          .logoCont {
+            cursor: pointer;
+            border-radius: 50%;
+            border: none;
+            height: 36px;
+            width: 36px;
+            flex-shrink: 0;
+            overflow: hidden;
+            .image {
+              object-fit: cover;
+              width: 100%;
+              -webkit-user-drag: none;
+              height: 100%;
+            }
+          }
+          .title {
+            color: clr(neutral, 0);
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 500;
+            white-space: nowrap; /* Conflicts with multi-line truncation */
+            overflow: hidden;
+            text-overflow: ellipsis; /* Works with single-line truncation */
+            width: 100%;
+            height: fit-content;
+            &:hover {
+              text-shadow: 5px 10px 10px 10px #fff;
+              transition: 0.3s all ease;
+            }
+            /* Media queries */
+            @media screen and (max-width: 1300px) {
+              font-size: 0.9rem;
+              line-height: 1.2rem;
+              max-height: calc(1.2rem * 2);
+            }
+            @media screen and (max-width: 700px) {
+              top: -3px;
+              height: fit-content;
+              /* Recalculate max-height if needed */
+            }
+            @media screen and (max-width: 550px) {
+              max-height: 6rem; /* Ensure this aligns with the desired number of lines */
+            }
+          }
+        }
+        .info {
+          width: 100%;
+          height: 100%;
+          overflow: hidden;
+
+          .bottomInfo {
+            font-size: 10pt;
+            display: flex;
+            justify-content: space-between;
+            flex-direction: column;
+            overflow: hidden;
+            gap: 0.5rem;
+            .tagline {
+              //give 2 lines of text
+              width: 100%;
+              overflow: hidden;
+              line-clamp: 2;
+              -webkit-line-clamp: 2;
+              display: -webkit-box;
+              -webkit-box-orient: vertical;
+              font-size: 0.81rem;
+              color: dark(primary, font);
+              font-weight: 400;
+              line-height: 1.2em; // Adjust this value to fine-tune the line height
+              height: 2.4em; // 2 lines * 1.2em line-height
+              white-space: normal; /* Conflicts with multi-line truncation */
+              overflow: hidden;
+              text-overflow: ellipsis; /* Works with single-line truncation */
+            }
+            .category {
+              color: hsl(220deg, 5%, 64%);
+              font-size: 0.73rem;
+              font-weight: 500;
+            }
+            .dateandviews {
+              display: flex;
+              gap: 5px;
+              margin-left: 0;
+              letter-spacing: 0.6px;
+            }
+          }
+        }
+      }
+
+      .playlistInner1 {
+        height: 75%;
+        position: relative;
+        border-radius: 10px;
+        overflow: hidden;
+        margin-bottom: 1%;
+        .playListOverlay {
+          cursor: pointer;
+          border-radius: 0 0 10px 10px;
+          width: 100%;
+          position: absolute;
+          height: 30%;
+          max-height: 38px;
+          min-height: 30px;
+          bottom: 0;
+          z-index: 10;
+          display: flex;
+          font-size: 1.5rem;
+          z-index: 10;
+          backdrop-filter: blur(3px);
+          background-color: #05050597;
+          justify-content: center;
+          align-items: center;
+          color: clr(neutral, 0);
+          filter: contrast(80%);
+          transition: 0.3s all ease;
+          &:hover {
+            filter: contrast(100%);
+          }
+        }
+        .overlaygrain {
+          @extend .playListOverlay;
+          background-color: transparent;
+          backdrop-filter: none;
+          z-index: 9;
+          opacity: 50%;
+          background: url("https://grainy-gradients.vercel.app/noise.svg");
+        }
+      }
+      @media screen and (max-width: 600px) {
+        .inner2 {
+          padding: 7px 0 0 0;
+        }
+      }
+      &:active {
+        background-color: dark(primary, container-clicked);
+      }
+    }
+  }
+}

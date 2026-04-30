@@ -1,0 +1,602 @@
+@use "./Logo";
+@use "../abstracts" as *;
+
+@-webkit-keyframes hvr-icon-hang {
+  0% {
+    -webkit-transform: translateY(6px);
+    transform: translateY(6px);
+  }
+  50% {
+    -webkit-transform: translateY(2px);
+    transform: translateY(2px);
+  }
+  100% {
+    -webkit-transform: translateY(6px);
+    transform: translateY(6px);
+  }
+}
+@keyframes hvr-icon-hang {
+  0% {
+    -webkit-transform: translateY(3px);
+    transform: translateY(3px);
+  }
+  50% {
+    -webkit-transform: translateY(0px);
+    transform: translateY(0px);
+  }
+  100% {
+    -webkit-transform: translateY(3px);
+    transform: translateY(3px);
+  }
+}
+@-webkit-keyframes hvr-icon-hang-sink {
+  100% {
+    -webkit-transform: translateY(3px);
+    transform: translateY(3px);
+  }
+}
+@keyframes hvr-icon-hang-sink {
+  100% {
+    -webkit-transform: translateY(3px);
+    transform: translateY(3px);
+  }
+}
+.hvr-icon-hang {
+  display: inline-block;
+  vertical-align: middle;
+  -webkit-transform: perspective(1px) translateZ(0);
+  transform: perspective(1px) translateZ(0);
+  box-shadow: 0 0 1px rgba(0, 0, 0, 0);
+  -webkit-transition-duration: 0.3s;
+  transition-duration: 0.3s;
+}
+.hvr-icon-hang .hvr-icon {
+  -webkit-transform: translateZ(0);
+  transform: translateZ(0);
+}
+.hvr-icon-hang:hover .hvr-icon,
+.hvr-icon-hang:focus .hvr-icon,
+.hvr-icon-hang:active .hvr-icon {
+  -webkit-animation-name: hvr-icon-hang-sink, hvr-icon-hang;
+  animation-name: hvr-icon-hang-sink, hvr-icon-hang;
+  -webkit-animation-duration: 0.3s, 1.5s;
+  animation-duration: 0.3s, 1.5s;
+  -webkit-animation-delay: 0s, 0.3s;
+  animation-delay: 0s, 0.3s;
+  -webkit-animation-timing-function: ease-out, ease-in-out;
+  animation-timing-function: ease-out, ease-in-out;
+  -webkit-animation-iteration-count: 1, infinite;
+  animation-iteration-count: 1, infinite;
+  -webkit-animation-fill-mode: forwards;
+  animation-fill-mode: forwards;
+  -webkit-animation-direction: normal, alternate;
+  animation-direction: normal, alternate;
+}
+
+@mixin navbar() {
+  .navbar {
+    width: 100%;
+    position: sticky;
+    display: flex;
+    top: 0;
+    z-index: 1000;
+    background-color: dark(primary, 1);
+    scrollbar-gutter: stable;
+    justify-content: center;
+    backdrop-filter: blur(10px); /* Blur effect */
+    -webkit-backdrop-filter: blur(10px); /* For Safari compatibility */
+    height: 4rem !important;
+    .navbarcontainer {
+      width: calc(100% - 4rem);
+      background-color: transparent;
+      height: 4rem !important;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      transition: all 0.3s ease-in-out;
+
+      .leftSide {
+        display: flex;
+        height: 100%;
+        position: relative;
+
+        .tabletMenu {
+          background-color: transparent;
+          flex-shrink: 0;
+          color: clr(neutral, 0);
+          height: 100%;
+          display: flex;
+          justify-content: center;
+          font-size: 1.8rem;
+          width: 30px;
+          align-items: center;
+          cursor: pointer;
+          margin-right: 6px;
+          svg {
+            border-radius: 50%;
+            color: clr(neutral, 0);
+
+            &:hover {
+              background-color: rgba(145, 145, 145, 0.247);
+            }
+          }
+
+          &:active {
+            color: rgba(145, 145, 145, 0.247);
+          }
+        }
+        @include Logo.Logo();
+        .background {
+          transition: width 0.3s ease;
+          position: absolute;
+          width: 4rem;
+          height: calc(100% - 12px);
+          z-index: -1;
+          background-color: dark(sidebar, 1);
+          overflow: hidden;
+          border-radius: 30px 30px 0 0;
+
+          &[aria-disabled="true"] {
+            @media screen and (min-width: 1200px) {
+              width: 240px;
+              border-radius: 30px 30px 0 0;
+            }
+
+            @media screen and (max-width: 1200px) {
+              width: 0px;
+              overflow: hidden;
+              flex-shrink: 0;
+            }
+            @media screen and (max-height: 750px) {
+              width: 0px;
+              overflow: hidden;
+              flex-shrink: 0;
+            }
+          }
+          @media screen and (max-width: 1200px) {
+            width: 0px;
+          }
+          @media screen and (max-height: 750px) {
+            width: 0px;
+          }
+        }
+        @media screen and (max-width: 1200px) {
+          overflow: hidden;
+          flex-shrink: 0;
+
+          .hamButton {
+            width: 3.5rem;
+            transition: none !important;
+            background-color: none;
+          }
+        }
+        @media screen and (max-height: 750px) {
+          overflow: hidden;
+          flex-shrink: 0;
+
+          .hamButton {
+            width: 3.5rem;
+            transition: none !important;
+            background-color: none;
+          }
+        }
+        @media screen and (min-width: 1201px) {
+          padding-top: 12px;
+          .hamButton {
+            width: 4rem;
+          }
+        }
+      }
+      .active {
+        @media screen and (min-width: 1201px) {
+          button {
+            width: 3rem;
+            margin-right: 3px;
+          }
+        }
+      }
+      .center {
+        display: flex;
+        width: 550px;
+
+        button {
+          flex-shrink: 0;
+          background-color: dark(input, 1);
+          border: 1px solid clr(neutral, 3a);
+          border-left: none;
+          color: clr(neutral, 0);
+          border-top-right-radius: 7px;
+          border-bottom-right-radius: 7px;
+          width: 2.8rem;
+          cursor: pointer;
+        }
+
+        .searchCont {
+          width: 100%;
+          max-width: 550px;
+          min-width: 100px;
+          display: flex;
+          background-color: dark(primary, 2);
+          color: dark(primary, font);
+          border-top-left-radius: 7px;
+          border-bottom-left-radius: 7px;
+          .searchField {
+            background-color: transparent;
+            width: 100%;
+            height: 2.4rem;
+            border: none;
+            color: dark(primary, font);
+            padding-left: 10px;
+            outline: none;
+            box-shadow: 100px clr(neutral, 0);
+
+            &::placeholder {
+              color: dark(primary, font);
+            }
+          }
+
+          button {
+            background-color: transparent;
+            color: dark(primary, font);
+            border: none;
+            flex-shrink: 0;
+            width: 2.2rem;
+
+            &:hover {
+              color: clr(neutral, 1);
+            }
+          }
+        }
+        .submit {
+          font-size: 21px;
+          transition: background-color ease-in 0.3s;
+          &:disabled {
+            background-color: dark(primary, 2);
+          }
+          &:hover {
+            background-color: dark(input, 1-hover);
+          }
+          &:active {
+            background-color: dark(input, 1-active);
+          }
+        }
+
+        .back {
+          display: none;
+          @media screen and (max-width: 700px) {
+            display: block;
+            border-radius: 0;
+            border: none;
+          }
+        }
+
+        @media screen and (max-width: 569px) {
+          width: 100% !important;
+          position: absolute;
+          right: 0;
+          background-color: clr(neutral, 7);
+          z-index: 10;
+          .submit {
+            border: none;
+            border-radius: 0;
+          }
+          .searchCont {
+            max-width: none;
+            border-width: 0 1px 0 1px;
+            border-radius: 0;
+          }
+        }
+        @media screen and (min-width: 1201px) {
+          padding-top: 12px;
+        }
+      }
+      .rightSide {
+        // border: 1px solid red;
+        display: flex;
+        align-items: center;
+        gap: 20px;
+        font-size: 1.2rem;
+        //sign in button
+        color: #fff;
+        z-index: 1010;
+        .userdropdown {
+          position: relative;
+          .userPic {
+            object-fit: cover;
+            border-radius: 50%;
+            width: 36px;
+            height: 36px;
+            border: none;
+            position: relative;
+            overflow: hidden;
+            cursor: pointer;
+            transition: border-radius ease-out 0.3s;
+
+            .wrapper {
+              width: 100%;
+              height: 100%;
+
+              .picPlaceholder > .icon2 {
+                width: 53%;
+              }
+
+              .image {
+                height: 100%;
+                width: auto;
+                object-fit: cover;
+              }
+            }
+            &:hover {
+              border-radius: 35%;
+            }
+          }
+          .dropdownMenu {
+            position: absolute;
+            right: 0;
+            top: calc(100% + 0.3rem);
+            background-color: dark(sidebar, 1);
+            border-radius: 8px;
+            opacity: 0;
+            pointer-events: none;
+            transform: translateY(-10px);
+            transition: opacity 150ms ease-in-out, transform 150ms ease-in-out;
+          }
+          .dropdownMenu_open {
+            opacity: 1;
+            transform: translateY(0);
+            pointer-events: auto;
+          }
+          .dropdownGrid {
+            display: flex;
+            flex-direction: column;
+            .dropdownLinks {
+              gap: 0.25rem;
+              border-bottom: 1px solid clr(neutral, 3c);
+              padding: 0.45rem;
+              .link {
+                display: flex;
+                min-width: 260px;
+                text-decoration: none;
+                padding-left: 9px;
+                margin-bottom: 1px;
+                cursor: pointer;
+                min-height: 2.6rem;
+                border-radius: 8px;
+                font-size: 1rem;
+                line-height: 2rem;
+                font-weight: 400;
+                flex-shrink: 0;
+                width: 100%;
+                align-items: center;
+                color: dark(sidebar, font);
+                background-color: transparent;
+                .icon {
+                  font-size: 1.3rem;
+                  margin-right: 1rem;
+                }
+                &:hover {
+                  color: dark(sidebar, font-hover);
+                  background-color: dark(sidebar, element-hover);
+                  .icon {
+                    -webkit-animation-name: hvr-icon-hang-sink, hvr-icon-hang;
+                    animation-name: hvr-icon-hang-sink, hvr-icon-hang;
+                    -webkit-animation-duration: 0.3s, 1.5s;
+                    animation-duration: 0.3s, 1.5s;
+                    -webkit-animation-delay: 0s, 0.3s;
+                    animation-delay: 0s, 0.3s;
+                    -webkit-animation-timing-function: ease-out, ease-in-out;
+                    animation-timing-function: ease-out, ease-in-out;
+                    -webkit-animation-iteration-count: 1, infinite;
+                    animation-iteration-count: 1, infinite;
+                    -webkit-animation-fill-mode: forwards;
+                    animation-fill-mode: forwards;
+                    -webkit-animation-direction: normal, alternate;
+                    animation-direction: normal, alternate;
+                  }
+                }
+                &:active {
+                  color: dark(sidebar, font-active);
+                  background-color: dark(sidebar, element-active);
+                }
+              }
+              .active {
+                color: dark(sidebar, font-active);
+                background-color: dark(sidebar, element-active);
+                font-weight: 500;
+              }
+            }
+          }
+          @media screen and (max-width: 750px) {
+            display: none;
+          }
+        }
+        .createstudio {
+          //signin modal
+          width: 110px;
+          height: 2.2rem;
+          line-height: 2.4rem;
+          border-radius: 7px;
+          display: flex;
+          align-items: center;
+          border: none;
+          font-weight: 500;
+          background-color: dark(button, 1);
+          color: dark(button, font);
+          justify-content: space-evenly;
+          font-size: 1rem;
+          cursor: pointer;
+          transition: background-color ease-in 0.2s;
+          &:hover {
+            background-color: dark(button, 1-hover);
+          }
+          &:active {
+            background-color: dark(button, 1-active);
+          }
+
+          @media screen and (max-width: 500px) {
+            width: 90px;
+            height: 1.8rem;
+            font-size: 0.6rem;
+            span {
+              font-size: 0.8rem;
+            }
+          }
+        }
+        @media screen and (min-width: 1201px) {
+          padding-top: 12px;
+        }
+      }
+
+      @media screen and (max-width: 1200px) and (min-width: 768px) {
+        padding: 10px;
+        .leftSide {
+          button {
+            margin-right: 0;
+          }
+          .hamButton {
+            width: 2.5rem;
+          }
+        }
+        .center {
+          max-width: 400px;
+          min-width: 350px;
+        }
+      }
+      @media screen and (max-width: 750px) {
+        width: 100%;
+        padding: 0 10px;
+
+        .leftSide {
+          margin-left: 0;
+          button {
+            margin-right: 0;
+          }
+          .hamButton {
+            width: 2.5rem;
+          }
+        }
+        .center {
+          max-width: 400px;
+          min-width: 350px;
+        }
+      }
+      @media screen and (max-width: 768px) and (min-width: 701px) {
+        .center {
+          width: 45%;
+        }
+        .leftSide {
+          .hamButton {
+            width: 2.5rem;
+            margin-right: 6px;
+          }
+        }
+      }
+      @media screen and (max-width: 700px) {
+        .leftSide {
+          .hamButton {
+            width: 2.5rem;
+            margin-right: 3px;
+          }
+        }
+        .center {
+          width: 45%;
+          height: 2rem;
+          text-align: center;
+
+          .searchCont {
+            .searchField {
+              height: 2rem;
+            }
+          }
+          .submit {
+            font-size: 18px;
+            padding-top: 1%;
+          }
+        }
+        .rightSide {
+          .createstudio {
+            width: 100px;
+            height: 2rem;
+            font-size: 0.8rem;
+          }
+        }
+      }
+      @media screen and (max-width: 680px) {
+        .rightSide {
+          gap: 10px;
+          .createstudio {
+            width: 90px;
+          }
+        }
+        .leftSide {
+          button {
+            flex-shrink: 0;
+            width: 3.2rem;
+            font-size: 1.4rem;
+            margin-right: 5px;
+            margin-left: 5px;
+          }
+          .tabletMenu {
+            width: 1.8rem;
+          }
+        }
+        .center {
+          width: 40%;
+          height: 2rem;
+          text-align: center;
+
+          .searchCont {
+            .searchField {
+              height: 2rem;
+            }
+          }
+          .submit {
+            font-size: 18px;
+            padding-top: 1%;
+          }
+        }
+      }
+      @media screen and (max-width: 569px) {
+        padding: 8px;
+        .leftSide {
+          button {
+            display: none;
+          }
+        }
+        .rightSide {
+          .createstudio {
+            width: fit-content;
+            padding: 12px;
+            background-color: transparent;
+            span {
+              display: none;
+            }
+          }
+          .userdropdown .userPic {
+            width: 32px;
+            height: 32px;
+          }
+        }
+        margin-right: 3px;
+      }
+    }
+    @media screen and (min-width: 1201px) {
+      height: 4rem !important;
+    }
+  }
+  .navbarInfo {
+    @extend .navbar;
+    transition: all 0.3s ease-in-out;
+    position: fixed;
+    background-color: transparent;
+    @media screen and (max-width: 1200px) and (min-width: 1px) {
+      .container {
+        width: 100%;
+      }
+    }
+  }
+  .showSticky {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
