@@ -16,6 +16,7 @@ describe("resolveProjectAgentDisplay", () => {
       name: "Clio",
       emoji: "🦞",
       kind: "openclaw",
+      real: true,
     });
   });
 
@@ -27,6 +28,7 @@ describe("resolveProjectAgentDisplay", () => {
       name: "agent-missing",
       emoji: "🤖",
       kind: undefined,
+      real: false,
     });
   });
 });

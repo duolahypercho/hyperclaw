@@ -45,10 +45,10 @@ describe("buildAddAgentProvisionPayload", () => {
         }],
       }],
       userProfile: {
-        name: "Ziwen Xu",
-        email: "ziwen@example.com",
-        username: "ziwen",
-        about: "Building Hyperclaw.",
+        name: "Test User",
+        email: "test@example.com",
+        username: "testuser",
+        about: "Building things.",
       },
     });
 
@@ -86,9 +86,9 @@ describe("buildAddAgentProvisionPayload", () => {
           appToken: "FAKE_SLACK_APP_TOKEN",
         }],
       }],
-      userName: "Ziwen Xu",
-      userEmail: "ziwen@example.com",
-      userAboutMe: "Building Hyperclaw.",
+      userName: "Test User",
+      userEmail: "test@example.com",
+      userAboutMe: "Building things.",
     });
   });
 

@@ -78,15 +78,15 @@ describe("buildAgentTemplates", () => {
       role: "Ops",
       description: "Keep deploys boring.",
       userProfile: {
-        name: "Ziwen Xu",
-        email: "ziwen@example.com",
-        username: "ziwen",
-        about: "Building Hyperclaw.",
+        name: "Test User",
+        email: "test@example.com",
+        username: "testuser",
+        about: "Building things.",
       },
     });
 
-    expect(files["USER.md"]).toContain("- **Name:** Ziwen Xu");
-    expect(files["USER.md"]).toContain("- **Email:** ziwen@example.com");
+    expect(files["USER.md"]).toContain("- **Name:** Test User");
+    expect(files["USER.md"]).toContain("- **Email:** test@example.com");
     expect(files["USER.md"]).toContain("- **Agent:** Dora");
     expect(files["USER.md"]).toContain("- **Need:** Keep deploys boring.");
   });
