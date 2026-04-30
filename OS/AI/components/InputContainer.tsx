@@ -38,6 +38,10 @@ import { gatewayConnection, subscribeGatewayConnection } from "$/lib/openclaw-ga
 import { useHyperclawContext } from "$/Providers/HyperclawProv";
 import { readOpenClawConfig, getAgentModel } from "$/lib/identity-md";
 import {
+  createDuplicateSubmitGuard,
+  createInputSubmitFingerprint,
+} from "./input-submit-guard";
+import {
   AttachmentPreview,
   AttachmentPreviewModal,
   InputContainerProps,
@@ -191,6 +195,7 @@ export const InputContainer: React.FC<InputContainerProps> = ({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const addFilesRef = useRef<(files: FileList | File[]) => Promise<void>>(async () => {});
+  const submitGuardRef = useRef(createDuplicateSubmitGuard());
   const { toast } = useToast();
 
   // Live transcription hook
@@ -423,6 +428,13 @@ export const InputContainer: React.FC<InputContainerProps> = ({
     // Store the current values to restore on error
     const currentInputValue = currentValue;
     const attachmentsToSend = [...currentAttachments];
+    const submitFingerprint = createInputSubmitFingerprint(
+      messageToSend,
+      attachmentsToSend
+    );
+
+    const submitAccepted = submitGuardRef.current.claim(submitFingerprint);
+    if (!submitAccepted) return;
 
     // Clear input and attachments immediately for better UX
     if (!isControlled) {
@@ -471,6 +483,11 @@ export const InputContainer: React.FC<InputContainerProps> = ({
         setInputValue(currentInputValue);
       }
       setCurrentAttachments(attachmentsToSend);
+    } finally {
+      // Release after React has had a chance to flush the cleared input/loading state.
+      window.setTimeout(() => {
+        submitGuardRef.current.release(submitFingerprint);
+      }, 0);
     }
   };
 
@@ -769,7 +786,7 @@ export const InputContainer: React.FC<InputContainerProps> = ({
   };
 
   // Sync transcript + interim to input value while voice capture is active and
-  // after stop while Whisper is still finalizing the transcript.
+  // after stop while the transcription engine is still finalizing the transcript.
   useEffect(() => {
     if (!isVoiceMode && !isListening && !isTranscribing && !transcript && !interimTranscript) {
       return;
@@ -888,7 +905,7 @@ export const InputContainer: React.FC<InputContainerProps> = ({
   }, [startListening, clearTranscript, setValue]);
 
   const handleVoiceModeStop = useCallback(() => {
-    // Cancel any in-flight transcription so the final Whisper result
+    // Cancel any in-flight transcription so the final transcript result
     // doesn't overwrite the user's edits to the input field.
     clearTranscript();
     stopListening();

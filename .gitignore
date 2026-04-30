@@ -88,3 +88,14 @@ extensions/*/dist/
 credentials.json
 service-account*.json
 
+# ML model weights — keep them out of git, fetch on demand instead.
+# The Whisper local-transcription path was removed; if a future contributor
+# brings it back, ship a downloader rather than committing 70+MB of weights.
+*.onnx
+*.safetensors
+*.gguf
+*.bin
+*.pt
+*.pth
+electron/python/models/
+

@@ -20,8 +20,6 @@
   },
   "dependencies": {
     "electron-updater": "^6.1.7",
-    "onnxruntime-node": "^1.24.3",
-    "python-shell": "^5.0.0",
     "uiohook-napi": "^1.5.4"
   },
   "devDependencies": {
@@ -35,7 +33,7 @@
     "asar": true,
     "asarUnpack": [
       "node_modules/uiohook-napi/**",
-      "python/**/*"
+      "resources/connector/**"
     ],
     "directories": {
       "output": "dist-electron"
@@ -43,8 +41,7 @@
     "files": [
       "main.js",
       "preload.js",
-      "whisper-service.js",
-      "python/**/*",
+      "resources/connector/**/*",
       "wordsdb.js",
       "app-config.json",
       "../public/**/*"
@@ -88,6 +85,13 @@
       "uninstallDisplayName": "Hyperclaw"
     },
     "extraResources": [
+      {
+        "from": "../public/downloads",
+        "to": "resources/connector",
+        "filter": [
+          "hyperclaw-connector*"
+        ]
+      },
       {
         "from": "../.next",
         "to": ".next",
