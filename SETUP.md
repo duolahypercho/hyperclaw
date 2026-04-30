@@ -1,146 +1,201 @@
-# Hyperclaw App — Setup & Usage Guide
+# Hyperclaw — Detailed Setup Guide
+
+This is the long-form setup guide. For the 60-second path, see the
+[README](README.md). This document covers everything you might want to wire up
+when running Hyperclaw seriously.
 
 ## Prerequisites
 
-- Node.js 18+
-- MongoDB (for UserManager)
-- A running [Hypercho_UserManager](../Hypercho_UserManager) instance (default: `http://localhost:9979`)
+- **Node.js 18+** (we test against 18 and 20; 22+ should also work)
+- **npm 9+** (or pnpm/yarn — the lockfile is npm)
+- **Go 1.21+** *(only if you want to build the connector from source)*
+- **Git**
 
-## Quick Start
+You do **not** need MongoDB, a hub, a UserManager, or any cloud account to run
+the Community Edition. The dashboard runs against a local connector and a
+SQLite store under `~/.hyperclaw/`.
+
+## Clone and install
 
 ```bash
-# 1. Install dependencies
+git clone https://github.com/<your-fork>/hyperclaw_app.git
+cd hyperclaw_app
 npm install
+```
 
-# 2. Copy environment variables
-cp .env.example .env
-# Edit .env with your values (see Environment Variables below)
+## Configure environment
 
-# 3. Run in development mode
+Copy the template and fill in only what you need:
+
+```bash
+cp .env.example .env.local
+```
+
+The single required value is `NEXTAUTH_SECRET`. Generate one:
+
+```bash
+echo "NEXTAUTH_SECRET=$(openssl rand -base64 32)" >> .env.local
+```
+
+Everything else in `.env.example` is optional. The file annotates which
+features each variable unlocks.
+
+### Community Edition vs Cloud Edition
+
+| Variable | Community (default) | Cloud |
+|---|---|---|
+| `NEXT_PUBLIC_HUB_URL` | empty — local-only | `wss://your-hub` |
+| `NEXT_PUBLIC_HUB_API_URL` | empty | `https://your-hub` |
+| `NEXT_PUBLIC_HYPERCHO_API` | empty | `https://your-user-manager` |
+| `NEXT_PUBLIC_CONNECTOR_RELEASES_URL` | empty — UI tells users to build locally | `https://github.com/<org>/<connector>/releases` |
+
+If a Hub URL is blank, the dashboard never reaches out — the WebSocket layer
+short-circuits and falls back to talking to the local connector directly.
+
+### Optional providers
+
+| Provider | Variables | What it unlocks |
+|---|---|---|
+| OpenAI | `OPENAI_API_KEY`, `OPENAI_ORG_ID` | In-app text autosuggest / enhance endpoints |
+| Google OAuth | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Google sign-in on `/auth/Login` |
+| Twitter / X OAuth | `TWITTER_CLIENT_ID`, `TWITTER_CLIENT_SECRET`, `TWITTER_CALLBACK_URL` | X sign-in and tweet posting tools |
+| AWS S3 | `S3_UPLOAD_*` | File and knowledge uploads |
+| Sentry | `NEXT_PUBLIC_SENTRY_DSN`, `SENTRY_ORG`, `SENTRY_PROJECT`, `SENTRY_AUTH_TOKEN` | Error reporting (you wire up your own org) |
+
+## Run the dashboard
+
+### Browser (Next.js dev server)
+
+```bash
 npm run dev
-# App runs at http://localhost:1000
+# http://localhost:1000
+```
 
-# 4. Or run as Electron desktop app
+### Desktop (Electron, dev mode)
+
+```bash
 npm run electron:dev
 ```
 
-## Environment Variables
+This loads the running dev server inside an Electron shell so you can iterate
+on desktop-specific behavior with hot reload.
 
-Create a `.env` file in the project root. Key variables:
+### Desktop (Electron, packaged build)
 
-| Variable | Description |
-|----------|-------------|
-| `NEXTAUTH_URL` | App URL, e.g. `http://localhost:1000/` |
-| `NEXTAUTH_SECRET` | JWT signing secret — **must match** UserManager's `JWT_TOKEN` and Hub's `--jwt-secret` |
-| `NEXT_PUBLIC_HYPERCHO_API` | UserManager API URL, e.g. `http://localhost:9979` |
-| `GOOGLE_CLIENT_ID` | Google OAuth client ID |
-| `GOOGLE_CLIENT_SECRET` | Google OAuth client secret |
-| `STRIPE_SECRET_KEY` | Stripe secret key (for deployment subscriptions) |
-| `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` | Stripe publishable key |
-| `OPENAI_API_KEY` | OpenAI key (for AI features) |
-
-Generate a shared secret for JWT:
 ```bash
-openssl rand -base64 32
+# macOS Apple Silicon / Intel
+npm run electron:build:mac:local
+
+# Windows
+npm run electron:build:win:local
+
+# Linux
+npm run electron:build:linux:local
 ```
 
-## Available Scripts
+Outputs land in `electron/dist-electron/`. The packaged app bundles the
+connector binary so end users get a single installer.
 
-| Command | Description |
-|---------|-------------|
-| `npm run dev` | Start dev server on port 1000 |
-| `npm run build` | Production build |
-| `npm run start` | Start production server |
-| `npm run lint` | Run ESLint |
-| `npm run electron:dev` | Start Electron dev mode |
-| `npm run electron:build` | Build Electron app (macOS) |
-| `npm run electron:build:win` | Build Electron app (Windows) |
+## Run the connector
 
-## Features
+The dashboard is happy on its own, but the AI runtime panels (Claude Code,
+Codex, OpenClaw, Hermes) need the connector daemon for live streaming.
 
-### Dashboard (`/dashboard`)
+### From source
 
-The main view. A customizable widget grid with drag-and-drop layout. Available widgets:
-
-- **Clock** — current time
-- **Pomodoro** — focus timer
-- **Logs** — activity log viewer
-- **Kanban** — task board
-- **Crons** — scheduled jobs
-- **Docs** — document browser
-- **Pixel Office** — virtual office
-- **Usage** — API usage stats
-- **Gateway Chat** — real-time chat
-- **Deployment** — manage AI deployments (new)
-
-Click the edit icon in the dashboard header to rearrange widgets or toggle their visibility.
-
-### Deployment Flow (`/deploy/*`)
-
-Deploy AI models to cloud platforms:
-
-1. **Select Model** (`/deploy/select-model`) — choose from Claude 3.5 Sonnet, GPT-4o, Gemini 1.5 Pro, GPT-4 Turbo, Claude 3 Opus, or Llama 3.1 405B
-2. **Select Channel** (`/deploy/select-channel`) — pick a deployment target (Vercel, Netlify, Railway, or Custom Server)
-3. **Subscribe** (`/deploy/subscribe`) — review summary and complete payment via Stripe
-
-After deployment, the new instance appears in the Deployment widget on the dashboard.
-
-Access via the user dropdown menu (top-right avatar) -> "Deploy".
-
-### Todo System (`/Tool/TodoList`)
-
-Unified todo management backed by UserManager MongoDB:
-
-- Create lists, tasks, and subtasks
-- Assign agents, set due dates, star tasks
-- Changes sync automatically to `~/.hyperclaw/todo.json` for offline access and OpenClaw agent consumption
-- Falls back to local file reads if UserManager is unreachable
-
-### Authentication
-
-Login at `/auth/Login`. Supports:
-
-- **Email/Password** — credentials stored in UserManager
-- **Google OAuth** — requires Google client ID/secret in `.env`
-
-JWT tokens use standardized `{ sub: userId, tier }` claims, compatible across Hyperclaw_app, UserManager, and Hub.
-
-## Project Structure
-
-```
-Hyperclaw_app/
-├── pages/                  # Next.js Pages Router
-│   ├── api/                # API routes (auth, stripe, hub)
-│   ├── auth/               # Login/signup pages
-│   ├── deploy/             # Deployment wizard
-│   ├── dashboard.tsx       # Main dashboard
-│   └── Tool/               # Tool pages (TodoList, etc.)
-├── components/
-│   ├── Home/               # Dashboard widgets and layout
-│   ├── Grainient/          # WebGL gradient background
-│   ├── Navigation/         # Sidebar and nav
-│   └── Tool/               # Tool UI components
-├── services/
-│   └── tools/todo/         # Todo API layer
-│       ├── index.ts        # Remote API (UserManager)
-│       ├── local.ts        # Local file fallback
-│       ├── unified.ts      # Unified service (remote + sync + fallback)
-│       └── sync.ts         # Sync adapter
-├── store/
-│   └── deployment.ts       # Zustand deployment state
-├── lib/
-│   └── shared-auth.ts      # JWT sign/verify utility
-└── electron/               # Electron wrapper
+```bash
+cd connector
+go build -o hyperclaw-connector ./cmd
+./hyperclaw-connector
 ```
 
-## Related Services
+The connector listens on a localhost port the dashboard auto-discovers. State
+lives in `~/.hyperclaw/connector.db` (SQLite).
 
-| Service | Port | Purpose |
-|---------|------|---------|
-| **Hyperclaw_app** | 1000 | Main frontend (this project) |
-| **Hypercho_UserManager** | 9979 | Auth, user data, todo storage |
-| **hyperclaw-hub** | — | WebSocket relay for devices |
-| **hyperclaw-connector** | — | Local device agent |
-| **Hypercho_blog** | — | Blog (independent) |
+### Bundled with Electron
 
-All services share the same JWT secret for cross-service auth. See `../.env.example` for details.
+When you build the Electron app via `npm run electron:build:*`, the connector
+is built and shipped inside the package — no separate process to start.
+
+### As a system service
+
+Once you have a built binary:
+
+```bash
+./hyperclaw-connector install   # installs as launchd (macOS) or systemd (Linux)
+./hyperclaw-connector status
+./hyperclaw-connector uninstall          # keeps your data
+./hyperclaw-connector uninstall --purge  # nukes ~/.hyperclaw too
+```
+
+Full details (env vars, plugin packing, OTA updates) live in
+[`connector/README.md`](connector/README.md).
+
+## Available scripts (cheat sheet)
+
+| Command | What it does |
+|---|---|
+| `npm run dev` | Next.js dev server on port 1000 |
+| `npm run build` | Production Next.js build |
+| `npm run start` | Run the production build on port 1000 |
+| `npm run lint` | ESLint |
+| `npm test` / `npm run test:watch` | Vitest |
+| `npm run electron` | Run the packaged Electron build locally |
+| `npm run electron:dev` | Electron pointing at the dev server |
+| `npm run electron:build:mac:local` | Build macOS desktop app |
+| `npm run electron:build:win:local` | Build Windows desktop app |
+| `npm run electron:build:linux:local` | Build Linux desktop app |
+| `npm run connector:build` | Build the connector binary |
+| `npm run connector:build:all` | Build the connector for all targets |
+| `npm run plugin:pack` | Pack the bundled OpenClaw plugin tarball |
+
+## Project structure
+
+See the [README](README.md#project-structure) — same tree, kept in one place
+to avoid drift.
+
+## Troubleshooting
+
+### Dashboard says "Gateway not reachable"
+
+The connector isn’t running. Either start it (`./hyperclaw-connector` from
+`./connector` after building), or build the Electron app which bundles it.
+
+### `EADDRINUSE: address already in use :::1000`
+
+Something else is on port 1000. Kill it or change the dev port:
+
+```bash
+PORT=3000 npm run dev
+```
+
+(The Next.js script hardcodes 1000 today; for a different port, edit
+`package.json` or run `next dev -p 3000` directly.)
+
+### `NEXTAUTH_SECRET` errors
+
+You skipped step 2. Run `openssl rand -base64 32` and put the output in
+`.env.local` as `NEXTAUTH_SECRET=...`.
+
+### Electron build fails on macOS
+
+Make sure you have Xcode Command Line Tools installed (`xcode-select
+--install`) and the connector binary builds standalone first
+(`npm run connector:build`).
+
+### "Hub" features look broken
+
+That’s expected on Community Edition. The hub is the proprietary multi-device
+relay — features like cross-device sync, hosted agents, and team workspaces
+require Cloud Edition. The local-first feature set should still work.
+
+## Related projects
+
+| Project | Purpose | License |
+|---|---|---|
+| **Hyperclaw** *(this repo)* | Dashboard + connector | MIT |
+| **OpenClaw** | Multi-channel agent gateway (WhatsApp, Slack, …) | Open source |
+| **Hyperclaw Cloud** | Hosted hub, user manager, billing | Proprietary |
+
+A shared JWT secret links Hyperclaw, the connector, and (in Cloud Edition) the
+hub — see `.env.example` for the relevant variables.
