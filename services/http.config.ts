@@ -1,20 +1,24 @@
 import axios from "axios";
 import { getAuthToken } from "$/lib/auth-token-cache";
 
+// In Community Edition no remote backend is configured by default. Cloud builds
+// set these env vars at build time so the dashboard can reach the hosted API.
+// Calls made without a configured baseURL will resolve against the current
+// origin and most will fail fast — features that need the cloud backend should
+// gracefully degrade or hide their UI.
+
 export const mediaApi = axios.create({
-  baseURL:
-    process.env.NEXT_PUBLIC_MEDIASERVICE_API ||
-    "https://mediaservice-jbb3-lbh.koyeb.app/",
+  baseURL: process.env.NEXT_PUBLIC_MEDIASERVICE_API || "",
   timeout: 12000,
 });
 
 export const creatorApi = axios.create({
-  baseURL: "https://some-domain.com/api/",
+  baseURL: "",
   timeout: 12000,
 });
 
 export const hyperchoApi = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_HYPERCHO_API || "https://api.hypercho.com/",
+  baseURL: process.env.NEXT_PUBLIC_HYPERCHO_API || "",
   timeout: 12000,
 });
 
@@ -44,7 +48,7 @@ const addAuthInterceptor = (api: any) => {
 };
 
 export const entrepriseApi = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_HYPERCHO_API || "https://api.hypercho.com/",
+  baseURL: process.env.NEXT_PUBLIC_HYPERCHO_API || "",
   timeout: 12000,
 });
 

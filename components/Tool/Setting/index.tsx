@@ -1,14 +1,13 @@
 import React, { useState, useMemo, useEffect } from "react";
 import { InteractApp } from "@OS/InteractApp";
 import { AppSchema, SidebarItem } from "@OS/Layout/types";
-import { User, Shield, Bell, LogOut, Moon, CreditCard, Monitor, Building2 } from "lucide-react";
+import { User, Shield, Bell, LogOut, Moon, Monitor, Building2 } from "lucide-react";
 import General from "./pages/general";
 import Company from "./pages/company";
 import Theme from "./pages/theme";
 import Privacy from "./pages/privacy";
 import Danger from "./pages/danger";
 import Notifications from "./pages/notifications";
-import Payment from "./pages/payment";
 import DevicesSettings from "./pages/devices";
 import { AnimatePresence } from "framer-motion";
 import { useOS } from "@OS/Provider/OSProv";
@@ -17,7 +16,6 @@ const sectionList = [
   { id: "general", title: "General", icon: User },
   { id: "company", title: "Company", icon: Building2 },
   { id: "devices", title: "Devices", icon: Monitor },
-  { id: "payment", title: "Subscription", icon: CreditCard },
   { id: "theme", title: "Theme", icon: Moon },
   { id: "privacy", title: "Privacy", icon: Shield },
   { id: "notifications", title: "Notifications", icon: Bell },
@@ -28,7 +26,6 @@ const sectionComponents: Record<string, React.ReactNode> = {
   general: <General />,
   company: <Company />,
   devices: <DevicesSettings />,
-  payment: <Payment />,
   theme: <Theme />,
   privacy: <Privacy />,
   notifications: <Notifications />,

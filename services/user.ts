@@ -130,29 +130,9 @@ export const addToWaitingList = ({
     email: email,
   });
 
-export const updateUserSubscription = ({
-  userId,
-  plan,
-  period,
-  customerId,
-}: {
-  userId: string;
-  plan: string;
-  period: "month" | "year";
-  customerId: string;
-}) =>
-  hyperchoApi.post(`/User/subscription/update`, {
-    userId: userId,
-    plan: plan,
-    period: period,
-    customerId: customerId,
-  });
-
-export const cancelUserSubscription = ({ userId }: { userId: string }) =>
-  hyperchoApi.post(`/User/subscription/cancel`, {
-    userId: userId,
-  });
-
+// Membership types kept so consumers (UI badges, rate-limit hints) compile in
+// both Community and Cloud builds. In Community Edition the membership is
+// always treated as free / unlimited and there is no Stripe billing portal.
 export interface MembershipPackage {
   name: string;
   maxToken: number;
@@ -164,32 +144,8 @@ export interface UserMembership {
   endDate: string | Date;
   package: MembershipPackage;
   isFreePlan: boolean;
-  customerId: string; // Stripe customer ID for billing portal access
+  customerId: string; // Stripe customer ID — only set in Cloud builds
 }
 
 export const getUserMembership = () =>
   hyperchoApi.get<HyperchoResponse<UserMembership>>(`/User/membership`);
-
-export const getBillingPortalUrl = async ({
-  customerId,
-}: {
-  customerId: string;
-}): Promise<{ url: string }> => {
-  const response = await fetch("/api/stripe/customBillingGate", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      customerId,
-    }),
-  });
-
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error || "Failed to create billing portal session");
-  }
-
-  const data = await response.json();
-  return data;
-};

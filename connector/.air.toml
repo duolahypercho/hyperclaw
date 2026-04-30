@@ -1,0 +1,26 @@
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  cmd = "go build -o ./tmp/hyperclaw-connector ./cmd"
+  bin = "./tmp/hyperclaw-connector"
+  full_bin = "./tmp/hyperclaw-connector"
+  include_ext = ["go"]
+  exclude_dir = ["tmp", "vendor"]
+  delay = 500
+  kill_delay = "1s"
+  rerun = false
+  log = "air.log"
+
+[log]
+  main_only = true
+  time = false
+
+[color]
+  main = "magenta"
+  watcher = "cyan"
+  build = "yellow"
+  runner = "green"
+
+[misc]
+  clean_on_exit = true

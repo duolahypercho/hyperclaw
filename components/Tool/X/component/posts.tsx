@@ -81,7 +81,7 @@ const SinglePostItem = ({
         <div className="flex items-center gap-1 mb-0.5">
           <div className="flex items-center gap-1 w-full">
             <span className="font-semibold text-foreground/90 whitespace-nowrap">
-              {twitterAccount?.name || "Ziwen Xu"}
+              {twitterAccount?.name || "Your Name"}
             </span>
             {twitterAccount?.verified && (
               <BadgeCheck className="w-4 h-4 fill-blue-400 flex-shrink-0 stroke-background" />

@@ -5,8 +5,9 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   Loader2, Check, Copy, Terminal, RefreshCw, Monitor, Globe, Server, Code2,
 } from "lucide-react";
-import { hubFetch } from "$/lib/hub-direct";
+import { getHubApiUrl, hubFetch } from "$/lib/hub-direct";
 import { useUser } from "$/Providers/UserProv";
+import { canUseRemoteOnboarding } from "./local-first-routing";
 import {
   OpenClawIcon,
   HermesIcon,
@@ -77,9 +78,10 @@ const runtimeOptions: Array<{
 ];
 
 export default function GuidedStepConnect({ onComplete, initialDeviceChoice, initialRuntimeChoices }: GuidedStepConnectProps) {
-  const { logout } = useUser();
+  const { logout, status } = useUser();
   const isElectron = typeof window !== "undefined" && !!window.electronAPI;
   const canInstallOnThisMachine = isElectron && !!window.electronAPI?.runtimes?.installLocalConnector;
+  const remoteAllowed = canUseRemoteOnboarding(status);
   const [choice, setChoice] = useState<DeviceChoice>(initialDeviceChoice ?? null);
   const [stage, setStage] = useState<"location" | "runtime" | "remote">(initialDeviceChoice ? "runtime" : "location");
   const [runtimeChoices, setRuntimeChoices] = useState<RuntimeChoice[]>(initialRuntimeChoices ?? ["openclaw"]);
@@ -99,6 +101,16 @@ export default function GuidedStepConnect({ onComplete, initialDeviceChoice, ini
   const [existingDevice, setExistingDevice] = useState<{ id: string; name: string } | null>(null);
   const [wantsNewDevice, setWantsNewDevice] = useState(false);
   const selectedRuntimeSet = new Set(runtimeChoices);
+
+  useEffect(() => {
+    if (remoteAllowed || choice !== "remote") return;
+    setChoice(null);
+    setStage("location");
+    setRemotePhase("pairing");
+    setPairing(null);
+    setExistingDevice(null);
+    setWantsNewDevice(false);
+  }, [choice, remoteAllowed]);
 
   useEffect(() => {
     if (stage !== "runtime" || choice !== "local" || !canInstallOnThisMachine || !window.electronAPI?.runtimes?.detectLocal) {
@@ -203,7 +215,7 @@ export default function GuidedStepConnect({ onComplete, initialDeviceChoice, ini
   }, [createDevice, regenerateToken]);
 
   useEffect(() => {
-    if (choice !== "remote" || stage !== "remote") return;
+    if (!remoteAllowed || choice !== "remote" || stage !== "remote") return;
     let cancelled = false;
 
     async function checkExisting() {
@@ -232,13 +244,13 @@ export default function GuidedStepConnect({ onComplete, initialDeviceChoice, ini
 
     checkExisting();
     return () => { cancelled = true; };
-  }, [choice, stage, initDevice]);
+  }, [choice, initDevice, remoteAllowed, stage]);
 
   useEffect(() => {
-    if (wantsNewDevice && !pairing && !creating) {
+    if (remoteAllowed && wantsNewDevice && !pairing && !creating) {
       initDevice();
     }
-  }, [wantsNewDevice, pairing, creating, initDevice]);
+  }, [creating, initDevice, pairing, remoteAllowed, wantsNewDevice]);
 
   useEffect(() => {
     if (!pairing) return;
@@ -258,7 +270,7 @@ export default function GuidedStepConnect({ onComplete, initialDeviceChoice, ini
   }
 
   useEffect(() => {
-    if (remotePhase !== "waiting" || !pairing) return;
+    if (!remoteAllowed || remotePhase !== "waiting" || !pairing) return;
     let done = false;
 
     let unsubWs: (() => void) | null = null;
@@ -268,8 +280,8 @@ export default function GuidedStepConnect({ onComplete, initialDeviceChoice, ini
         const { getUserToken } = await import("$/lib/hub-direct");
         if (!gatewayConnection.wsUrl) {
           const token = await getUserToken();
-          if (token) {
-            const hubUrl = process.env.NEXT_PUBLIC_HUB_API_URL || "https://hub.hypercho.com";
+          const hubUrl = process.env.NEXT_PUBLIC_HUB_API_URL || "";
+          if (token && hubUrl) {
             connectGatewayWs(hubUrl, { token, hubMode: true });
           }
         }
@@ -304,10 +316,13 @@ export default function GuidedStepConnect({ onComplete, initialDeviceChoice, ini
       clearInterval(interval);
       unsubWs?.();
     };
-  }, [remotePhase, pairing]);
+  }, [remoteAllowed, remotePhase, pairing]);
 
-  const installCommand = pairing
-    ? `curl -fsSL https://hub.hypercho.com/downloads/install.sh | bash -s -- --token ${pairing.token} --device-id ${pairing.deviceId}`
+  // Build the install command from the configured hub URL. In Community
+  // Edition with no hub configured the command is empty and the UI hides it.
+  const installerHubUrl = getHubApiUrl();
+  const installCommand = pairing && installerHubUrl
+    ? `curl -fsSL ${installerHubUrl.replace(/\/$/, "")}/downloads/install.sh | bash -s -- --token ${pairing.token} --device-id ${pairing.deviceId} --hub-url ${installerHubUrl}`
     : "";
 
   const copyCommand = () => {
@@ -376,23 +391,36 @@ export default function GuidedStepConnect({ onComplete, initialDeviceChoice, ini
 
           <motion.button
             onClick={() => {
+              if (!remoteAllowed) return;
               setChoice("remote");
               setStage("runtime");
             }}
-            className="w-full flex items-center gap-4 p-4 rounded-xl border border-foreground/8 bg-foreground/[0.03] hover:border-foreground/15 hover:bg-foreground/[0.06] text-left transition-all duration-200"
+            disabled={!remoteAllowed}
+            className={`w-full flex items-center gap-4 p-4 rounded-xl border text-left transition-all duration-200 ${
+              remoteAllowed
+                ? "border-foreground/8 bg-foreground/[0.03] hover:border-foreground/15 hover:bg-foreground/[0.06] cursor-pointer"
+                : "border-foreground/5 bg-foreground/[0.02] cursor-not-allowed"
+            }`}
             initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
+            animate={{ opacity: remoteAllowed ? 1 : 0.45, y: 0 }}
             transition={{ delay: 0.2, duration: 0.4, ease: EASE }}
-            whileHover={{ y: -1 }}
-            whileTap={{ y: 0 }}
+            whileHover={remoteAllowed ? { y: -1 } : {}}
+            whileTap={remoteAllowed ? { y: 0 } : {}}
           >
             <div className="w-10 h-10 rounded-xl bg-foreground/[0.06] flex items-center justify-center shrink-0">
               <Globe className="w-5 h-5 text-foreground/50" />
             </div>
             <div className="flex-1 min-w-0">
-              <div className="text-[14px] font-medium text-foreground/90">A different machine</div>
+              <div className="text-[14px] font-medium text-foreground/90 flex items-center gap-2">
+                A different machine
+                {!remoteAllowed && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-foreground/8 text-foreground/30">sign in required</span>
+                )}
+              </div>
               <div className="text-[12px] text-foreground/30 mt-0.5">
-                Connect an existing server, browser-paired device, or another machine via the connector
+                {remoteAllowed
+                  ? "Connect an existing server, browser-paired device, or another machine via the connector"
+                  : "Local setup works without an account. Sign in when you want to pair a remote machine."}
               </div>
             </div>
           </motion.button>
@@ -522,12 +550,16 @@ export default function GuidedStepConnect({ onComplete, initialDeviceChoice, ini
                 onComplete({ deviceChoice: "local", runtimeChoices });
                 return;
               }
+              if (!remoteAllowed) {
+                setStage("location");
+                return;
+              }
               setStage("remote");
             }}
-            disabled={runtimeChoices.length === 0}
+            disabled={runtimeChoices.length === 0 || (choice === "remote" && !remoteAllowed)}
             className="min-h-[44px] px-8 py-2.5 rounded-lg text-sm font-medium text-primary-foreground bg-primary hover:bg-primary/80 disabled:bg-foreground/[0.03] disabled:text-foreground/30 disabled:border-foreground/6 disabled:cursor-not-allowed border border-foreground/10 hover:border-foreground/20 transition-all"
-            whileHover={runtimeChoices.length > 0 ? { y: -1 } : {}}
-            whileTap={runtimeChoices.length > 0 ? { y: 0 } : {}}
+            whileHover={runtimeChoices.length > 0 && (choice !== "remote" || remoteAllowed) ? { y: -1 } : {}}
+            whileTap={runtimeChoices.length > 0 && (choice !== "remote" || remoteAllowed) ? { y: 0 } : {}}
           >
             Continue
           </motion.button>

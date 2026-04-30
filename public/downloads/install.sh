@@ -1,7 +1,11 @@
 #!/bin/bash
 set -e
 
-HUB_URL="${HUB_URL:-https://hub.hypercho.com}"
+# In Community Edition both HUB_URL and DOWNLOAD_BASE_URL must be supplied
+# either via env vars or --hub-url / --download-url flags. The official
+# Hyperclaw Cloud installer pre-fills these at packaging time.
+HUB_URL="${HUB_URL:-}"
+DOWNLOAD_BASE_URL="${DOWNLOAD_BASE_URL:-}"
 INSTALL_DIR="$HOME/.hyperclaw"
 
 # --- Parse arguments ---
@@ -16,6 +20,7 @@ while [[ $# -gt 0 ]]; do
     --email) EMAIL="$2"; shift 2 ;;
     --password) PASSWORD="$2"; shift 2 ;;
     --hub-url) HUB_URL="$2"; shift 2 ;;
+    --download-url) DOWNLOAD_BASE_URL="$2"; shift 2 ;;
     *) TOKEN="$1"; shift ;;  # bare arg = token
   esac
 done
@@ -36,7 +41,7 @@ case "$OS" in
 esac
 
 BINARY_NAME="hyperclaw-connector-${OS}-${ARCH}"
-DOWNLOAD_URL="${HUB_URL}/downloads/${BINARY_NAME}"
+DOWNLOAD_URL="${DOWNLOAD_BASE_URL%/}/downloads/${BINARY_NAME}"
 
 echo ""
 echo "  ╔══════════════════════════════════════════╗"

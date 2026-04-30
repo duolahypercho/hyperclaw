@@ -1,19 +1,44 @@
 /** @type {import('next').NextConfig} */
 const isDev = process.env.NODE_ENV !== "production";
 
+// CSP allowlist is built from env. Community Edition (no env set) only allows
+// self + local bridge + dev hosts. Cloud builds set NEXT_PUBLIC_HYPERCHO_API
+// and NEXT_PUBLIC_HUB_API_URL / NEXT_PUBLIC_HUB_URL at build time so the
+// browser is allowed to talk to the production hub.
+function deriveHubOrigin(value, scheme) {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return `${scheme}://${url.host}`;
+  } catch {
+    return null;
+  }
+}
+
 function buildCSP() {
   const connectParts = [
     "connect-src 'self'",
-    "https://api.hypercho.com",
-    "https://hub.hypercho.com",
     "https://cdn.jsdelivr.net",
-    "wss://hub.hypercho.com",
     "https://raw.githack.com",
     "https://*.ingest.us.sentry.io",
   ];
 
+  // Allow the configured backend API host (e.g. api.hypercho.com in Cloud builds).
+  const hyperchoOrigin = deriveHubOrigin(process.env.NEXT_PUBLIC_HYPERCHO_API, "https");
+  if (hyperchoOrigin) connectParts.push(hyperchoOrigin);
+
+  // Allow the configured hub HTTP + WS origins.
+  const hubHttpOrigin = deriveHubOrigin(process.env.NEXT_PUBLIC_HUB_API_URL, "https");
+  if (hubHttpOrigin) connectParts.push(hubHttpOrigin);
+  const hubWsOrigin = deriveHubOrigin(process.env.NEXT_PUBLIC_HUB_URL, "wss");
+  if (hubWsOrigin) connectParts.push(hubWsOrigin);
+
   if (isDev) {
     connectParts.push("http://127.0.0.1:9979", "http://localhost:9979");
+    // Cursor debug ingest in local development. This is not part of the
+    // connector path, but allowing it keeps dev-only instrumentation from
+    // flooding the console with CSP violations.
+    connectParts.push("http://127.0.0.1:7509", "http://localhost:7509");
     // Local connector bridge
     connectParts.push("http://127.0.0.1:18790", "http://localhost:18790");
     // Local OpenClaw gateway WebSocket ports
@@ -78,17 +103,32 @@ const nextConfig = {
     ];
   },
   images: {
+    // Allowlist of external image hosts that next/image can optimize.
+    // The CloudFront/CDN hostname is derived from NEXT_PUBLIC_CLOUD_FRONT_URL
+    // so the OSS repo doesn't carry a proprietary distribution ID; Cloud builds
+    // pin their own CDN at build time.
     remotePatterns: [
       {
         protocol: "https",
         hostname: "source.unsplash.com",
         pathname: "/**",
       },
-      {
-        protocol: "https",
-        hostname: "d3hv93ovhtsi9a.cloudfront.net",
-        pathname: "/**",
-      },
+      ...(() => {
+        const cdn = process.env.NEXT_PUBLIC_CLOUD_FRONT_URL;
+        if (!cdn) return [];
+        try {
+          const url = new URL(cdn);
+          return [
+            {
+              protocol: url.protocol.replace(":", ""),
+              hostname: url.hostname,
+              pathname: "/**",
+            },
+          ];
+        } catch {
+          return [];
+        }
+      })(),
       {
         protocol: "https",
         hostname: "**.googleusercontent.com",

@@ -7,8 +7,10 @@
 import { encryptForDevice, isValidPubkey } from "./e2e-crypto";
 import { hubFetch, getUserToken } from "./hub-direct";
 
-const HUB_API_URL =
-  process.env.NEXT_PUBLIC_HUB_API_URL || "https://hub.hypercho.com";
+// Empty default = Community Edition (local-only). Cloud builds set
+// NEXT_PUBLIC_HUB_API_URL at build time. Callers must check before issuing
+// remote credential operations.
+const HUB_API_URL = process.env.NEXT_PUBLIC_HUB_API_URL || "";
 
 // --- Types ---
 

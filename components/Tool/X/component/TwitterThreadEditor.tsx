@@ -179,7 +179,7 @@ function SortableTweetItem({
         <div className="flex items-center gap-1 mb-0.5">
           <div className="flex items-center gap-1 w-full">
             <span className="font-semibold text-foreground/90 text-sm whitespace-nowrap">
-              {twitterAccounts[activeAccount].name || "Ziwen Xu"}
+              {twitterAccounts[activeAccount].name || "Your Name"}
             </span>
             {twitterAccounts[activeAccount].verified && (
               <BadgeCheck className="w-4 h-4 fill-accent flex-shrink-0" />

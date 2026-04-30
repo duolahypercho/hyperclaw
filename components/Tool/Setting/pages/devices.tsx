@@ -397,11 +397,18 @@ function AddDeviceDialog({
               <div className="space-y-4">
                 <div className="space-y-2">
                   <p className="text-xs font-medium text-muted-foreground">1. Download the connector (if you haven't already)</p>
-                  <Button variant="outline" size="sm" className="text-xs h-8" asChild>
-                    <a href="https://github.com/Hypercho-Inc/hyperclaw-connector/releases" target="_blank" rel="noopener noreferrer">
-                      <Download className="w-3 h-3 mr-1.5" /> Download Connector <ExternalLink className="w-3 h-3 ml-1.5 text-muted-foreground" />
-                    </a>
-                  </Button>
+                  {process.env.NEXT_PUBLIC_CONNECTOR_RELEASES_URL ? (
+                    <Button variant="outline" size="sm" className="text-xs h-8" asChild>
+                      <a href={process.env.NEXT_PUBLIC_CONNECTOR_RELEASES_URL} target="_blank" rel="noopener noreferrer">
+                        <Download className="w-3 h-3 mr-1.5" /> Download Connector <ExternalLink className="w-3 h-3 ml-1.5 text-muted-foreground" />
+                      </a>
+                    </Button>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      Build the bundled connector from <code>./connector</code> in this repo
+                      (<code>cd connector && go build -o hyperclaw-connector ./cmd</code>).
+                    </p>
+                  )}
                 </div>
                 <div className="space-y-2">
                   <p className="text-xs font-medium text-muted-foreground">2. Run this command in your terminal</p>

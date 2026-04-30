@@ -17,7 +17,6 @@ import { getMediaUrl } from "$/utils";
 import { cn } from "@/lib/utils";
 import { motion } from "framer-motion";
 import { usePricingModal } from "$/Providers/PricingModalProv";
-import { getBillingPortalUrl } from "$/services/user";
 import { useToast } from "@/components/ui/use-toast";
 import { Badge } from "@/components/ui/badge";
 import { useDoctorTerminal } from "$/components/Tool/DoctorTerminal/DoctorTerminalContext";
@@ -49,6 +48,8 @@ function getConnectorHealthLabel(status: ConnectorState): string {
       return "Connector offline: hub disconnected";
     case "connector-offline":
       return `Connector offline: ${status.deviceName}`;
+    case "gateway-unhealthy":
+      return `Connector online, gateway ${status.gatewayState}: ${status.deviceName}`;
     case "revoked":
       return `Connector offline: ${status.deviceName} revoked`;
   }
@@ -76,7 +77,6 @@ const UserdropdownContent = ({ connectorStatus }: { connectorStatus: ConnectorSt
   const { runDoctorFix, isRunning: fixingOpenClaw } = useDoctorTerminal();
   const router = useRouter();
   const { openModal } = usePricingModal();
-  const [isLoadingBilling, setIsLoadingBilling] = useState(false);
   const { toast } = useToast();
 
   const handleGatewayRestart = async () => {
@@ -123,45 +123,11 @@ const UserdropdownContent = ({ connectorStatus }: { connectorStatus: ConnectorSt
     router.push(path);
   };
 
-  const handleManagePlan = async () => {
-    if (!membership) {
-      toast({
-        title: "Error",
-        description: "Unable to access billing portal. Please try again later.",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    const customerId = membership.customerId;
-
-    if (!customerId) {
-      toast({
-        title: "Error",
-        description: "Customer ID not found. Please contact support.",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    setIsLoadingBilling(true);
-    try {
-      const { url } = await getBillingPortalUrl({
-        customerId: customerId,
-      });
-
-      window.open(url, "_blank");
-    } catch (error: any) {
-      console.error("Error opening billing portal:", error);
-      toast({
-        title: "Error",
-        description:
-          error.message || "Failed to open billing portal. Please try again.",
-        variant: "destructive",
-      });
-    } finally {
-      setIsLoadingBilling(false);
-    }
+  // Billing portal is a Cloud-only feature. In Community Edition we surface
+  // the same upgrade prompt instead of trying to open a Stripe portal that
+  // doesn't exist.
+  const handleManagePlan = () => {
+    openModal();
   };
 
   // Connector health is driven by the live hub WS + device/probe status.
@@ -263,13 +229,9 @@ const UserdropdownContent = ({ connectorStatus }: { connectorStatus: ConnectorSt
           <span>Settings</span>
         </DropdownMenuItem>
         {hasActiveMembership ? (
-          <DropdownMenuItem
-            onClick={handleManagePlan}
-            disabled={isLoadingBilling}
-            className="cursor-pointer"
-          >
+          <DropdownMenuItem onClick={handleManagePlan} className="cursor-pointer">
             <CreditCard className="mr-2 h-4 w-4" />
-            <span>{isLoadingBilling ? "Opening..." : "Manage Plan"}</span>
+            <span>Manage Plan</span>
           </DropdownMenuItem>
         ) : (
           <DropdownMenuItem onClick={openModal}>

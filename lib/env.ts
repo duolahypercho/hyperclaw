@@ -21,12 +21,6 @@ const serverSchema = z.object({
   // OpenAI (optional — gateway chat won't work without it)
   OPENAI_API_KEY: z.string().optional(),
 
-  // Stripe (optional — billing features won't work)
-  STRIPE_SECRET_KEY: z.string().optional(),
-  STRIPE_WEBHOOK_SECRET: z.string().optional(),
-  STRIPE_MONTHLY_PLAN_ID: z.string().optional(),
-  STRIPE_ANNUAL_PLAN_ID: z.string().optional(),
-
   // S3 (optional — file uploads won't work)
   S3_UPLOAD_KEY: z.string().optional(),
   S3_UPLOAD_SECRET: z.string().optional(),

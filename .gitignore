@@ -28,7 +28,12 @@ yarn-error.log*
 .pnpm-debug.log*
 
 # local env files
-.env*.local
+.env
+.env.local
+.env.*.local
+.env.production
+.env.development
+.env.test
 
 # vercel
 .vercel
@@ -36,7 +41,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
-.env
 
 # electron build artifacts
 electron/dist-electron/
@@ -56,4 +60,31 @@ public/hyperclaw-plugin.tgz
 extensions/*/node_modules/
 extensions/*/dist/
 
+# Agent / harness scratch directories — never commit these
 .gstack/
+.superpowers/
+.codex/
+.factory/
+.opencode/
+.openclaw/
+.gbrain/
+.hermes/
+.kiro/
+.slate/
+.aider*/
+.claude/projects/
+
+# IDE / editor scratch
+.cursor/debug-*.log
+.cursor/**/*.log
+.idea/
+.vscode/
+
+# secrets / credentials (defense in depth)
+*.key
+*.pfx
+*.p12
+*.crt
+credentials.json
+service-account*.json
+

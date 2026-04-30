@@ -56,6 +56,28 @@ function getConnectorDownloadName() {
   return null;
 }
 
+function getConnectorPublicDownloadName() {
+  const plat = process.platform;
+  const arch = process.arch;
+
+  if (plat === "darwin") {
+    return arch === "arm64"
+      ? "hyperclaw-connector-darwin-arm64"
+      : "hyperclaw-connector-darwin-amd64";
+  }
+  if (plat === "linux") {
+    return arch === "arm64"
+      ? "hyperclaw-connector-linux-arm64"
+      : "hyperclaw-connector-linux-amd64";
+  }
+  if (plat === "win32") {
+    return arch === "arm64"
+      ? "hyperclaw-connector-windows-arm64.exe"
+      : "hyperclaw-connector-windows-amd64.exe";
+  }
+  return null;
+}
+
 function getConnectorInstallPaths() {
   const installDir = path.join(os.homedir(), ".hyperclaw");
   const binaryName = process.platform === "win32"
@@ -69,8 +91,45 @@ function getConnectorInstallPaths() {
   };
 }
 
+function getBundledConnectorCandidates(downloadName) {
+  if (!downloadName) return [];
+  const publicDownloadName = getConnectorPublicDownloadName();
+  const names = [...new Set([downloadName, publicDownloadName].filter(Boolean))];
+  return [
+    ...names.map((name) => path.join(__dirname, "resources", "connector", name)),
+    ...names.map((name) => path.join(__dirname, "..", "public", "downloads", name)),
+    ...names.map((name) => path.join(process.resourcesPath || "", "resources", "connector", name)),
+    ...names.map((name) => path.join(process.resourcesPath || "", "app", "resources", "connector", name)),
+  ].filter(Boolean);
+}
+
+async function copyFirstExistingConnectorBinary(downloadName, destinationPath) {
+  for (const candidate of getBundledConnectorCandidates(downloadName)) {
+    try {
+      await fs.promises.access(candidate, fs.constants.X_OK);
+      await fs.promises.copyFile(candidate, destinationPath);
+      await fs.promises.chmod(destinationPath, 0o755).catch(() => {});
+      console.log("[connector] Using bundled connector:", candidate);
+      return true;
+    } catch {
+      // Try the next packaging/dev path.
+    }
+  }
+  return false;
+}
+
+function createLocalConnectorIdentity() {
+  const host = os.hostname().toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").slice(0, 32) || "machine";
+  return {
+    token: `local-${crypto.randomBytes(24).toString("hex")}`,
+    deviceId: `local-${host}-${crypto.randomBytes(6).toString("hex")}`,
+  };
+}
+
+// Hub URL normalization helpers. Empty input returns "" — callers must treat
+// an empty hub URL as "local-only mode" and skip remote operations.
 function normalizeHubWsUrl(hubUrl) {
-  if (!hubUrl) return "wss://hub.hypercho.com";
+  if (!hubUrl) return "";
   if (hubUrl.startsWith("ws://") || hubUrl.startsWith("wss://")) return hubUrl;
   if (hubUrl.startsWith("https://")) return `wss://${hubUrl.slice("https://".length)}`;
   if (hubUrl.startsWith("http://")) return `ws://${hubUrl.slice("http://".length)}`;
@@ -78,7 +137,7 @@ function normalizeHubWsUrl(hubUrl) {
 }
 
 function normalizeHubHttpUrl(hubUrl) {
-  if (!hubUrl) return "https://hub.hypercho.com";
+  if (!hubUrl) return "";
   if (hubUrl.startsWith("https://") || hubUrl.startsWith("http://")) return hubUrl;
   if (hubUrl.startsWith("wss://")) return `https://${hubUrl.slice("wss://".length)}`;
   if (hubUrl.startsWith("ws://")) return `http://${hubUrl.slice("ws://".length)}`;
@@ -128,8 +187,13 @@ function runExecFile(file, args, options = {}) {
   });
 }
 
-async function installLocalConnectorService({ token, deviceId, hubUrl, jwt }) {
-  if (!token || !deviceId) {
+async function installLocalConnectorService({ token, deviceId, hubUrl, jwt, localOnly } = {}) {
+  const isLocalOnly = Boolean(localOnly) || (!token && !deviceId);
+  const localIdentity = isLocalOnly ? createLocalConnectorIdentity() : null;
+  const resolvedToken = token || localIdentity?.token || "";
+  const resolvedDeviceId = deviceId || localIdentity?.deviceId || "";
+
+  if (!isLocalOnly && (!resolvedToken || !resolvedDeviceId)) {
     throw new Error("Missing device token or device ID for connector install");
   }
 
@@ -140,7 +204,13 @@ async function installLocalConnectorService({ token, deviceId, hubUrl, jwt }) {
 
   const { installDir, binaryPath, envPath, credentialsDir } = getConnectorInstallPaths();
   const normalizedHubUrl = normalizeHubWsUrl(hubUrl);
-  const downloadBase = normalizeHubHttpUrl(appConfig.hub?.url || hubUrl || "https://hub.hypercho.com");
+  const downloadBase = normalizeHubHttpUrl(appConfig.hub?.url || hubUrl);
+  if (!downloadBase) {
+    throw new Error(
+      "Cannot install connector: no hub URL configured. " +
+      "Set appConfig.hub.url (Cloud build) or pass hubUrl explicitly."
+    );
+  }
   const downloadUrl = new URL(`/downloads/${downloadName}`, downloadBase).toString();
 
   await fs.promises.mkdir(installDir, { recursive: true });
@@ -162,64 +232,76 @@ async function installLocalConnectorService({ token, deviceId, hubUrl, jwt }) {
       )).trim();
     } catch { /* no device.id on disk — proceed with install */ }
 
-    if (existingDeviceId && existingDeviceId === deviceId) {
+    if (existingDeviceId && existingDeviceId === resolvedDeviceId) {
       const probe = await fetch("http://127.0.0.1:18790/bridge/health", {
         signal: AbortSignal.timeout(2000),
       });
       if (probe.ok) {
-        return { success: true, installDir, binaryPath, hubUrl: normalizedHubUrl };
+        return { success: true, installDir, binaryPath, hubUrl: normalizedHubUrl, deviceId: resolvedDeviceId, localOnly: isLocalOnly };
       }
     }
   } catch { /* not running or binary missing — proceed with install */ }
 
-  // Prefer locally-built connector (dev build) over hub download
+  // Prefer the bundled connector shipped with the Electron app. This is the
+  // local-first/open-source path and avoids depending on hub downloads.
+  let usedLocalBuild = await copyFirstExistingConnectorBinary(downloadName, binaryPath);
+
+  // In development, allow an explicit local connector build as a fallback.
   const localDevBuild = path.join(os.homedir(), "Code", "hyperclaw-connector", "hyperclaw-connector");
-  let usedLocalBuild = false;
-  try {
-    await fs.promises.access(localDevBuild, fs.constants.X_OK);
-    await fs.promises.copyFile(localDevBuild, binaryPath);
-    await fs.promises.chmod(binaryPath, 0o755).catch(() => {});
-    usedLocalBuild = true;
-    console.log("[connector] Using local dev build:", localDevBuild);
-  } catch { /* no local build, download from hub */ }
+  if (!usedLocalBuild) {
+    try {
+      await fs.promises.access(localDevBuild, fs.constants.X_OK);
+      await fs.promises.copyFile(localDevBuild, binaryPath);
+      await fs.promises.chmod(binaryPath, 0o755).catch(() => {});
+      usedLocalBuild = true;
+      console.log("[connector] Using local dev build:", localDevBuild);
+    } catch { /* no local build, download from hub */ }
+  }
 
   if (!usedLocalBuild) {
+    if (isLocalOnly) {
+      throw new Error("Bundled connector binary was not found. Run npm run connector:build before local-only onboarding.");
+    }
     await downloadFile(downloadUrl, binaryPath);
     await fs.promises.chmod(binaryPath, 0o755).catch(() => {});
   }
 
   const envContent = [
-    `DEVICE_TOKEN=${token}`,
-    `DEVICE_ID=${deviceId}`,
-    `HUB_URL=${normalizedHubUrl}`,
+    `DEVICE_TOKEN=${resolvedToken}`,
+    `DEVICE_ID=${resolvedDeviceId}`,
+    ...(isLocalOnly ? ["HYPERCLAW_LOCAL_ONLY=1"] : []),
+    ...(normalizedHubUrl ? [`HUB_URL=${normalizedHubUrl}`] : []),
     "",
   ].join("\n");
 
-  await fs.promises.writeFile(path.join(installDir, "device.token"), `${token}\n`, "utf8");
-  await fs.promises.writeFile(path.join(installDir, "device.id"), `${deviceId}\n`, "utf8");
-  await fs.promises.writeFile(path.join(credentialsDir, "device.token"), `${token}\n`, "utf8");
-  await fs.promises.writeFile(path.join(credentialsDir, "device.id"), `${deviceId}\n`, "utf8");
+  await fs.promises.writeFile(path.join(installDir, "device.token"), `${resolvedToken}\n`, "utf8");
+  await fs.promises.writeFile(path.join(installDir, "device.id"), `${resolvedDeviceId}\n`, "utf8");
+  await fs.promises.writeFile(path.join(credentialsDir, "device.token"), `${resolvedToken}\n`, "utf8");
+  await fs.promises.writeFile(path.join(credentialsDir, "device.id"), `${resolvedDeviceId}\n`, "utf8");
   await fs.promises.writeFile(envPath, envContent, "utf8");
 
   await runExecFile(binaryPath, ["install"], {
     env: {
       ...process.env,
-      DEVICE_TOKEN: token,
-      DEVICE_ID: deviceId,
-      HUB_URL: normalizedHubUrl,
+      DEVICE_TOKEN: resolvedToken,
+      DEVICE_ID: resolvedDeviceId,
+      ...(isLocalOnly ? { HYPERCLAW_LOCAL_ONLY: "1" } : {}),
+      ...(normalizedHubUrl ? { HUB_URL: normalizedHubUrl } : {}),
     },
     windowsHide: true,
   });
 
-  // Write hub-config.json so subsequent Electron restarts auto-load it
-  // Use the HTTP URL — getHubInfo() feeds hubCommandFromElectron which makes HTTP requests
+  // Write hub-config.json so subsequent Electron restarts auto-load it.
+  // Use the HTTP URL — getHubInfo() feeds hubCommandFromElectron which makes
+  // HTTP requests. In local-only mode the URL stays empty.
   const hubConfigPath = path.join(os.homedir(), ".hyperclaw", "hub-config.json");
-  const httpHubUrl = normalizeHubHttpUrl(hubUrl || "https://hub.hypercho.com");
+  const httpHubUrl = normalizeHubHttpUrl(hubUrl);
   const hubConfigData = {
-    enabled: true,
+    enabled: !isLocalOnly && !!httpHubUrl,
     url: httpHubUrl,
-    deviceId,
+    deviceId: resolvedDeviceId,
     jwt: jwt || appConfig.hub?.jwt || "",
+    localOnly: isLocalOnly,
   };
   await fs.promises.writeFile(hubConfigPath, JSON.stringify(hubConfigData, null, 2), "utf8");
 
@@ -231,6 +313,8 @@ async function installLocalConnectorService({ token, deviceId, hubUrl, jwt }) {
     installDir,
     binaryPath,
     hubUrl: normalizedHubUrl,
+    deviceId: resolvedDeviceId,
+    localOnly: isLocalOnly,
   };
 }
 
@@ -285,9 +369,14 @@ if (!gotTheLock) {
 }
 
 // Configuration
+//
+// Defaults are local-only so a fresh checkout of the open-source repo runs
+// against http://localhost:1000 without contacting any remote service. The
+// official Hyperclaw Cloud build overrides `mode` and `remoteUrl` via
+// electron/app-config.json before packaging.
 let appConfig = {
   mode: "local",
-  remoteUrl: "https://claw.hypercho.com",
+  remoteUrl: "",
   localUrl: "http://localhost:1000",
   gateway: {
     host: "127.0.0.1",
@@ -505,11 +594,31 @@ function fetchImageFromUrl(url) {
 }
 
 function createTray() {
-  // Use remote URL for tray icon
-  const remoteIconUrl = "https://claw.hypercho.com/tray.png";
-
-  // Try to fetch icon from remote URL first
+  // Tray icon is fetched from the configured remote URL when available, or
+  // falls back to the bundled local PNG. In Community Edition `remoteUrl` is
+  // empty so we go straight to the bundled icon.
   const size = process.platform === "win32" ? 16 : 22;
+  const remoteIconUrl = appConfig.remoteUrl
+    ? `${appConfig.remoteUrl.replace(/\/$/, "")}/tray.png`
+    : "";
+
+  if (!remoteIconUrl) {
+    // No remote URL configured (Community Edition default). Use the
+    // bundled fallback icon directly without a network round-trip.
+    const fallbackIcon = createFallbackIcon();
+    if (process.platform === "win32") {
+      try {
+        const pngBuffer = fallbackIcon.toPNG();
+        const convertedFallback = nativeImage.createFromBuffer(pngBuffer);
+        createTrayWithIcon(convertedFallback);
+      } catch {
+        createTrayWithIcon(fallbackIcon);
+      }
+    } else {
+      createTrayWithIcon(fallbackIcon);
+    }
+    return;
+  }
 
   fetchImageFromUrl(remoteIconUrl)
     .then((loadedIcon) => {
@@ -1038,6 +1147,24 @@ function createWindow() {
     }
   });
 }
+
+// ─── IPC Handlers: Local connector bearer token ─────────────────────────────
+
+// Reads ~/.hyperclaw/connector.token. The connector creates this file at
+// startup with mode 0600. Renderer uses it to authenticate /bridge calls.
+// Returns "" when the file isn't present yet (rollout window).
+ipcMain.handle("connector:get-token", async () => {
+  const tokenPath = path.join(os.homedir(), ".hyperclaw", "connector.token");
+  try {
+    const data = await fs.promises.readFile(tokenPath, "utf8");
+    return data.trim();
+  } catch (err) {
+    if (err && err.code !== "ENOENT") {
+      console.warn("[connector-token] read failed:", err.message);
+    }
+    return "";
+  }
+});
 
 // ─── IPC Handlers: Window Controls ──────────────────────────────────────────
 

@@ -173,8 +173,8 @@ export default function DeviceSetup({ onComplete, embedded }: DeviceSetupProps) 
         // Ensure gateway is connected in hub mode
         if (!gatewayConnection.wsUrl) {
           const token = await getUserToken();
-          if (token) {
-            const hubUrl = process.env.NEXT_PUBLIC_HUB_API_URL || "https://hub.hypercho.com";
+          const hubUrl = process.env.NEXT_PUBLIC_HUB_API_URL || "";
+          if (token && hubUrl) {
             connectGatewayWs(hubUrl, { token, hubMode: true });
           }
         }
@@ -217,8 +217,11 @@ export default function DeviceSetup({ onComplete, embedded }: DeviceSetupProps) 
     };
   }, [step, pairing, onComplete]);
 
-  const installCommand = pairing
-    ? `curl -fsSL https://hub.hypercho.com/downloads/install.sh | bash -s -- --token ${pairing.token} --device-id ${pairing.deviceId}`
+  // Pull the hub URL from env so the installer command points at whichever
+  // hub the build is configured for. Empty in Community Edition.
+  const setupHubUrl = process.env.NEXT_PUBLIC_HUB_API_URL || "";
+  const installCommand = pairing && setupHubUrl
+    ? `curl -fsSL ${setupHubUrl.replace(/\/$/, "")}/downloads/install.sh | bash -s -- --token ${pairing.token} --device-id ${pairing.deviceId} --hub-url ${setupHubUrl}`
     : "";
 
   const copyCommand = () => {
