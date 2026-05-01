@@ -91,9 +91,8 @@ cd HyperClaw
 # 1. Install dependencies
 npm install
 
-# 2. Copy the env template and generate a session secret
+# 2. Copy the env template
 cp .env.example .env.local
-echo "NEXTAUTH_SECRET=$(openssl rand -base64 32)" >> .env.local
 
 # 3. Start the dev server
 npm run dev
@@ -139,7 +138,7 @@ Hyperclaw reads everything from `.env.local`. The full list (with explanations o
 
 | Variable | When you need it |
 |---|---|
-| `NEXTAUTH_SECRET` | **Always.** Signs session cookies. `openssl rand -base64 32`. |
+| `NEXTAUTH_SECRET` | **Cloud Edition.** Local builds use a built-in default; override with `openssl rand -base64 32` for a unique secret. |
 | `NEXTAUTH_URL` | Always. Defaults to `http://localhost:1000`. |
 | `HYPERCLAW_ALLOW_NETWORK_LOGIN` | Leave `false` unless you intentionally expose local credentials on a trusted private network. |
 | `OPENAI_API_KEY` | Only if you use the in-app text autosuggest / enhance features. |
