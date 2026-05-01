@@ -1,14 +1,53 @@
 import { z } from "zod";
 
+const LOCAL_NEXTAUTH_URL = "http://localhost:1000";
+const LOCAL_NEXTAUTH_SECRET = "hyperclaw-local-community-secret";
+const CLOUD_BUILD_FLAVORS = new Set(["cloud", "commercial", "remote"]);
+
+const blankToUndefined = (value: unknown) =>
+  typeof value === "string" && value.trim() === "" ? undefined : value;
+
+const optionalUrlWithDefault = (fallback: string) =>
+  z.preprocess(
+    blankToUndefined,
+    z.string().url("NEXTAUTH_URL must be a valid URL").optional().default(fallback)
+  );
+
+const optionalSecretWithDefault = (fallback: string) =>
+  z.preprocess(
+    blankToUndefined,
+    z.string().min(1, "NEXTAUTH_SECRET is required").optional().default(fallback)
+  );
+
+const requiredUrl = z.preprocess(
+  blankToUndefined,
+  z.string({ required_error: "Required" }).url("NEXTAUTH_URL must be a valid URL")
+);
+
+const requiredSecret = z.preprocess(
+  blankToUndefined,
+  z.string({ required_error: "Required" }).min(1, "NEXTAUTH_SECRET is required")
+);
+
+function isCloudRuntimeEnv(rawEnv: NodeJS.ProcessEnv): boolean {
+  const flavor = String(
+    rawEnv.BUILD_FLAVOR || rawEnv.HYPERCLAW_BUILD_FLAVOR || ""
+  ).toLowerCase();
+
+  return (
+    CLOUD_BUILD_FLAVORS.has(flavor) ||
+    !!rawEnv.HYPERCLAW_REMOTE_URL ||
+    !!rawEnv.NEXT_PUBLIC_HUB_API_URL ||
+    !!rawEnv.NEXT_PUBLIC_HUB_URL ||
+    !!rawEnv.NEXT_PUBLIC_HYPERCHO_API
+  );
+}
+
 /**
  * Server-side env validation. Only the vars the app truly cannot start without
  * are marked required — the rest are optional with sensible defaults.
  */
-const serverSchema = z.object({
-  // NextAuth (required — auth breaks without these)
-  NEXTAUTH_URL: z.string().url("NEXTAUTH_URL must be a valid URL"),
-  NEXTAUTH_SECRET: z.string().min(1, "NEXTAUTH_SECRET is required"),
-
+const baseServerSchema = z.object({
   // Google OAuth (optional — app works without Google login)
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
@@ -37,6 +76,23 @@ const serverSchema = z.object({
   NODE_ENV: z.enum(["development", "production", "test"]).optional().default("development"),
 });
 
+const localServerSchema = baseServerSchema.extend({
+  // Community/local builds can run in guest mode. The fallback only protects
+  // NextAuth internals if an auth route is touched during local development.
+  NEXTAUTH_URL: optionalUrlWithDefault(LOCAL_NEXTAUTH_URL),
+  NEXTAUTH_SECRET: optionalSecretWithDefault(LOCAL_NEXTAUTH_SECRET),
+});
+
+const cloudServerSchema = baseServerSchema.extend({
+  // Cloud builds issue real session cookies, so these must be explicit.
+  NEXTAUTH_URL: requiredUrl,
+  NEXTAUTH_SECRET: requiredSecret,
+});
+
+const serverSchema = isCloudRuntimeEnv(process.env)
+  ? cloudServerSchema
+  : localServerSchema;
+
 export type ServerEnv = z.infer<typeof serverSchema>;
 
 let _validatedEnv: ServerEnv | null = null;
@@ -52,6 +108,16 @@ export function validateEnv(): ServerEnv {
       .join("\n");
     console.error(`\n❌ Environment validation failed:\n${formatted}\n`);
     throw new Error(`Missing or invalid environment variables:\n${formatted}`);
+  }
+
+  // Mirror defaulted values back into process.env so libraries that read it
+  // directly (NextAuth, JWT helpers, etc.) see the same fallback we computed.
+  // Only writes keys that were genuinely empty — never overrides explicit env.
+  for (const [key, value] of Object.entries(result.data)) {
+    const existing = process.env[key];
+    if ((existing === undefined || existing === "") && typeof value === "string" && value !== "") {
+      process.env[key] = value;
+    }
   }
 
   _validatedEnv = result.data;

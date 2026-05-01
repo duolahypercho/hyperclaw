@@ -121,7 +121,6 @@
     "@types/three": "^0.180.0",
     "@upstash/ratelimit": "^0.4.4",
     "@upstash/redis": "^1.34.3",
-    "@vercel/analytics": "^1.6.1",
     "@xyflow/react": "^12.10.2",
     "ai": "^2.2.37",
     "arctic": "^3.6.0",

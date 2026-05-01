@@ -1,7 +1,8 @@
-import { NextPage } from "next";
+import { GetServerSideProps, NextPage } from "next";
 import Head from "next/head";
 import HomeContent from "$/components/Landing/HomeContent";
 import { getLayout } from "$/layouts/AuthLayout";
+import { isHubConfigured } from "$/lib/hub-direct";
 
 const Index: NextPage & { getLayout?: (page: NextPage) => JSX.Element } = () => {
   return (
@@ -21,3 +22,16 @@ const Index: NextPage & { getLayout?: (page: NextPage) => JSX.Element } = () => 
 Index.getLayout = getLayout;
 
 export default Index;
+
+export const getServerSideProps: GetServerSideProps = async () => {
+  if (!isHubConfigured()) {
+    return {
+      redirect: {
+        destination: "/dashboard",
+        permanent: false,
+      },
+    };
+  }
+
+  return { props: {} };
+};

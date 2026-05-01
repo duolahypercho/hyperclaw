@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter } from "next/router";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -25,6 +25,7 @@ import {
 const STATE_DOT: Record<ConnectorState["state"], string> = {
   unauthenticated: "bg-red-500",
   "no-device": "bg-zinc-500",
+  "no-local-connector": "bg-yellow-500",
   connecting: "bg-blue-500",
   "permanently-failed": "bg-red-500",
   "hub-disconnected": "bg-red-500",
@@ -39,6 +40,7 @@ const STATE_DOT: Record<ConnectorState["state"], string> = {
 const STATE_ANIMATE: Record<ConnectorState["state"], boolean> = {
   unauthenticated: false,
   "no-device": false,
+  "no-local-connector": false,
   connecting: true,
   "permanently-failed": false,
   "hub-disconnected": true,
@@ -62,6 +64,8 @@ function tooltipText(status: ConnectorState): string {
       return "Session expired — please sign in again";
     case "no-device":
       return "No connector paired";
+    case "no-local-connector":
+      return "Local connector not running — install via the hyperclaw repo";
     case "connecting":
       return "Connecting to hub…";
     case "permanently-failed":
@@ -102,7 +106,19 @@ export const ConnectorStatusIndicator: React.FC<ConnectorStatusIndicatorProps> =
           actionLabel: "Pair a device",
           onAction: () => {
             setOpen(false);
-            router.push("/devices");
+            router.push("/Tool/Devices");
+          },
+        };
+      case "no-local-connector":
+        return {
+          actionLabel: "Install local connector",
+          onAction: () => {
+            setOpen(false);
+            window.open(
+              "https://github.com/duolahypercho/HyperClaw#local-connector",
+              "_blank",
+              "noopener,noreferrer"
+            );
           },
         };
       case "permanently-failed":
@@ -120,7 +136,7 @@ export const ConnectorStatusIndicator: React.FC<ConnectorStatusIndicatorProps> =
           actionLabel: "Open Devices",
           onAction: () => {
             setOpen(false);
-            router.push("/devices");
+            router.push("/Tool/Devices");
           },
         };
       default:
@@ -180,6 +196,20 @@ export const ConnectorStatusIndicator: React.FC<ConnectorStatusIndicatorProps> =
         <StatusRow label="Device" value={<DeviceValue status={status} />} />
         <StatusRow label="Probe" value={<ProbeValue status={status} />} />
 
+        {status.state === "no-local-connector" && (
+          <div className="rounded-md border border-dashed border-border bg-muted/40 p-2 text-[11px] leading-relaxed text-muted-foreground">
+            <div className="font-medium text-foreground mb-1">
+              Local connector not running
+            </div>
+            Run the connector daemon on this machine to enable AI runtimes:
+            <pre className="mt-1 whitespace-pre-wrap font-mono text-[10px]">
+{`git clone https://github.com/duolahypercho/HyperClaw
+cd HyperClaw/connector
+go run ./cmd`}
+            </pre>
+          </div>
+        )}
+
         <Button
           variant="outline"
           size="sm"
@@ -218,6 +248,10 @@ function HubValue({ status }: { status: ConnectorState }) {
     ? "Online"
     : status.state === "unauthenticated"
     ? "Session expired"
+    : status.state === "no-local-connector"
+    ? "Not configured"
+    : status.state === "no-device"
+    ? "No device"
     : status.state === "permanently-failed"
     ? "Failed"
     : status.state === "connecting"
@@ -225,6 +259,8 @@ function HubValue({ status }: { status: ConnectorState }) {
     : "Reconnecting…";
   const color = hubUp
     ? "bg-emerald-500"
+    : status.state === "no-local-connector" || status.state === "no-device"
+    ? "bg-zinc-500"
     : status.state === "connecting"
     ? "bg-blue-500"
     : "bg-red-500";
@@ -239,6 +275,9 @@ function HubValue({ status }: { status: ConnectorState }) {
 function DeviceValue({ status }: { status: ConnectorState }) {
   if (status.state === "no-device") {
     return <span className="text-muted-foreground">Not paired</span>;
+  }
+  if (status.state === "no-local-connector") {
+    return <span className="text-muted-foreground">Not installed</span>;
   }
   if (status.state === "unauthenticated") {
     return <span className="text-muted-foreground">—</span>;

@@ -70,6 +70,11 @@ function buildCSP() {
 const nextConfig = {
   reactStrictMode: true,
   transpilePackages: ["@mui/material", "geist", "ai", "@ai-sdk/react"],
+  // Required in Next 14 so instrumentation.ts (which seeds default
+  // NEXTAUTH_SECRET for Community Edition) actually runs at server startup.
+  experimental: {
+    instrumentationHook: true,
+  },
   async redirects() {
     return [];
   },

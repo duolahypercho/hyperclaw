@@ -34,6 +34,7 @@ import { SITE_URL } from "../lib/site-url";
 import { SEOProv, type SEOSchema } from "@OS/Provider/SEOProv";
 import { InteractApp } from "@OS/InteractApp";
 import { useEnsembleToolSchema } from "$/components/ensemble/shared/toolSchema";
+import { isHubConfigured } from "$/lib/hub-direct";
 
 import {
   ProjectsProvider,
@@ -949,7 +950,7 @@ const Dashboard = () => {
   const { status } = useUser();
   const appSchema = useEnsembleToolSchema("Dashboard");
 
-  if (status !== "authenticated") {
+  if (isHubConfigured() && status !== "authenticated") {
     return <Loading text="Loading Hyperclaw..." />;
   }
 
