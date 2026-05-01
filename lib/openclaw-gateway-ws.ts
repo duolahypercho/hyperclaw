@@ -1091,6 +1091,11 @@ export const gatewayConnection = {
 
   startPing() {
     this.stopPing();
+    // Direct OpenClaw gateway connections use a request-only protocol after
+    // handshake. Only the hub relay supports this application-level ping/pong.
+    if (!this.hubMode) {
+      return;
+    }
     this._lastPong = Date.now();
     this._pingTimer = setInterval(() => {
       if (Date.now() - this._lastPong > this._PONG_TIMEOUT) {
