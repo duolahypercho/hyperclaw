@@ -203,6 +203,21 @@ function getHubUrl(path: string): string {
   return `${HUB_API_URL}${path}`;
 }
 
+export function isHubConfigured(): boolean {
+  return HUB_API_URL !== "";
+}
+
+function makeHubUnavailableResponse(): Response {
+  return new Response(
+    JSON.stringify({ error: "Hub not configured (Community Edition)" }),
+    {
+      status: 503,
+      statusText: "Hub Not Configured",
+      headers: { "Content-Type": "application/json" },
+    }
+  );
+}
+
 function buildHubHeaders(
   token: string,
   headers?: HeadersInit,
@@ -239,6 +254,7 @@ export async function getActiveDeviceId(
   if (_deviceCache && Date.now() - _deviceCache.checkedAt < DEVICE_CACHE_TTL) {
     return _deviceCache.id;
   }
+  if (!isHubConfigured()) return null;
   const jwt = token || (await getUserToken());
   if (!jwt) return null;
 
@@ -318,7 +334,7 @@ export function isLocalBridgeTimeoutError(error: unknown): boolean {
   return name === "AbortError" || name === "TimeoutError";
 }
 
-async function probeLocalBridgeHealth(): Promise<boolean> {
+export async function probeLocalBridgeHealth(): Promise<boolean> {
   try {
     const res = await fetch(`${LOCAL_BRIDGE_BASE_URL}/bridge/health`, {
       signal: AbortSignal.timeout(LOCAL_BRIDGE_HEALTH_TIMEOUT_MS),
@@ -736,6 +752,7 @@ export async function hubFetch(
   path: string,
   options: RequestInit = {}
 ): Promise<Response> {
+  if (!isHubConfigured()) return makeHubUnavailableResponse();
   const token = await getUserToken();
   const method = (options.method || "GET").toUpperCase();
 

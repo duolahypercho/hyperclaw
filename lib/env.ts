@@ -110,6 +110,16 @@ export function validateEnv(): ServerEnv {
     throw new Error(`Missing or invalid environment variables:\n${formatted}`);
   }
 
+  // Mirror defaulted values back into process.env so libraries that read it
+  // directly (NextAuth, JWT helpers, etc.) see the same fallback we computed.
+  // Only writes keys that were genuinely empty — never overrides explicit env.
+  for (const [key, value] of Object.entries(result.data)) {
+    const existing = process.env[key];
+    if ((existing === undefined || existing === "") && typeof value === "string" && value !== "") {
+      process.env[key] = value;
+    }
+  }
+
   _validatedEnv = result.data;
   return _validatedEnv;
 }

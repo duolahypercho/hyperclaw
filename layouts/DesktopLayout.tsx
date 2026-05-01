@@ -13,6 +13,7 @@ import DoctorTerminalPanel from "$/components/Tool/DoctorTerminal/DoctorTerminal
 import { useSession } from "next-auth/react";
 import { useEnsembleAgents } from "$/components/ensemble";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
+import { useIsElectron } from "$/hooks/useIsElectron";
 
 
 // Memoized wrapper to prevent re-renders - following your existing pattern
@@ -43,6 +44,7 @@ const DesktopLayout = ({ children }: any) => {
   const { hasCompletedTour } = useGuidance();
   const ensembleAgents = useEnsembleAgents();
   const onboardingDone = hasCompletedTour("copanion-onboarding");
+  const isElectron = useIsElectron();
 
   useEffect(() => {
     const handler = (e: CustomEvent) => setNavExpanded(e.detail.expanded as boolean);
@@ -104,7 +106,9 @@ const DesktopLayout = ({ children }: any) => {
         <Navbar />
         {/* Content offset by sidebar width + titlebar height */}
         <div
-          className="flex-1 flex flex-row overflow-hidden pt-8 transition-[padding-left] duration-300 ease-in-out"
+          className={`flex-1 flex flex-row overflow-hidden transition-[padding-left] duration-300 ease-in-out ${
+            isElectron ? "pt-8" : ""
+          }`}
           style={{ paddingLeft: navExpanded ? NAV_EXPANDED_W : NAV_COLLAPSED_W }}
         >
           <MemoizedChildren>

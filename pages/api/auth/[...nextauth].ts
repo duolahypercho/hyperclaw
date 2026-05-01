@@ -7,6 +7,16 @@ import Jwt from "jsonwebtoken";
 import { signToken } from "$/lib/shared-auth";
 import logger from "$/lib/logger";
 
+// Module-scoped one-shot guard: authOptions is rebuilt on every NextAuth
+// request (so it can read req.url for the JWT update flow), but the absence
+// of Google OAuth credentials is a startup configuration concern — warn once.
+let _googleDisabledLogged = false;
+function warnGoogleDisabledOnce() {
+  if (_googleDisabledLogged) return;
+  _googleDisabledLogged = true;
+  logger.warn("Google OAuth credentials not configured — Google sign-in disabled");
+}
+
 const isLoopbackHost = (hostHeader: string | undefined): boolean => {
   const header = hostHeader || "";
   const host = header.startsWith("[")
@@ -102,7 +112,7 @@ export const authOptions = (req: any, res: any) => {
       })
     );
   } else {
-    logger.warn("Google OAuth credentials not configured — Google sign-in disabled");
+    warnGoogleDisabledOnce();
   }
 
   const authOption: NextAuthOptions = {

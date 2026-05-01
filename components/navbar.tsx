@@ -25,6 +25,7 @@ import { AgentGlyph, StatusDot, normalizeAgentState } from "$/components/ensembl
 import { useAgentStatus } from "$/components/ensemble/hooks";
 import { normalizeRuntimeKind, type EnsembleAgent } from "$/components/ensemble/agents";
 import { useConnectorStatus } from "$/hooks/useConnectorStatus";
+import { useIsElectron } from "$/hooks/useIsElectron";
 
 export const NAV_COLLAPSED_W = 48;   // px
 export const NAV_EXPANDED_W  = 220;  // px
@@ -249,6 +250,7 @@ const Navbar = () => {
   const { userInfo, membership } = useUser();
   const { agents } = useHyperclawContext();
   const { status: connectorStatus } = useConnectorStatus();
+  const isElectron = useIsElectron();
   const { pathname } = Router;
 
   const [expanded, setExpanded] = useState(false);
@@ -393,7 +395,10 @@ const Navbar = () => {
 
   return (
     <motion.div
-      className="fixed left-0 top-8 bottom-0 z-50 border-r border-l-0 border-t-0 border-b-0 border-solid border-border bg-secondary backdrop-blur-xl cursor-default overflow-hidden"
+      className={cn(
+        "fixed left-0 bottom-0 z-50 border-r border-l-0 border-t-0 border-b-0 border-solid border-border bg-secondary backdrop-blur-xl cursor-default overflow-hidden",
+        isElectron ? "top-8" : "top-0"
+      )}
       animate={{ width: expanded ? NAV_EXPANDED_W : NAV_COLLAPSED_W }}
       initial={false}
       transition={{ type: "spring", stiffness: 350, damping: 32 }}

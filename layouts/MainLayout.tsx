@@ -31,12 +31,18 @@ import PricingModal from "$/components/Navigation/PricingModal";
 import { DevicesProvider, useSharedDevices } from "$/Providers/DevicesProv";
 import GuidedSetup from "$/components/Onboarding/GuidedSetup";
 import { dashboardState } from "$/lib/dashboard-state";
-import { isDeviceUnreachable } from "$/lib/hub-direct";
+import { isDeviceUnreachable, isHubConfigured } from "$/lib/hub-direct";
+
+// Build-time constant: stable across the app's lifetime. When no hub URL is
+// configured we are in Community/local-only mode — there is no remote hub to
+// authenticate against, so the dashboard runs as a guest regardless of whether
+// the local connector daemon is reachable.
+const COMMUNITY_LOCAL_MODE = !isHubConfigured();
 
 const MainLayout = ({ children }: any) => {
   const { status } = useUser();
   return (
-    <DevicesProvider authReady={status === "authenticated"}>
+    <DevicesProvider authReady={COMMUNITY_LOCAL_MODE || status === "authenticated"}>
       <MainLayoutInner>{children}</MainLayoutInner>
     </DevicesProvider>
   );
@@ -59,10 +65,20 @@ const MainLayoutInner = ({ children }: any) => {
     );
   })();
   const [localBridgeReadyForGuest, setLocalBridgeReadyForGuest] = useState(false);
-  const [localBridgeProbeComplete, setLocalBridgeProbeComplete] = useState(false);
-  const canUseGuestLocalMode = hasElectronLocalBootstrap || localBridgeReadyForGuest;
+  const [localBridgeProbeComplete, setLocalBridgeProbeComplete] = useState(
+    COMMUNITY_LOCAL_MODE,
+  );
+  // In Community mode the dashboard always runs as a guest — the connector
+  // probe only updates the indicator UI, never gates rendering. In Cloud mode
+  // we still require either Electron bootstrap or a reachable local bridge to
+  // skip the login redirect.
+  const canUseGuestLocalMode =
+    COMMUNITY_LOCAL_MODE || hasElectronLocalBootstrap || localBridgeReadyForGuest;
   const isProbingLocalGuestMode =
-    !hasElectronLocalBootstrap && canProbeLocalBridgeForGuest && !localBridgeProbeComplete;
+    !COMMUNITY_LOCAL_MODE &&
+    !hasElectronLocalBootstrap &&
+    canProbeLocalBridgeForGuest &&
+    !localBridgeProbeComplete;
   const [guidedSetupComplete, setGuidedSetupComplete] = useState(() => {
     if (typeof window === "undefined") return true;
     // Try in-memory cache first, then localStorage backup (cache may not be hydrated yet)
@@ -121,10 +137,20 @@ const MainLayoutInner = ({ children }: any) => {
       signal: AbortSignal.timeout(800),
     })
       .then((res) => {
-        if (!cancelled) setLocalBridgeReadyForGuest(res.ok);
+        if (!cancelled) {
+          setLocalBridgeReadyForGuest(res.ok);
+          if (COMMUNITY_LOCAL_MODE && !res.ok) {
+            setGuidedSetupComplete(false);
+          }
+        }
       })
       .catch(() => {
-        if (!cancelled) setLocalBridgeReadyForGuest(false);
+        if (!cancelled) {
+          setLocalBridgeReadyForGuest(false);
+          if (COMMUNITY_LOCAL_MODE) {
+            setGuidedSetupComplete(false);
+          }
+        }
       })
       .finally(() => {
         if (!cancelled) setLocalBridgeProbeComplete(true);
@@ -136,11 +162,25 @@ const MainLayoutInner = ({ children }: any) => {
   }, [canProbeLocalBridgeForGuest, hasElectronLocalBootstrap]);
 
 
-  const showFullPageLoading =
-    isRedirecting ||
-    (status === "unauthenticated" && isProbingLocalGuestMode) ||
-    (!hasBeenAuthenticatedRef.current && (isLoading || status === "loading"));
+  // Backstop: never block on the full-page loader for more than 5s. If any
+  // upstream provider hangs, the user still gets a usable UI (or a redirect)
+  // instead of an indefinite "Loading Hyperclaw…".
+  const [loadingBackstopElapsed, setLoadingBackstopElapsed] = useState(false);
+  useEffect(() => {
+    const id = setTimeout(() => setLoadingBackstopElapsed(true), 5_000);
+    return () => clearTimeout(id);
+  }, []);
+
+  // Community mode: never block rendering on auth state. There is no remote
+  // session to wait for, and useAuthGuard cannot redirect anywhere useful.
+  const showFullPageLoading = COMMUNITY_LOCAL_MODE
+    ? false
+    : !loadingBackstopElapsed &&
+      (isRedirecting ||
+        (status === "unauthenticated" && isProbingLocalGuestMode) ||
+        (!hasBeenAuthenticatedRef.current && (isLoading || status === "loading")));
   const showAppWithLayout =
+    COMMUNITY_LOCAL_MODE ||
     status === "authenticated" ||
     (hasBeenAuthenticatedRef.current && status === "loading") ||
     (status === "unauthenticated" && canUseGuestLocalMode);

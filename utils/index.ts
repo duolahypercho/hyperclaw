@@ -6,6 +6,11 @@ import { FieldConfig, GroupFieldConfig, SchemaConfig } from "@/types/form";
 const base_url = process.env.NEXT_PUBLIC_URL || "http://localhost:1000";
 const CLOUD_FRONT_URL = process.env.NEXT_PUBLIC_CLOUD_FRONT_URL || "";
 
+// Static placeholder used when no real media is available. Picking the local
+// favicon (always shipped with the dashboard) avoids 404/500s from <Image>
+// requests for relative paths like "/1" when CLOUD_FRONT_URL is unset.
+const MEDIA_PLACEHOLDER = "/favicon-32x32.ico";
+
 export const getMediaUrl = (path?: string) => {
   if (path === "hypercho logo") {
     return "/Logopic.png";
@@ -13,13 +18,28 @@ export const getMediaUrl = (path?: string) => {
   if (path === "hypercho banner") {
     return "/hypercho_banner.avif";
   }
-  if (path && path.startsWith("https://")) {
+  if (!path || typeof path !== "string") {
+    return MEDIA_PLACEHOLDER;
+  }
+  // "1" is a legacy sentinel for "no profile picture" used by older user
+  // records — never a real media path.
+  if (path === "1") {
+    return MEDIA_PLACEHOLDER;
+  }
+  if (path.startsWith("https://") || path.startsWith("http://") || path.startsWith("data:")) {
     return path;
   }
-  if (path && typeof path === "string") {
-    return `${CLOUD_FRONT_URL}${path}`;
+  // Locally-served asset under /public.
+  if (path.startsWith("/")) {
+    return path;
   }
-  return "/";
+  // Relative path that needs a CDN prefix. Without CLOUD_FRONT_URL, prepending
+  // "" produces a same-origin URL like /1 that the Next.js image loader cannot
+  // resolve. Fall back to the placeholder instead.
+  if (!CLOUD_FRONT_URL) {
+    return MEDIA_PLACEHOLDER;
+  }
+  return `${CLOUD_FRONT_URL}${path}`;
 };
 
 export const absoluteURL = (path: string) => {

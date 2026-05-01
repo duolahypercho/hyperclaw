@@ -7,7 +7,12 @@ import {
   resetGatewayConnection,
   type ConnectorHealth,
 } from "$/lib/openclaw-gateway-ws";
-import { hubFetch, isAuthExpired } from "$/lib/hub-direct";
+import {
+  hubFetch,
+  isAuthExpired,
+  isHubConfigured,
+  probeLocalBridgeHealth,
+} from "$/lib/hub-direct";
 
 // Mirrors the status union in components/Tool/Devices/index.tsx STATUS_CONFIG.
 export type DeviceStatus =
@@ -22,6 +27,8 @@ export type ConnectorState =
   | { state: "unauthenticated" }
   // No devices registered on the account.
   | { state: "no-device" }
+  // Community/local mode: no hub configured and no local connector reachable.
+  | { state: "no-local-connector" }
   // Device exists but dashboard→hub WS is not open yet.
   | { state: "connecting" }
   // WS dropped, reconnect loop exhausted all attempts.
@@ -48,6 +55,8 @@ interface HubDevice {
 const DEVICE_POLL_MS = 30_000;
 const PROBE_INTERVAL_MS = 45_000;
 const PROBE_TIMEOUT_MS = 8_000;
+const LOCAL_BRIDGE_PROBE_INTERVAL_MS = 5_000;
+const LOCAL_DEVICE_NAME = "Local connector";
 
 async function fetchDevices(): Promise<HubDevice[] | null> {
   try {
@@ -77,6 +86,10 @@ interface UseConnectorStatusResult {
   retry: () => void;
 }
 
+// Build-time constant: stable across the app's lifetime, so branching effects
+// on it does not violate hook ordering rules.
+const HUB_CONFIGURED = isHubConfigured();
+
 export function useConnectorStatus(): UseConnectorStatusResult {
   const [hubConnected, setHubConnected] = useState(
     () => getGatewayConnectionState().connected
@@ -99,8 +112,10 @@ export function useConnectorStatus(): UseConnectorStatusResult {
     };
   }, []);
 
-  // Subscribe to WS connection state.
+  // Subscribe to WS connection state. (Hub mode only — local mode never opens
+  // the gateway WS, but the subscription is a no-op in that case.)
   useEffect(() => {
+    if (!HUB_CONFIGURED) return;
     return subscribeGatewayConnection(() => {
       const s = getGatewayConnectionState();
       if (!mountedRef.current) return;
@@ -109,6 +124,7 @@ export function useConnectorStatus(): UseConnectorStatusResult {
   }, []);
 
   useEffect(() => {
+    if (!HUB_CONFIGURED) return;
     const handlePermanentlyFailed = () => {
       if (!mountedRef.current) return;
       setPermanentlyFailed(true);
@@ -119,21 +135,42 @@ export function useConnectorStatus(): UseConnectorStatusResult {
     };
   }, []);
 
-  // Poll device list.
+  // Poll device list (hub mode) OR probe local bridge health (community mode).
   const refreshDevices = useCallback(async () => {
-    const list = await fetchDevices();
+    if (HUB_CONFIGURED) {
+      const list = await fetchDevices();
+      if (!mountedRef.current) return;
+      setDevices(list);
+      return;
+    }
+    // Community local mode: synthesize a single "device" from local bridge probe.
+    const started = Date.now();
+    const ok = await probeLocalBridgeHealth();
     if (!mountedRef.current) return;
-    setDevices(list);
+    setDevices(
+      ok ? [{ id: "local", name: LOCAL_DEVICE_NAME, status: "online" }] : []
+    );
+    setProbe({
+      healthy: ok,
+      health: null,
+      error: ok ? null : "Local connector unreachable",
+      ms: Date.now() - started,
+      at: Date.now(),
+    });
   }, []);
 
   useEffect(() => {
     refreshDevices();
-    const id = setInterval(refreshDevices, DEVICE_POLL_MS);
+    const interval = HUB_CONFIGURED
+      ? DEVICE_POLL_MS
+      : LOCAL_BRIDGE_PROBE_INTERVAL_MS;
+    const id = setInterval(refreshDevices, interval);
     return () => clearInterval(id);
   }, [refreshDevices]);
 
-  // Periodically probe connector/gateway health when hub WS is up.
+  // Hub-mode-only: periodically probe connector/gateway health when hub WS is up.
   useEffect(() => {
+    if (!HUB_CONFIGURED) return;
     if (!hubConnected) {
       setProbe((p) => ({ ...p, healthy: null, health: null, error: null }));
       return;
@@ -166,19 +203,42 @@ export function useConnectorStatus(): UseConnectorStatusResult {
   }, [hubConnected]);
 
   const retry = useCallback(() => {
-    resetGatewayConnection();
-    setPermanentlyFailed(false);
+    if (HUB_CONFIGURED) {
+      resetGatewayConnection();
+      setPermanentlyFailed(false);
+    }
     refreshDevices();
   }, [refreshDevices]);
 
-  const status = deriveStatus({
-    hubConnected,
-    permanentlyFailed,
-    devices,
-    probe,
-  });
+  const status = HUB_CONFIGURED
+    ? deriveStatus({
+        hubConnected,
+        permanentlyFailed,
+        devices,
+        probe,
+      })
+    : deriveLocalStatus({ devices, probe });
 
   return { status, refresh: refreshDevices, retry };
+}
+
+function deriveLocalStatus({
+  devices,
+  probe,
+}: {
+  devices: HubDevice[] | null;
+  probe: { healthy: boolean | null; ms: number };
+}): ConnectorState {
+  if (devices === null) return { state: "connecting" };
+  if (probe.healthy === null) return { state: "connecting" };
+  if (probe.healthy === true) {
+    return {
+      state: "connected",
+      deviceName: LOCAL_DEVICE_NAME,
+      lastProbeMs: probe.ms,
+    };
+  }
+  return { state: "no-local-connector" };
 }
 
 interface DeriveInput {

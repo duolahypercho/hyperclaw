@@ -40,6 +40,8 @@ function getConnectorHealthLabel(status: ConnectorState): string {
       return "Connector offline: session expired";
     case "no-device":
       return "Connector offline: no device paired";
+    case "no-local-connector":
+      return "Connector offline: install via the hyperclaw repo";
     case "connecting":
       return "Connector offline: connecting";
     case "permanently-failed":
