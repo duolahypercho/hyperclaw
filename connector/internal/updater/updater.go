@@ -56,6 +56,10 @@ func Apply(payload map[string]interface{}, reportStatus StatusFunc) error {
 	if downloadURL == "" {
 		return fmt.Errorf("no download URL in update payload")
 	}
+	checksum = strings.TrimSpace(checksum)
+	if checksum == "" {
+		return fmt.Errorf("checksum is required in update payload")
+	}
 
 	log.Printf("[updater] Update available: v%s from %s", version, downloadURL)
 
@@ -74,14 +78,12 @@ func Apply(payload map[string]interface{}, reportStatus StatusFunc) error {
 	}()
 
 	// 2. Verify checksum
-	if checksum != "" {
-		reportStatus("verifying", "")
-		if err := verify(tmpPath, checksum); err != nil {
-			reportStatus("failed", err.Error())
-			return fmt.Errorf("checksum verification failed: %w", err)
-		}
-		log.Printf("[updater] Checksum verified")
+	reportStatus("verifying", "")
+	if err := verify(tmpPath, checksum); err != nil {
+		reportStatus("failed", err.Error())
+		return fmt.Errorf("checksum verification failed: %w", err)
 	}
+	log.Printf("[updater] Checksum verified")
 
 	// 3. Replace binary
 	reportStatus("replacing", "")

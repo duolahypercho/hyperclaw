@@ -2,6 +2,9 @@ import React from "react";
 import Head from "next/head";
 import { SITE_URL } from "../lib/site-url";
 
+const safeJsonLd = (value: any): string =>
+  JSON.stringify(value).replace(/</g, "\\u003c").replace(/>/g, "\\u003e");
+
 interface SEOProps {
   title: string;
   description: string;
@@ -241,7 +244,7 @@ const SEO: React.FC<SEOProps> = ({
       {/* Structured Data */}
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData) }}
+        dangerouslySetInnerHTML={{ __html: safeJsonLd(structuredData) }}
       />
 
       {/* Performance and Security */}

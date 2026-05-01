@@ -4,6 +4,9 @@ import Head from "next/head";
 // --- Types ---
 export type SEOJsonLd = Record<string, any>;
 
+const safeJsonLd = (value: SEOJsonLd): string =>
+  JSON.stringify(value).replace(/</g, "\\u003c").replace(/>/g, "\\u003e");
+
 const defaultSEOSchema: SEOSchema = {
   title: "Hyperclaw",
   description: "Hyperclaw",
@@ -148,7 +151,7 @@ export const SEOProv: React.FC<{
         {/* Structured Data */}
         <script
           type="application/ld+json"
-          dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData) }}
+          dangerouslySetInnerHTML={{ __html: safeJsonLd(structuredData) }}
         />
       </Head>
       {children}

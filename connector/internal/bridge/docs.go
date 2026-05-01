@@ -632,26 +632,27 @@ func (b *BridgeHandler) writeAgentIdentityDoc(params map[string]interface{}) act
 // files based on runtime. v0.5.6+: all runtimes except Hermes live under
 // ~/.hyperclaw/agents/{runtime}-{id}/.
 func resolveRuntimeAgentDir(paths Paths, runtime, agentId string) (string, error) {
+	runtime = strings.TrimSpace(runtime)
 	switch runtime {
 	case "hermes":
-		id := agentId
+		id := strings.TrimSpace(agentId)
 		if strings.HasPrefix(id, "hermes:") {
 			id = id[len("hermes:"):]
 		}
 		if id == "" || id == "main" || id == "__main__" {
 			return filepath.Join(paths.Home, ".hermes"), nil
 		}
+		if err := ValidateAgentID(id); err != nil {
+			return "", err
+		}
 		return filepath.Join(paths.Home, ".hermes", "profiles", id), nil
 	default:
-		if agentId == "" {
-			return "", fmt.Errorf("agentId required for runtime %q", runtime)
-		}
 		// Empty runtime defaults to "openclaw" for back-compat with the
 		// historical default behavior of this helper.
 		if runtime == "" {
 			runtime = "openclaw"
 		}
-		return paths.AgentDir(runtime, agentId), nil
+		return paths.SafeAgentDir(runtime, agentId)
 	}
 }
 

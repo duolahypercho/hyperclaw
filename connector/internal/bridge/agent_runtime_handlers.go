@@ -20,13 +20,24 @@ import (
 //   - soul, identity, agents, tools, user, heartbeat, memory (string): personality file contents
 func (b *BridgeHandler) setupAgent(params map[string]interface{}) actionResult {
 	agentId, _ := params["agentId"].(string)
-	if agentId == "" {
-		return errResultStatus("agentId is required", 400)
+	agentId = strings.TrimSpace(agentId)
+	if err := ValidateAgentID(agentId); err != nil {
+		return errResultStatus(err.Error(), 400)
 	}
 
 	runtimeStr, _ := params["runtime"].(string)
 	if runtimeStr == "" {
 		runtimeStr = "openclaw"
+	}
+	runtimeStr = strings.TrimSpace(runtimeStr)
+	adapter, ok := map[RuntimeType]RuntimeAdapter{
+		RuntimeOpenClaw: NewOpenClawAdapter(b.paths),
+		RuntimeHermes:   NewHermesAdapter(b.paths),
+		RuntimeClaude:   NewClaudeCodeAdapter(b.paths),
+		RuntimeCodex:    NewCodexAdapter(b.paths),
+	}[RuntimeType(runtimeStr)]
+	if !ok {
+		return errResultStatus(fmt.Sprintf("unknown runtime: %s", runtimeStr), 400)
 	}
 
 	displayName := strParam(params, "name")
@@ -59,7 +70,10 @@ func (b *BridgeHandler) setupAgent(params map[string]interface{}) actionResult {
 	// Claude Code and Codex have no harness, so we manage files in ~/.hyperclaw/agents/{id}/.
 	usesNativeHarness := runtimeStr == "openclaw" || runtimeStr == "hermes"
 
-	agentDir := b.paths.AgentDir(runtimeStr, agentId)
+	agentDir, err := b.paths.SafeAgentDir(runtimeStr, agentId)
+	if err != nil {
+		return errResultStatus(err.Error(), 400)
+	}
 	if !usesNativeHarness {
 		if err := SaveAgentPersonality(agentDir, personality); err != nil {
 			return errResult(fmt.Sprintf("failed to save personality: %v", err))
@@ -79,23 +93,12 @@ func (b *BridgeHandler) setupAgent(params map[string]interface{}) actionResult {
 	// codex only writes personality files and never needs the binary installed.
 	// ResolveAdapter would silently fall back to openclaw when the binary is
 	// missing, which misregisters the agent under the wrong runtime.
-	allAdapters := map[RuntimeType]RuntimeAdapter{
-		RuntimeOpenClaw: NewOpenClawAdapter(b.paths),
-		RuntimeHermes:   NewHermesAdapter(b.paths),
-		RuntimeClaude:   NewClaudeCodeAdapter(b.paths),
-		RuntimeCodex:    NewCodexAdapter(b.paths),
-	}
-	adapter, ok := allAdapters[RuntimeType(runtimeStr)]
-	if !ok {
-		return errResult(fmt.Sprintf("unknown runtime: %s", runtimeStr))
-	}
-
 	if err := adapter.SetupAgent(agentId, personality); err != nil {
 		// Roll back the on-disk agent dir we created at line 68 so a failed
 		// setup doesn't leave a phantom workspace that confuses cold sync
 		// (.runtime would survive, then sync_engine would re-import the
 		// half-broken agent on next start).
-		if removeErr := os.RemoveAll(agentDir); removeErr != nil {
+		if removeErr := b.removeAgentDirForRollback(agentDir); removeErr != nil {
 			log.Printf("[setup-agent] warning: failed to roll back %s after setup error: %v", agentDir, removeErr)
 		}
 		return errResult(fmt.Sprintf("failed to setup agent in %s: %v", adapter.Name(), err))
@@ -112,7 +115,7 @@ func (b *BridgeHandler) setupAgent(params map[string]interface{}) actionResult {
 	if RuntimeType(runtimeStr) == RuntimeOpenClaw && agentId != "main" {
 		if _, err := os.Stat(filepath.Join(b.paths.OpenClaw, "openclaw.json")); err == nil {
 			if !agentExistsInConfig(b.paths, agentId) {
-				if removeErr := os.RemoveAll(agentDir); removeErr != nil {
+				if removeErr := b.removeAgentDirForRollback(agentDir); removeErr != nil {
 					log.Printf("[setup-agent] warning: failed to roll back %s after registration miss: %v", agentDir, removeErr)
 				}
 				return errResult(fmt.Sprintf("agent %q created on disk but missing from openclaw.json agents.list — chat will fail. If this happened repeatedly, openclaw.json is likely invalid; run `openclaw doctor --fix` and retry.", agentId))
@@ -162,8 +165,9 @@ func (b *BridgeHandler) setupAgent(params map[string]interface{}) actionResult {
 //   - runtime (string): preferred runtime (optional, auto-detects if omitted)
 func (b *BridgeHandler) runAgentTask(params map[string]interface{}) actionResult {
 	agentId, _ := params["agentId"].(string)
-	if agentId == "" {
-		return errResultStatus("agentId is required", 400)
+	agentId = strings.TrimSpace(agentId)
+	if err := ValidateAgentID(agentId); err != nil {
+		return errResultStatus(err.Error(), 400)
 	}
 
 	task, _ := params["task"].(string)
@@ -177,7 +181,10 @@ func (b *BridgeHandler) runAgentTask(params map[string]interface{}) actionResult
 	}
 
 	// Load personality from ~/.hyperclaw/agents/{runtime}-{id}/
-	agentDir := b.paths.AgentDir(runtimeStr, agentId)
+	agentDir, err := b.paths.SafeAgentDir(runtimeStr, agentId)
+	if err != nil {
+		return errResultStatus(err.Error(), 400)
+	}
 	personality := LoadAgentPersonality(agentDir, agentId)
 
 	adapter := ResolveAdapter(RuntimeType(runtimeStr), b.paths)
@@ -199,10 +206,10 @@ func (b *BridgeHandler) runAgentTask(params map[string]interface{}) actionResult
 //
 // This is the agent-to-agent (A2A) entry point. It's a wrapper around
 // adapter.RunTask but with three differences from runAgentTask:
-//   1. runtime is looked up by id, not passed in
-//   2. message is decorated with the sender's id for context
-//   3. response shape includes from/to/runtime so the caller can render the
-//      conversation without a second round-trip to find out who said what
+//  1. runtime is looked up by id, not passed in
+//  2. message is decorated with the sender's id for context
+//  3. response shape includes from/to/runtime so the caller can render the
+//     conversation without a second round-trip to find out who said what
 //
 // Params:
 //   - toAgentId (required): recipient agent id
@@ -211,8 +218,9 @@ func (b *BridgeHandler) runAgentTask(params map[string]interface{}) actionResult
 //     params["requestingAgentId"] which the MCP layer auto-populates
 func (b *BridgeHandler) sendAgentMessage(params map[string]interface{}) actionResult {
 	toAgentId, _ := params["toAgentId"].(string)
-	if toAgentId == "" {
-		return errResultStatus("toAgentId is required", 400)
+	toAgentId = strings.TrimSpace(toAgentId)
+	if err := ValidateAgentID(toAgentId); err != nil {
+		return errResultStatus(err.Error(), 400)
 	}
 	message, _ := params["message"].(string)
 	if message == "" {
@@ -260,7 +268,10 @@ func (b *BridgeHandler) sendAgentMessage(params map[string]interface{}) actionRe
 		decorated = fmt.Sprintf("[Message from agent %q]\n\n%s", fromAgentId, message)
 	}
 
-	agentDir := b.paths.AgentDir(runtimeStr, toAgentId)
+	agentDir, err := b.paths.SafeAgentDir(runtimeStr, toAgentId)
+	if err != nil {
+		return errResultStatus(err.Error(), 400)
+	}
 	personality := LoadAgentPersonality(agentDir, toAgentId)
 
 	// Session continuity: build a stable per-(from,to) thread key. The KV
@@ -355,8 +366,9 @@ func a2aThreadKey(fromAgentId, toAgentId string) string {
 //   - agentId (string): agent identifier
 func (b *BridgeHandler) getAgentPersonality(params map[string]interface{}) actionResult {
 	agentId, _ := params["agentId"].(string)
-	if agentId == "" {
-		return errResultStatus("agentId is required", 400)
+	agentId = strings.TrimSpace(agentId)
+	if err := ValidateAgentID(agentId); err != nil {
+		return errResultStatus(err.Error(), 400)
 	}
 
 	// Always read from the Hyperclaw canonical store, never from the runtime dir.
@@ -380,7 +392,11 @@ func (b *BridgeHandler) getAgentPersonality(params map[string]interface{}) actio
 // (~/.hyperclaw/agents/{agentId}/). Called after any personality save
 // for claude-code agents so Claude Code always sees up-to-date context.
 func (b *BridgeHandler) refreshClaudeMd(agentId string) {
-	agentDir := b.paths.AgentDir("claude-code", agentId)
+	agentDir, err := b.paths.SafeAgentDir("claude-code", agentId)
+	if err != nil {
+		log.Printf("[agent] skipping CLAUDE.md refresh for invalid agentId %q: %v", agentId, err)
+		return
+	}
 	personality := LoadAgentPersonality(agentDir, agentId)
 	claudeMd := AssembleClaudeMd(personality)
 	if claudeMd == "" {
@@ -400,22 +416,32 @@ func (b *BridgeHandler) saveAgentFileSingle(params map[string]interface{}) actio
 	agentId, _ := params["agentId"].(string)
 	fileKey, _ := params["fileKey"].(string)
 	content, _ := params["content"].(string)
-	if agentId == "" || fileKey == "" {
-		return errResultStatus("agentId and fileKey required", 400)
+	agentId = strings.TrimSpace(agentId)
+	if err := ValidateAgentID(agentId); err != nil {
+		return errResultStatus(err.Error(), 400)
+	}
+	if strings.TrimSpace(fileKey) == "" {
+		return errResultStatus("fileKey is required", 400)
 	}
 	if len(content) > 512*1024 {
 		return errResultStatus(fileKey+" content too large (max 512KB)", 400)
 	}
 
 	runtime := b.resolveAgentRuntime(agentId)
-	agentDir := b.paths.AgentDir(runtime, agentId)
+	agentDir, err := b.paths.SafeAgentDir(runtime, agentId)
+	if err != nil {
+		return errResultStatus(err.Error(), 400)
+	}
 	if err := os.MkdirAll(agentDir, 0700); err != nil {
 		return errResult("failed to create agent dir: " + err.Error())
 	}
 
-	filePath := filepath.Join(agentDir, fileKey+".md")
+	normalizedFileKey, filePath, err := safeAgentFileTarget(agentDir, fileKey)
+	if err != nil {
+		return errResultStatus(err.Error(), 400)
+	}
 	if b.syncEngine != nil {
-		if err := b.syncEngine.WriteAgentFile(agentId, fileKey, content, filePath, runtime); err != nil {
+		if err := b.syncEngine.WriteAgentFile(agentId, normalizedFileKey, content, filePath, runtime); err != nil {
 			return errResultStatus("write failed: "+err.Error(), 500)
 		}
 	} else {
@@ -429,7 +455,7 @@ func (b *BridgeHandler) saveAgentFileSingle(params map[string]interface{}) actio
 		b.refreshClaudeMd(agentId)
 	}
 
-	return okResult(map[string]interface{}{"success": true, "agentId": agentId, "fileKey": fileKey})
+	return okResult(map[string]interface{}{"success": true, "agentId": agentId, "fileKey": normalizedFileKey})
 }
 
 // resolveAgentRuntime looks up the agent's runtime from the identity store.
@@ -454,9 +480,15 @@ func (b *BridgeHandler) resolveAgentRuntime(agentId string) string {
 func (b *BridgeHandler) agentDirFor(agentId string) string {
 	runtime := b.resolveAgentRuntime(agentId)
 	if runtime != "" {
-		return b.paths.AgentDir(runtime, agentId)
+		if dir, err := b.paths.SafeAgentDir(runtime, agentId); err == nil {
+			return dir
+		}
+		return ""
 	}
-	legacy := b.paths.LegacyAgentDir(agentId)
+	legacy, err := b.paths.SafeLegacyAgentDir(agentId)
+	if err != nil {
+		return ""
+	}
 	if _, err := os.Stat(legacy); err == nil {
 		return legacy
 	}
@@ -476,10 +508,17 @@ func (b *BridgeHandler) runtimeAgentDir(agentId, runtime string) string {
 	home := b.paths.Home
 	switch runtime {
 	case "hermes":
+		if err := ValidateAgentID(agentId); err != nil {
+			return ""
+		}
 		// Hermes stores files directly in ~/.hermes/ (single agent)
 		return filepath.Join(home, ".hermes")
 	default:
-		return b.paths.AgentDir(runtime, agentId)
+		dir, err := b.paths.SafeAgentDir(runtime, agentId)
+		if err != nil {
+			return ""
+		}
+		return dir
 	}
 }
 
@@ -493,8 +532,9 @@ func (b *BridgeHandler) runtimeAgentDir(agentId, runtime string) string {
 // The SyncEngine also updates the SQLite agent_files table atomically.
 func (b *BridgeHandler) saveAgentPersonality(params map[string]interface{}) actionResult {
 	agentId, _ := params["agentId"].(string)
-	if agentId == "" {
-		return errResultStatus("agentId is required", 400)
+	agentId = strings.TrimSpace(agentId)
+	if err := ValidateAgentID(agentId); err != nil {
+		return errResultStatus(err.Error(), 400)
 	}
 
 	personality := AgentPersonality{
@@ -511,7 +551,10 @@ func (b *BridgeHandler) saveAgentPersonality(params map[string]interface{}) acti
 	// Always write to the Hyperclaw-internal dir — it is the canonical store.
 	// Runtime-specific formats (CLAUDE.md, SOUL.md in hermes) are derived outputs.
 	runtime := b.resolveAgentRuntime(agentId)
-	agentDir := b.paths.AgentDir(runtime, agentId)
+	agentDir, err := b.paths.SafeAgentDir(runtime, agentId)
+	if err != nil {
+		return errResultStatus(err.Error(), 400)
+	}
 
 	if b.syncEngine != nil {
 		// Route each non-empty file through the SyncEngine so the SQLite
@@ -578,6 +621,13 @@ func (b *BridgeHandler) saveAgentPersonality(params map[string]interface{}) acti
 		"success": true,
 		"agentId": agentId,
 	})
+}
+
+func (b *BridgeHandler) removeAgentDirForRollback(agentDir string) error {
+	if err := ensurePathWithinBase(b.paths.AgentsDir(), agentDir); err != nil {
+		return err
+	}
+	return os.RemoveAll(agentDir)
 }
 
 // listAvailableRuntimes returns which runtimes are installed and available.

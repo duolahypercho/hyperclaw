@@ -1,5 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import { readFile } from "fs/promises";
+import { readFile, realpath } from "fs/promises";
 import path from "path";
 import os from "os";
 
@@ -16,9 +16,25 @@ const MIME_TYPES: Record<string, string> = {
   ".ogg": "audio/ogg",
 };
 
+const isLoopbackHost = (hostHeader: string | undefined): boolean => {
+  const header = hostHeader || "";
+  const host = header.startsWith("[")
+    ? header.slice(1, header.indexOf("]"))
+    : header.split(":")[0];
+  return ["localhost", "127.0.0.1", "::1"].includes(host);
+};
+
+const isLocalRequest = (req: NextApiRequest): boolean =>
+  isLoopbackHost(req.headers.host) &&
+  ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress || "");
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET") {
     return res.status(405).end("Method Not Allowed");
+  }
+
+  if (!isLocalRequest(req)) {
+    return res.status(403).end("Forbidden");
   }
 
   const { path: filePath } = req.query;
@@ -44,15 +60,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const resolvedPath = path.resolve(absolutePath);
   const allowedBase = path.join(homeDir, ".openclaw");
 
-  // Security: only allow files under ~/.openclaw/
-  if (!resolvedPath.startsWith(allowedBase + path.sep) && resolvedPath !== allowedBase) {
-    return res.status(403).end("Forbidden");
-  }
-
   try {
-    const buffer = await readFile(resolvedPath);
-    const ext = path.extname(resolvedPath).toLowerCase();
-    const contentType = MIME_TYPES[ext] ?? "application/octet-stream";
+    const [realBase, realRequested] = await Promise.all([
+      realpath(allowedBase),
+      realpath(resolvedPath),
+    ]);
+    if (!realRequested.startsWith(realBase + path.sep) && realRequested !== realBase) {
+      return res.status(403).end("Forbidden");
+    }
+
+    const ext = path.extname(realRequested).toLowerCase();
+    const contentType = MIME_TYPES[ext];
+    if (!contentType) {
+      return res.status(403).end("Forbidden");
+    }
+
+    const buffer = await readFile(realRequested);
 
     res.setHeader("Content-Type", contentType);
     res.setHeader("Cache-Control", "public, max-age=3600");

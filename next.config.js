@@ -33,22 +33,23 @@ function buildCSP() {
   const hubWsOrigin = deriveHubOrigin(process.env.NEXT_PUBLIC_HUB_URL, "wss");
   if (hubWsOrigin) connectParts.push(hubWsOrigin);
 
+  // Local connector and OpenClaw gateway are used by production self-hosted
+  // and packaged local-first builds as well as by development.
+  connectParts.push("http://127.0.0.1:18790", "http://localhost:18790");
+  const gatewayPorts = (process.env.NEXT_PUBLIC_OPENCLAW_GATEWAY_PORTS || "18789")
+    .split(",")
+    .map((p) => p.trim())
+    .filter(Boolean);
+  for (const p of gatewayPorts) {
+    connectParts.push(`ws://127.0.0.1:${p}`, `ws://localhost:${p}`, `wss://127.0.0.1:${p}`, `wss://localhost:${p}`);
+  }
+
   if (isDev) {
     connectParts.push("http://127.0.0.1:9979", "http://localhost:9979");
     // Cursor debug ingest in local development. This is not part of the
     // connector path, but allowing it keeps dev-only instrumentation from
     // flooding the console with CSP violations.
     connectParts.push("http://127.0.0.1:7509", "http://localhost:7509");
-    // Local connector bridge
-    connectParts.push("http://127.0.0.1:18790", "http://localhost:18790");
-    // Local OpenClaw gateway WebSocket ports
-    const ports = (process.env.NEXT_PUBLIC_OPENCLAW_GATEWAY_PORTS || "18789")
-      .split(",")
-      .map((p) => p.trim())
-      .filter(Boolean);
-    for (const p of ports) {
-      connectParts.push(`ws://127.0.0.1:${p}`, `ws://localhost:${p}`, `wss://127.0.0.1:${p}`, `wss://localhost:${p}`);
-    }
   }
 
   const directives = [

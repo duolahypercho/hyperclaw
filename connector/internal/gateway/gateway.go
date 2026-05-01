@@ -95,7 +95,7 @@ func (g *Gateway) loadIdentity() {
 		var id DeviceIdentity
 		if json.Unmarshal(data, &id) == nil && id.DeviceID != "" {
 			g.identity = &id
-			log.Printf("Loaded device identity: %s", id.DeviceID[:16]+"...")
+			log.Printf("Loaded device identity: %s", redactedDeviceID(id.DeviceID))
 		}
 	} else if os.IsNotExist(err) {
 		log.Printf("Gateway identity not yet provisioned (%s missing) — the OpenClaw daemon writes this on first run", idPath)
@@ -109,6 +109,13 @@ func (g *Gateway) loadIdentity() {
 			g.auth = &auth
 		}
 	}
+}
+
+func redactedDeviceID(deviceID string) string {
+	if len(deviceID) <= 16 {
+		return deviceID
+	}
+	return deviceID[:16] + "..."
 }
 
 func (g *Gateway) getAuthToken() string {

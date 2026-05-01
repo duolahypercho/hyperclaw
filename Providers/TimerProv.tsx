@@ -150,7 +150,9 @@ export const TimerProvider = ({ children }: { children: React.ReactNode }) => {
             const elapsed = Math.floor(
               (Date.now() - timer.lastUpdateTime) / 1000
             );
-            const newCurrentTime = Math.max(0, timer.currentTime - elapsed);
+            const newCurrentTime = timer.type === "stopwatch"
+              ? timer.currentTime + elapsed
+              : Math.max(0, timer.currentTime - elapsed);
 
             // Check if timer completed while away
             if (newCurrentTime === 0 && timer.type === "countdown") {
@@ -294,6 +296,13 @@ export const TimerProvider = ({ children }: { children: React.ReactNode }) => {
     },
     [] // timerRefs is a ref, doesn't need to be in dependencies
   );
+
+  useEffect(() => {
+    return () => {
+      timerRefs.current.forEach((interval) => clearInterval(interval));
+      timerRefs.current.clear();
+    };
+  }, []);
 
   // Update running timers
   useEffect(() => {

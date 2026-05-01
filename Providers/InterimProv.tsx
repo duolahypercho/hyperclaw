@@ -55,6 +55,7 @@ export const InterimProvider = ({ children }: { children: ReactNode }) => {
       setMobileLandscape(false);
       if (screenWidth <= MAXMOBILESCREENSIZE) {
         setMobileScreen(true);
+        setTabletScreen(false);
         return;
       }
       if (screenWidth <= MAXTABLETSCREENSIZE) {

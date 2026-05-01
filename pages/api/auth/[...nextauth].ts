@@ -25,6 +25,13 @@ const isLoopbackHost = (hostHeader: string | undefined): boolean => {
   return ["localhost", "127.0.0.1", "::1"].includes(host);
 };
 
+const isLoopbackAddress = (address: string | undefined): boolean =>
+  ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(address || "");
+
+const isLocalCredentialsRequest = (req: NextApiRequest | undefined): boolean =>
+  isLoopbackHost(req?.headers?.host) &&
+  isLoopbackAddress(req?.socket?.remoteAddress);
+
 export const authOptions = (req: any, res: any) => {
   const useSecureCookies = process.env.NEXTAUTH_URL?.startsWith("https://") ?? false;
   const googleClientId = process.env.GOOGLE_CLIENT_ID;
@@ -47,7 +54,7 @@ export const authOptions = (req: any, res: any) => {
       async authorize(credentials) {
         const { password: Password, email }: any = credentials;
         try {
-          if (!allowNetworkCredentials && !isLoopbackHost(req?.headers?.host)) {
+          if (!allowNetworkCredentials && !isLocalCredentialsRequest(req)) {
             throw new Error(
               "Local credentials are disabled for non-localhost access. Set HYPERCLAW_ALLOW_NETWORK_LOGIN=true only if you understand the risk."
             );
@@ -303,4 +310,3 @@ const handler = async (req: NextApiRequest, res: NextApiResponse) => {
 };
 
 export default handler;
-
