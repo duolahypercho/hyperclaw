@@ -88,9 +88,10 @@ const ExploreLists = ({
     };
 
     changeSize(window.innerWidth);
-    window.addEventListener("resize", () => changeSize(window.innerWidth));
+    const handleResize = () => changeSize(window.innerWidth);
+    window.addEventListener("resize", handleResize);
     return () =>
-      window.removeEventListener("resize", () => changeSize(window.innerWidth));
+      window.removeEventListener("resize", handleResize);
   }, []);
 
   /*use Effect to handle intersection events */

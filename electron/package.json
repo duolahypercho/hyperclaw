@@ -5,6 +5,9 @@
   "author": "Hypercho",
   "main": "main.js",
   "scripts": {
+    "electron": "electron .",
+    "electron:dev": "cross-env NODE_ENV=development electron .",
+    "electron:build": "electron-builder",
     "electron:build:win:local": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false APPLE_ID= APPLE_APP_SPECIFIC_PASSWORD= APPLE_TEAM_ID= electron-builder --win",
     "electron:build:win:remote": "node scripts/set-config.js remote && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=true electron-builder --win",
     "electron:build:win:portable": "node scripts/set-config.js local && npx cross-env CSC_IDENTITY_AUTO_DISCOVERY=false APPLE_ID= APPLE_APP_SPECIFIC_PASSWORD= APPLE_TEAM_ID= electron-builder --win --config.win.target=portable",

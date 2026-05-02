@@ -116,7 +116,10 @@ func (a *OpenClawAdapter) SetupAgent(agentId string, personality AgentPersonalit
 	// OpenClaw workspace lives under ~/.hyperclaw/agents/openclaw-{id}/ (set via
 	// --workspace during onboarding). Fall back to the legacy ~/.openclaw/workspace/
 	// path if the new directory doesn't exist yet.
-	workspaceDir := a.paths.AgentDir("openclaw", agentId)
+	workspaceDir, err := a.paths.SafeAgentDir("openclaw", agentId)
+	if err != nil {
+		return err
+	}
 	if _, err := os.Stat(workspaceDir); os.IsNotExist(err) {
 		// Legacy fallback
 		if agentId == "main" {
@@ -547,7 +550,10 @@ func (a *ClaudeCodeAdapter) SetupAgent(agentId string, personality AgentPersonal
 	// We save the personality to ~/.hyperclaw/agents/claude-code-{id}/ for later use,
 	// and seed baseline workspace files (USER.md, BOOTSTRAP.md, etc.) from
 	// the OpenClaw main workspace so every agent starts with the same kit.
-	agentDir := a.paths.AgentDir(string(RuntimeClaude), agentId)
+	agentDir, err := a.paths.SafeAgentDir(string(RuntimeClaude), agentId)
+	if err != nil {
+		return err
+	}
 	SeedBaselineFiles(a.paths, agentDir)
 	return SaveAgentPersonality(agentDir, personality)
 }
@@ -723,7 +729,10 @@ func (a *CodexAdapter) Available() bool {
 }
 
 func (a *CodexAdapter) SetupAgent(agentId string, personality AgentPersonality) error {
-	agentDir := a.paths.AgentDir(string(RuntimeCodex), agentId)
+	agentDir, err := a.paths.SafeAgentDir(string(RuntimeCodex), agentId)
+	if err != nil {
+		return err
+	}
 	SeedBaselineFiles(a.paths, agentDir)
 	return SaveAgentPersonality(agentDir, personality)
 }
@@ -750,7 +759,14 @@ func (a *CodexAdapter) RunTask(agentId string, task string, personality AgentPer
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = a.paths.Home
 	if agentId != "" {
-		agentDir := a.paths.AgentDir(string(RuntimeCodex), agentId)
+		agentDir, err := a.paths.SafeAgentDir(string(RuntimeCodex), agentId)
+		if err != nil {
+			return AgentRunResult{
+				Success: false,
+				Error:   err.Error(),
+				Runtime: string(RuntimeCodex),
+			}
+		}
 		if err := os.MkdirAll(agentDir, 0700); err == nil {
 			cmd.Dir = agentDir
 		}

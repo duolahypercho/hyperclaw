@@ -11,6 +11,10 @@ interface UploadImageOptions {
   width?: number;
   height?: number;
 }
+
+const userScopedPrefix = (storeLocation: string, userId: string): string =>
+  `${storeLocation.replace(/\/+$/g, "")}/${userId}/`;
+
 /**
  * Hook to get the upload function with proper context
  */
@@ -36,12 +40,12 @@ export const useImageUpload = () => {
     const uploadConfig: any = {
       endpoint: {
         request: {
-          body: {
-            Id: fileId,
-            userId: `${storeLocation}${sessionData.user.userId}/`,
+            body: {
+              Id: fileId,
+              userId: userScopedPrefix(storeLocation, sessionData.user.userId),
+            },
           },
         },
-      },
     };
 
     // Add conversion settings if specified

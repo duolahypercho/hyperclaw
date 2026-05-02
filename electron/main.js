@@ -21,6 +21,74 @@ const { promisify } = require("util");
 const isDev = process.env.NODE_ENV === "development";
 const { execFile } = require("child_process");
 const streamPipeline = promisify(pipeline);
+const userConfigDir = path.join(os.homedir(), ".hyperclaw");
+const userAppConfigPath = path.join(userConfigDir, "app-config.json");
+const userHubConfigPath = path.join(userConfigDir, "hub-config.json");
+
+async function chmodPrivate(targetPath, mode) {
+  if (process.platform === "win32") return;
+  try {
+    await fs.promises.chmod(targetPath, mode);
+  } catch {
+    // Best effort on filesystems that do not support POSIX modes.
+  }
+}
+
+async function ensurePrivateDir(dirPath) {
+  await fs.promises.mkdir(dirPath, { recursive: true, mode: 0o700 });
+  await chmodPrivate(dirPath, 0o700);
+}
+
+async function writePrivateFile(filePath, contents) {
+  await ensurePrivateDir(path.dirname(filePath));
+  await fs.promises.writeFile(filePath, contents, { encoding: "utf8", mode: 0o600 });
+  await chmodPrivate(filePath, 0o600);
+}
+
+function readJsonFileSync(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+  } catch (error) {
+    console.warn(`[config] Failed to read ${filePath}:`, error.message);
+    return null;
+  }
+}
+
+function mergeAppConfig(baseConfig, overrideConfig) {
+  if (!overrideConfig || typeof overrideConfig !== "object" || Array.isArray(overrideConfig)) {
+    return baseConfig;
+  }
+  const merged = { ...baseConfig, ...overrideConfig };
+  if (baseConfig.gateway || overrideConfig.gateway) {
+    merged.gateway = { ...(baseConfig.gateway || {}), ...(overrideConfig.gateway || {}) };
+  }
+  if (baseConfig.hub || overrideConfig.hub) {
+    merged.hub = { ...(baseConfig.hub || {}), ...(overrideConfig.hub || {}) };
+  }
+  return merged;
+}
+
+function mergeMutableAppConfig(baseConfig, mutableConfig) {
+  if (!mutableConfig || typeof mutableConfig !== "object" || Array.isArray(mutableConfig)) {
+    return baseConfig;
+  }
+  const scopedConfig = {};
+  if (mutableConfig.gateway && typeof mutableConfig.gateway === "object" && !Array.isArray(mutableConfig.gateway)) {
+    scopedConfig.gateway = mutableConfig.gateway;
+  }
+  if (mutableConfig.hub && typeof mutableConfig.hub === "object" && !Array.isArray(mutableConfig.hub)) {
+    scopedConfig.hub = mutableConfig.hub;
+  }
+  return mergeAppConfig(baseConfig, scopedConfig);
+}
+
+async function persistMutableAppConfig() {
+  const mutableConfig = {};
+  if (appConfig.gateway) mutableConfig.gateway = appConfig.gateway;
+  if (appConfig.hub) mutableConfig.hub = appConfig.hub;
+  await writePrivateFile(userAppConfigPath, `${JSON.stringify(mutableConfig, null, 2)}\n`);
+}
 
 // Gaming mode: disable hardware acceleration to avoid GPU conflicts
 // Set HYPERCLAW_GAMING_MODE=1 or pass --gaming-mode flag
@@ -49,7 +117,7 @@ function getConnectorDownloadName() {
       : "hyperclaw-connector-linux";
   }
   if (plat === "win32") {
-    return arch === "arm64"Captions by GetTranscribed.com
+    return arch === "arm64"
       ? "hyperclaw-connector-win-arm64.exe"
       : "hyperclaw-connector-win.exe";
   }
@@ -203,18 +271,11 @@ async function installLocalConnectorService({ token, deviceId, hubUrl, jwt, loca
   }
 
   const { installDir, binaryPath, envPath, credentialsDir } = getConnectorInstallPaths();
-  const normalizedHubUrl = normalizeHubWsUrl(hubUrl);
-  const downloadBase = normalizeHubHttpUrl(appConfig.hub?.url || hubUrl);
-  if (!downloadBase) {
-    throw new Error(
-      "Cannot install connector: no hub URL configured. " +
-      "Set appConfig.hub.url (Cloud build) or pass hubUrl explicitly."
-    );
-  }
-  const downloadUrl = new URL(`/downloads/${downloadName}`, downloadBase).toString();
+  const resolvedHubUrl = hubUrl || appConfig.hub?.url || "";
+  const normalizedHubUrl = normalizeHubWsUrl(resolvedHubUrl);
 
-  await fs.promises.mkdir(installDir, { recursive: true });
-  await fs.promises.mkdir(credentialsDir, { recursive: true });
+  await ensurePrivateDir(installDir);
+  await ensurePrivateDir(credentialsDir);
 
   // Skip entire install only when the connector is already running AND already
   // paired to the same device we are onboarding. The short-circuit has to check
@@ -262,6 +323,14 @@ async function installLocalConnectorService({ token, deviceId, hubUrl, jwt, loca
     if (isLocalOnly) {
       throw new Error("Bundled connector binary was not found. Run npm run connector:build before local-only onboarding.");
     }
+    const downloadBase = normalizeHubHttpUrl(resolvedHubUrl);
+    if (!downloadBase) {
+      throw new Error(
+        "Cannot download connector: no hub URL configured. " +
+        "Set appConfig.hub.url (Cloud build) or pass hubUrl explicitly."
+      );
+    }
+    const downloadUrl = new URL(`/downloads/${downloadName}`, downloadBase).toString();
     await downloadFile(downloadUrl, binaryPath);
     await fs.promises.chmod(binaryPath, 0o755).catch(() => {});
   }
@@ -274,11 +343,11 @@ async function installLocalConnectorService({ token, deviceId, hubUrl, jwt, loca
     "",
   ].join("\n");
 
-  await fs.promises.writeFile(path.join(installDir, "device.token"), `${resolvedToken}\n`, "utf8");
-  await fs.promises.writeFile(path.join(installDir, "device.id"), `${resolvedDeviceId}\n`, "utf8");
-  await fs.promises.writeFile(path.join(credentialsDir, "device.token"), `${resolvedToken}\n`, "utf8");
-  await fs.promises.writeFile(path.join(credentialsDir, "device.id"), `${resolvedDeviceId}\n`, "utf8");
-  await fs.promises.writeFile(envPath, envContent, "utf8");
+  await writePrivateFile(path.join(installDir, "device.token"), `${resolvedToken}\n`);
+  await writePrivateFile(path.join(installDir, "device.id"), `${resolvedDeviceId}\n`);
+  await writePrivateFile(path.join(credentialsDir, "device.token"), `${resolvedToken}\n`);
+  await writePrivateFile(path.join(credentialsDir, "device.id"), `${resolvedDeviceId}\n`);
+  await writePrivateFile(envPath, envContent);
 
   await runExecFile(binaryPath, ["install"], {
     env: {
@@ -294,8 +363,7 @@ async function installLocalConnectorService({ token, deviceId, hubUrl, jwt, loca
   // Write hub-config.json so subsequent Electron restarts auto-load it.
   // Use the HTTP URL — getHubInfo() feeds hubCommandFromElectron which makes
   // HTTP requests. In local-only mode the URL stays empty.
-  const hubConfigPath = path.join(os.homedir(), ".hyperclaw", "hub-config.json");
-  const httpHubUrl = normalizeHubHttpUrl(hubUrl);
+  const httpHubUrl = normalizeHubHttpUrl(resolvedHubUrl);
   const hubConfigData = {
     enabled: !isLocalOnly && !!httpHubUrl,
     url: httpHubUrl,
@@ -303,10 +371,11 @@ async function installLocalConnectorService({ token, deviceId, hubUrl, jwt, loca
     jwt: jwt || appConfig.hub?.jwt || "",
     localOnly: isLocalOnly,
   };
-  await fs.promises.writeFile(hubConfigPath, JSON.stringify(hubConfigData, null, 2), "utf8");
+  await writePrivateFile(userHubConfigPath, `${JSON.stringify(hubConfigData, null, 2)}\n`);
 
   // Update in-memory appConfig so getHubInfo().enabled is true for the rest of this session
   appConfig.hub = { ...hubConfigData };
+  await persistMutableAppConfig();
 
   return {
     success: true,
@@ -354,6 +423,52 @@ if (!isDev && app.isPackaged) {
   }
 }
 
+function emitUpdateStatus(data) {
+  const payload = data && typeof data === "object" ? data : { status: String(data || "unknown") };
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      win.webContents.send("update-status", payload);
+    }
+  }
+}
+
+function getUpdateUnavailableResponse() {
+  return {
+    success: false,
+    unavailable: true,
+    version: app.getVersion(),
+    error: "Auto updates are only available in packaged production builds.",
+  };
+}
+
+function canUseAutoUpdater() {
+  return !!autoUpdater && app.isPackaged && !isDev;
+}
+
+if (autoUpdater) {
+  autoUpdater.on("checking-for-update", () => {
+    emitUpdateStatus({ status: "checking", version: app.getVersion() });
+  });
+  autoUpdater.on("update-available", (info) => {
+    emitUpdateStatus({ status: "available", info });
+  });
+  autoUpdater.on("update-not-available", (info) => {
+    emitUpdateStatus({ status: "not-available", info });
+  });
+  autoUpdater.on("error", (error) => {
+    emitUpdateStatus({
+      status: "error",
+      error: error && error.message ? error.message : String(error),
+    });
+  });
+  autoUpdater.on("download-progress", (progress) => {
+    emitUpdateStatus({ status: "download-progress", progress });
+  });
+  autoUpdater.on("update-downloaded", (info) => {
+    emitUpdateStatus({ status: "downloaded", info });
+  });
+}
+
 // Single Instance Lock
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
@@ -386,10 +501,14 @@ let appConfig = {
 
 try {
   const configPath = path.join(__dirname, "app-config.json");
-  if (fs.existsSync(configPath)) {
-    appConfig = JSON.parse(fs.readFileSync(configPath, "utf8"));
-  }
+  const bundledConfig = readJsonFileSync(configPath);
+  if (bundledConfig) appConfig = mergeAppConfig(appConfig, bundledConfig);
 } catch (error) {
+}
+
+const userAppConfig = readJsonFileSync(userAppConfigPath);
+if (userAppConfig) {
+  appConfig = mergeMutableAppConfig(appConfig, userAppConfig);
 }
 
 const buildFlavor = String(process.env.BUILD_FLAVOR || process.env.HYPERCLAW_BUILD_FLAVOR || "").toLowerCase();
@@ -401,31 +520,98 @@ if (["cloud", "commercial", "remote"].includes(buildFlavor)) {
   appConfig.remoteUrl = process.env.HYPERCLAW_REMOTE_URL || appConfig.remoteUrl || "";
 }
 
-// Auto-load hub config from ~/.hyperclaw/hub-config.json if not in app-config.json
-if (!appConfig.hub || !appConfig.hub.enabled) {
-  try {
-    const hubConfigPath = path.join(os.homedir(), ".hyperclaw", "hub-config.json");
-    if (fs.existsSync(hubConfigPath)) {
-      const hubCfg = JSON.parse(fs.readFileSync(hubConfigPath, "utf8"));
-      if (hubCfg.enabled && hubCfg.url && hubCfg.deviceId) {
-        appConfig.hub = {
-          enabled: true,
-          url: hubCfg.url,
-          deviceId: hubCfg.deviceId,
-          jwt: hubCfg.jwt || "",
-        };
-      }
-    }
-  } catch (_) {}
+// Auto-load legacy hub config from ~/.hyperclaw/hub-config.json.
+const hubCfg = readJsonFileSync(userHubConfigPath);
+if (hubCfg && typeof hubCfg === "object") {
+  appConfig.hub = {
+    ...(appConfig.hub || {}),
+    enabled: !!hubCfg.enabled,
+    url: typeof hubCfg.url === "string" ? hubCfg.url : "",
+    deviceId: typeof hubCfg.deviceId === "string" ? hubCfg.deviceId : "",
+    jwt: typeof hubCfg.jwt === "string" ? hubCfg.jwt : "",
+    localOnly: !!hubCfg.localOnly,
+  };
 }
 
 const isRemoteMode = appConfig.mode === "remote";
-let remoteUrl = appConfig.remoteUrl;
-const localUrl = appConfig.localUrl;
+let remoteUrl = typeof appConfig.remoteUrl === "string" ? appConfig.remoteUrl : "";
+const localUrl = typeof appConfig.localUrl === "string" && appConfig.localUrl
+  ? appConfig.localUrl
+  : "http://localhost:1000";
 
 // Ensure remoteUrl has protocol
 if (isRemoteMode && remoteUrl && !remoteUrl.startsWith("http://") && !remoteUrl.startsWith("https://")) {
   remoteUrl = `https://${remoteUrl}`;
+}
+appConfig.remoteUrl = remoteUrl || "";
+appConfig.localUrl = localUrl;
+
+function parseHttpUrl(rawUrl, baseUrl) {
+  if (!rawUrl || typeof rawUrl !== "string") return null;
+  try {
+    const parsed = baseUrl ? new URL(rawUrl, baseUrl) : new URL(rawUrl);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function getTrustedAppOrigins() {
+  const origins = new Set();
+  for (const candidate of [localUrl, remoteUrl]) {
+    const parsed = parseHttpUrl(candidate);
+    if (parsed) origins.add(parsed.origin);
+  }
+  return origins;
+}
+
+function getPrimaryAppBaseUrl() {
+  return isRemoteMode && remoteUrl ? remoteUrl : localUrl;
+}
+
+function isTrustedAppUrl(rawUrl) {
+  const parsed = parseHttpUrl(rawUrl);
+  return !!parsed && getTrustedAppOrigins().has(parsed.origin);
+}
+
+function resolveTrustedAppUrl(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== "string") return "";
+  const trimmed = rawUrl.trim();
+  if (!trimmed || trimmed === "about:blank") return "";
+  const parsed = parseHttpUrl(trimmed, getPrimaryAppBaseUrl());
+  if (!parsed) return "";
+  return isTrustedAppUrl(parsed.toString()) ? parsed.toString() : "";
+}
+
+function openExternalUrl(rawUrl) {
+  try {
+    const parsed = new URL(rawUrl, getPrimaryAppBaseUrl());
+    if (["http:", "https:", "mailto:"].includes(parsed.protocol)) {
+      shell.openExternal(parsed.toString()).catch((error) => {
+        console.warn("[navigation] Failed to open external URL:", error.message);
+      });
+      return true;
+    }
+  } catch {
+    // Ignore invalid URLs.
+  }
+  return false;
+}
+
+function isTrustedPermissionOrigin(webContents, details = {}, requestingOrigin = "") {
+  const candidates = [
+    requestingOrigin,
+    details.securityOrigin,
+    details.requestingUrl,
+    details.embeddingOrigin,
+  ];
+  try {
+    candidates.push(webContents?.getURL?.());
+  } catch {
+    // Ignore destroyed webContents.
+  }
+  return candidates.some((candidate) => isTrustedAppUrl(candidate));
 }
 
 let mainWindow = null;
@@ -539,7 +725,7 @@ async function hubCommandFromElectron(body) {
     req.on("error", (err) => resolve({ success: false, error: err.message }));
     req.on("timeout", () => {
       req.destroy();
-      resolve({ success: false, error: `Hub request timed out (${action || "unknown"})` });
+      resolve({ success: false, error: `Hub request timed out (${body?.action || "unknown"})` });
     });
     req.write(payload);
     req.end();
@@ -600,6 +786,13 @@ function fetchImageFromUrl(url) {
       response.on("error", reject);
     }).on("error", reject);
   });
+}
+
+function toggleVoiceOverlay() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (!mainWindow.isVisible()) mainWindow.show();
+  mainWindow.focus();
+  mainWindow.webContents.send("voice-input:toggle");
 }
 
 function createTray() {
@@ -877,113 +1070,94 @@ function createWindow() {
     }
   }
 
-  function isAppOriginUrl(url) {
-    try {
-      return url.startsWith(localUrl) || url.startsWith(remoteUrl);
-    } catch {
-      return false;
-    }
-  }
-
-  // Handle external links - open in system browser instead of Electron window.
-  // OAuth URLs (e.g. Google sign-in) open in an in-app child window so the callback returns to the app.
-  // For internal URLs: Electron often loads about:blank when window.open() gets a relative URL
-  // (e.g. "/Tool/OpenClaw"), so we create the child window ourselves with an absolute URL
-  // and the same preload so the app and bridge work in the new window.
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (!url) return { action: "deny" };
-    // OAuth: open in child window so callback stays in Electron instead of system browser
-    if (isOAuthProviderUrl(url)) {
-      const preloadPath = path.join(__dirname, "preload.js");
-      setImmediate(() => {
-        const oauthChild = new BrowserWindow({
-          width: 500,
-          height: 650,
-          title: "Sign in",
-          frame: true,
-          webPreferences: {
-            nodeIntegration: false,
-            contextIsolation: true,
-            webSecurity: true,
-            backgroundThrottling: true,
-            // Use default session so callback cookies are shared with main window
-          },
-          show: false,
-        });
-        oauthChild.loadURL(url, { userAgent: mainWindow.webContents.getUserAgent() }).catch((err) => {
-          console.error("OAuth window load failed:", err);
-          oauthChild.close();
-        });
-        oauthChild.once("ready-to-show", () => oauthChild.show());
-        // When OAuth redirects back to our app, load that URL in the main window and close the child.
-        // Use did-navigate so the callback runs in the child first and sets the session cookie (shared session).
-        oauthChild.webContents.on("did-navigate", (ev, navUrl) => {
-          if (isAppOriginUrl(navUrl)) {
-            mainWindow.loadURL(navUrl, { userAgent: mainWindow.webContents.getUserAgent() }).catch(() => {});
-            mainWindow.show();
-            mainWindow.focus();
-            oauthChild.close();
-          }
-        });
-      });
-      return { action: "deny" };
-    }
-    if (!url.startsWith(localUrl) && !url.startsWith(remoteUrl)) {
-      shell.openExternal(url);
-      return { action: "deny" };
-    }
-    // If Chromium passed about:blank (e.g. failed to resolve relative URL), we can't know the target
-    if (url === "about:blank" || url.trim() === "") return { action: "allow" };
-    const baseUrl = isRemoteMode ? remoteUrl : localUrl;
-    const absoluteUrl = url.startsWith("http://") || url.startsWith("https://")
-      ? url
-      : (baseUrl.replace(/\/$/, "") + (url.startsWith("/") ? url : "/" + url));
-    const preloadPath = path.join(__dirname, "preload.js");
+  function openOAuthChild(url) {
     setImmediate(() => {
-      const child = new BrowserWindow({
-        width: 1200,
-        height: 800,
-        minWidth: 800,
-        minHeight: 600,
-        title: "Hyperclaw",
-        frame: false,
+      const oauthChild = new BrowserWindow({
+        width: 500,
+        height: 650,
+        title: "Sign in",
+        frame: true,
         webPreferences: {
           nodeIntegration: false,
           contextIsolation: true,
-          preload: preloadPath,
           webSecurity: true,
           backgroundThrottling: true,
+          // Use default session so callback cookies are shared with main window.
         },
         show: false,
       });
-      child.loadURL(absoluteUrl, { userAgent: mainWindow.webContents.getUserAgent() }).catch((err) => {
-        console.error("Child window load failed:", err);
-        child.close();
+      oauthChild.loadURL(url, { userAgent: mainWindow.webContents.getUserAgent() }).catch((err) => {
+        console.error("OAuth window load failed:", err);
+        oauthChild.close();
       });
-      child.once("ready-to-show", () => child.show());
+      oauthChild.once("ready-to-show", () => oauthChild.show());
+      // When OAuth redirects back to our app, load that URL in the main window and close the child.
+      // Use did-navigate so the callback runs in the child first and sets the session cookie.
+      oauthChild.webContents.on("did-navigate", (ev, navUrl) => {
+        if (isTrustedAppUrl(navUrl)) {
+          mainWindow.loadURL(navUrl, { userAgent: mainWindow.webContents.getUserAgent() }).catch(() => {});
+          mainWindow.show();
+          mainWindow.focus();
+          oauthChild.close();
+        }
+      });
     });
+  }
+
+  // Handle external links - open in system browser instead of Electron window.
+  // Internal child windows are created explicitly with preload; external windows never get preload APIs.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (!url) return { action: "deny" };
+
+    const trustedUrl = resolveTrustedAppUrl(url);
+    if (trustedUrl) {
+      const preloadPath = path.join(__dirname, "preload.js");
+      setImmediate(() => {
+        const child = new BrowserWindow({
+          width: 1200,
+          height: 800,
+          minWidth: 800,
+          minHeight: 600,
+          title: "Hyperclaw",
+          frame: false,
+          webPreferences: {
+            nodeIntegration: false,
+            contextIsolation: true,
+            preload: preloadPath,
+            webSecurity: true,
+            backgroundThrottling: true,
+          },
+          show: false,
+        });
+        child.loadURL(trustedUrl, { userAgent: mainWindow.webContents.getUserAgent() }).catch((err) => {
+          console.error("Child window load failed:", err);
+          child.close();
+        });
+        child.once("ready-to-show", () => child.show());
+      });
+      return { action: "deny" };
+    }
+
+    if (isOAuthProviderUrl(url)) {
+      openOAuthChild(url);
+      return { action: "deny" };
+    }
+
+    openExternalUrl(url);
     return { action: "deny" };
   });
 
-  // Prevent navigation to external URLs within the Electron window (except OAuth flows)
+  // Prevent navigation to external URLs within the Electron window.
   mainWindow.webContents.on("will-navigate", (event, navigationUrl) => {
-    const parsedUrl = new URL(navigationUrl);
-    const currentUrl = isRemoteMode ? remoteUrl : localUrl;
-    const parsedCurrentUrl = new URL(currentUrl);
-
-    // Allow our app origins
-    if (navigationUrl.startsWith(localUrl) || navigationUrl.startsWith(remoteUrl)) {
+    if (isTrustedAppUrl(navigationUrl)) {
       return;
     }
-    // Allow OAuth providers in-window so callback returns to the app instead of system browser
+    event.preventDefault();
     if (isOAuthProviderUrl(navigationUrl)) {
+      openOAuthChild(navigationUrl);
       return;
     }
-    // External URL: open in system browser and prevent in-app navigation
-    if (parsedUrl.origin !== parsedCurrentUrl.origin) {
-      event.preventDefault();
-      shell.openExternal(navigationUrl);
-    }
+    openExternalUrl(navigationUrl);
   });
 
   mainWindow.loadURL(urlToLoad, {
@@ -1156,6 +1330,57 @@ function createWindow() {
     }
   });
 }
+
+// ─── IPC Handlers: App and Updates ──────────────────────────────────────────
+
+ipcMain.handle("get-version", () => app.getVersion());
+
+ipcMain.handle("check-for-updates", async () => {
+  if (!canUseAutoUpdater()) {
+    const response = getUpdateUnavailableResponse();
+    emitUpdateStatus({ status: "unavailable", error: response.error, version: response.version });
+    return response;
+  }
+  try {
+    const result = await autoUpdater.checkForUpdates();
+    return {
+      success: true,
+      updateInfo: result?.updateInfo || null,
+    };
+  } catch (error) {
+    const message = error && error.message ? error.message : String(error);
+    emitUpdateStatus({ status: "error", error: message });
+    return { success: false, error: message };
+  }
+});
+
+ipcMain.handle("download-update", async () => {
+  if (!canUseAutoUpdater()) {
+    const response = getUpdateUnavailableResponse();
+    emitUpdateStatus({ status: "unavailable", error: response.error, version: response.version });
+    return response;
+  }
+  try {
+    const files = await autoUpdater.downloadUpdate();
+    return { success: true, files };
+  } catch (error) {
+    const message = error && error.message ? error.message : String(error);
+    emitUpdateStatus({ status: "error", error: message });
+    return { success: false, error: message };
+  }
+});
+
+ipcMain.handle("install-update", async () => {
+  if (!canUseAutoUpdater()) {
+    const response = getUpdateUnavailableResponse();
+    emitUpdateStatus({ status: "unavailable", error: response.error, version: response.version });
+    return response;
+  }
+  setImmediate(() => {
+    autoUpdater.quitAndInstall(false, true);
+  });
+  return { success: true };
+});
 
 // ─── IPC Handlers: Local connector bearer token ─────────────────────────────
 
@@ -1671,8 +1896,8 @@ ipcMain.handle("oauth:start-flow", async (_event, { providerId }) => {
       const server = http.createServer(async (req, res) => {
         const reqUrl = new URL(req.url, `http://localhost`);
 
-        // Only handle the callback path
-        if (!req.url.startsWith(new URL(redirectUri).pathname)) {
+        // Only handle the exact callback path.
+        if (reqUrl.pathname !== redirectHost.pathname) {
           res.writeHead(404);
           res.end();
           return;
@@ -2000,8 +2225,7 @@ ipcMain.handle("hyperclaw:set-gateway-config", async (event, { host, port, token
     appConfig.gateway.port = trimmedPort;
     appConfig.gateway.token = trimmedToken;
 
-    const configPath = path.join(__dirname, "app-config.json");
-    fs.writeFileSync(configPath, JSON.stringify(appConfig, null, 2), "utf-8");
+    await persistMutableAppConfig();
 
     return { success: true };
   } catch (err) {
@@ -2075,20 +2299,17 @@ ipcMain.handle("hyperclaw:set-hub-config", async (event, { enabled, url, deviceI
     appConfig.hub.deviceId = (deviceId && typeof deviceId === "string") ? deviceId.trim() : "";
     appConfig.hub.jwt = (jwt && typeof jwt === "string") ? jwt.trim() : "";
 
-    // Persist to app-config.json
-    const configPath = path.join(__dirname, "app-config.json");
-    fs.writeFileSync(configPath, JSON.stringify(appConfig, null, 2), "utf-8");
+    await persistMutableAppConfig();
 
     // Also persist to hub-config.json so the config survives Electron restarts
-    const hubConfigPath = path.join(os.homedir(), ".hyperclaw", "hub-config.json");
     try {
-      await fs.promises.mkdir(path.join(os.homedir(), ".hyperclaw"), { recursive: true });
-      await fs.promises.writeFile(hubConfigPath, JSON.stringify({
+      await writePrivateFile(userHubConfigPath, `${JSON.stringify({
         enabled: appConfig.hub.enabled,
         url: appConfig.hub.url,
         deviceId: appConfig.hub.deviceId,
         jwt: appConfig.hub.jwt,
-      }, null, 2), "utf8");
+        localOnly: !!appConfig.hub.localOnly,
+      }, null, 2)}\n`);
     } catch { /* best-effort */ }
 
     return { success: true };
@@ -2136,11 +2357,10 @@ if (process.platform === "darwin") {
 app.whenReady().then(() => {
   writeToBridgeLog("Hyperclaw main process started");
 
-  // Grant microphone permission for voice input (audio only, deny camera/geolocation/etc.)
-  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
-    if (permission === "media") {
-      // Allow audio (microphone) access from our own app
-      callback(true);
+  // Grant media permissions only to trusted app origins.
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+    if (permission === "media" || permission === "display-capture") {
+      callback(isTrustedPermissionOrigin(webContents, details));
       return;
     }
     // Deny all other permissions by default
@@ -2149,16 +2369,23 @@ app.whenReady().then(() => {
 
   // Also set permission check handler — Electron 20+ checks permissions before requesting them.
   // Without this, getUserMedia can be silently denied before setPermissionRequestHandler fires.
-  session.defaultSession.setPermissionCheckHandler((webContents, permission) => {
-    if (permission === "media") return true;
+  session.defaultSession.setPermissionCheckHandler((webContents, permission, requestingOrigin, details) => {
+    if (permission === "media") {
+      return isTrustedPermissionOrigin(webContents, details, requestingOrigin);
+    }
     return false;
   });
 
   // Enable getDisplayMedia() with native macOS screen picker.
   // This lets the renderer capture a screen/window via the system picker
   // WITHOUT needing the app-level Screen Recording permission (no restart required).
-  session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
-    callback({ video: true });
+  session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
+    const frameUrl = request?.frame?.url || "";
+    if (isTrustedAppUrl(request?.securityOrigin) || isTrustedAppUrl(frameUrl)) {
+      callback({ video: true });
+      return;
+    }
+    callback({});
   }, { useSystemPicker: true });
 
   // Permissions are now handled in the onboarding wizard (GuidedStepPermissions)

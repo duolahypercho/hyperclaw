@@ -35,6 +35,9 @@ import { useToast } from "@/components/ui/use-toast";
 import Image from "next/image";
 import AvatarEditor from "react-avatar-editor";
 
+const userScopedPrefix = (storeLocation: string, userId: string): string =>
+  `${storeLocation.replace(/\/+$/g, "")}/${userId}/`;
+
 interface HyperchoLogoInputProps {
   value?: string;
   onChange: (value: string | File) => void;
@@ -276,7 +279,7 @@ const HyperchoLogoInput = forwardRef<
             request: {
               body: {
                 Id: fileId,
-                userId: `${storeLocation}/`,
+                userId: userScopedPrefix(storeLocation, sessionData.user.userId),
               },
             },
           },

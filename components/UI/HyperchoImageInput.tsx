@@ -9,6 +9,9 @@ import { useSession } from "next-auth/react";
 import { useToast } from "@/components/ui/use-toast";
 import Image from "next/image";
 
+const userScopedPrefix = (storeLocation: string, userId: string): string =>
+  `${storeLocation.replace(/\/+$/g, "")}/${userId}/`;
+
 interface HyperchoImageInputProps {
   value?: string;
   onChange: (value: string | File) => void;
@@ -109,7 +112,7 @@ const HyperchoImageInput: React.FC<HyperchoImageInputProps> = ({
           request: {
             body: {
               Id: fileId,
-              userId: `${storeLocation}/`,
+              userId: userScopedPrefix(storeLocation, sessionData.user.userId),
             },
           },
         },

@@ -28,7 +28,7 @@ const HyperchoHint = ({ value }: { value: string }) => {
             sideOffset={5}
             side="bottom"
           >
-            <span dangerouslySetInnerHTML={{ __html: value }} />
+            <span>{value}</span>
             <Arrow
               className="fill-background backdrop-blur"
               style={{

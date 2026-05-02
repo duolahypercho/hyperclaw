@@ -11,14 +11,35 @@ interface RequestBody {
 }
 
 const handler = async (req: NextApiRequest, res: NextApiResponse) => {
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+
   const session = await getServerSession(req, res, authOptions(req, res));
   if (!session?.user) {
     return res.status(401).json({ error: "Unauthorized" });
   }
 
-  const { body }: { body: RequestBody } = req;
-  const { messages, maxTokens, stop, stream } = body;
-  if (!messages) {
+  let body: unknown;
+  try {
+    body = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
+  } catch {
+    return res.status(400).json({ error: "Invalid request body" });
+  }
+  const bodyRecord = body && typeof body === "object"
+    ? (body as Partial<RequestBody>)
+    : {};
+  const { messages, maxTokens, stop, stream } = bodyRecord;
+  if (
+    !Array.isArray(messages) ||
+    messages.some((message) =>
+      !message ||
+      typeof message.content !== "string" ||
+      !["system", "user", "assistant"].includes(message.role)
+    ) ||
+    (maxTokens !== undefined && (!Number.isInteger(maxTokens) || maxTokens <= 0)) ||
+    (stop !== undefined && (!Array.isArray(stop) || stop.some((value) => typeof value !== "string")))
+  ) {
     return res.status(400).json({ error: "Invalid request body" });
   }
   if (stream) {

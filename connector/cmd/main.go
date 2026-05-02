@@ -789,29 +789,45 @@ func startLocalBridge(ctx context.Context, port int, dataStore *store.Store, int
 		"http://localhost:1000": true,
 		"http://127.0.0.1:1000": true,
 	}
-	corsOrigin := func(r *http.Request) string {
+	corsOrigin := func(r *http.Request) (string, bool) {
 		origin := r.Header.Get("Origin")
 		if origin == "" {
 			// Direct curl / non-browser callers don't send Origin; that's
 			// fine — they're not subject to CORS at all.
-			return ""
+			return "", true
 		}
 		if allowedOrigins[origin] {
-			return origin
+			return origin, true
 		}
-		return ""
+		return origin, false
+	}
+	allowCORS := func(w http.ResponseWriter, r *http.Request) {
+		if origin, ok := corsOrigin(r); ok && origin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+		}
+	}
+	rejectUntrustedOrigin := func(w http.ResponseWriter, r *http.Request) bool {
+		origin, ok := corsOrigin(r)
+		if ok {
+			return false
+		}
+		w.Header().Set("Vary", "Origin")
+		http.Error(w, "forbidden origin", http.StatusForbidden)
+		log.Printf("[cors] rejected %s %s from untrusted origin %q", r.Method, r.URL.Path, origin)
+		return true
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/bridge", func(w http.ResponseWriter, r *http.Request) {
+		if rejectUntrustedOrigin(w, r) {
+			return
+		}
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
 			return
 		}
-		if origin := corsOrigin(r); origin != "" {
-			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Set("Vary", "Origin")
-		}
+		allowCORS(w, r)
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		w.Header().Set("Content-Type", "application/json")
 
@@ -842,9 +858,7 @@ func startLocalBridge(ctx context.Context, port int, dataStore *store.Store, int
 	mux.HandleFunc("/bridge/health", func(w http.ResponseWriter, r *http.Request) {
 		// Health stays unauth — used by Electron's reachability probe and
 		// container healthchecks. No state, no secrets.
-		if origin := corsOrigin(r); origin != "" {
-			w.Header().Set("Access-Control-Allow-Origin", origin)
-		}
+		allowCORS(w, r)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(bh.Dispatch("connector-health", map[string]interface{}{}))
 	})
@@ -858,11 +872,11 @@ func startLocalBridge(ctx context.Context, port int, dataStore *store.Store, int
 	// CORS preflight + bearer auth wrapper for /mcp routes (mcp-go's
 	// transport doesn't know about our auth model, so we wrap the mux).
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/mcp") && rejectUntrustedOrigin(w, r) {
+			return
+		}
 		if r.Method == http.MethodOptions {
-			if origin := corsOrigin(r); origin != "" {
-				w.Header().Set("Access-Control-Allow-Origin", origin)
-				w.Header().Set("Vary", "Origin")
-			}
+			allowCORS(w, r)
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 			w.Header().Set("Access-Control-Max-Age", "86400")
