@@ -29,6 +29,7 @@ import {
   knowledgeDeleteDoc,
   knowledgeCreateCollection,
   knowledgeDeleteCollection,
+  knowledgeUploadFile,
   type KnowledgeCollectionEntry,
   type KnowledgeFileEntry,
 } from "$/lib/hyperclaw-bridge-client";
@@ -92,6 +93,10 @@ interface KnowledgeContextValue {
   createCollection: (name: string) => Promise<boolean>;
   deleteDoc: (relativePath: string) => Promise<boolean>;
   deleteCollection: (id: string) => Promise<boolean>;
+  uploadFiles: (
+    collection: string,
+    files: File[],
+  ) => Promise<{ uploaded: string[]; failed: { name: string; error: string }[] }>;
 }
 
 const KnowledgeContext = createContext<KnowledgeContextValue | undefined>(undefined);
@@ -372,6 +377,39 @@ export function KnowledgeProvider({ children }: { children: ReactNode }) {
     [companyId, selectedCollection, refreshList]
   );
 
+  const uploadFiles = useCallback(
+    async (
+      collection: string,
+      files: File[],
+    ): Promise<{ uploaded: string[]; failed: { name: string; error: string }[] }> => {
+      const uploaded: string[] = [];
+      const failed: { name: string; error: string }[] = [];
+      for (const file of files) {
+        try {
+          const result = await knowledgeUploadFile(companyId, collection, file);
+          if (result.success && result.relativePath) {
+            uploaded.push(result.relativePath);
+          } else {
+            failed.push({ name: file.name, error: result.error ?? "Upload failed" });
+          }
+        } catch (e) {
+          failed.push({
+            name: file.name,
+            error: e instanceof Error ? e.message : "Upload failed",
+          });
+        }
+      }
+      if (uploaded.length > 0) {
+        await refreshList();
+      }
+      if (failed.length > 0 && uploaded.length === 0) {
+        setError(failed[0].error);
+      }
+      return { uploaded, failed };
+    },
+    [companyId, refreshList],
+  );
+
   const hasUnsavedChanges =
     content !== null && originalContent !== null && content !== originalContent;
 
@@ -601,6 +639,7 @@ export function KnowledgeProvider({ children }: { children: ReactNode }) {
       createCollection,
       deleteDoc,
       deleteCollection,
+      uploadFiles,
     }),
     [
       companyId,
@@ -629,6 +668,7 @@ export function KnowledgeProvider({ children }: { children: ReactNode }) {
       createCollection,
       deleteDoc,
       deleteCollection,
+      uploadFiles,
     ]
   );
 

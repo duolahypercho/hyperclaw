@@ -87,6 +87,8 @@ export type BridgeAction =
   | 'list-models'
   | 'gateway-restart'
   | 'openclaw-doctor-fix'
+  | 'openclaw-security-audit-deep'
+  | 'openclaw-status-all'
   // Layout
   | 'save-layout'
   | 'get-layouts'

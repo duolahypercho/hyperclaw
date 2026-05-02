@@ -236,13 +236,28 @@ export interface FetchCronsOptions {
   runtime?: string;
 }
 
+export type SupportedCronRuntime = "openclaw" | "hermes" | "claude-code" | "codex";
+
+export function normalizeCronRuntime(runtime?: string): SupportedCronRuntime | undefined {
+  const value = runtime?.trim().toLowerCase();
+  if (!value || value === "all") return undefined;
+  if (value === "openclaw" || value === "open claw") return "openclaw";
+  if (value === "hermes" || value === "hermes-agent") return "hermes";
+  if (value === "claude-code" || value === "claude_code" || value === "claude code" || value === "claude" || value === "claw-code") {
+    return "claude-code";
+  }
+  if (value === "codex" || value === "openai-codex") return "codex";
+  return undefined;
+}
+
 function hydrateUnifiedCronJob(item: Record<string, unknown>): OpenClawCronJobJson {
-  const runtime = (item.runtime as OpenClawCronJobJson["runtime"]) ?? "openclaw";
+  const itemRuntime = typeof item.runtime === "string" ? item.runtime : undefined;
+  const runtime = itemRuntime ? normalizeCronRuntime(itemRuntime) : "openclaw";
   const fallback: OpenClawCronJobJson = {
     id: item.id as string,
     name: item.name as string,
     enabled: Boolean(item.enabled),
-    runtime,
+    ...(runtime ? { runtime } : {}),
   };
 
   if (typeof item.agentId === "string" && item.agentId.trim()) {
@@ -255,9 +270,11 @@ function hydrateUnifiedCronJob(item: Record<string, unknown>): OpenClawCronJobJs
 
   try {
     const raw = JSON.parse(item.rawJson) as OpenClawCronJobJson;
+    const rawWithoutRuntime = { ...raw };
+    delete rawWithoutRuntime.runtime;
     return {
-      ...raw,
-      runtime,
+      ...rawWithoutRuntime,
+      ...(runtime ? { runtime } : {}),
       agentId:
         typeof raw.agentId === "string" && raw.agentId.trim()
           ? raw.agentId
@@ -272,12 +289,14 @@ function hydrateUnifiedCronJob(item: Record<string, unknown>): OpenClawCronJobJs
 
 export async function fetchCronsFromBridge(options?: FetchCronsOptions): Promise<OpenClawCronJobJson[]> {
   const { agentId, runtime } = options ?? {};
+  const normalizedRuntime = normalizeCronRuntime(runtime);
+  if (runtime && !normalizedRuntime) return [];
 
   // Try unified store first (get-all-crons reads from SQLite)
   try {
     const params: Record<string, string> = {};
     if (agentId) params.agentId = agentId;
-    if (runtime) params.runtime = runtime;
+    if (normalizedRuntime) params.runtime = normalizedRuntime;
 
     const unified = await bridgeInvoke("get-all-crons", params);
     if (Array.isArray(unified) && unified.length > 0) {
@@ -289,11 +308,11 @@ export async function fetchCronsFromBridge(options?: FetchCronsOptions): Promise
       // Fallback: response is already in BridgeCron format (get-all-crons fell through to get-crons)
       return mapBridgeCronsToJobs(unified as BridgeCron[]);
     }
-    // If agentId filter was used and no results, return empty (don't fall back)
-    if (agentId) return [];
+    // If a filter was used and no results matched, return empty (don't fall back).
+    if (agentId || normalizedRuntime) return [];
   } catch {
-    // Fall through to legacy get-crons (only if no agentId filter)
-    if (agentId) return [];
+    // Fall through to legacy get-crons only when no filters were requested.
+    if (agentId || normalizedRuntime) return [];
   }
 
   const data = await bridgeInvoke("get-crons");

@@ -44,6 +44,7 @@ import { createMergeToolCalls } from "./gateway-chat/mergeToolCallsWithResults";
 import { exportChatAsMarkdown } from "./gateway-chat/exportChat";
 import { SlashCommandMenu } from "./gateway-chat/SlashCommandMenu";
 import { SLASH_COMMANDS, type SlashCommand } from "./gateway-chat/slashCommands";
+import { createNewChatSessionKey } from "./gateway-chat/sessionKeys";
 import { useRuntimeModels } from "@OS/AI/core/hook/use-runtime-models";
 import { AgentDetailDialog } from "$/components/Tool/Agents/AgentDetailDialog";
 import SessionHistoryDropdown from "$/components/SessionHistoryDropdown";
@@ -66,6 +67,9 @@ export function dispatchOpenAgentPanel(agentId: string, sessionKey?: string) {
 /* ── Types ────────────────────────────────────────────────── */
 
 type PanelTab = "chat" | "edit";
+type SessionListItem = { key: string; label?: string; updatedAt?: number; status?: string; trigger?: string; preview?: string };
+
+const SESSION_LIST_CACHE_TTL_MS = 15_000;
 
 interface AgentChatPanelProps {
   open: boolean;
@@ -232,7 +236,7 @@ export function AgentChatPanel({ open, agentId, sessionKey: initialSessionKey, o
 export interface PanelChatViewHandle {
   newChat: () => void;
   reload: () => void;
-  sessions: Array<{ key: string; label?: string; updatedAt?: number; status?: string; trigger?: string; preview?: string }>;
+  sessions: SessionListItem[];
   sessionsLoading: boolean;
   sessionsError: string | null;
   selectedSessionKey: string | undefined;
@@ -246,9 +250,9 @@ interface PanelChatViewProps {
   backendTab: BackendTab;
   onBackendTabChange: (tab: BackendTab) => void;
   showSubHeader?: boolean;
-  onSessionsUpdate?: (sessions: Array<{ key: string; label?: string; updatedAt?: number; status?: string; trigger?: string; preview?: string }>) => void;
+  onSessionsUpdate?: (sessions: SessionListItem[]) => void;
   /** Pre-populated sessions from parent cache — skips initial fetch and loading state */
-  initialSessions?: Array<{ key: string; label?: string; updatedAt?: number; status?: string; trigger?: string; preview?: string }>;
+  initialSessions?: SessionListItem[];
   /** If true, the runtime is unavailable (uninstalled) and sending is disabled */
   runtimeUnavailable?: boolean;
   /** Optional lifecycle block, e.g. agent is being fired. Disables sending. */
@@ -275,15 +279,20 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
   };
 
   // Sessions — initialize from parent cache if provided to avoid redundant fetches
-  const [sessions, setSessions] = useState<Array<{ key: string; label?: string; updatedAt?: number; status?: string; trigger?: string; preview?: string }>>(initialSessions ?? []);
+  const [sessions, setSessions] = useState<SessionListItem[]>(initialSessions ?? []);
   const [selectedSessionKey, setSelectedSessionKey] = useState<string | undefined>(initialSessionKey);
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const [sessionsError, setSessionsError] = useState<string | null>(null);
+  // Agent identity — needed for project-scoped session filtering (Claude Code/Codex)
+  const sessionAgentIdentity = useAgentIdentity(agentId);
+  const suppressNextSessionReloadRef = useRef<string | null>(null);
   // Track if we received pre-populated sessions to skip redundant work
   const hadInitialSessionsRef = useRef(!!initialSessions && initialSessions.length > 0);
   const selectedSessionOwnerRef = useRef(agentId);
-  const latestSessionScopeRef = useRef({ agentId, backendTab });
-  latestSessionScopeRef.current = { agentId, backendTab };
+  const latestSessionScopeRef = useRef({ agentId, backendTab, projectPath: sessionAgentIdentity?.project || "" });
+  latestSessionScopeRef.current = { agentId, backendTab, projectPath: sessionAgentIdentity?.project || "" };
+  const sessionFetchInflightRef = useRef<Map<string, Promise<SessionListItem[]>>>(new Map());
+  const sessionFetchCacheRef = useRef<Map<string, { sessions: SessionListItem[]; ts: number }>>(new Map());
 
   const setOwnedSelectedSessionKey = useCallback((key: string | undefined) => {
     selectedSessionOwnerRef.current = agentId;
@@ -314,9 +323,6 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
   const hermesProfileId = backendTab === "hermes"
     ? (agentId.startsWith("hermes:") ? agentId.slice(7) : agentId)
     : undefined;
-
-  // Agent identity — needed for project-scoped session filtering (claude-code)
-  const sessionAgentIdentity = useAgentIdentity(agentId);
 
   const gatewayChat = useGatewayChat({
     sessionKey,
@@ -398,6 +404,10 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
     if (!initialLoadDoneRef.current) return;
     if (sessionKey === prevSessionRef.current) return;
     prevSessionRef.current = sessionKey;
+    if (suppressNextSessionReloadRef.current === sessionKey) {
+      suppressNextSessionReloadRef.current = null;
+      return;
+    }
     setInitialReady(false);
     loadChatHistory()
       .catch(() => {})
@@ -408,9 +418,12 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
   const fetchSessions = useCallback(async () => {
     const requestAgentId = agentId;
     const requestBackendTab = backendTab;
+    const projectPath = sessionAgentIdentity?.project || "";
+    const fetchKey = `${requestBackendTab}:${requestAgentId}:${projectPath}`;
     const isCurrentRequest = () =>
       latestSessionScopeRef.current.agentId === requestAgentId &&
-      latestSessionScopeRef.current.backendTab === requestBackendTab;
+      latestSessionScopeRef.current.backendTab === requestBackendTab &&
+      latestSessionScopeRef.current.projectPath === projectPath;
 
     // A firing agent is read-only. Keep existing cached sessions intact.
     if (sendDisabledReason) {
@@ -426,61 +439,80 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
       return;
     }
 
+    const cached = sessionFetchCacheRef.current.get(fetchKey);
+    if (cached && Date.now() - cached.ts < SESSION_LIST_CACHE_TTL_MS) {
+      if (isCurrentRequest()) {
+        setSessions(cached.sessions);
+        onSessionsUpdate?.(cached.sessions);
+        setSessionsLoading(false);
+      }
+      return;
+    }
+
     setSessionsLoading(true);
     setSessionsError(null);
     try {
-      let result: Array<{ key: string; label?: string; updatedAt?: number; status?: string; trigger?: string }> = [];
-      if (backendTab === "openclaw") {
-        if (gatewayConnection.isConnected()) {
-          const r = await gatewayConnection.listSessions(agentId, 50).catch(() => ({ sessions: [] as any[] }));
-          result = (r.sessions || []).map((s: any) => ({
-            ...s,
-            label: s.label || s.key,
-            trigger: s.kind || s.trigger,
-            preview: s.preview || s.lastMessage,
-          }));
-        }
-      } else if (backendTab === "claude-code") {
-        const projectPath = sessionAgentIdentity?.project;
-        const r = await bridgeInvoke("claude-code-list-sessions", { agentId, limit: 50, ...(projectPath ? { projectPath } : {}) }).catch(() => ({ sessions: [] })) as any;
-        result = (r?.sessions || []).map((s: any) => ({
-          key: s.key || `claude:${s.id}`,
-          label: s.label || s.id?.slice(0, 8),
-          updatedAt: s.updatedAt,
-          status: s.status,
-          trigger: s.kind || s.trigger,
-          preview: s.preview,
-        }));
-      } else if (backendTab === "codex") {
-        const projectPath = sessionAgentIdentity?.project;
-        const r = await bridgeInvoke("codex-list-sessions", { agentId, limit: 50, ...(projectPath ? { projectPath } : {}) }).catch(() => ({ sessions: [] })) as any;
-        result = (r?.sessions || []).map((s: any) => ({
-          key: s.key || `codex:${s.id}`,
-          label: s.label || s.id?.slice(0, 8),
-          updatedAt: s.updatedAt,
-          status: s.status,
-          trigger: s.kind || s.trigger,
-          preview: s.preview,
-        }));
-      } else if (backendTab === "hermes") {
-        // Strip "hermes:" prefix — the connector expects the bare profile name
-        const hermesProfileId = agentId.startsWith("hermes:") ? agentId.slice(7) : agentId;
-        const r = await bridgeInvoke("hermes-sessions", { agentId: hermesProfileId }).catch(() => ({ sessions: [] })) as any;
-        result = (r?.sessions || []).map((s: any) => ({
-          key: `hermes:${s.key || s.id}`,
-          label: s.label || (s.key || s.id)?.slice(0, 16),
-          updatedAt: s.updatedAt,
-          status: s.status,
-          trigger: s.kind || s.trigger,
-          preview: s.preview,
-        }));
+      let request = sessionFetchInflightRef.current.get(fetchKey);
+      if (!request) {
+        request = (async (): Promise<SessionListItem[]> => {
+          let result: SessionListItem[] = [];
+          if (requestBackendTab === "openclaw") {
+            if (gatewayConnection.isConnected()) {
+              const r = await gatewayConnection.listSessions(requestAgentId, 50).catch(() => ({ sessions: [] as any[] }));
+              result = (r.sessions || []).map((s: any) => ({
+                ...s,
+                label: s.label || s.key,
+                trigger: s.kind || s.trigger,
+                preview: s.preview || s.lastMessage,
+              }));
+            }
+          } else if (requestBackendTab === "claude-code") {
+            const r = await bridgeInvoke("claude-code-list-sessions", { agentId: requestAgentId, limit: 50, ...(projectPath ? { projectPath } : {}) }).catch(() => ({ sessions: [] })) as any;
+            result = (r?.sessions || []).map((s: any) => ({
+              key: s.key || `claude:${s.id}`,
+              label: s.label || s.id?.slice(0, 8),
+              updatedAt: s.updatedAt,
+              status: s.status,
+              trigger: s.kind || s.trigger,
+              preview: s.preview,
+            }));
+          } else if (requestBackendTab === "codex") {
+            const r = await bridgeInvoke("codex-list-sessions", { agentId: requestAgentId, limit: 50, ...(projectPath ? { projectPath } : {}) }).catch(() => ({ sessions: [] })) as any;
+            result = (r?.sessions || []).map((s: any) => ({
+              key: s.key || `codex:${s.id}`,
+              label: s.label || s.id?.slice(0, 8),
+              updatedAt: s.updatedAt,
+              status: s.status,
+              trigger: s.kind || s.trigger,
+              preview: s.preview,
+            }));
+          } else if (requestBackendTab === "hermes") {
+            // Strip "hermes:" prefix — the connector expects the bare profile name
+            const hermesProfileId = requestAgentId.startsWith("hermes:") ? requestAgentId.slice(7) : requestAgentId;
+            const r = await bridgeInvoke("hermes-sessions", { agentId: hermesProfileId }).catch(() => ({ sessions: [] })) as any;
+            result = (r?.sessions || []).map((s: any) => ({
+              key: `hermes:${s.key || s.id}`,
+              label: s.label || (s.key || s.id)?.slice(0, 16),
+              updatedAt: s.updatedAt,
+              status: s.status,
+              trigger: s.kind || s.trigger,
+              preview: s.preview,
+            }));
+          }
+          result.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+          // Safety cap at 100 — the dropdown is scrollable and has a built-in
+          // search filter, so we no longer need the aggressive 15-item cut-off
+          // that was previously hiding legitimate Codex/Claude history.
+          return result.slice(0, 100);
+        })().finally(() => {
+          sessionFetchInflightRef.current.delete(fetchKey);
+        });
+        sessionFetchInflightRef.current.set(fetchKey, request);
       }
-      result.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+
+      const capped = await request;
+      sessionFetchCacheRef.current.set(fetchKey, { sessions: capped, ts: Date.now() });
       if (!isCurrentRequest()) return;
-      // Safety cap at 100 — the dropdown is scrollable and has a built-in
-      // search filter, so we no longer need the aggressive 15-item cut-off
-      // that was previously hiding legitimate Codex/Claude history.
-      const capped = result.slice(0, 100);
       setSessions(capped);
       onSessionsUpdate?.(capped);
     } catch {
@@ -509,7 +541,7 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
   const prevIdentityProjectRef = useRef<string | undefined>(undefined);
   useEffect(() => {
     if (!initialLoadDoneRef.current) return;
-    if (backendTab !== "claude-code") return;
+    if (backendTab !== "claude-code" && backendTab !== "codex") return;
     const newProject = sessionAgentIdentity?.project;
     if (newProject && prevIdentityProjectRef.current !== newProject) {
       prevIdentityProjectRef.current = newProject;
@@ -540,6 +572,7 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
   useEffect(() => {
     if (initialSessionKey && initialSessionKey !== prevInitialSessionKeyRef.current) {
       prevInitialSessionKeyRef.current = initialSessionKey;
+      suppressNextSessionReloadRef.current = initialSessionKey;
       setOwnedSelectedSessionKey(initialSessionKey);
       setChatSessionKey(initialSessionKey);
       // Load chat history for the newly-arrived primary session key
@@ -565,6 +598,7 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
     // When initialSessionKey is undefined (primary key still resolving from connector),
     // use the fallback — the sync effect will update when the real key arrives.
     const newKey = initialSessionKey || `agent:${agentId}:main`;
+    suppressNextSessionReloadRef.current = newKey;
     setOwnedSelectedSessionKey(newKey);
     setChatSessionKey(newKey);
 
@@ -791,6 +825,26 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
     setChatSessionKey,
   ]);
 
+  const handleStartNewChat = useCallback(() => {
+    if (inputBlocked) return;
+    if (isLoading) stopGeneration();
+    const newSessionKey = createNewChatSessionKey(agentId, backendTab);
+    setOwnedSelectedSessionKey(newSessionKey);
+    setChatSessionKey(newSessionKey);
+    setMessageQueue([]);
+    setQuotedMessage(null);
+    setShowScrollButton(false);
+    inputHandleRef.current?.clear();
+  }, [
+    agentId,
+    backendTab,
+    inputBlocked,
+    isLoading,
+    setChatSessionKey,
+    setOwnedSelectedSessionKey,
+    stopGeneration,
+  ]);
+
   // Session change
   const handleSessionChange = useCallback((newSessionKey: string) => {
     if (sendDisabledReason) return;
@@ -807,7 +861,7 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
   // Export
   // Expose actions to parent via ref
   useImperativeHandle(ref, () => ({
-    newChat: handleClearCurrentChat,
+    newChat: handleStartNewChat,
     reload: () => { loadChatHistory(); },
     sessions,
     sessionsLoading,
@@ -815,7 +869,7 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
     selectedSessionKey: selectedSessionKeyForActiveAgent,
     onSessionChange: handleSessionChange,
     fetchSessions,
-  }), [handleClearCurrentChat, loadChatHistory, sessions, sessionsLoading, sessionsError, selectedSessionKeyForActiveAgent, handleSessionChange, fetchSessions]);
+  }), [handleStartNewChat, loadChatHistory, sessions, sessionsLoading, sessionsError, selectedSessionKeyForActiveAgent, handleSessionChange, fetchSessions]);
 
   const handleExport = useCallback(() => {
     exportChatAsMarkdown(mergedMessages, currentAgent.name);
@@ -837,14 +891,14 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
       setSlashMenuVisible(false);
       inputHandleRef.current?.clear();
       switch (cmd.name) {
-        case "/new": handleClearCurrentChat(); break;
+        case "/new": handleStartNewChat(); break;
         case "/clear": handleClearCurrentChat(); break;
         case "/stop": stopGeneration(); break;
         case "/export": handleExport(); break;
-        case "/reload": loadChatHistory(); break;
+        case "/reload": loadChatHistory().catch(() => {}); break;
       }
     },
-    [handleClearCurrentChat, stopGeneration, handleExport, loadChatHistory]
+    [handleStartNewChat, handleClearCurrentChat, stopGeneration, handleExport, loadChatHistory]
   );
 
   // Send message
@@ -940,9 +994,9 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
             error={sessionsError}
             currentSessionKey={selectedSessionKeyForActiveAgent}
             onLoadSession={handleSessionChange}
-            onNewChat={handleClearCurrentChat}
+            onNewChat={handleStartNewChat}
             onFetchSessions={fetchSessions}
-            newChatLabel="Clear Session"
+            newChatLabel="+ New Chat"
             disabled={!!sendDisabledReason}
           />
         </div>
@@ -1222,6 +1276,28 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
             !initialReady && "hidden"
           )}
         >
+          {/* Runtime error */}
+          <AnimatePresence>
+            {error && (
+              <motion.div
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 8 }}
+                className="pointer-events-auto mb-2 rounded-lg border border-red-200 bg-red-50/95 px-3 py-2 text-xs text-red-700 shadow-sm backdrop-blur-sm dark:border-red-800/40 dark:bg-red-950/80 dark:text-red-300"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <span className="min-w-0 break-words">{error}</span>
+                  <button
+                    onClick={() => loadChatHistory().catch(() => {})}
+                    className="shrink-0 rounded bg-red-100 px-2 py-0.5 text-[10px] font-medium transition-colors hover:bg-red-200 dark:bg-red-900/50 dark:hover:bg-red-800/60"
+                  >
+                    Retry
+                  </button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
           {/* Quoted message */}
           <AnimatePresence>
             {quotedMessage && (
@@ -1342,9 +1418,9 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
               onStopGeneration={stopGeneration}
               onInputChange={handleInputChange}
               inputRef={inputHandleRef}
+              runtimeModels={runtimeModels}
+              runtimeModelsLoading={runtimeModelsLoading}
               {...(backendTab !== "openclaw" ? {
-                runtimeModels,
-                runtimeModelsLoading,
                 currentModel: currentModel || "",
                 onModelChange: setCurrentModel,
               } : {})}

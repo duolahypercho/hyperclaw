@@ -2,11 +2,27 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
-import { loadUsageWs, type UsageCostPayload } from "$/lib/openclaw-gateway-ws";
+import {
+  getGatewayConnectionState,
+  loadUsageWs,
+  subscribeGatewayConnection,
+  type UsageCostPayload,
+} from "$/lib/openclaw-gateway-ws";
 import { parseCronJobs, type CronJobParsed } from "$/components/Tool/Crons/utils";
 export type { CronJobParsed };
 
 const POLL_INTERVAL_MS = 30_000;
+const RUNTIME_ONLY_STATS = new Set(["claude-code", "codex", "hermes"]);
+
+interface TokenUsageSummary {
+  groupKey: string;
+  totalCostUsd: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  lastActivityMs: number;
+  sessionCount?: number;
+}
 
 /** Format a Date as YYYY-MM-DD in local timezone (not UTC). */
 function toLocalDateStr(d: Date): string {
@@ -70,6 +86,28 @@ const EMPTY_USAGE: { usageCost: UsageCostPayload; sessionsUsage: null } = {
   sessionsUsage: null,
 };
 
+function mergeActivityUsage(
+  activityMap: Map<string, AgentActivitySnapshot>,
+  key: string,
+  usage: TokenUsageSummary,
+  sessions?: number,
+) {
+  if (!key || key === "unattributed" || key === "unknown") return;
+  const existing = activityMap.get(key);
+  const tokenTotal =
+    (usage.inputTokens ?? 0) +
+    (usage.outputTokens ?? 0) +
+    (usage.cacheReadTokens ?? 0);
+  activityMap.set(key, {
+    agent_id: key,
+    cost_month: Math.max(existing?.cost_month ?? 0, usage.totalCostUsd ?? 0),
+    tokens_month: Math.max(existing?.tokens_month ?? 0, tokenTotal),
+    sessions: Math.max(existing?.sessions ?? 0, usage.sessionCount ?? sessions ?? 0),
+    last_activity: Math.max(existing?.last_activity ?? 0, usage.lastActivityMs ?? 0) || undefined,
+    state: existing?.state,
+  });
+}
+
 export function useEnsembleData(): EnsembleData {
   const [inboxItems, setInboxItems] = useState<InboxItem[]>([]);
   const [crons, setCrons] = useState<CronJobParsed[]>([]);
@@ -99,15 +137,41 @@ export function useEnsembleData(): EnsembleData {
 
     try {
       const now = new Date();
+      const nowMs = now.getTime();
+      const todayMidnightMs = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+      const monthStartMs = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
       const todayStr = toLocalDateStr(now);
       const monthStartStr = toLocalDateStr(new Date(now.getFullYear(), now.getMonth(), 1));
 
-      const [inboxRes, cronsRes, logsRes, monthUsage] = await Promise.all([
+      const [
+        inboxRes,
+        cronsRes,
+        logsRes,
+        monthUsage,
+        monthUsageByAgent,
+        monthUsageByRuntime,
+        todayUsageByRuntime,
+      ] = await Promise.all([
         safeCall<{ items?: InboxItem[] }>("inbox-list", { status: "pending", limit: 20 }, {}),
         safeCall<unknown>("get-crons", {}, {}),
         safeCall<LogEntry[] | { data?: LogEntry[] }>("get-logs", { lines: 50 }, []),
         // Month-to-date: per-agent stats + sparkline + today's cost from daily[].
         loadUsageWs({ startDate: monthStartStr, endDate: todayStr, limit: 2000 }).catch(() => EMPTY_USAGE),
+        safeCall<{ success?: boolean; data?: TokenUsageSummary[] }>("get-token-usage", {
+          from: monthStartMs,
+          to: nowMs,
+          groupBy: "agent",
+        }, { success: false, data: [] }),
+        safeCall<{ success?: boolean; data?: TokenUsageSummary[] }>("get-token-usage", {
+          from: monthStartMs,
+          to: nowMs,
+          groupBy: "runtime",
+        }, { success: false, data: [] }),
+        safeCall<{ success?: boolean; data?: TokenUsageSummary[] }>("get-token-usage", {
+          from: todayMidnightMs,
+          to: nowMs,
+          groupBy: "runtime",
+        }, { success: false, data: [] }),
       ]);
 
       // ── inbox ────────────────────────────────────────────────────────────
@@ -154,6 +218,16 @@ export function useEnsembleData(): EnsembleData {
         }
       }
 
+      for (const row of monthUsageByAgent.data ?? []) {
+        mergeActivityUsage(activityMap, row.groupKey, row, row.groupKey ? 1 : 0);
+      }
+
+      for (const row of monthUsageByRuntime.data ?? []) {
+        if (RUNTIME_ONLY_STATS.has(row.groupKey)) {
+          mergeActivityUsage(activityMap, row.groupKey, row, row.groupKey ? 1 : 0);
+        }
+      }
+
       setActivity(activityMap);
 
       // ── today's spend + sparkline ─────────────────────────────────────────
@@ -165,28 +239,102 @@ export function useEnsembleData(): EnsembleData {
         .sort((a, b) => a.date.localeCompare(b.date));
 
       const todayEntry = sortedDaily.find((d) => d.date === todayStr);
-      setTotalSpendToday(todayEntry?.totalCost ?? 0);
-      setTokensToday(todayEntry?.totalTokens ?? 0);
+      const connectorRuntimeOnlyToday = (todayUsageByRuntime.data ?? []).filter((row) =>
+        RUNTIME_ONLY_STATS.has(row.groupKey),
+      );
+      const connectorOpenClawToday = (todayUsageByRuntime.data ?? []).filter((row) =>
+        row.groupKey === "openclaw",
+      );
+      const runtimeOnlyTodayCost = connectorRuntimeOnlyToday.reduce(
+        (sum, row) => sum + (row.totalCostUsd ?? 0),
+        0,
+      );
+      const runtimeOnlyTodayTokens = connectorRuntimeOnlyToday.reduce(
+        (sum, row) =>
+          sum +
+          (row.inputTokens ?? 0) +
+          (row.outputTokens ?? 0) +
+          (row.cacheReadTokens ?? 0),
+        0,
+      );
+      const connectorOpenClawCost = connectorOpenClawToday.reduce(
+        (sum, row) => sum + (row.totalCostUsd ?? 0),
+        0,
+      );
+      const connectorOpenClawTokens = connectorOpenClawToday.reduce(
+        (sum, row) =>
+          sum +
+          (row.inputTokens ?? 0) +
+          (row.outputTokens ?? 0) +
+          (row.cacheReadTokens ?? 0),
+        0,
+      );
+      const gatewayTodayCost = todayEntry?.totalCost ?? 0;
+      const gatewayTodayTokens = todayEntry?.totalTokens ?? 0;
+      const openClawTodayCost = gatewayTodayCost || connectorOpenClawCost;
+      const openClawTodayTokens = gatewayTodayTokens || connectorOpenClawTokens;
+      const totalTodayCost = openClawTodayCost + runtimeOnlyTodayCost;
+      const totalTodayTokens = openClawTodayTokens + runtimeOnlyTodayTokens;
+      setTotalSpendToday(totalTodayCost);
+      setTokensToday(totalTodayTokens);
 
       // ── cumulative intraday spend series ─────────────────────────────────
       // x = hours of today (0 … currentHour), y = running $ total at each hour.
       // This always climbs and shows exactly when spend is happening today.
-      const todayMidnightMs = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
       const todaySessions = (monthUsage.sessionsUsage?.sessions ?? []).filter(
         (s) => (s.usage?.lastActivity ?? 0) >= todayMidnightMs
       );
-      setSessionsToday(todaySessions.length);
+      const runtimeOnlyTodaySessions = connectorRuntimeOnlyToday.reduce(
+        (sum, row) => sum + (row.sessionCount ?? 0),
+        0,
+      );
+      const connectorOpenClawSessions = connectorOpenClawToday.reduce(
+        (sum, row) => sum + (row.sessionCount ?? 0),
+        0,
+      );
+      setSessionsToday((todaySessions.length || connectorOpenClawSessions) + runtimeOnlyTodaySessions);
 
+      const currentHour = now.getHours();
+      const hourlyCosts = new Array(24).fill(0) as number[];
+      let hasHourlySpend = false;
+
+      // Bucket each gateway session's cost into the hour of its last activity.
       if (todaySessions.length >= 1) {
-        // Bucket each session's cost into the hour of its last activity.
-        const hourlyCosts = new Array(24).fill(0) as number[];
         for (const s of todaySessions) {
           if (!s.usage?.lastActivity) continue;
           const hour = new Date(s.usage.lastActivity).getHours();
-          hourlyCosts[hour] += s.usage.totalCost ?? 0;
+          const cost = s.usage.totalCost ?? 0;
+          if (cost <= 0) continue;
+          hourlyCosts[hour] += cost;
+          hasHourlySpend = true;
         }
-        // Build running cumulative up to the current hour.
-        const currentHour = now.getHours();
+      }
+
+      const gatewaySessionSpend = hourlyCosts.reduce((sum, cost) => sum + cost, 0);
+      if (gatewaySessionSpend <= 0 && gatewayTodayCost > 0) {
+        // Gateway may only provide a daily total. Keep the Today chart alive.
+        hourlyCosts[currentHour] += gatewayTodayCost;
+        hasHourlySpend = true;
+      }
+
+      const connectorRowsForChart = [
+        ...(gatewayTodayCost > 0 || gatewaySessionSpend > 0 ? [] : connectorOpenClawToday),
+        ...connectorRuntimeOnlyToday,
+      ];
+      for (const row of connectorRowsForChart) {
+        const cost = row.totalCostUsd ?? 0;
+        if (cost <= 0) continue;
+        const hour = row.lastActivityMs ? new Date(row.lastActivityMs).getHours() : currentHour;
+        hourlyCosts[Math.max(0, Math.min(23, hour))] += cost;
+        hasHourlySpend = true;
+      }
+
+      if (!hasHourlySpend && totalTodayCost > 0) {
+        hourlyCosts[currentHour] = totalTodayCost;
+        hasHourlySpend = true;
+      }
+
+      if (hasHourlySpend) {
         let cumSum = 0;
         const series: number[] = [];
         for (let h = 0; h <= currentHour; h++) {
@@ -196,7 +344,7 @@ export function useEnsembleData(): EnsembleData {
         // Ensure at least 2 points so the sparkline can draw a line.
         setDailySpend(series.length >= 2 ? series : [0, ...series]);
       } else {
-        // No session data — fall back to last 8 days of daily totals.
+        // No spend today - fall back to last 8 days of daily totals.
         setDailySpend(sortedDaily.slice(-8).map((d) => d.totalCost));
       }
 
@@ -238,6 +386,24 @@ export function useEnsembleData(): EnsembleData {
     const handleFocus = () => fetchAll(true);
     window.addEventListener("focus", handleFocus);
     return () => window.removeEventListener("focus", handleFocus);
+  }, [fetchAll]);
+
+  useEffect(() => {
+    const handleTokenUsageUpdated = () => fetchAll(true);
+    window.addEventListener("token.usage.updated", handleTokenUsageUpdated);
+    return () => window.removeEventListener("token.usage.updated", handleTokenUsageUpdated);
+  }, [fetchAll]);
+
+  useEffect(() => {
+    let wasConnected = getGatewayConnectionState().connected;
+
+    return subscribeGatewayConnection(() => {
+      const isConnected = getGatewayConnectionState().connected;
+      if (isConnected && !wasConnected) {
+        void fetchAll(true);
+      }
+      wasConnected = isConnected;
+    });
   }, [fetchAll]);
 
   return {

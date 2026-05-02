@@ -5,7 +5,7 @@ import { HyperchoInput, HyperchoTextarea } from "$/components/UI/InputBox";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/use-toast";
-import { dashboardState } from "$/lib/dashboard-state";
+import { loadCompanyProfile, saveCompanyProfile } from "$/lib/company-profile";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
 import { getActiveDeviceId } from "$/lib/hub-direct";
 import SettingsSkeleton from "$/components/Tool/Setting/pages/skelenton";
@@ -25,16 +25,6 @@ function formatRelativeTime(unixSeconds: number): string {
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
   return `${Math.floor(diff / 86400)}d ago`;
-}
-
-function loadCompany(): { name: string; description: string; avatarDataUri?: string; createdAt?: string } {
-  try {
-    const raw = dashboardState.get("hyperclaw-company");
-    if (!raw) return { name: "", description: "" };
-    return JSON.parse(raw);
-  } catch {
-    return { name: "", description: "" };
-  }
 }
 
 const Company = () => {
@@ -58,7 +48,7 @@ const Company = () => {
   const [showConnect, setShowConnect] = useState(false);
 
   useEffect(() => {
-    const data = loadCompany();
+    const data = loadCompanyProfile();
     setName(data.name || "");
     setDescription(data.description || "");
     setAvatarDataUri(data.avatarDataUri || null);
@@ -200,9 +190,8 @@ const Company = () => {
         name: name.trim(),
         description: description.trim(),
         avatarDataUri: avatarDataUri || undefined,
-        createdAt: loadCompany().createdAt || new Date().toISOString(),
+        createdAt: loadCompanyProfile().createdAt || new Date().toISOString(),
       };
-      dashboardState.set("hyperclaw-company", JSON.stringify(updated), { flush: true });
 
       await bridgeInvoke("onboarding-configure-workspace", {
         companyName: name.trim(),
@@ -212,6 +201,8 @@ const Company = () => {
         providerConfigs: [],
         runtimeChannelConfigs: [],
       });
+
+      saveCompanyProfile(updated);
 
       setOriginal({
         name: name.trim(),
@@ -495,7 +486,7 @@ function StripeArrBlock({
                   Stripe → Create restricted key
                   <ExternalLink className="w-2.5 h-2.5" />
                 </a>
-                . The name "Hyperclaw ARR" is prefilled.
+                . The name &quot;Hyperclaw ARR&quot; is prefilled.
               </li>
               <li>
                 In the permissions list, set these three to <span className="font-medium">Read</span>:

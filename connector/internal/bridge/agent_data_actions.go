@@ -265,6 +265,7 @@ func (b *BridgeHandler) listAgentIdentities() actionResult {
 			storedAgents[agent.ID] = agent
 		}
 	}
+	savedChannelConfigs := b.loadSavedAgentChannelConfigs()
 	data := make([]map[string]interface{}, 0, len(agents))
 	for _, agent := range agents {
 		row := map[string]interface{}{
@@ -281,9 +282,117 @@ func (b *BridgeHandler) listAgentIdentities() actionResult {
 				row["config"] = config
 			}
 		}
+		if _, hasConfig := row["config"]; !hasConfig {
+			if config, ok := publicSavedAgentChannelConfig(agent, agents, savedChannelConfigs); ok {
+				row["config"] = config
+			}
+		}
 		data = append(data, row)
 	}
 	return okResult(map[string]interface{}{"success": true, "data": data})
+}
+
+func (b *BridgeHandler) loadSavedAgentChannelConfigs() []onboardingRuntimeChannelConfig {
+	if b.store == nil {
+		return nil
+	}
+	var merged []onboardingRuntimeChannelConfig
+	seen := map[string]bool{}
+	for _, key := range []string{"onboarding-agent-channel-configs", "onboarding-runtime-channels"} {
+		raw, err := b.store.KVGet(key)
+		if err != nil || strings.TrimSpace(raw) == "" {
+			continue
+		}
+		var configs []onboardingRuntimeChannelConfig
+		if err := json.Unmarshal([]byte(raw), &configs); err != nil {
+			continue
+		}
+		for _, cfg := range configs {
+			configKey := savedAgentChannelConfigKey(cfg)
+			if seen[configKey] {
+				continue
+			}
+			seen[configKey] = true
+			merged = append(merged, cfg)
+		}
+	}
+	return merged
+}
+
+func savedAgentChannelConfigKey(cfg onboardingRuntimeChannelConfig) string {
+	agentKey := strings.TrimSpace(cfg.AgentID)
+	if agentKey == "" {
+		agentKey = strings.ToLower(strings.TrimSpace(cfg.AgentName))
+	}
+	return strings.TrimSpace(cfg.Runtime) + ":" + agentKey
+}
+
+func publicSavedAgentChannelConfig(
+	agent store.AgentIdentity,
+	agents []store.AgentIdentity,
+	configs []onboardingRuntimeChannelConfig,
+) (map[string]interface{}, bool) {
+	runtimeName := strings.TrimSpace(agent.Runtime)
+	if runtimeName != "openclaw" && runtimeName != "hermes" {
+		return nil, false
+	}
+
+	var exactByID *onboardingRuntimeChannelConfig
+	var exactByName *onboardingRuntimeChannelConfig
+	var runtimeOnly *onboardingRuntimeChannelConfig
+	for i := range configs {
+		cfg := &configs[i]
+		if strings.TrimSpace(cfg.Runtime) != runtimeName {
+			continue
+		}
+		cfgAgentID := strings.TrimSpace(cfg.AgentID)
+		switch {
+		case cfgAgentID != "" && sameAgentConfigID(runtimeName, cfgAgentID, agent.ID):
+			exactByID = cfg
+		case strings.TrimSpace(cfg.AgentName) != "" && strings.EqualFold(strings.TrimSpace(cfg.AgentName), strings.TrimSpace(agent.Name)):
+			exactByName = cfg
+		case cfgAgentID == "":
+			runtimeOnly = cfg
+		}
+	}
+
+	selected := exactByID
+	if selected == nil {
+		selected = exactByName
+	}
+	if selected == nil && runtimeOnly != nil && countAgentsForRuntime(agents, runtimeName) <= 1 {
+		selected = runtimeOnly
+	}
+	if selected == nil || len(selected.Channels) == 0 {
+		return nil, false
+	}
+
+	channelConfig := *selected
+	channelConfig.Runtime = runtimeName
+	channelConfig.AgentID = agent.ID
+	channelConfig.AgentName = agent.Name
+	return map[string]interface{}{
+		"channels":      channelConfig.Channels,
+		"channelConfig": channelConfig,
+	}, true
+}
+
+func sameAgentConfigID(runtimeName, configID, agentID string) bool {
+	if strings.EqualFold(configID, agentID) {
+		return true
+	}
+	return runtimeName == "hermes" &&
+		((configID == "main" && agentID == "__main__") || (configID == "__main__" && agentID == "main"))
+}
+
+func countAgentsForRuntime(agents []store.AgentIdentity, runtimeName string) int {
+	count := 0
+	for _, agent := range agents {
+		if strings.TrimSpace(agent.Runtime) == runtimeName {
+			count++
+		}
+	}
+	return count
 }
 
 func publicAgentChannelConfig(raw string) (map[string]interface{}, bool) {

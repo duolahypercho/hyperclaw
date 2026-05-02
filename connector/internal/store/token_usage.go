@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"sort"
 	"time"
 )
 
@@ -10,7 +11,7 @@ import (
 type TokenUsageRow struct {
 	ID              int64   `json:"id"`
 	DedupKey        string  `json:"dedupKey"`
-	AgentID         string  `json:"agentId"`   // empty = unattributed
+	AgentID         string  `json:"agentId"` // empty = unattributed
 	Runtime         string  `json:"runtime"`
 	SessionID       string  `json:"sessionId"` // empty if unknown
 	Model           string  `json:"model"`
@@ -37,7 +38,6 @@ func (s *Store) InsertTokenUsage(row TokenUsageRow) error {
 		row.CostUSD, row.RecordedAt)
 	return err
 }
-
 
 // UpsertHermesTokenUsage inserts a Hermes session row and updates cost_usd + model
 // when the existing row has cost_usd = 0. This handles the case where Hermes records
@@ -72,6 +72,7 @@ type TokenUsageSummary struct {
 	OutputTokens    int64   `json:"outputTokens"`
 	CacheReadTokens int64   `json:"cacheReadTokens"`
 	LastActivityMs  int64   `json:"lastActivityMs"`
+	SessionCount    int64   `json:"sessionCount"`
 }
 
 // GetTokenUsage returns aggregated usage filtered by optional agent, runtime,
@@ -109,8 +110,9 @@ func (s *Store) GetTokenUsage(agentID, runtime string, from, to int64, groupBy s
 
 	query := `
 		SELECT ` + groupCol + ` as grp,
-		       SUM(cost_usd), SUM(input_tokens), SUM(output_tokens), SUM(cache_read_tokens),
-		       MAX(recorded_at)
+		       COALESCE(SUM(cost_usd),0), COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), COALESCE(SUM(cache_read_tokens),0),
+		       MAX(recorded_at),
+		       COUNT(DISTINCT ` + tokenUsageSessionKeyExpr + `)
 		FROM token_usage
 		WHERE ` + where + `
 		GROUP BY grp
@@ -127,7 +129,7 @@ func (s *Store) GetTokenUsage(agentID, runtime string, from, to int64, groupBy s
 		var r TokenUsageSummary
 		var grp sql.NullString
 		var lastMs sql.NullInt64
-		if err := rows.Scan(&grp, &r.TotalCostUSD, &r.InputTokens, &r.OutputTokens, &r.CacheReadTokens, &lastMs); err != nil {
+		if err := rows.Scan(&grp, &r.TotalCostUSD, &r.InputTokens, &r.OutputTokens, &r.CacheReadTokens, &lastMs, &r.SessionCount); err != nil {
 			return nil, fmt.Errorf("scan token_usage row: %w", err)
 		}
 		r.GroupKey = grp.String
@@ -174,6 +176,13 @@ var runtimeOnlyAgents = map[string]bool{
 	"codex":       true,
 	"hermes":      true,
 }
+
+const tokenUsageSessionKeyExpr = `
+CASE
+  WHEN session_id IS NOT NULL AND session_id != '' THEN session_id
+  WHEN instr(substr(dedup_key, instr(dedup_key, ':') + 1), ':') > 0 THEN substr(dedup_key, 1, instr(dedup_key, ':') + instr(substr(dedup_key, instr(dedup_key, ':') + 1), ':') - 1)
+  ELSE dedup_key
+END`
 
 // GetAgentStats returns aggregated cost/token/session data for one agent,
 // split by runtime. from/to are Unix milliseconds (0 = no filter).
@@ -278,7 +287,7 @@ func (s *Store) GetAgentStats(agentID string, from, to int64) (*AgentStats, erro
 	if stats.SessionCount == 0 {
 		var distinctSessions sql.NullInt64
 		_ = s.db.QueryRow(
-			`SELECT COUNT(DISTINCT session_id) FROM token_usage WHERE session_id IS NOT NULL AND session_id != '' AND `+where,
+			`SELECT COUNT(DISTINCT `+tokenUsageSessionKeyExpr+`) FROM token_usage WHERE `+where,
 			whereArgs...).Scan(&distinctSessions)
 		if distinctSessions.Valid {
 			stats.SessionCount = distinctSessions.Int64
@@ -316,28 +325,36 @@ func (s *Store) GetAgentStats(agentID string, from, to int64) (*AgentStats, erro
 	for rt, r := range runtimeMap {
 		if r.LastActiveMs == 0 {
 			var lastMs sql.NullInt64
+			rtArgs := append(append([]interface{}{}, whereArgs...), rt)
 			_ = s.db.QueryRow(
 				`SELECT MAX(recorded_at) FROM token_usage WHERE `+where+` AND runtime = ?`,
-				append(whereArgs, rt)...).Scan(&lastMs)
+				rtArgs...).Scan(&lastMs)
 			if lastMs.Valid {
 				r.LastActiveMs = lastMs.Int64
 			}
 		}
 		if r.SessionCount == 0 {
 			var cnt sql.NullInt64
+			rtArgs := append(append([]interface{}{}, whereArgs...), rt)
 			_ = s.db.QueryRow(
-				`SELECT COUNT(DISTINCT session_id) FROM token_usage WHERE session_id IS NOT NULL AND session_id != '' AND `+where+` AND runtime = ?`,
-				append(whereArgs, rt)...).Scan(&cnt)
+				`SELECT COUNT(DISTINCT `+tokenUsageSessionKeyExpr+`) FROM token_usage WHERE `+where+` AND runtime = ?`,
+				rtArgs...).Scan(&cnt)
 			if cnt.Valid {
 				r.SessionCount = cnt.Int64
 			}
 		}
 	}
 
-	// Flatten map → slice in cost-desc order (already ordered from first query)
+	// Flatten map → slice in deterministic cost-desc order.
 	for _, r := range runtimeMap {
 		stats.Runtimes = append(stats.Runtimes, *r)
 	}
+	sort.Slice(stats.Runtimes, func(i, j int) bool {
+		if stats.Runtimes[i].TotalCostUSD != stats.Runtimes[j].TotalCostUSD {
+			return stats.Runtimes[i].TotalCostUSD > stats.Runtimes[j].TotalCostUSD
+		}
+		return stats.Runtimes[i].Runtime < stats.Runtimes[j].Runtime
+	})
 
 	return &stats, nil
 }

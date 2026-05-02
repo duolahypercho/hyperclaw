@@ -70,6 +70,7 @@ func ParseOpenClawSessionFile(path, agentID string) ([]store.TokenUsageRow, erro
 	absPath, _ := filepath.Abs(path)
 	h := sha256.Sum256([]byte(absPath))
 	pathKey := fmt.Sprintf("%x", h[:6])
+	sessionID := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 
 	var rows []store.TokenUsageRow
 	scanner := bufio.NewScanner(f)
@@ -142,6 +143,7 @@ func ParseOpenClawSessionFile(path, agentID string) ([]store.TokenUsageRow, erro
 			DedupKey:        fmt.Sprintf("openclaw:%s:%d", pathKey, lineIdx),
 			Runtime:         "openclaw",
 			AgentID:         agentID,
+			SessionID:       sessionID,
 			InputTokens:     input,
 			OutputTokens:    output,
 			CacheReadTokens: cacheRead,

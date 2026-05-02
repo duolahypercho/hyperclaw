@@ -17,18 +17,45 @@ import (
 // own SOUL.md content alongside whatever the bridge wrote and re-runs
 // only swap the managed section.
 //
-//  - existing == "":                   write content as a fresh managed block
-//  - existing has managed block:       replace just the block, preserve outside
-//  - existing has no managed block:    append managed block after user content
+//   - existing == "":                   write content as a fresh managed block
+//   - existing has managed block:       replace just the block, preserve outside
+//   - existing has no managed block:    append managed block after user content
 //
 // Returns the full file content the caller should persist.
 func MergePersonalityContent(existing, newContent string) string {
+	if hasAgenticStackBlock(newContent) {
+		newContent = normalizeAgenticStackFileContent(newContent)
+		if strings.TrimSpace(existing) == "" {
+			return newContent
+		}
+		if before, body, after, ok := splitAgenticStackContent(newContent); ok {
+			block := wrapAgenticStackBlock(body)
+			if updated, replaced := replaceAgenticStackBlock(existing, block); replaced {
+				updated = mergeOutsideAgenticStackContent(updated, before, after)
+				if stripped, ok := stripRedundantAgenticStackBlock(updated); ok {
+					return stripped
+				}
+				return updated
+			}
+			if isRedundantManagedPayload(existing, body) {
+				return strings.TrimRight(existing, "\n") + "\n"
+			}
+			return appendAgenticStackBlock(existing, block)
+		}
+		return strings.TrimRight(newContent, "\n") + "\n"
+	}
 	block := wrapAgenticStackBlock(newContent)
 	if strings.TrimSpace(existing) == "" {
 		return block
 	}
 	if updated, replaced := replaceAgenticStackBlock(existing, block); replaced {
+		if stripped, ok := stripRedundantAgenticStackBlock(updated); ok {
+			return stripped
+		}
 		return updated
+	}
+	if isRedundantManagedPayload(existing, newContent) {
+		return strings.TrimRight(existing, "\n") + "\n"
 	}
 	return appendAgenticStackBlock(existing, block)
 }

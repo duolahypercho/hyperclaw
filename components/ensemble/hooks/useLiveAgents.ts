@@ -6,6 +6,8 @@ import { normalizeAgentState, type AgentState } from "../primitives/StatusDot";
 import type { AgentActivitySnapshot } from "./useEnsembleData";
 import type { EnsembleAgentView } from "./useEnsembleAgents";
 
+const RUNTIME_ONLY_STATS = new Set(["claude-code", "codex", "hermes"]);
+
 export interface LiveAgentRow {
   agent: EnsembleAgent;
   /**
@@ -33,7 +35,9 @@ export function useLiveAgents(
   return useMemo(
     () =>
       agents.map((a) => {
-        const live = activity.get(a.id);
+        const live =
+          activity.get(a.id) ??
+          (RUNTIME_ONLY_STATS.has(a.kind) ? activity.get(a.kind) : undefined);
         // Adapt EnsembleAgentView → EnsembleAgent for downstream card components.
         const agentShape: EnsembleAgent = {
           id: a.id,

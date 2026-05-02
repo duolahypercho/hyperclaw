@@ -91,7 +91,8 @@ function MemberRow({
   onRoleChange: (role: string) => void;
 }) {
   const { agents } = useHyperclawContext();
-  const agent = agents.find((a) => a.id === member.agentId);
+  const agent = agents.find((a) => a.id === member.agentId && a.status !== "deleting");
+  if (!agent) return null;
   const display = resolveProjectAgentDisplay(agent, member.agentId);
   const RoleIcon = ROLE_ICONS[member.role] ?? Wrench;
 
@@ -99,8 +100,8 @@ function MemberRow({
     <div className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-white/5 group">
       <AgentGlyph agent={display} size={28} className="shrink-0" />
       <div className="flex-1 min-w-0">
-        <p className="text-sm text-white truncate">{agent?.name ?? member.agentId}</p>
-        <p className="text-xs text-white/40 capitalize">{agent?.runtime ?? "unknown"}</p>
+        <p className="text-sm text-white truncate">{agent.name}</p>
+        <p className="text-xs text-white/40 capitalize">{agent.runtime ?? "unknown"}</p>
       </div>
       <Select value={member.role} onValueChange={onRoleChange}>
         <SelectTrigger className="h-7 w-28 bg-white/5 border-white/10 text-white/60 text-xs focus:ring-0">
@@ -139,7 +140,7 @@ function AddAgentDropdown({
 }) {
   const { agents } = useHyperclawContext();
   const { addMember } = useProjects();
-  const available = agents.filter((a) => !existingAgentIds.includes(a.id));
+  const available = agents.filter((a) => a.status !== "deleting" && !existingAgentIds.includes(a.id));
 
   return (
     <DropdownMenu>
@@ -192,7 +193,9 @@ function ProjectDetail({ project }: { project: Project }) {
   const [workflowTemplates, setWorkflowTemplates] = useState(project.workflowTemplates ?? []);
   const [workflowRuns, setWorkflowRuns] = useState(project.workflowRuns ?? []);
   const [creatingWorkflow, setCreatingWorkflow] = useState(false);
-  const members = project.members ?? [];
+  const { agents } = useHyperclawContext();
+  const activeAgentIds = new Set(agents.filter((agent) => agent.status !== "deleting").map((agent) => agent.id));
+  const members = (project.members ?? []).filter((member) => activeAgentIds.has(member.agentId));
   const leadMember = members.find((member) => member.role === "lead") ?? (project.leadAgentId ? members.find((member) => member.agentId === project.leadAgentId) : undefined);
 
   const handleRemoveMember = useCallback(

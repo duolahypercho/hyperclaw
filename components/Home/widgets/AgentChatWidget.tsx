@@ -1000,7 +1000,7 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
                   <Button variant="ghost" size="iconSm" className="h-6 w-6" onClick={() => chatRef.current?.reload()} title="Reload chat">
                     <RefreshCw className="w-3 h-3" />
                   </Button>
-                  <Button variant="ghost" size="iconSm" className="h-6 w-6" onClick={() => { chatRef.current?.newChat(); setActiveSessionLabel(undefined); }} title="Clear chat">
+                  <Button variant="ghost" size="iconSm" className="h-6 w-6" onClick={() => { chatRef.current?.newChat(); setActiveSessionLabel(undefined); }} title="New chat">
                     <Plus className="w-3 h-3" />
                   </Button>
                   <SessionHistoryDropdown
@@ -1016,7 +1016,7 @@ const AgentChatWidgetContent = memo((props: CustomProps) => {
                     }}
                     onNewChat={() => { chatRef.current?.newChat(); setActiveSessionLabel(undefined); }}
                     onFetchSessions={handleFetchSessions}
-                    newChatLabel="Clear Session"
+                    newChatLabel="+ New Chat"
                     onSetPrimary={(key) => {
                       const prevKey = primarySessionKey;
                       setPrimarySessionKey(key);

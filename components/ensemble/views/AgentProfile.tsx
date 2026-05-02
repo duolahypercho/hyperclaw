@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState, useEffect, useRef } from "react";
+import React, { useCallback, useMemo, useState, useEffect, useRef } from "react";
 import { useRouter } from "next/router";
 import {
   ArrowLeft,
@@ -169,14 +169,21 @@ export default function AgentProfile({
   // Which file is active inside the "files" tab (key matches FileTabSpec.key)
   const [activeFileKey, setActiveFileKey] = useState<string>("soul");
   const [showDelete, setShowDelete] = useState(false);
+  const [actionsOpen, setActionsOpen] = useState(false);
 
   const [autoAdapterError, setAutoAdapterError] = useState<string | null>(null);
   const ensuredAdapterKeysRef = useRef<Set<string>>(new Set());
+
+  const closeActionsThen = useCallback((action: () => void) => {
+    setActionsOpen(false);
+    window.setTimeout(action, 0);
+  }, []);
 
   // Reset to overview + default file + clean save state when navigating to a different agent
   useEffect(() => {
     setTab("overview");
     setActiveFileKey("soul");
+    setActionsOpen(false);
     setSaveState({ isDirty: false, saving: false, saved: false, save: null, reset: null });
     setAutoAdapterError(null);
   }, [agentId]);
@@ -440,7 +447,7 @@ export default function AgentProfile({
               )}
               {isHiring ? "Hiring…" : `Chat with ${agentFirstName}`}
             </Button>
-            <DropdownMenu>
+            <DropdownMenu open={actionsOpen} onOpenChange={setActionsOpen}>
               <DropdownMenuTrigger asChild>
                 <Button
                   size="xs"
@@ -455,19 +462,25 @@ export default function AgentProfile({
               <DropdownMenuContent align="end" className="w-44">
                 <DropdownMenuItem
                   disabled={!agent || isHiring}
-                  onSelect={() => setTab("config")}
+                  onSelect={(event) => {
+                    event.preventDefault();
+                    closeActionsThen(() => setTab("config"));
+                  }}
                 >
-                  <UserPen className="h-3.5 w-3.5" />
+                  <UserPen className="h-3.5 w-3.5 mr-1" />
                   Edit info
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
                   disabled={!agent || isHiring}
-                  onSelect={() => setShowDelete(true)}
+                  onSelect={(event) => {
+                    event.preventDefault();
+                    closeActionsThen(() => setShowDelete(true));
+                  }}
                   className="text-destructive focus:text-destructive"
                 >
-                  <Flame className="h-3.5 w-3.5" />
-                  Remove employee
+                  <Flame className="h-3.5 w-3.5 mr-1" />
+                  Fire Agent
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -655,7 +668,7 @@ export default function AgentProfile({
           )}
 
           {!isHiring && tab === "runs" && (
-            <AgentCronsTab agentId={agentId} runtime={agent.runtimeLabel} />
+            <AgentCronsTab agentId={agentId} runtime={agent.kind} />
           )}
 
           {!isHiring && tab === "skills" && (

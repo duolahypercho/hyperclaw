@@ -3,6 +3,11 @@
  * Gateway is at ws://127.0.0.1:<port> (default 18789). Protocol: connect.challenge → connect request → hello-ok.
  * Uses device identity from Electron for signing.
  */
+import {
+  getGatewayUnavailableMessage,
+  isLocalConnectorContext,
+  shouldBlockRemoteHubFallback,
+} from "./local-connector-routing";
 
 // Heartbeat/silent reply detection — matches OpenClaw's server-chat.ts filtering.
 // Heartbeat runs produce agent events that bypass server-side chat suppression;
@@ -148,9 +153,28 @@ function isGatewayMethod(method: string): boolean {
 }
 
 export function isGatewayUnavailableErrorMessage(message: string): boolean {
-  return /gateway not connected|pairing required|not paired|failed to communicate with device|device not connected|connector is offline/i.test(
+  return /gateway not connected|pairing required|not paired|failed to communicate with device|device not connected|connector is offline|start the local connector|no hub configured/i.test(
     message
   );
+}
+
+async function requestGatewayViaLocalConnector<T>(
+  method: string,
+  params: Record<string, unknown>,
+  timeoutMs?: number,
+): Promise<T> {
+  const { bridgeInvoke } = await import("$/lib/hyperclaw-bridge-client");
+  const result = await bridgeInvoke("gateway-request", {
+    requestType: method,
+    params,
+    ...(timeoutMs ? { timeoutMs } : {}),
+  });
+  const wrapped = result as { success?: boolean; data?: unknown; error?: unknown };
+  if (wrapped && typeof wrapped === "object" && "success" in wrapped && wrapped.success === false) {
+    const message = typeof wrapped.error === "string" ? wrapped.error : `Gateway request ${method} failed`;
+    throw new Error(message);
+  }
+  return (wrapped && "data" in wrapped ? wrapped.data : result) as T;
 }
 
 /** Sign a connect challenge using Electron API or server-side API fallback */
@@ -234,11 +258,12 @@ export const gatewayConnection = {
   // text messages interleaved between tool groups.
   _committedSegments: null as Map<string, string> | null,
 
-  // Keepalive: application-level ping/pong
-  _pingTimer: null as ReturnType<typeof setInterval> | null,
-  _lastPong: 0 as number,
-  _PING_INTERVAL: 30_000,
-  _PONG_TIMEOUT: 60_000,
+  // Local gateway liveness: OpenClaw emits tick/health events, but does not
+  // accept browser-level ping frames. Treat any inbound frame as activity.
+  _watchdogTimer: null as ReturnType<typeof setInterval> | null,
+  _lastGatewayActivity: 0 as number,
+  _WATCHDOG_INTERVAL: 30_000,
+  _INACTIVITY_TIMEOUT: 60_000,
   _gatewayUnavailableUntil: 0 as number,
 
   notify() {
@@ -266,6 +291,14 @@ export const gatewayConnection = {
 
   /** Send a request over WebSocket and wait for response */
   request<T = unknown>(method: string, params: Record<string, unknown> = {}, timeoutMs?: number): Promise<T> {
+    if (
+      (!this.ws || this.ws.readyState !== WebSocket.OPEN || this.hubMode) &&
+      shouldBlockRemoteHubFallback() &&
+      isGatewayMethod(method)
+    ) {
+      return requestGatewayViaLocalConnector<T>(method, params, timeoutMs);
+    }
+
     return new Promise((resolve, reject) => {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
         reject(new Error("WebSocket not connected"));
@@ -336,22 +369,17 @@ export const gatewayConnection = {
        event === "hermes-stream" ||
        event === "room-agent-stream" ||
        event === "claude-code-session-update" ||
+       event === "token.usage.updated" ||
        event === "runtime.uninstalled" ||
        event === "onboarding-progress" ||
        event === "onboarding-action-completed")
     ) {
-      const data = payload?.data as Record<string, unknown> | undefined;
+      const data = (payload?.data ?? msg.data ?? payload ?? msg) as Record<string, unknown> | undefined;
       if (data && typeof window !== "undefined") {
         window.dispatchEvent(
           new CustomEvent(event, { detail: data })
         );
       }
-    }
-
-    // Handle pong (keepalive response from hub or gateway)
-    if (msgType === "pong" || (msg.type === "event" && event === "pong")) {
-      this._lastPong = Date.now();
-      return;
     }
 
     if (msg.type === "res") {
@@ -474,6 +502,10 @@ export const gatewayConnection = {
           this.setState(false, errMsg);
           // Don't null out wsUrl — allow reconnection to retry
         }
+      }).catch((error) => {
+        const errMsg = error instanceof Error ? error.message : "Challenge signing failed";
+        console.warn("[Gateway WS] Sign challenge failed:", errMsg);
+        this.setState(false, errMsg);
       });
       return;
     }
@@ -884,6 +916,7 @@ export const gatewayConnection = {
     }
     this._deltaSourceOwner?.clear();
     this._committedSegments?.clear();
+    this.invalidateChatHistoryCache(params.sessionKey);
 
     return this.request("chat.send", {
       sessionKey: params.sessionKey,
@@ -909,20 +942,26 @@ export const gatewayConnection = {
   /** Get chat history */
   _chatHistoryInflight: new Map<string, Promise<{ messages?: unknown[] }>>(),
   _chatHistoryCache: new Map<string, { data: { messages?: unknown[] }; ts: number }>(),
+  _chatHistoryCacheGeneration: new Map<string, number>(),
   _chatHistoryCacheTTL: 30000, // 30s TTL — chat history is mostly append-only
   invalidateChatHistoryCache(sessionKey: string): void {
     for (const key of this._chatHistoryCache.keys()) {
       if (key.startsWith(`${sessionKey}::`)) {
         this._chatHistoryCache.delete(key);
+        this._chatHistoryCacheGeneration.set(key, (this._chatHistoryCacheGeneration.get(key) || 0) + 1);
       }
     }
     for (const key of this._chatHistoryInflight.keys()) {
       if (key.startsWith(`${sessionKey}::`)) {
         this._chatHistoryInflight.delete(key);
+        this._chatHistoryCacheGeneration.set(key, (this._chatHistoryCacheGeneration.get(key) || 0) + 1);
       }
     }
   },
-  clearChatHistory(params: { sessionKey: string }): Promise<unknown> {
+  clearChatHistory(params: { sessionKey: string; confirmDestructive?: boolean }): Promise<unknown> {
+    if (params.confirmDestructive !== true) {
+      return Promise.reject(new Error("Refusing to clear persisted OpenClaw chat history without explicit confirmation"));
+    }
     this.invalidateChatHistoryCache(params.sessionKey);
     return this.request("chat.clear", { sessionKey: params.sessionKey }, 30_000);
   },
@@ -940,9 +979,13 @@ export const gatewayConnection = {
 
     // 60s timeout — chat.history reads large JSONL session files (3-8MB) and the
     // response traverses a 4-hop relay chain (dashboard→hub→connector→gateway).
+    const generation = this._chatHistoryCacheGeneration.get(cacheKey) || 0;
     const req = this.request<{ messages?: unknown[] }>("chat.history", { sessionKey, limit }, 60_000)
       .then((result) => {
         const now = Date.now();
+        if ((this._chatHistoryCacheGeneration.get(cacheKey) || 0) !== generation) {
+          return result;
+        }
         this._chatHistoryCache.set(cacheKey, { data: result, ts: now });
         // Prune stale entries on every write to prevent unbounded Map growth.
         // Without this, every unique sessionKey::limit combo seen in the session
@@ -950,12 +993,15 @@ export const gatewayConnection = {
         for (const [k, v] of this._chatHistoryCache) {
           if (now - v.ts > this._chatHistoryCacheTTL) {
             this._chatHistoryCache.delete(k);
+            this._chatHistoryCacheGeneration.delete(k);
           }
         }
         return result;
       })
       .finally(() => {
-        this._chatHistoryInflight.delete(cacheKey);
+        if (this._chatHistoryInflight.get(cacheKey) === req) {
+          this._chatHistoryInflight.delete(cacheKey);
+        }
       });
     this._chatHistoryInflight.set(cacheKey, req);
     return req;
@@ -1089,30 +1135,32 @@ export const gatewayConnection = {
     }
   },
 
-  startPing() {
-    this.stopPing();
-    this._lastPong = Date.now();
-    this._pingTimer = setInterval(() => {
-      if (Date.now() - this._lastPong > this._PONG_TIMEOUT) {
-        console.warn("[Gateway WS] No pong received in", this._PONG_TIMEOUT, "ms — forcing reconnect");
-        this.stopPing();
+  startActivityWatchdog() {
+    this.stopActivityWatchdog();
+    // The Hub dashboard socket is a relay, not the OpenClaw gateway protocol.
+    // It does not guarantee application-level ping/pong, and forcing a close
+    // here interrupts long remote-device streams.
+    if (this.hubMode) {
+      this._lastGatewayActivity = 0;
+      return;
+    }
+    this._lastGatewayActivity = Date.now();
+    this._watchdogTimer = setInterval(() => {
+      if (Date.now() - this._lastGatewayActivity > this._INACTIVITY_TIMEOUT) {
+        console.warn("[Gateway WS] No gateway activity in", this._INACTIVITY_TIMEOUT, "ms — forcing reconnect");
+        this.stopActivityWatchdog();
         if (this.ws) {
           try { this.ws.close(); } catch { /* ignore */ }
         }
         return;
       }
-      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        try {
-          this.ws.send(JSON.stringify({ type: "ping", payload: { clientTime: Date.now() } }));
-        } catch { /* ignore send errors */ }
-      }
-    }, this._PING_INTERVAL);
+    }, this._WATCHDOG_INTERVAL);
   },
 
-  stopPing() {
-    if (this._pingTimer != null) {
-      clearInterval(this._pingTimer);
-      this._pingTimer = null;
+  stopActivityWatchdog() {
+    if (this._watchdogTimer != null) {
+      clearInterval(this._watchdogTimer);
+      this._watchdogTimer = null;
     }
   },
 
@@ -1126,7 +1174,16 @@ export const gatewayConnection = {
         this.hubDeviceId = options.hubDeviceId ?? null;
       }
       if (options.hubMode !== undefined) {
-        this.hubMode = !!options.hubMode;
+        const nextHubMode = !!options.hubMode;
+        if (nextHubMode !== this.hubMode) {
+          this.hubMode = nextHubMode;
+          if (nextHubMode) {
+            this.stopActivityWatchdog();
+            this._lastGatewayActivity = 0;
+          } else if (this.ws.readyState === WebSocket.OPEN) {
+            this.startActivityWatchdog();
+          }
+        }
       }
       return;
     }
@@ -1135,7 +1192,7 @@ export const gatewayConnection = {
     // Clean up existing connection. IMPORTANT: detach handlers from the old WS
     // BEFORE closing it. Otherwise the old WS's onclose fires asynchronously
     // after the new WS is created and clobbers this.ws with null.
-    this.stopPing();
+    this.stopActivityWatchdog();
     if (this.reconnectTimer != null) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -1181,7 +1238,7 @@ export const gatewayConnection = {
     this.ws.onopen = () => {
       if (gen !== this._connectionGeneration) return; // stale
       this.reconnectAttempt = 0;
-      this.startPing();
+      this.startActivityWatchdog();
       // In hub mode, the hub authenticates via JWT and doesn't use the
       // gateway's challenge-response handshake. Mark connected immediately.
       if (this.hubMode) {
@@ -1193,6 +1250,9 @@ export const gatewayConnection = {
       try {
         const msg = typeof ev.data === "string" ? JSON.parse(ev.data) : null;
         if (!msg) return;
+        if (!this.hubMode) {
+          this._lastGatewayActivity = Date.now();
+        }
         this.handleMessage(msg);
       } catch {
         /* ignore parse errors */
@@ -1204,7 +1264,7 @@ export const gatewayConnection = {
     };
     this.ws.onclose = (ev: CloseEvent) => {
       if (gen !== this._connectionGeneration) return; // stale
-      this.stopPing();
+      this.stopActivityWatchdog();
       const { code, reason } = ev;
       this.ws = null;
       const connectionRefused = code === 1006 || (reason && /refused|ECONNREFUSED/i.test(String(reason)));
@@ -1267,16 +1327,30 @@ export const gatewayConnection = {
             });
             return;
           }
+          if (shouldBlockRemoteHubFallback()) {
+            this.wsUrl = null;
+            this.hubMode = false;
+            this.hubDeviceId = null;
+            this.setState(false, null);
+            return;
+          }
         } catch {
           /* fall through to reconnect with captured values */
         }
+      }
+      if (shouldBlockRemoteHubFallback()) {
+        this.wsUrl = null;
+        this.hubMode = false;
+        this.hubDeviceId = null;
+        this.setState(false, null);
+        return;
       }
       if (url) this.connect(url, { token, hubMode: hubMode || undefined, hubDeviceId: hubDeviceId || undefined });
     }, delay);
   },
 
   disconnect() {
-    this.stopPing();
+    this.stopActivityWatchdog();
     if (this.reconnectTimer != null) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -1368,8 +1442,23 @@ export const gatewayConnection = {
           });
           return;
         }
+        if (shouldBlockRemoteHubFallback()) {
+          this.wsUrl = null;
+          this.hubMode = false;
+          this.hubDeviceId = null;
+          this.setState(false, null);
+          return;
+        }
       } catch { /* fall through */ }
     }
+    if (shouldBlockRemoteHubFallback()) {
+      this.wsUrl = null;
+      this.hubMode = false;
+      this.hubDeviceId = null;
+      this.setState(false, null);
+      return;
+    }
+    if (!this.wsUrl) return;
     this.connect(this.wsUrl, {
       token: this.token,
       hubMode: this.hubMode || undefined,
@@ -1392,6 +1481,13 @@ if (typeof document !== "undefined") {
 }
 
 export function connectGatewayWs(wsUrl: string, options?: GatewayConnectOptions): void {
+  if (options?.hubMode && shouldBlockRemoteHubFallback()) {
+    if (gatewayConnection.hubMode) {
+      gatewayConnection.disconnect();
+    }
+    return;
+  }
+
   let finalUrl = wsUrl;
   if (options?.hubMode && wsUrl) {
     // Convert hub HTTP URL to WebSocket dashboard URL
@@ -1400,6 +1496,8 @@ export function connectGatewayWs(wsUrl: string, options?: GatewayConnectOptions)
       const sep = finalUrl.includes("?") ? "&" : "?";
       finalUrl = `${finalUrl}${sep}token=${encodeURIComponent(options.token)}`;
     }
+  } else if (wsUrl) {
+    finalUrl = buildGatewayWsUrl(wsUrl, options?.token);
   }
   gatewayConnection.connect(finalUrl, options ?? {});
 }
@@ -1425,7 +1523,11 @@ function normalizeConnectorHealth(value: unknown): ConnectorHealth {
   if (!value || typeof value !== "object") {
     return { ok: false, connectorOnline: false, gatewayConnected: false, gatewayState: "unknown" };
   }
-  const data = value as Record<string, unknown>;
+  const envelope = value as Record<string, unknown>;
+  const data =
+    envelope.data && typeof envelope.data === "object"
+      ? (envelope.data as Record<string, unknown>)
+      : envelope;
   return {
     ok: data.ok === true || data.connectorOnline === true,
     connectorOnline: data.connectorOnline === true || data.ok === true,
@@ -1460,24 +1562,8 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string)
 const LOCAL_CONNECTOR_HEALTH_URL = "http://127.0.0.1:18790/bridge/health";
 const LOCAL_CONNECTOR_HEALTH_FAST_TIMEOUT_MS = 800;
 
-function isLocalDashboardContext(): boolean {
-  if (typeof window === "undefined") return false;
-  const host = window.location.hostname;
-  if (
-    host === "localhost" ||
-    host === "127.0.0.1" ||
-    host === "::1" ||
-    host.endsWith(".localhost")
-  ) {
-    return true;
-  }
-  // Electron always has the bridge available even when host is "file://".
-  const w = window as { electronAPI?: { hyperClawBridge?: unknown } };
-  return Boolean(w.electronAPI?.hyperClawBridge);
-}
-
 async function probeLocalConnectorHealthDirect(): Promise<ConnectorHealth | null> {
-  if (!isLocalDashboardContext()) return null;
+  if (!isLocalConnectorContext()) return null;
   try {
     const res = await fetch(LOCAL_CONNECTOR_HEALTH_URL, {
       signal: AbortSignal.timeout(LOCAL_CONNECTOR_HEALTH_FAST_TIMEOUT_MS),
@@ -1617,6 +1703,7 @@ async function getLocalGatewayConfig(): Promise<{ gatewayUrl: string; token: str
 /** Get gateway config — prefers direct local gateway when the connector is available. */
 export async function getGatewayConfig(): Promise<{ gatewayUrl: string; token: string | null; hubMode?: boolean; hubDeviceId?: string }> {
   let authExpired = false;
+  const localOnly = shouldBlockRemoteHubFallback();
   try {
     const { isAuthExpired } = await import("$/lib/hub-direct");
     authExpired = isAuthExpired();
@@ -1637,6 +1724,10 @@ export async function getGatewayConfig(): Promise<{ gatewayUrl: string; token: s
     }
   } catch {
     /* local mode unavailable */
+  }
+
+  if (localOnly) {
+    return { gatewayUrl: "", token: null };
   }
 
   // Short-circuit hub mode when auth is expired — avoid spamming 401 requests.
@@ -1700,7 +1791,7 @@ export async function sendChatMessageWs(sessionKey: string, message: string): Pr
   const { connected } = getGatewayConnectionState();
   if (!connected) {
     const config = await getGatewayConfig();
-    if (!config.gatewayUrl) throw new Error("No hub configured");
+    if (!config.gatewayUrl) throw new Error(getGatewayUnavailableMessage());
     connectGatewayWs(config.gatewayUrl, {
       token: config.token,
       hubMode: config.hubMode,
@@ -1736,7 +1827,7 @@ export async function sendChatMessageWs(sessionKey: string, message: string): Pr
   }
 
   const idempotencyKey = `ws-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  return gatewayConnection.request("chat.send", {
+  return gatewayConnection.sendChatMessage({
     sessionKey,
     message,
     idempotencyKey,

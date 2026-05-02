@@ -893,19 +893,120 @@ func wrapAgenticStackBlockHash(body string) string {
 	return "# " + agenticStackBlockBegin + "\n" + "# " + agenticStackBlockNote + "\n\n" + body + "\n" + "# " + agenticStackBlockEnd + "\n"
 }
 
+func normalizeMarkdownForCompare(content string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(content)), " ")
+}
+
+func firstMarkdownHeading(content string) string {
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "# ") {
+			return strings.ToLower(line)
+		}
+	}
+	return ""
+}
+
+func looksLikeStarterTemplate(content string) bool {
+	content = strings.ToLower(content)
+	starterPhrases := []string{
+		"fill this in during your first conversation",
+		"pick something you like",
+		"learn about the person you're helping",
+		"keep this file empty (or with only comments)",
+		"this folder is home. treat it that way.",
+	}
+	for _, phrase := range starterPhrases {
+		if strings.Contains(content, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+func isRedundantManagedPayload(existing, body string) bool {
+	existing = strings.TrimSpace(existing)
+	body = strings.TrimSpace(body)
+	if existing == "" || body == "" {
+		return false
+	}
+	if normalizeMarkdownForCompare(existing) == normalizeMarkdownForCompare(body) {
+		return true
+	}
+	existingHeading := firstMarkdownHeading(existing)
+	bodyHeading := firstMarkdownHeading(body)
+	if existingHeading == "" || existingHeading != bodyHeading || !looksLikeStarterTemplate(body) {
+		return false
+	}
+	existingNorm := normalizeMarkdownForCompare(existing)
+	bodyNorm := normalizeMarkdownForCompare(body)
+	// If the incoming starter has the existing text plus new material, it is
+	// no longer just a duplicate template. Keep it so user-added tasks survive.
+	if strings.Contains(bodyNorm, existingNorm) && bodyNorm != existingNorm {
+		return false
+	}
+	return true
+}
+
+func containsMarkdownSection(content, section string) bool {
+	content = strings.TrimSpace(content)
+	section = strings.TrimSpace(section)
+	if section == "" {
+		return true
+	}
+	if strings.Contains(content, section) {
+		return true
+	}
+	return strings.Contains(normalizeMarkdownForCompare(content), normalizeMarkdownForCompare(section))
+}
+
+func mergeOutsideAgenticStackContent(content, before, after string) string {
+	content = strings.TrimRight(content, "\n")
+	before = strings.TrimSpace(before)
+	after = strings.TrimSpace(after)
+	if before != "" && !containsMarkdownSection(content, before) {
+		content = before + "\n\n" + content
+	}
+	if after != "" && !containsMarkdownSection(content, after) {
+		content = content + "\n\n" + after
+	}
+	if content == "" {
+		return ""
+	}
+	return content + "\n"
+}
+
+func stripRedundantAgenticStackBlock(content string) (string, bool) {
+	before, body, after, ok := splitAgenticStackContent(content)
+	if !ok {
+		return content, false
+	}
+	outside := strings.TrimSpace(strings.TrimSpace(before) + "\n\n" + strings.TrimSpace(after))
+	if !isRedundantManagedPayload(outside, body) {
+		return content, false
+	}
+	if outside == "" {
+		return "", true
+	}
+	return strings.TrimRight(outside, "\n") + "\n", true
+}
+
 // findAgenticStackBlock returns the [start, end) byte range of our
 // managed block within content. ok is false if no complete block is
 // present. The range starts at the beginning of the line containing the
 // begin marker so that any leading comment prefix (e.g. "# " for TOML/YAML)
 // is included; otherwise replace would leave orphan "# " characters when
 // swapping a hash-style block for a fresh one.
+//
+// If a previous buggy write nested managed blocks, use the final end marker.
+// That lets the next replace collapse all orphan end markers in one pass.
 func findAgenticStackBlock(content string) (int, int, bool) {
 	startIdx := strings.Index(content, agenticStackBlockBegin)
 	if startIdx < 0 {
 		return 0, 0, false
 	}
 	tail := content[startIdx:]
-	endRel := strings.Index(tail, agenticStackBlockEnd)
+	endRel := strings.LastIndex(tail, agenticStackBlockEnd)
 	if endRel < 0 {
 		return 0, 0, false
 	}
@@ -916,6 +1017,89 @@ func findAgenticStackBlock(content string) (int, int, bool) {
 		lineStart--
 	}
 	return lineStart, startIdx + endRel + len(agenticStackBlockEnd), true
+}
+
+func hasAgenticStackBlock(content string) bool {
+	_, _, ok := findAgenticStackBlock(content)
+	return ok
+}
+
+func splitAgenticStackContent(content string) (string, string, string, bool) {
+	startIdx, endIdx, ok := findAgenticStackBlock(content)
+	if !ok {
+		return "", "", "", false
+	}
+	body := extractAgenticStackBody(content[startIdx:endIdx])
+	before := strings.TrimRight(content[:startIdx], "\n")
+	after := strings.TrimLeft(content[endIdx:], "\n")
+	return before, body, after, true
+}
+
+func normalizeAgenticStackFileContent(content string) string {
+	before, body, after, ok := splitAgenticStackContent(content)
+	if !ok {
+		if strings.TrimSpace(content) == "" {
+			return ""
+		}
+		return strings.TrimRight(content, "\n") + "\n"
+	}
+	block := strings.TrimRight(wrapAgenticStackBlock(body), "\n")
+	var normalized string
+	switch {
+	case before == "" && after == "":
+		normalized = block + "\n"
+	case before == "":
+		normalized = block + "\n\n" + strings.TrimRight(after, "\n") + "\n"
+	case after == "":
+		normalized = before + "\n\n" + block + "\n"
+	default:
+		normalized = before + "\n\n" + block + "\n\n" + strings.TrimRight(after, "\n") + "\n"
+	}
+	if stripped, ok := stripRedundantAgenticStackBlock(normalized); ok {
+		return stripped
+	}
+	return normalized
+}
+
+func extractAgenticStackBody(block string) string {
+	lines := strings.Split(block, "\n")
+	start := -1
+	for i, line := range lines {
+		if strings.Contains(line, agenticStackBlockBegin) {
+			start = i + 1
+			break
+		}
+	}
+	if start < 0 {
+		return strings.TrimSpace(block)
+	}
+	for start < len(lines) && strings.Contains(lines[start], agenticStackBlockNote) {
+		start++
+	}
+	for start < len(lines) && strings.TrimSpace(lines[start]) == "" {
+		start++
+	}
+	end := len(lines)
+	for i := start; i < len(lines); i++ {
+		if strings.Contains(lines[i], agenticStackBlockBegin) || strings.Contains(lines[i], agenticStackBlockEnd) {
+			end = i
+			break
+		}
+	}
+	body := strings.TrimSpace(strings.Join(lines[start:end], "\n"))
+	if body != "" {
+		return body
+	}
+	cleaned := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if strings.Contains(line, agenticStackBlockBegin) ||
+			strings.Contains(line, agenticStackBlockEnd) ||
+			strings.Contains(line, agenticStackBlockNote) {
+			continue
+		}
+		cleaned = append(cleaned, line)
+	}
+	return strings.TrimSpace(strings.Join(cleaned, "\n"))
 }
 
 // replaceAgenticStackBlock swaps the managed block in existing for
@@ -1171,8 +1355,8 @@ func (b *BridgeHandler) registerHyperclawMCPForWorkspace(targetRoot string) map[
 		agentID,
 		"hyperclaw",
 		"http",
-		"",   // command (stdio only)
-		nil,  // args
+		"",  // command (stdio only)
+		nil, // args
 		hyperclawMCPURL(),
 		map[string]string{},
 		map[string]string{},

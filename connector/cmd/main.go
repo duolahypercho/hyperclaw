@@ -641,7 +641,7 @@ func main() {
 	shutdownWg.Add(1)
 	go func() {
 		defer shutdownWg.Done()
-		startLocalBridgeWithRetry(ctx, 18790, dataStore, intelStore, syncEng, runtimeWorker, gatewayToHub, &gwConnected, kickGateway)
+		startLocalBridgeWithRetry(ctx, cfg, 18790, dataStore, intelStore, syncEng, runtimeWorker, gatewayToHub, &gwConnected, kickGateway)
 	}()
 
 	<-sigCh
@@ -704,13 +704,13 @@ func connectorHealthEvent(version string, startTime time.Time, gatewayConnected 
 // bridge auto-recovers if the listener is killed (e.g. `kill` on the port).
 // Returns when ctx is canceled so shutdown releases the port before launchd
 // can respawn the daemon and race the still-bound socket.
-func startLocalBridgeWithRetry(ctx context.Context, port int, dataStore *store.Store, intelStore *store.IntelStore, syncEng bridge.SyncEngineIface, runtimeWorker bridge.RuntimeWorker, hubBroadcast chan<- []byte, gwConnected *atomic.Int32, kickGateway chan<- struct{}) {
+func startLocalBridgeWithRetry(ctx context.Context, cfg *config.Config, port int, dataStore *store.Store, intelStore *store.IntelStore, syncEng bridge.SyncEngineIface, runtimeWorker bridge.RuntimeWorker, hubBroadcast chan<- []byte, gwConnected *atomic.Int32, kickGateway chan<- struct{}) {
 	attempt := 0
 	for {
 		if ctx.Err() != nil {
 			return
 		}
-		err := startLocalBridge(ctx, port, dataStore, intelStore, syncEng, runtimeWorker, hubBroadcast, gwConnected, kickGateway)
+		err := startLocalBridge(ctx, cfg, port, dataStore, intelStore, syncEng, runtimeWorker, hubBroadcast, gwConnected, kickGateway)
 		if ctx.Err() != nil {
 			return
 		}
@@ -730,9 +730,10 @@ func startLocalBridgeWithRetry(ctx context.Context, port int, dataStore *store.S
 // Returns an error when the listener stops so the caller can retry. When ctx
 // is canceled the server is gracefully shut down so the port is released
 // before process exit.
-func startLocalBridge(ctx context.Context, port int, dataStore *store.Store, intelStore *store.IntelStore, syncEng bridge.SyncEngineIface, runtimeWorker bridge.RuntimeWorker, hubBroadcast chan<- []byte, gwConnected *atomic.Int32, kickGateway chan<- struct{}) error {
+func startLocalBridge(ctx context.Context, cfg *config.Config, port int, dataStore *store.Store, intelStore *store.IntelStore, syncEng bridge.SyncEngineIface, runtimeWorker bridge.RuntimeWorker, hubBroadcast chan<- []byte, gwConnected *atomic.Int32, kickGateway chan<- struct{}) error {
 	bh := bridge.NewBridgeHandler()
 	bh.SetRuntimeWorker(runtimeWorker)
+	bh.SetGatewayConfig(cfg)
 	if gwConnected != nil {
 		bh.SetGatewayFlag(gwConnected)
 	}

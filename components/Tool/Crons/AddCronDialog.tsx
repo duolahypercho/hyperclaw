@@ -23,7 +23,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useCronsActions } from "./provider/cronsProvider";
-import type { CronAddParams } from "./utils";
+import { normalizeCronRuntime, type CronAddParams } from "./utils";
 import { Textarea } from "@/components/ui/textarea";
 
 export interface AddCronDialogProps {
@@ -64,13 +64,14 @@ const AGENT_NONE = "__none__";
 export function AddCronDialog({ open, onOpenChange, onSuccess, defaultAgent, defaultRuntime }: AddCronDialogProps) {
   const { cronAdd } = useCronsActions();
   const { agents: openClawAgents } = useHyperclawContext();
+  const defaultCronRuntime = normalizeCronRuntime(defaultRuntime) ?? "openclaw";
   const [name, setName] = useState("");
   const [scheduleType, setScheduleType] = useState<ScheduleType>("recurring");
   const [atPreset, setAtPreset] = useState<string>("15m");
   const [atCustom, setAtCustom] = useState("");
   const [cronPreset, setCronPreset] = useState<string>("0 7 * * *");
   const [cronCustom, setCronCustom] = useState("");
-  const [runtime, setRuntime] = useState<string>(defaultRuntime ?? "openclaw");
+  const [runtime, setRuntime] = useState<string>(defaultCronRuntime);
   const [model, setModel] = useState("");
   const [session, setSession] = useState<"main" | "isolated">("isolated");
   const [prompt, setPrompt] = useState("");
@@ -92,7 +93,7 @@ export function AddCronDialog({ open, onOpenChange, onSuccess, defaultAgent, def
     setAtCustom("");
     setCronPreset("0 7 * * *");
     setCronCustom("");
-    setRuntime(defaultRuntime ?? "openclaw");
+    setRuntime(defaultCronRuntime);
     setModel("");
     setSession("main");
     setPrompt("");
@@ -100,7 +101,7 @@ export function AddCronDialog({ open, onOpenChange, onSuccess, defaultAgent, def
     setError(null);
     setAgent(defaultAgent ?? "");
     setAnnounceChannel("");
-  }, [defaultAgent, defaultRuntime]);
+  }, [defaultAgent, defaultCronRuntime]);
 
   // Sync agents from context
   useEffect(() => {

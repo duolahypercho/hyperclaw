@@ -18,6 +18,7 @@ import {
   Users,
   Home,
   FolderKanban,
+  Plug,
 } from "lucide-react";
 import { useRouter } from "next/router";
 import { Button } from "@/components/ui/button";
@@ -471,6 +472,16 @@ export const OSProvider: React.FC<OSProviderProps> = ({ children }) => {
           createToolClickHandler("/Tool/Projects", "projects")();
         },
         href: "/Tool/Projects",
+      },
+      {
+        id: "bridges",
+        name: "Bridges",
+        description: "Models, APIs and tools your agents can read from and write to",
+        icon: <Plug className="w-3.5 h-3.5" />,
+        onClick: () => {
+          createToolClickHandler("/Tool/Bridges", "bridges")();
+        },
+        href: "/Tool/Bridges",
       },
       {
         id: "settings",

@@ -5,6 +5,7 @@
  * Device: fetched from Hub /api/devices and cached.
  */
 import { getCachedToken } from "./auth-token-cache";
+import { isLocalConnectorContext, shouldBlockRemoteHubFallback } from "./local-connector-routing";
 
 // Hub API URL is set by the Cloud build at build time. In Community Edition it
 // is intentionally empty — the dashboard will only use the local connector
@@ -54,7 +55,7 @@ export function clearConnectorTokenCache(): void {
   _connectorTokenFetchedAt = 0;
 }
 const LOCAL_BRIDGE_FAILURE_BACKOFF_MS = 2_000;
-const DEFAULT_LOCAL_BRIDGE_TIMEOUT_MS = 1_500;
+const DEFAULT_LOCAL_BRIDGE_TIMEOUT_MS = 5_000;
 const HERMES_HEALTH_LOCAL_TIMEOUT_MS = 15_000;
 const LOCAL_BRIDGE_HEALTH_TIMEOUT_MS = 500;
 const DEFAULT_REST_TIMEOUT_MS = 30 * 1000;
@@ -307,7 +308,9 @@ export function isLongRunningBridgeAction(action?: string): boolean {
     action === "onboarding-install-runtime" ||
     action === "onboarding-configure-workspace" ||
     action === "onboarding-provision-agent" ||
-    action === "openclaw-doctor-fix"
+    action === "openclaw-doctor-fix" ||
+    action === "openclaw-security-audit-deep" ||
+    action === "openclaw-status-all"
   );
 }
 
@@ -348,6 +351,7 @@ export async function probeLocalBridgeHealth(): Promise<boolean> {
 export async function getBridgeMode(): Promise<BridgeModeStatus> {
   const authenticated = Boolean(await getUserToken());
   let localBridgeAvailable = false;
+  const localOnly = shouldBlockRemoteHubFallback();
 
   if (canAttemptLocalBridge()) {
     localBridgeAvailable = await probeLocalBridgeHealth();
@@ -356,6 +360,16 @@ export async function getBridgeMode(): Promise<BridgeModeStatus> {
       return { mode: "local", authenticated, localBridgeAvailable };
     }
     markLocalBridgeUnavailable();
+  }
+
+  if (localOnly) {
+    return {
+      mode: "unavailable",
+      authenticated,
+      localBridgeAvailable: false,
+      needsLoginForRemote: false,
+      reason: "Start the local connector on this machine.",
+    };
   }
 
   if (authenticated) {
@@ -493,23 +507,7 @@ async function ensureGatewayConnected(): Promise<boolean> {
 // Uses the dashboard WebSocket (gateway connection) when available,
 // falls back to REST API.
 function shouldUseLocalBridgeFastPath(): boolean {
-  if (
-    process.env.NEXT_PUBLIC_LOCAL_BRIDGE === "true" &&
-    process.env.NODE_ENV !== "production"
-  ) {
-    return true;
-  }
-  if (typeof window === "undefined") return false;
-
-  const host = window.location.hostname;
-  const isLocalHost =
-    host === "localhost" ||
-    host === "127.0.0.1" ||
-    host === "::1" ||
-    host.endsWith(".localhost");
-  const hasElectronBridge = Boolean(window.electronAPI?.hyperClawBridge);
-
-  return isLocalHost || hasElectronBridge;
+  return isLocalConnectorContext();
 }
 
 let _localBridgeDisabledUntil = 0;
@@ -578,7 +576,12 @@ export async function hubCommand(
         : false;
       if (bridgeAlive) {
         markLocalBridgeAvailable();
-        if (isStreaming || isLongRunning || action === "hermes-health") {
+        if (
+          isStreaming ||
+          isLongRunning ||
+          action === "hermes-health" ||
+          shouldBlockRemoteHubFallback()
+        ) {
           return {
             success: false,
             error: `Local connector timed out while handling ${action}`,
@@ -592,6 +595,15 @@ export async function hubCommand(
       }
       // Local bridge not available, try gateway WS
     }
+  }
+
+  if (shouldBlockRemoteHubFallback()) {
+    return {
+      success: false,
+      error: "Start the local connector on this machine.",
+      needsSetup: true,
+      localBridgeUnavailable: true,
+    };
   }
 
   const token = await getUserToken();

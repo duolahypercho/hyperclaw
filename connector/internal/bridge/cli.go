@@ -549,6 +549,8 @@ const openClawAgentAddTimeoutMs = 480000
 const openClawAgentDeleteTimeoutMs = 480000
 
 const openClawDoctorFixTimeoutMs = 600000
+const openClawSecurityAuditDeepTimeoutMs = 600000
+const openClawStatusAllTimeoutMs = 120000
 
 func (b *BridgeHandler) addAgent(params map[string]interface{}) actionResult {
 	name, _ := params["agentName"].(string)
@@ -1439,6 +1441,44 @@ func (b *BridgeHandler) openClawDoctorFix() actionResult {
 	stdout, stderr, err := runOpenClaw(context.Background(), b.paths, []string{
 		"doctor", "--fix", "--non-interactive",
 	}, openClawDoctorFixTimeoutMs)
+	if err != nil {
+		return okResult(map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+			"stdout":  stdout,
+			"stderr":  stderr,
+		})
+	}
+	return okResult(map[string]interface{}{
+		"success": true,
+		"stdout":  stdout,
+		"stderr":  stderr,
+	})
+}
+
+func (b *BridgeHandler) openClawSecurityAuditDeep() actionResult {
+	stdout, stderr, err := runOpenClaw(context.Background(), b.paths, []string{
+		"security", "audit", "--deep",
+	}, openClawSecurityAuditDeepTimeoutMs)
+	if err != nil {
+		return okResult(map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+			"stdout":  stdout,
+			"stderr":  stderr,
+		})
+	}
+	return okResult(map[string]interface{}{
+		"success": true,
+		"stdout":  stdout,
+		"stderr":  stderr,
+	})
+}
+
+func (b *BridgeHandler) openClawStatusAll() actionResult {
+	stdout, stderr, err := runOpenClaw(context.Background(), b.paths, []string{
+		"status", "--all",
+	}, openClawStatusAllTimeoutMs)
 	if err != nil {
 		return okResult(map[string]interface{}{
 			"success": false,

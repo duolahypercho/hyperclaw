@@ -48,6 +48,52 @@ export async function loadLocalUsage(): Promise<{ success: boolean; data: LocalU
   return await bridgeInvoke("load-local-usage", {}) as { success: boolean; data: LocalUsageData | null; error?: string };
 }
 
+export interface LocalUserProfile {
+  name: string;
+  email: string;
+  aboutme: string;
+  profilePic: string;
+  updatedAt?: number;
+}
+
+const LOCAL_USER_PROFILE_FALLBACK_KEY = "hyperclaw:local-user-profile";
+
+function readLocalUserProfileFallback(): LocalUserProfile | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(LOCAL_USER_PROFILE_FALLBACK_KEY);
+    return raw ? (JSON.parse(raw) as LocalUserProfile) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeLocalUserProfileFallback(profile: LocalUserProfile): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(LOCAL_USER_PROFILE_FALLBACK_KEY, JSON.stringify(profile));
+}
+
+function isUnknownLocalProfileAction(result: { success?: boolean; error?: string } | null | undefined): boolean {
+  return result?.success === false && result.error?.includes("unknown action: save-local-user-profile") === true;
+}
+
+export async function loadLocalUserProfile(): Promise<{ success: boolean; profile: LocalUserProfile | null; error?: string; storage?: "sqlite" | "browser" }> {
+  const result = await bridgeInvoke("get-local-user-profile", {}) as { success: boolean; profile: LocalUserProfile | null; error?: string };
+  if (result.success === false && result.error?.includes("unknown action: get-local-user-profile")) {
+    return { success: true, profile: readLocalUserProfileFallback(), storage: "browser" };
+  }
+  return { ...result, storage: "sqlite" };
+}
+
+export async function saveLocalUserProfile(profile: LocalUserProfile): Promise<{ success: boolean; profile?: LocalUserProfile; error?: string; storage?: "sqlite" | "browser" }> {
+  const result = await bridgeInvoke("save-local-user-profile", { profile }) as { success: boolean; profile?: LocalUserProfile; error?: string };
+  if (isUnknownLocalProfileAction(result)) {
+    writeLocalUserProfileFallback(profile);
+    return { success: true, profile, storage: "browser" };
+  }
+  return { ...result, storage: "sqlite" };
+}
+
 // Agent event storage helpers
 
 export interface AgentEvent {
@@ -798,4 +844,83 @@ export async function knowledgeGetFileBinary(
   const result = await bridgeInvoke("knowledge-get-binary", { companyId, relativePath });
   return (result as { success: boolean; content?: string; mimeType?: string; error?: string }) ??
     { success: false, error: "Binary preview not supported by connector" };
+}
+
+export interface KnowledgeUploadResult {
+  success: boolean;
+  relativePath?: string;
+  name?: string;
+  error?: string;
+}
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error("Failed to read file"));
+    reader.onload = () => {
+      const result = reader.result;
+      if (typeof result !== "string") {
+        reject(new Error("Unexpected reader result"));
+        return;
+      }
+      // Strip the `data:<mime>;base64,` prefix.
+      const comma = result.indexOf(",");
+      resolve(comma >= 0 ? result.slice(comma + 1) : result);
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+/**
+ * Upload an arbitrary file (binary or text) into a collection. Routes through
+ * the local Next.js API which writes directly into ~/.hyperclaw/knowledge/.
+ *
+ * Only available when the dashboard is running on localhost (Electron app or
+ * `next dev`). When the dashboard is served from a remote origin (e.g. Vercel),
+ * the API returns 403 because there is no shared filesystem.
+ */
+export async function knowledgeUploadFile(
+  companyId: string,
+  collection: string,
+  file: File,
+): Promise<KnowledgeUploadResult> {
+  if (!canUseLocalKnowledgeMediaFallback()) {
+    return {
+      success: false,
+      error: "File uploads require the local desktop app or `next dev`.",
+    };
+  }
+
+  let contentBase64: string;
+  try {
+    contentBase64 = await fileToBase64(file);
+  } catch (e) {
+    return {
+      success: false,
+      error: e instanceof Error ? e.message : "Failed to read file",
+    };
+  }
+
+  try {
+    const response = await fetch("/api/knowledge-local-upload", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        companyId,
+        collection,
+        fileName: file.name,
+        contentBase64,
+      }),
+    });
+    const data = (await response.json()) as KnowledgeUploadResult;
+    if (!response.ok) {
+      return { success: false, error: data?.error ?? `Upload failed (${response.status})` };
+    }
+    return data;
+  } catch (e) {
+    return {
+      success: false,
+      error: e instanceof Error ? e.message : "Upload failed",
+    };
+  }
 }

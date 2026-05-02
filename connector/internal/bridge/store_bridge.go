@@ -11,6 +11,8 @@ import (
 )
 
 const projectDepartmentPrefix = "project:"
+const localUserProfileKey = "local-user-profile"
+const maxLocalUserProfileBytes = 1024 * 1024
 
 type orgProjectTeam struct {
 	ID          string
@@ -522,6 +524,49 @@ func (b *BridgeHandler) saveLocalUsage(params map[string]interface{}) actionResu
 		return b.saveLocalUsageFile(params)
 	}
 	return okResult(map[string]interface{}{"success": true})
+}
+
+func (b *BridgeHandler) getLocalUserProfile() actionResult {
+	if b.store == nil {
+		return errResultStatus("store not available", 500)
+	}
+
+	val, err := b.store.KVGet(localUserProfileKey)
+	if err != nil {
+		return errResultStatus(fmt.Sprintf("failed to load local user profile: %v", err), 500)
+	}
+	if val == "" {
+		return okResult(map[string]interface{}{"success": true, "profile": nil})
+	}
+
+	var profile map[string]interface{}
+	if err := json.Unmarshal([]byte(val), &profile); err != nil {
+		return errResultStatus(fmt.Sprintf("failed to parse local user profile: %v", err), 500)
+	}
+	return okResult(map[string]interface{}{"success": true, "profile": profile})
+}
+
+func (b *BridgeHandler) saveLocalUserProfile(params map[string]interface{}) actionResult {
+	if b.store == nil {
+		return errResultStatus("store not available", 500)
+	}
+
+	profile, ok := params["profile"].(map[string]interface{})
+	if !ok {
+		return errResultStatus("profile is required", 400)
+	}
+
+	data, err := json.Marshal(profile)
+	if err != nil {
+		return errResultStatus(fmt.Sprintf("failed to encode local user profile: %v", err), 500)
+	}
+	if len(data) > maxLocalUserProfileBytes {
+		return errResultStatus("profile payload is too large", 413)
+	}
+	if err := b.store.KVSet(localUserProfileKey, string(data)); err != nil {
+		return errResultStatus(fmt.Sprintf("failed to save local user profile: %v", err), 500)
+	}
+	return okResult(map[string]interface{}{"success": true, "profile": profile})
 }
 
 func (b *BridgeHandler) listChannels() actionResult {

@@ -51,6 +51,9 @@ export function ProjectCardMenu({
   const stopPropagation = React.useCallback((event: React.SyntheticEvent) => {
     event.stopPropagation();
   }, []);
+  const runAfterMenuClose = React.useCallback((action: () => void) => {
+    setTimeout(action, 0);
+  }, []);
 
   if (!onEdit && !onRemove) return null;
 
@@ -85,7 +88,7 @@ export function ProjectCardMenu({
         {onEdit && (
           <DropdownMenuItem
             onSelect={() => {
-              onEdit();
+              runAfterMenuClose(onEdit);
             }}
             className="cursor-pointer text-[12px] px-2 py-1.5 gap-2"
           >
@@ -97,7 +100,7 @@ export function ProjectCardMenu({
         {onRemove && (
           <DropdownMenuItem
             onSelect={() => {
-              onRemove();
+              runAfterMenuClose(onRemove);
             }}
             className="cursor-pointer text-[12px] px-2 py-1.5 gap-2 text-destructive focus:text-destructive focus:bg-destructive/10"
           >

@@ -1,12 +1,19 @@
 import React, { useState, useEffect, useRef, useLayoutEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
+import Image from "next/image";
 import { cn } from "@/lib/utils";
 import { useOS } from "@OS/Provider/OSProv";
 import { Button } from "@/components/ui/button";
 import { useRouter } from "next/router";
 import HyperchoTooltip from "$/components/UI/HyperchoTooltip";
 import HyperchoIcon from "$/components/Navigation/HyperchoIcon";
+import {
+  COMPANY_PROFILE_CHANGED_EVENT,
+  isCompanyProfile,
+  loadCompanyProfile,
+  type CompanyProfile,
+} from "$/lib/company-profile";
 import { dashboardState } from "$/lib/dashboard-state";
 import { useUser } from "$/Providers/UserProv";
 import { useHyperclawContext } from "$/Providers/HyperclawProv";
@@ -254,6 +261,9 @@ const Navbar = () => {
   const { pathname } = Router;
 
   const [expanded, setExpanded] = useState(false);
+  const [companyProfile, setCompanyProfile] = useState<CompanyProfile>(() =>
+    loadCompanyProfile()
+  );
 
   const [activeChatAgentId, setActiveChatAgentId] = useState<string | null>(null);
   const [showAddAgent, setShowAddAgent] = useState(false);
@@ -268,6 +278,24 @@ const Navbar = () => {
     dashboardState.set("nav-expanded", String(expanded));
     window.dispatchEvent(new CustomEvent("nav-expanded-change", { detail: { expanded } }));
   }, [expanded]);
+
+  useEffect(() => {
+    const refreshCompanyProfile = (event?: Event) => {
+      const nextProfile =
+        event instanceof CustomEvent && isCompanyProfile(event.detail)
+          ? event.detail
+          : loadCompanyProfile();
+      setCompanyProfile(nextProfile);
+    };
+
+    refreshCompanyProfile();
+    window.addEventListener(COMPANY_PROFILE_CHANGED_EVENT, refreshCompanyProfile);
+    window.addEventListener("dashboard-state-rehydrated", refreshCompanyProfile);
+    return () => {
+      window.removeEventListener(COMPANY_PROFILE_CHANGED_EVENT, refreshCompanyProfile);
+      window.removeEventListener("dashboard-state-rehydrated", refreshCompanyProfile);
+    };
+  }, []);
 
   // Track which agent is active in chat
   useEffect(() => {
@@ -392,6 +420,8 @@ const Navbar = () => {
   }, [Router, activeTool, pathname, agents, activeChatAgentId, visibleTools]);
 
   const planLabel = membership?.isFreePlan === false ? "Pro" : "Free";
+  const companyName = companyProfile.name.trim() || "Hypercho";
+  const companyAvatarDataUri = companyProfile.avatarDataUri;
 
   return (
     <motion.div
@@ -408,8 +438,19 @@ const Navbar = () => {
         <div className="absolute inset-0 flex flex-col">
             {/* Logo header */}
             <div className="shrink-0 flex items-center gap-2 h-12 px-3 border-b border-border border-solid border-t-0 border-l-0 border-r-0">
-              <HyperchoIcon className="h-6 w-6 shrink-0" />
-              <span className="flex-1 text-sm font-medium text-foreground truncate" style={{ letterSpacing: "-0.015em" }}>Hypercho</span>
+              {companyAvatarDataUri ? (
+                <Image
+                  src={companyAvatarDataUri}
+                  alt={`${companyName} logo`}
+                  width={24}
+                  height={24}
+                  unoptimized
+                  className="h-6 w-6 shrink-0 rounded-sm object-cover"
+                />
+              ) : (
+                <HyperchoIcon className="h-6 w-6 shrink-0" />
+              )}
+              <span className="flex-1 text-[13px] font-normal text-foreground truncate" style={{ letterSpacing: "-0.015em" }}>{companyName}</span>
               <button
                 onClick={() => setExpanded(false)}
                 className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-primary/5 transition-colors shrink-0"
@@ -472,7 +513,18 @@ const Navbar = () => {
               className="w-full h-12 transition-all duration-200 group rounded-none hover:bg-transparent justify-center border-solid border-border border-b border-l-0 border-t-0 border-r-0"
             >
               <div className="w-6 h-6 flex items-center justify-center shrink-0">
-                <HyperchoIcon className="h-6 w-6 transition-transform duration-300 group-hover:scale-110" />
+                {companyAvatarDataUri ? (
+                  <Image
+                    src={companyAvatarDataUri}
+                    alt={`${companyName} logo`}
+                    width={24}
+                    height={24}
+                    unoptimized
+                    className="h-6 w-6 rounded-sm object-cover transition-transform duration-300 group-hover:scale-110"
+                  />
+                ) : (
+                  <HyperchoIcon className="h-6 w-6 transition-transform duration-300 group-hover:scale-110" />
+                )}
               </div>
             </Button>
             </NavTooltip>
