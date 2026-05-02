@@ -55,6 +55,7 @@ var onboardingAllowedChannelIDs = map[string]bool{
 type onboardingAgentProfile struct {
 	Runtime       string `json:"runtime"`
 	Name          string `json:"name"`
+	Role          string `json:"role"`
 	Description   string `json:"description"`
 	EmojiEnabled  bool   `json:"emojiEnabled"`
 	Emoji         string `json:"emoji"`
@@ -100,24 +101,25 @@ type onboardingOAuthTokens struct {
 }
 
 // hermesProviderEnvKeys maps onboarding provider IDs → Hermes .env variable names.
-var hermesProviderEnvKeys = map[string]string{
-	"anthropic":   "ANTHROPIC_API_KEY",
-	"openai":      "OPENAI_API_KEY",
-	"openrouter":  "OPENROUTER_API_KEY",
-	"google":      "GOOGLE_API_KEY",
-	"mistral":     "MISTRAL_API_KEY",
-	"groq":        "GROQ_API_KEY",
-	"xai":         "XAI_API_KEY",
-	"cohere":      "COHERE_API_KEY",
-	"minimax":     "MINIMAX_API_KEY",
-	"kimi":        "KIMI_API_KEY",
-	"moonshot":    "KIMI_API_KEY",
-	"together":    "TOGETHER_API_KEY",
-	"huggingface": "HF_TOKEN",
-	"deepseek":    "DEEPSEEK_API_KEY",
-	"cerebras":    "CEREBRAS_API_KEY",
-	"nvidia":      "NVIDIA_API_KEY",
-	"perplexity":  "PERPLEXITY_API_KEY",
+var hermesProviderEnvKeys = map[string][]string{
+	"anthropic":   {"ANTHROPIC_API_KEY"},
+	"openai":      {"OPENAI_API_KEY"},
+	"openrouter":  {"OPENROUTER_API_KEY"},
+	"google":      {"GOOGLE_API_KEY", "GEMINI_API_KEY"},
+	"gemini":      {"GOOGLE_API_KEY", "GEMINI_API_KEY"},
+	"mistral":     {"MISTRAL_API_KEY"},
+	"groq":        {"GROQ_API_KEY"},
+	"xai":         {"XAI_API_KEY"},
+	"cohere":      {"COHERE_API_KEY"},
+	"minimax":     {"MINIMAX_API_KEY"},
+	"kimi":        {"KIMI_API_KEY"},
+	"moonshot":    {"KIMI_API_KEY"},
+	"together":    {"TOGETHER_API_KEY"},
+	"huggingface": {"HF_TOKEN"},
+	"deepseek":    {"DEEPSEEK_API_KEY"},
+	"cerebras":    {"CEREBRAS_API_KEY"},
+	"nvidia":      {"NVIDIA_API_KEY"},
+	"perplexity":  {"PERPLEXITY_API_KEY"},
 }
 
 // hermesChannelEnvKeys maps channel names → Hermes .env variable names for home channel targets.
@@ -253,6 +255,36 @@ func onboardingUserMD(userName, userEmail, userAboutMe string) string {
 	return b.String()
 }
 
+// onboardingSoulMD generates a small starter SOUL.md for agents created by
+// onboarding and MCP tools. Dashboard-created agents may overwrite this with a
+// richer template immediately after provisioning.
+func onboardingSoulMD(name, role, description string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "Agent"
+	}
+	role = strings.TrimSpace(role)
+	description = strings.TrimSpace(description)
+
+	var b strings.Builder
+	b.WriteString("# SOUL.md - Who You Are\n\n")
+	b.WriteString("You are **" + name + "**.\n")
+	if role != "" {
+		b.WriteString("\n- **Role:** " + role + "\n")
+	}
+	if description != "" {
+		b.WriteString("\n## Mission\n\n")
+		b.WriteString(description + "\n")
+	}
+	b.WriteString("\n## Operating Style\n\n")
+	b.WriteString("- Lead with the useful answer.\n")
+	b.WriteString("- Keep context in files, not in memory.\n")
+	b.WriteString("- Read `USER.md` before making assumptions about the operator.\n")
+	b.WriteString("- Ask before destructive or external actions.\n")
+	b.WriteString("- Escalate clearly when blocked.\n")
+	return b.String()
+}
+
 // onboardingVibe picks a vibe word from the description, or defaults to "helpful".
 func onboardingVibe(description string) string {
 	lower := strings.ToLower(description)
@@ -344,14 +376,6 @@ func onboardingWorkspaceDir(paths Paths, runtimeName, agentID string) string {
 		return paths.AgentDir(runtimeName, agentID)
 	}
 }
-
-// onboardingSoulMD was removed intentionally. Onboarding writes IDENTITY.md only
-// and leaves SOUL.md as the pristine template shipped with each runtime so the
-// agent can evolve its own persona via BOOTSTRAP.md on first run. Editing
-// SOUL.md remains available as an explicit user action through the personality
-// editor (agent_runtime_handlers.go -> updateAgentPersonality), not onboarding.
-// Reintroducing onboarding-time SOUL.md writes is what caused the 3 GB echo
-// loop. Keep onboarding structural (name/description) and out of SOUL.md.
 
 // knowledgeSection returns a markdown section pointing agents to the shared
 // company knowledge base. The knowledgeDir is an absolute path like
@@ -1313,9 +1337,11 @@ func (b *BridgeHandler) ensureOpenClawDefaults(providers []onboardingProviderCon
 				if mapping.KeyFlag != "" {
 					args = append(args, mapping.KeyFlag, key)
 				}
-				if mapping.EnvVar != "" {
-					os.Setenv(mapping.EnvVar, key)
-					defer os.Unsetenv(mapping.EnvVar)
+				// Keep auth env vars available for the OpenClaw subprocesses in this function,
+				// then restore the connector process environment before returning.
+				for _, envVar := range providerOnboardEnvVars(mapping) {
+					restore := setOnboardingEnv(envVar, key)
+					defer restore()
 				}
 			} else {
 				// Provider has no auth-choice (env-only like groq) — skip for onboard,
@@ -1358,12 +1384,18 @@ func (b *BridgeHandler) ensureOpenClawDefaults(providers []onboardingProviderCon
 			// For env-var providers, always persist the key to openclaw.json's
 			// env section (e.g. env.MINIMAX_API_KEY, env.ZAI_API_KEY) so the
 			// gateway daemon can discover it at runtime.
-			if mapping.EnvVar != "" {
-				os.Setenv(mapping.EnvVar, key)
-				patchOpenClawJSON(configPath, map[string]string{
-					"env." + mapping.EnvVar: key,
-				}, nil)
-				log.Printf("[onboarding] %s: persisted %s to openclaw.json env", p.ProviderID, mapping.EnvVar)
+			envPatches := map[string]string{}
+			for _, envVar := range providerOnboardEnvVars(mapping) {
+				restore := setOnboardingEnv(envVar, key)
+				defer restore()
+				envPatches["env."+envVar] = key
+			}
+			if len(envPatches) > 0 {
+				if err := patchOpenClawJSON(configPath, envPatches, nil); err != nil {
+					log.Printf("[onboarding] %s: failed to persist env key(s) to openclaw.json: %v", p.ProviderID, err)
+				} else {
+					log.Printf("[onboarding] %s: persisted %d env key(s) to openclaw.json", p.ProviderID, len(envPatches))
+				}
 			}
 
 			// Providers without an auth-choice (e.g. groq) are env-var-only.
@@ -1396,6 +1428,7 @@ func (b *BridgeHandler) ensureOpenClawDefaults(providers []onboardingProviderCon
 			}
 		}
 	}
+	persistOpenClawProviderEnvKeys(configPath, providers)
 
 	// Set agents.defaults.workspace — only if it differs from the current value
 	// so we don't trigger an unnecessary openclaw.json write that would cause
@@ -1633,9 +1666,10 @@ func resolvePrimaryOnboardProvider(providers []onboardingProviderConfig, primary
 
 // providerOnboardMapping holds the auth-choice value and how to pass the API key.
 type providerOnboardMapping struct {
-	AuthChoice string // --auth-choice value (empty = skip openclaw onboard for this provider)
-	KeyFlag    string // CLI flag like "--anthropic-api-key" (empty if env-only)
-	EnvVar     string // env var like "MINIMAX_API_KEY" (empty if flag-based)
+	AuthChoice string   // --auth-choice value (empty = skip openclaw onboard for this provider)
+	KeyFlag    string   // CLI flag like "--anthropic-api-key" (empty if env-only)
+	EnvVar     string   // env var like "MINIMAX_API_KEY" (empty if flag-based)
+	EnvVars    []string // additional env aliases written alongside EnvVar
 }
 
 // mapProviderToOnboard maps a provider config to openclaw onboard auth-choice
@@ -1651,7 +1685,7 @@ func mapProviderToOnboard(p *onboardingProviderConfig) *providerOnboardMapping {
 		return &providerOnboardMapping{AuthChoice: "openai-api-key", KeyFlag: "--openai-api-key"}
 	case "google", "gemini":
 		// docs: --auth-choice gemini-api-key --gemini-api-key "$GEMINI_API_KEY"
-		return &providerOnboardMapping{AuthChoice: "gemini-api-key", KeyFlag: "--gemini-api-key"}
+		return &providerOnboardMapping{AuthChoice: "gemini-api-key", KeyFlag: "--gemini-api-key", EnvVar: "GEMINI_API_KEY", EnvVars: []string{"GOOGLE_API_KEY"}}
 	case "minimax":
 		// docs: --auth-choice minimax-global-api, key via env MINIMAX_API_KEY (no CLI flag)
 		return &providerOnboardMapping{AuthChoice: "minimax-global-api", EnvVar: "MINIMAX_API_KEY"}
@@ -1679,6 +1713,53 @@ func mapProviderToOnboard(p *onboardingProviderConfig) *providerOnboardMapping {
 		return &providerOnboardMapping{AuthChoice: "ollama"}
 	default:
 		return nil
+	}
+}
+
+func providerOnboardEnvVars(mapping *providerOnboardMapping) []string {
+	if mapping == nil {
+		return nil
+	}
+	out := make([]string, 0, 1+len(mapping.EnvVars))
+	if mapping.EnvVar != "" {
+		out = append(out, mapping.EnvVar)
+	}
+	out = append(out, mapping.EnvVars...)
+	return out
+}
+
+func setOnboardingEnv(key, value string) func() {
+	previous, hadPrevious := os.LookupEnv(key)
+	_ = os.Setenv(key, value)
+	return func() {
+		if hadPrevious {
+			_ = os.Setenv(key, previous)
+			return
+		}
+		_ = os.Unsetenv(key)
+	}
+}
+
+func persistOpenClawProviderEnvKeys(configPath string, providers []onboardingProviderConfig) {
+	for _, p := range providers {
+		key := strings.TrimSpace(p.APIKey)
+		if key == "" {
+			continue
+		}
+		mapping := mapProviderToOnboard(&p)
+		envVars := providerOnboardEnvVars(mapping)
+		if len(envVars) == 0 {
+			continue
+		}
+		patches := make(map[string]string, len(envVars))
+		for _, envVar := range envVars {
+			patches["env."+envVar] = key
+		}
+		if err := patchOpenClawJSON(configPath, patches, nil); err != nil {
+			log.Printf("[onboarding] %s: failed to persist provider env keys to openclaw.json: %v", p.ProviderID, err)
+			continue
+		}
+		log.Printf("[onboarding] %s: persisted %d env key(s) to openclaw.json", p.ProviderID, len(patches))
 	}
 }
 
@@ -2773,11 +2854,14 @@ func (b *BridgeHandler) ensureHermesEnv(providers []onboardingProviderConfig, ch
 	updates["API_SERVER_PORT"] = "8642"
 
 	for _, p := range providers {
-		envKey, ok := hermesProviderEnvKeys[p.ProviderID]
-		if !ok || strings.TrimSpace(p.APIKey) == "" {
+		envKeys, ok := hermesProviderEnvKeys[p.ProviderID]
+		key := strings.TrimSpace(p.APIKey)
+		if !ok || key == "" {
 			continue
 		}
-		updates[envKey] = strings.TrimSpace(p.APIKey)
+		for _, envKey := range envKeys {
+			updates[envKey] = key
+		}
 	}
 
 	for channel, target := range channelTargets {
@@ -3327,7 +3411,10 @@ func (b *BridgeHandler) onboardingProvisionAgent(params map[string]interface{}) 
 	if profile.EmojiEnabled {
 		emoji = strings.TrimSpace(profile.Emoji)
 	}
-	role := onboardingRuntimeRole(profile.Runtime)
+	role := strings.TrimSpace(profile.Role)
+	if role == "" {
+		role = onboardingRuntimeRole(profile.Runtime)
+	}
 	stepKey := fmt.Sprintf("agent:%s:%s", profile.Runtime, onboardingSlug(name))
 	if strings.HasSuffix(stepKey, ":") {
 		stepKey = fmt.Sprintf("agent:%s:%s", profile.Runtime, agentID)
@@ -3377,6 +3464,7 @@ func (b *BridgeHandler) onboardingProvisionAgent(params map[string]interface{}) 
 	userEmail, _ := params["userEmail"].(string)
 	userAboutMe, _ := params["userAboutMe"].(string)
 	userMD := onboardingUserMD(userName, userEmail, userAboutMe)
+	soulMD := onboardingSoulMD(name, role, description)
 
 	switch profile.Runtime {
 	case "openclaw":
@@ -3405,6 +3493,7 @@ func (b *BridgeHandler) onboardingProvisionAgent(params map[string]interface{}) 
 			"runtime":  "openclaw",
 			"name":     name,
 			"emoji":    emoji,
+			"soul":     soulMD,
 			"identity": identityMD,
 			"user":     userMD,
 			"channels": channelConfigByRuntime["openclaw"],
@@ -3434,6 +3523,7 @@ func (b *BridgeHandler) onboardingProvisionAgent(params map[string]interface{}) 
 		adapter := NewHermesAdapter(b.paths)
 		personality := AgentPersonality{
 			AgentID:  agentID,
+			Soul:     soulMD,
 			Identity: identityMD,
 			User:     userMD,
 		}
@@ -3454,6 +3544,7 @@ func (b *BridgeHandler) onboardingProvisionAgent(params map[string]interface{}) 
 				"runtime":  "hermes",
 				"name":     name,
 				"emoji":    emoji,
+				"soul":     soulMD,
 				"identity": personality.Identity,
 				"user":     userMD,
 				"channels": channelConfigByRuntime["hermes"],
@@ -3512,6 +3603,7 @@ func (b *BridgeHandler) onboardingProvisionAgent(params map[string]interface{}) 
 			"runtime":  "claude-code",
 			"name":     name,
 			"emoji":    emoji,
+			"soul":     soulMD,
 			"identity": identityMD,
 			"user":     userMD,
 			"agents":   onboardingClaudeMD(name, emoji, role, description, knowledgeDir),
@@ -3529,6 +3621,7 @@ func (b *BridgeHandler) onboardingProvisionAgent(params map[string]interface{}) 
 			"runtime":  "codex",
 			"name":     name,
 			"emoji":    emoji,
+			"soul":     soulMD,
 			"identity": identityMD,
 			"user":     userMD,
 			"agents":   onboardingAgentsMD(name, emoji, role, description, knowledgeDir),
@@ -3835,7 +3928,10 @@ func (b *BridgeHandler) onboardingProvisionWorkspace(params map[string]interface
 		if profile.EmojiEnabled {
 			emoji = strings.TrimSpace(profile.Emoji)
 		}
-		role := onboardingRuntimeRole(profile.Runtime)
+		role := strings.TrimSpace(profile.Role)
+		if role == "" {
+			role = onboardingRuntimeRole(profile.Runtime)
+		}
 
 		runtimeHasImplicitMain := profile.Runtime == "openclaw" || profile.Runtime == "hermes"
 		exists := false
@@ -3852,6 +3948,11 @@ func (b *BridgeHandler) onboardingProvisionWorkspace(params map[string]interface
 		bulkWsDir := onboardingWorkspaceDir(b.paths, profile.Runtime, agentID)
 		bulkAvatarPath := saveOnboardingAvatar(bulkWsDir, onboardingSlug(name), profile.AvatarDataURI)
 		bulkIdentityMD := onboardingIdentityMD(name, emoji, description, bulkAvatarPath)
+		// Legacy bulk onboarding does not collect the operator profile fields
+		// that granular onboarding passes, but the file should still exist so
+		// the runtime starts with the same personality surface.
+		bulkUserMD := onboardingUserMD("", "", "")
+		bulkSoulMD := onboardingSoulMD(name, role, description)
 
 		switch profile.Runtime {
 		case "openclaw":
@@ -3874,7 +3975,9 @@ func (b *BridgeHandler) onboardingProvisionWorkspace(params map[string]interface
 				"runtime":  "openclaw",
 				"name":     name,
 				"emoji":    emoji,
+				"soul":     bulkSoulMD,
 				"identity": bulkIdentityMD,
+				"user":     bulkUserMD,
 			})
 			if setupResult.err != nil {
 				return fail(stepKey, setupResult.err.Error())
@@ -3889,7 +3992,9 @@ func (b *BridgeHandler) onboardingProvisionWorkspace(params map[string]interface
 			hermesAdapter := NewHermesAdapter(b.paths)
 			hermesPers := AgentPersonality{
 				AgentID:  agentID,
+				Soul:     bulkSoulMD,
 				Identity: bulkIdentityMD,
+				User:     bulkUserMD,
 			}
 			if agentID == "main" {
 				// Default agent: write directly to ~/.hermes/, skip setupAgent.
@@ -3902,7 +4007,9 @@ func (b *BridgeHandler) onboardingProvisionWorkspace(params map[string]interface
 					"runtime":  "hermes",
 					"name":     name,
 					"emoji":    emoji,
+					"soul":     bulkSoulMD,
 					"identity": hermesPers.Identity,
+					"user":     bulkUserMD,
 					"channels": hermesChannelCreds,
 				})
 				if setupResult.err != nil {
@@ -3922,7 +4029,9 @@ func (b *BridgeHandler) onboardingProvisionWorkspace(params map[string]interface
 				"runtime":  "claude-code",
 				"name":     name,
 				"emoji":    emoji,
+				"soul":     bulkSoulMD,
 				"identity": bulkIdentityMD,
+				"user":     bulkUserMD,
 				"agents":   onboardingClaudeMD(name, emoji, role, description, knowledgeDir),
 			})
 			if setupResult.err != nil {
@@ -3934,7 +4043,9 @@ func (b *BridgeHandler) onboardingProvisionWorkspace(params map[string]interface
 				"runtime":  "codex",
 				"name":     name,
 				"emoji":    emoji,
+				"soul":     bulkSoulMD,
 				"identity": bulkIdentityMD,
+				"user":     bulkUserMD,
 				"agents":   onboardingAgentsMD(name, emoji, role, description, knowledgeDir),
 			})
 			if setupResult.err != nil {

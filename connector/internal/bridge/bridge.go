@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/hypercho/hyperclaw-connector/internal/config"
+	"github.com/hypercho/hyperclaw-connector/internal/gateway"
 	"github.com/hypercho/hyperclaw-connector/internal/protocol"
 	"github.com/hypercho/hyperclaw-connector/internal/store"
 )
@@ -19,6 +21,8 @@ var actionTimeouts = map[string]time.Duration{
 	"trigger-process-commands":       180 * time.Second,
 	"openclaw-cron-execute":          120 * time.Second,
 	"openclaw-doctor-fix":            time.Duration(openClawDoctorFixTimeoutMs) * time.Millisecond,
+	"openclaw-security-audit-deep":   time.Duration(openClawSecurityAuditDeepTimeoutMs) * time.Millisecond,
+	"openclaw-status-all":            time.Duration(openClawStatusAllTimeoutMs) * time.Millisecond,
 	"gateway-restart":                30 * time.Second,
 	"cron-run":                       120 * time.Second,
 	"add-agent":                      10 * time.Minute,
@@ -33,6 +37,7 @@ var actionTimeouts = map[string]time.Duration{
 	"get-cron-by-id":                 10 * time.Second,
 	"list-agents":                    10 * time.Second,
 	"get-config":                     10 * time.Second,
+	"gateway-request":                90 * time.Second,
 	"get-team":                       10 * time.Second,
 	"get-todo-data":                  10 * time.Second,
 	"save-todo-data":                 10 * time.Second,
@@ -107,6 +112,8 @@ var actionTimeouts = map[string]time.Duration{
 	"oauth:store-cli-tokens":         15 * time.Second,
 	"run-agent-task":                 300 * time.Second,
 	"agent-send-message":             300 * time.Second,
+	"project-lead-heartbeat":         30 * time.Minute,
+	"project-task-dispatch":          5 * time.Minute,
 	"get-agent-personality":          10 * time.Second,
 	"save-agent-personality":         10 * time.Second,
 	"save-agent-file":                10 * time.Second,
@@ -290,6 +297,8 @@ type BridgeHandler struct {
 	// connected dashboards see live updates without polling. Optional —
 	// nil means "no live channel," and callers tolerate that case.
 	hubBroadcast chan<- []byte
+
+	gatewayConfig *config.Config
 }
 
 // NewBridgeHandler creates a new native bridge handler.
@@ -305,6 +314,10 @@ func NewBridgeHandler() *BridgeHandler {
 
 func (b *BridgeHandler) SetRuntimeWorker(worker RuntimeWorker) {
 	b.runtimeWorker = worker
+}
+
+func (b *BridgeHandler) SetGatewayConfig(cfg *config.Config) {
+	b.gatewayConfig = cfg
 }
 
 // BeginShutdown marks the bridge as shutting down. Subsequent Dispatch/Handle
@@ -654,6 +667,45 @@ func (b *BridgeHandler) RunStreamingAction(action string, params map[string]inte
 	}
 }
 
+func (b *BridgeHandler) gatewayRequest(params map[string]interface{}) actionResult {
+	requestType, _ := params["requestType"].(string)
+	if requestType == "" {
+		return errResultStatus("requestType is required", 400)
+	}
+	if !IsGatewayRequest(requestType) {
+		return errResultStatus("unsupported gateway request type", 400)
+	}
+
+	requestParams, _ := params["params"].(map[string]interface{})
+	timeout := 30 * time.Second
+	if ms, ok := params["timeoutMs"].(float64); ok && ms > 0 {
+		timeout = time.Duration(ms) * time.Millisecond
+	}
+	if timeout > 90*time.Second {
+		timeout = 90 * time.Second
+	}
+
+	cfg := &config.Config{}
+	if b.gatewayConfig != nil {
+		copy := *b.gatewayConfig
+		cfg = &copy
+	}
+	if cfg.GatewayHost == "" {
+		cfg.GatewayHost = "127.0.0.1"
+	}
+	if cfg.GatewayPort == 0 && cfg.GatewayURL == "" {
+		cfg.GatewayPort = 18789
+	}
+	if cfg.Version == "" {
+		cfg.Version = "local-bridge"
+	}
+	payload, err := gateway.RequestOnce(cfg, requestType, requestParams, timeout)
+	if err != nil {
+		return errResultStatus(err.Error(), 502)
+	}
+	return okResult(payload)
+}
+
 // Handle processes a bridge request by dispatching to native Go handlers.
 func (b *BridgeHandler) Handle(req protocol.Message, toHub chan<- []byte) {
 	params, _ := req.Payload["params"].(map[string]interface{})
@@ -869,12 +921,18 @@ func (b *BridgeHandler) dispatch(action string, params map[string]interface{}) a
 		return b.getLogs(params)
 	case "get-config":
 		return b.getConfig()
+	case "gateway-request":
+		return b.gatewayRequest(params)
 	case "list-models":
 		return b.listModels(params)
 	case "load-local-usage":
 		return b.loadLocalUsage()
 	case "save-local-usage":
 		return b.saveLocalUsage(params)
+	case "get-local-user-profile":
+		return b.getLocalUserProfile()
+	case "save-local-user-profile":
+		return b.saveLocalUserProfile(params)
 	case "list-channels":
 		return b.listChannels()
 	case "send-command":
@@ -975,6 +1033,10 @@ func (b *BridgeHandler) dispatch(action string, params map[string]interface{}) a
 		return b.openclawCronExecute(params)
 	case "openclaw-doctor-fix":
 		return b.openClawDoctorFix()
+	case "openclaw-security-audit-deep":
+		return b.openClawSecurityAuditDeep()
+	case "openclaw-status-all":
+		return b.openClawStatusAll()
 	case "gateway-restart":
 		return b.gatewayRestart()
 
@@ -1239,6 +1301,10 @@ func (b *BridgeHandler) dispatch(action string, params map[string]interface{}) a
 		return b.projectRemoveMember(params)
 	case "project-get-members":
 		return b.projectGetMembers(params)
+	case "project-lead-heartbeat":
+		return b.projectLeadHeartbeat(params)
+	case "project-task-dispatch":
+		return b.projectTaskDispatch(params)
 	case "agent-get-projects":
 		return b.agentGetProjects(params)
 	case "get-team-mode-status":

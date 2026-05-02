@@ -6,6 +6,7 @@ import {
   Loader2, Check, Copy, Terminal, RefreshCw, Monitor, Globe, Server, Code2,
 } from "lucide-react";
 import { getHubApiUrl, hubFetch } from "$/lib/hub-direct";
+import { shouldBlockRemoteHubFallback } from "$/lib/local-connector-routing";
 import { useUser } from "$/Providers/UserProv";
 import { canUseRemoteOnboarding } from "./local-first-routing";
 import {
@@ -281,7 +282,7 @@ export default function GuidedStepConnect({ onComplete, initialDeviceChoice, ini
         if (!gatewayConnection.wsUrl) {
           const token = await getUserToken();
           const hubUrl = process.env.NEXT_PUBLIC_HUB_API_URL || "";
-          if (token && hubUrl) {
+          if (token && hubUrl && !shouldBlockRemoteHubFallback()) {
             connectGatewayWs(hubUrl, { token, hubMode: true });
           }
         }

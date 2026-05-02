@@ -8,6 +8,7 @@ import {
   subscribeGatewayConnection,
   gatewayConnection,
   probeGatewayHealth,
+  probeConnectorHealth,
 } from "$/lib/openclaw-gateway-ws";
 import { v4 as uuidv4 } from "uuid";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
@@ -22,6 +23,7 @@ import {
   readChatClearMarker,
   writeChatClearMarker,
 } from "./chat-clear-boundary";
+import { getGatewayUnavailableMessage } from "$/lib/local-connector-routing";
 
 // Module-level registry: maps active runId → sessionKey.
 // Prevents cross-chat event bleed when multiple useGatewayChat instances
@@ -50,6 +52,14 @@ const clearRunIdOwnership = (sessionKey: string) => {
 };
 
 const TRANSIENT_CHAT_STATE_TTL_MS = 5 * 60_000;
+const INITIAL_HISTORY_LIMIT = 100;
+const HISTORY_TIERS = [INITIAL_HISTORY_LIMIT, 200, 500, 1000] as const;
+const FINALIZE_HISTORY_LIMIT = INITIAL_HISTORY_LIMIT;
+const HERMES_POLL_HISTORY_LIMIT = 50;
+const HERMES_POLL_INTERVAL_MS = 1_500;
+const HERMES_LATEST_SESSION_CACHE_TTL_MS = 5_000;
+const EMPTY_MODEL_RESPONSE_MESSAGE =
+  "The model did not return a visible response. It may have refused, run out of tokens, or ended without final text.";
 
 interface TransientGatewayChatState {
   messages: GatewayChatMessage[];
@@ -59,6 +69,7 @@ interface TransientGatewayChatState {
 }
 
 const transientGatewayChatState = new Map<string, TransientGatewayChatState>();
+const latestHermesSessionCache = new Map<string, { sessionId: string | null; ts: number; inflight?: Promise<string | null> }>();
 
 function getTransientChatStateKey(
   backend: GatewayChatBackend,
@@ -209,18 +220,6 @@ export interface UseGatewayChatOptions {
 }
 
 type GatewayChatBackend = NonNullable<UseGatewayChatOptions["backend"]>;
-
-function getDebugMessageShape(message: GatewayChatMessage) {
-  return {
-    id: message.id,
-    role: message.role,
-    contentLength: message.content?.length ?? 0,
-    thinkingLength: message.thinking?.length ?? 0,
-    contentBlockTypes: message.contentBlocks?.map((block) => block.type),
-    toolCallCount: message.toolCalls?.length ?? 0,
-    toolResultCount: message.toolResults?.length ?? 0,
-  };
-}
 
 function getOpenClawTransportSessionKey(
   sessionKey: string,
@@ -392,6 +391,21 @@ function presentationMetadataChanged(
     if (currentBlock.type !== nextBlock.type) return true;
     if (currentBlock.type === "thinking" && currentBlock.thinking !== nextBlock.thinking) return true;
     if (currentBlock.type === "text" && currentBlock.text !== nextBlock.text) return true;
+  }
+  return false;
+}
+
+function currentTurnHasVisibleAssistantOutput(messages: GatewayChatMessage[]): boolean {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (message.role === "user") break;
+    if (message.role === "assistant") {
+      if (message.content?.trim()) return true;
+      if (message.toolCalls?.length || message.toolResults?.length || message.contentBlocks?.length) return true;
+    }
+    if (message.role === "tool" || message.role === "toolResult") {
+      if (message.content?.trim() || message.toolResults?.length) return true;
+    }
   }
   return false;
 }
@@ -670,16 +684,40 @@ function applyFinalAssistantText(
   return pruneContainedAssistantTextMessages(appended, finalText, appended[appended.length - 1].id);
 }
 
+function parseMessageTimestamp(value: unknown, fallback: number): number {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return fallback;
+}
+
 // Helper to normalize message to our format
 function normalizeMessage(
   message: unknown,
-  missingTimestampFallback = Date.now()
+  missingTimestampFallback = Date.now(),
+  depth = 0
 ): GatewayChatMessage | null {
   if (!message || typeof message !== "object") {
     return null;
   }
 
   const msg = message as Record<string, unknown>;
+  if (msg.type === "message" && msg.message && typeof msg.message === "object") {
+    if (depth >= 3) return null;
+    const wrappedMessage = msg.message as Record<string, unknown>;
+    return normalizeMessage(
+      {
+        ...wrappedMessage,
+        id: typeof wrappedMessage.id === "string" ? wrappedMessage.id : msg.id,
+        timestamp: wrappedMessage.timestamp ?? msg.timestamp,
+      },
+      parseMessageTimestamp(msg.timestamp, missingTimestampFallback),
+      depth + 1
+    );
+  }
+
   const role = typeof msg.role === "string" ? msg.role : null;
 
   if (!role) {
@@ -687,7 +725,7 @@ function normalizeMessage(
   }
 
   const id = typeof msg.id === "string" ? msg.id : uuidv4();
-  const timestamp = typeof msg.timestamp === "number" ? msg.timestamp : missingTimestampFallback;
+  const timestamp = parseMessageTimestamp(msg.timestamp, missingTimestampFallback);
 
   // Handle content as array (new format from gateway)
   let content = "";
@@ -896,6 +934,7 @@ export const _testHelpers = {
   normalizeForCompare,
   hasNormalizedContainment,
   normalizeMessage,
+  parseMessageTimestamp,
   deduplicateMessages,
   toolCallSignaturesEqual,
   mergeHistoryIntoMessages,
@@ -1057,6 +1096,7 @@ function readStoredHermesSessionId(chatSessionKey: string, agentId?: string): st
 
 function rememberHermesSessionId(chatSessionKey: string, sessionId: string, agentId?: string): void {
   if (!sessionId || typeof window === "undefined") return;
+  latestHermesSessionCache.set(agentId || "main", { sessionId, ts: Date.now() });
   try {
     localStorage.setItem(getHermesSessionStorageKey(chatSessionKey), sessionId);
     if (isDefaultHermesChatSessionKey(chatSessionKey)) {
@@ -1068,16 +1108,29 @@ function rememberHermesSessionId(chatSessionKey: string, sessionId: string, agen
 }
 
 async function loadLatestHermesSessionId(agentId?: string): Promise<string | null> {
-  try {
-    const result = await bridgeInvoke("hermes-sessions", {
-      limit: 1,
-      ...(agentId ? { agentId } : {}),
-    }) as { sessions?: Array<{ key?: string; id?: string }> } | null;
-    const latest = result?.sessions?.[0];
-    return latest?.key || latest?.id || null;
-  } catch {
-    return null;
+  const cacheKey = agentId || "main";
+  const cached = latestHermesSessionCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < HERMES_LATEST_SESSION_CACHE_TTL_MS) {
+    if (cached.inflight) return cached.inflight;
+    return cached.sessionId;
   }
+
+  const inflight = (async () => {
+    try {
+      const result = await bridgeInvoke("hermes-sessions", {
+        limit: 1,
+        ...(agentId ? { agentId } : {}),
+      }) as { sessions?: Array<{ key?: string; id?: string }> } | null;
+      const latest = result?.sessions?.[0];
+      return latest?.key || latest?.id || null;
+    } catch {
+      return null;
+    }
+  })();
+  latestHermesSessionCache.set(cacheKey, { sessionId: cached?.sessionId ?? null, ts: Date.now(), inflight });
+  const sessionId = await inflight;
+  latestHermesSessionCache.set(cacheKey, { sessionId, ts: Date.now() });
+  return sessionId;
 }
 
 async function resolveHermesSessionId(chatSessionKey: string, agentId?: string): Promise<string | undefined> {
@@ -1222,6 +1275,10 @@ async function sendMessageViaHermes(
       onError("No response from Hermes");
       return;
     }
+    if (result.success === false && !result.error) {
+      onError("Hermes returned an error without details.");
+      return;
+    }
     if (result.error) {
       onError(result.error);
       return;
@@ -1241,12 +1298,14 @@ async function sendMessageViaHermes(
       onSessionId?.(result.sessionId);
     }
 
+    let emittedFinalText = false;
     if (result.content) {
-      const cleanedFinal = stripHermesCLIChrome(result.content);
+      const cleanedFinal = stripProtocolMarkers(stripHermesCLIChrome(result.content));
       if (
         cleanedFinal &&
         (!sawStreamDelta || normalizeForCompare(streamedVisibleText) !== normalizeForCompare(cleanedFinal))
       ) {
+        emittedFinalText = true;
         onFinal(cleanedFinal);
       }
     }
@@ -1264,6 +1323,10 @@ async function sendMessageViaHermes(
           };
         })
       : undefined;
+    if (!sawStreamDelta && !emittedFinalText && !attachments?.length) {
+      onError(EMPTY_MODEL_RESPONSE_MESSAGE);
+      return;
+    }
     onDone(attachments);
   } catch (err: any) {
     onError(err?.message || "Hermes bridge request failed");
@@ -1350,7 +1413,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       historyTierRef.current = 0;
       setHasMoreHistory(false);
     }
-  }, [agentId, backend, statusAgentId]);
+  }, [agentId, backend, getTransportSessionKey, statusAgentId]);
 
   useEffect(() => {
     if (!initialSessionKey || initialSessionKey === prevPropKeyRef.current) return;
@@ -1377,7 +1440,10 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
   const gatewayStartupRetryRef = useRef<number>(0);
   const gatewayStartupRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loadChatHistoryRef = useRef<(() => Promise<void>) | null>(null);
+  const loadChatHistoryInFlightRef = useRef<string | null>(null);
+  const historyLoadInflightRef = useRef<Map<string, Promise<{ messages?: unknown[] }>>>(new Map());
   const clearedRunIdsRef = useRef<Set<string>>(new Set());
+  const successfulFinalRunIdsRef = useRef<Set<string>>(new Set());
   latestBackendRef.current = backend;
   latestAgentIdRef.current = agentId;
   useEffect(() => { messagesRef.current = messages; }, [messages]);
@@ -1402,34 +1468,47 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
   }, []);
 
   const loadHistoryForBackend = useCallback(async (limit?: number): Promise<{ messages?: unknown[] }> => {
-    if (backend === "openclaw") {
-      return gatewayConnection.getChatHistory(getTransportSessionKey(), limit ?? 200);
-    }
+    const sessionKey = sessionKeyRef.current;
+    const effectiveLimit = limit ?? INITIAL_HISTORY_LIMIT;
+    const cacheKey = `${backend}:${agentId || ""}:${sessionKey}:${effectiveLimit}`;
+    const inflight = historyLoadInflightRef.current.get(cacheKey);
+    if (inflight) return inflight;
 
-    const sessionId = getRuntimeHistorySessionId(backend, sessionKeyRef.current);
-    if (!sessionId) {
+    const request = (async (): Promise<{ messages?: unknown[] }> => {
+      if (backend === "openclaw") {
+        return gatewayConnection.getChatHistory(getTransportSessionKey(), effectiveLimit);
+      }
+
+      const sessionId = getRuntimeHistorySessionId(backend, sessionKey);
+      if (!sessionId) {
+        return { messages: [] };
+      }
+
+      if (backend === "claude-code") {
+        return await bridgeInvoke("claude-code-load-history", {
+          sessionId,
+          ...(agentId ? { agentId } : {}),
+        }) as { messages?: unknown[] };
+      }
+
+      if (backend === "codex") {
+        return await bridgeInvoke("codex-load-history", { sessionId }) as { messages?: unknown[] };
+      }
+
+      if (backend === "hermes") {
+        return await bridgeInvoke("hermes-load-history", {
+          sessionId,
+          limit: effectiveLimit,
+          ...(agentId ? { agentId } : {}),
+        }) as { messages?: unknown[] };
+      }
+
       return { messages: [] };
-    }
-
-    if (backend === "claude-code") {
-      return await bridgeInvoke("claude-code-load-history", {
-        sessionId,
-        ...(agentId ? { agentId } : {}),
-      }) as { messages?: unknown[] };
-    }
-
-    if (backend === "codex") {
-      return await bridgeInvoke("codex-load-history", { sessionId }) as { messages?: unknown[] };
-    }
-
-    if (backend === "hermes") {
-      return await bridgeInvoke("hermes-load-history", {
-        sessionId,
-        ...(agentId ? { agentId } : {}),
-      }) as { messages?: unknown[] };
-    }
-
-    return { messages: [] };
+    })().finally(() => {
+      historyLoadInflightRef.current.delete(cacheKey);
+    });
+    historyLoadInflightRef.current.set(cacheKey, request);
+    return request;
   }, [agentId, backend, getTransportSessionKey]);
 
   // Shared helper: fetch history and merge into current messages.
@@ -1442,7 +1521,10 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
   const mergeHistoryAndMaybeFinalize = useCallback((autoFinalize: boolean) => {
     if (isMergingRef.current) return; // skip if a merge is already in progress
     isMergingRef.current = true;
-    loadHistoryForBackend(50).then((response) => {
+    if (backend === "openclaw") {
+      gatewayConnection.invalidateChatHistoryCache(getTransportSessionKey());
+    }
+    loadHistoryForBackend(FINALIZE_HISTORY_LIMIT).then((response) => {
       if (!response.messages?.length) return;
       const loaded: GatewayChatMessage[] = [];
       for (const m of response.messages) {
@@ -1451,7 +1533,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       }
       const deduped = filterMessagesAfterClear(
         deduplicateMessages(loaded),
-        readChatClearMarker(sessionKeyRef.current)
+        backend === "openclaw" ? null : readChatClearMarker(sessionKeyRef.current)
       );
       const lastHistoryMessage = deduped[deduped.length - 1];
       if (
@@ -1487,7 +1569,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
     }).catch(() => {}).finally(() => {
       isMergingRef.current = false;
     });
-  }, [agentId, backend, loadHistoryForBackend]);
+  }, [backend, getTransportSessionKey, loadHistoryForBackend]);
 
   // Shared helper: start (or restart) the 3s finalization debounce.
   // 3s allows enough headroom for multi-tool agent runs where there can be
@@ -1538,7 +1620,9 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
     // When idle (no active run), use runId to decide whether to re-activate.
     if (payload.sessionKey) {
       const matchesCurrentSession = sessionKeysMatchForBackend(payload.sessionKey, sessionKeyRef.current, backend, agentId, statusAgentId);
-      if (!matchesCurrentSession) return;
+      if (!matchesCurrentSession) {
+        return;
+      }
     } else if (currentRunIdRef.current !== null) {
       // Active conversation — check the runId registry to prevent cross-chat bleed.
       // If the event's runId is registered to a DIFFERENT session, reject it.
@@ -1547,7 +1631,9 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       // also accepting events from the same sub-agent.
       if (payload.runId) {
         const ownerSession = runIdOwners.get(payload.runId);
-        if (ownerSession && ownerSession !== sessionKeyRef.current) return;
+        if (ownerSession && ownerSession !== sessionKeyRef.current) {
+          return;
+        }
         if (!ownerSession) {
           registerRunId(payload.runId, sessionKeyRef.current);
         }
@@ -1753,14 +1839,8 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       const rawText = extractText(payload.message);
       // Strip protocol markers that models sometimes emit (e.g. <final>, <thinking>)
       const text = typeof rawText === "string" ? stripProtocolMarkers(rawText) : null;
-      const deltaDebugMessage = payload.message as Record<string, unknown> | undefined;
-      const deltaDebugContent = deltaDebugMessage?.content;
-      const deltaDebugContentTypes = Array.isArray(deltaDebugContent)
-        ? deltaDebugContent.map((block: any) => block?.type).filter(Boolean)
-        : typeof deltaDebugContent === "string"
-          ? ["string"]
-          : [];
       if (typeof text === "string" && text) {
+        setError(null);
         // Cap stream buffer at 512KB to prevent OOM if "final" event never arrives
         streamContentRef.current = text.length > 524_288 ? text.slice(-524_288) : text;
 
@@ -1917,15 +1997,21 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       // message" bug where the response only appears after history refresh.
       const finalText = extractText(payload.message);
       const cleanFinalText = typeof finalText === "string" ? stripProtocolMarkers(finalText) : null;
-      const finalDebugMessage = payload.message as Record<string, unknown> | undefined;
-      const finalDebugContent = finalDebugMessage?.content;
-      const finalDebugContentTypes = Array.isArray(finalDebugContent)
-        ? finalDebugContent.map((block: any) => block?.type).filter(Boolean)
-        : typeof finalDebugContent === "string"
-          ? ["string"]
-          : [];
       if (cleanFinalText && cleanFinalText.trim()) {
+        if (payload.runId) successfulFinalRunIdsRef.current.add(payload.runId);
+        setError(null);
         setMessages((prev) => applyFinalAssistantText(prev, cleanFinalText, payload.runId));
+      } else if (
+        payload.runId &&
+        payload.runId === currentRunIdRef.current &&
+        !streamContentRef.current.trim() &&
+        !currentTurnHasVisibleAssistantOutput(messagesRef.current)
+      ) {
+        const emptyRunId = currentRunIdRef.current;
+        setError(EMPTY_MODEL_RESPONSE_MESSAGE);
+        currentRunIdRef.current = null;
+        if (emptyRunId) markAgentRunFinished(emptyRunId);
+        setIsLoading(false);
       }
       streamContentRef.current = "";
 
@@ -1959,7 +2045,20 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       currentRunIdRef.current = null;
       setIsLoading(false);
     } else if (payload.state === "error") {
-      setError(payload.errorMessage || "Chat error");
+      const errorMessage = payload.errorMessage || "Chat error";
+      const hasSuccessfulFinal = !!payload.runId && successfulFinalRunIdsRef.current.has(payload.runId);
+      const hasVisibleOutput = currentTurnHasVisibleAssistantOutput(messagesRef.current) || !!streamContentRef.current.trim();
+      // Some OpenClaw runs emit a successful final message and then a late error
+      // for the same runId. Do not let that stale terminal event erase visible text.
+      if (hasSuccessfulFinal || hasVisibleOutput) {
+        if (payload.runId && payload.runId === currentRunIdRef.current) {
+          currentRunIdRef.current = null;
+          markAgentRunFinished(payload.runId);
+          setIsLoading(false);
+        }
+        return;
+      }
+      setError(errorMessage);
       streamContentRef.current = "";
       mergeHistoryAndMaybeFinalize(false);
       currentRunIdRef.current = null;
@@ -1977,7 +2076,6 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
 
   // Track current fetch limit and whether more history may exist.
   // Start with 100 so the user sees a meaningful history on first load.
-  const HISTORY_TIERS = [100, 200, 500, 1000] as const;
   const historyTierRef = useRef(0); // index into HISTORY_TIERS
   const [hasMoreHistory, setHasMoreHistory] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -2013,7 +2111,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       setHasMoreHistory(backend === "openclaw" && loaded.length >= fetchLimit && fetchLimit < 1000);
       const deduped = filterMessagesAfterClear(
         deduplicateMessages(loaded),
-        readChatClearMarker(requestSessionKey)
+        backend === "openclaw" ? null : readChatClearMarker(requestSessionKey)
       );
       const lastHistoryMessage = deduped[deduped.length - 1];
       if (currentRunIdRef.current !== null && lastHistoryMessage?.role === "assistant") {
@@ -2042,7 +2140,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       console.error("[GatewayChat] Failed to load history:", err);
       throw err; // propagate so loadChatHistory can set the error state
     }
-  }, [backend, loadHistoryForBackend]);
+  }, [agentId, backend, loadHistoryForBackend]);
 
   // Subscribe to gateway connection state
   useEffect(() => {
@@ -2065,7 +2163,8 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
         // Probe end-to-end health first — "hub WS connected" only means we can
         // talk to the hub, not that the connector/OpenClaw is reachable. Without
         // this check, chat.history gets relayed into a dead end and times out.
-        if (currentRunIdRef.current === null) {
+        const reconnectLoadKey = `${backend}:${agentId || ""}:${sessionKeyRef.current}`;
+        if (currentRunIdRef.current === null && loadChatHistoryInFlightRef.current !== reconnectLoadKey) {
           // Belt-and-suspenders: clear any stale banner immediately on reconnect.
           // If the relay is still unhealthy, a fresh error will replace it. The
           // old banner was almost certainly from a prior disconnect window, and
@@ -2074,7 +2173,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
           clearGatewayStartupRetry();
           if (usesGatewayHealthProbe(backend)) {
             probeGatewayHealth().then((probe) => {
-              if (probe.healthy) {
+              if (probe.healthy && currentRunIdRef.current === null) {
                 fetchAndSetHistory().catch(() => {});
               }
             });
@@ -2115,17 +2214,20 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       setIsConnected(true);
       if (!previousConnected) {
         previousConnected = true;
-        // Same belt-and-suspenders: clear stale banners immediately.
-        setError(null);
-        clearGatewayStartupRetry();
-        if (usesGatewayHealthProbe(backend)) {
-          probeGatewayHealth().then((probe) => {
-            if (probe.healthy) {
-              fetchAndSetHistory().catch(() => {});
-            }
-          });
-        } else {
-          fetchAndSetHistory().catch(() => {});
+        const reconnectLoadKey = `${backend}:${agentId || ""}:${sessionKeyRef.current}`;
+        if (currentRunIdRef.current === null && loadChatHistoryInFlightRef.current !== reconnectLoadKey) {
+          // Same belt-and-suspenders: clear stale banners immediately.
+          setError(null);
+          clearGatewayStartupRetry();
+          if (usesGatewayHealthProbe(backend)) {
+            probeGatewayHealth().then((probe) => {
+              if (probe.healthy && currentRunIdRef.current === null) {
+                fetchAndSetHistory().catch(() => {});
+              }
+            });
+          } else {
+            fetchAndSetHistory().catch(() => {});
+          }
         }
       }
     }
@@ -2158,13 +2260,23 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
     let cancelled = false;
     const runProbe = async () => {
       if (cancelled) return;
-      if (!gatewayConnection.isConnected()) return;
+      if (!gatewayConnection.isConnected()) {
+        const connector = await probeConnectorHealth(1000);
+        if (cancelled) return;
+        if (connector.healthy) {
+          setError(null);
+          clearGatewayStartupRetry();
+        }
+        return;
+      }
       const probe = await probeGatewayHealth(8000);
       if (cancelled) return;
       if (probe.healthy) {
         setError(null);
         clearGatewayStartupRetry();
-        fetchAndSetHistory().catch(() => {});
+        if (currentRunIdRef.current === null) {
+          fetchAndSetHistory().catch(() => {});
+        }
       }
     };
     // Fire the first probe immediately so the banner doesn't linger for 3s
@@ -2251,7 +2363,18 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
     try {
       const config = await getGatewayConfig();
       if (!config.gatewayUrl) {
-        setError("No hub configured");
+        const connector = await probeConnectorHealth(1000);
+        if (connector.healthy || backend === "openclaw") {
+          setError(null);
+          // Connector is reachable — attempt direct WS to the default local gateway.
+          // getGatewayConfig() returned no URL (bridge-mode detection edge case),
+          // but the gateway runs alongside the connector on :18789 in local mode.
+          // If the connector health probe is in a transient backoff, the WS itself
+          // is the authoritative readiness check and will report a concrete error.
+          connectGatewayWs("http://127.0.0.1:18789", { hubMode: false });
+          return;
+        }
+        setError(getGatewayUnavailableMessage());
         return;
       }
       connectGatewayWs(config.gatewayUrl, {
@@ -2274,6 +2397,10 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
   // Guard isLoading so a history reload during active streaming doesn't kill the
   // "AI is generating" state (currentRunIdRef.current !== null while streaming).
   const loadChatHistory = useCallback(async () => {
+    const loadKey = `${backend}:${agentId || ""}:${sessionKeyRef.current}`;
+    if (loadChatHistoryInFlightRef.current === loadKey) return;
+    loadChatHistoryInFlightRef.current = loadKey;
+    try {
     if (backend === "hermes") {
       // Load hermes history via hub/connector relay
       const key = sessionKeyRef.current;
@@ -2372,7 +2499,12 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
     } finally {
       if (currentRunIdRef.current === null) setIsLoading(false);
     }
-  }, [backend, clearGatewayStartupRetry, fetchAndSetHistory]);
+    } finally {
+      if (loadChatHistoryInFlightRef.current === loadKey) {
+        loadChatHistoryInFlightRef.current = null;
+      }
+    }
+  }, [agentId, backend, clearGatewayStartupRetry, fetchAndSetHistory]);
   loadChatHistoryRef.current = loadChatHistory;
 
   // Backend-change reset: when the consumer flips `backend` (e.g. Hermes ↔ OpenClaw
@@ -2504,7 +2636,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
           if (historyPollInFlight) return;
           historyPollInFlight = true;
           try {
-            const historyMessages = await loadHermesHistoryMessages(sessionId, runAgentId);
+            const historyMessages = await loadHermesHistoryMessages(sessionId, runAgentId, HERMES_POLL_HISTORY_LIMIT);
             if (historyMessages.length === 0) return;
             const mergedRunMessages = mergeHistoryIntoMessages(hermesRunMessages, historyMessages);
             if (mergedRunMessages) {
@@ -2527,7 +2659,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
           }
         };
         void poll();
-        historyPollTimer = setInterval(() => { void poll(); }, 800);
+        historyPollTimer = setInterval(() => { void poll(); }, HERMES_POLL_INTERVAL_MS);
       };
 
       const assistantMsgId = uuidv4();
@@ -2681,28 +2813,33 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
           },
           (error) => {
             stopHermesHistoryPolling();
-            hermesRunMessages = upsertHermesAssistantMessage(hermesRunMessages, (existing) => ({
-              id: assistantMsgId,
-              role: "assistant" as ChatMessageRole,
-              content: `Error: ${error}`,
-              timestamp: existing?.timestamp || Date.now(),
-              ...(existing?.attachments ? { attachments: existing.attachments } : {}),
-            }));
-            persistHermesMessagesNow(hermesRunMessages);
+            const shouldPersistError = error !== EMPTY_MODEL_RESPONSE_MESSAGE;
+            if (shouldPersistError) {
+              hermesRunMessages = upsertHermesAssistantMessage(hermesRunMessages, (existing) => ({
+                id: assistantMsgId,
+                role: "assistant" as ChatMessageRole,
+                content: `Error: ${error}`,
+                timestamp: existing?.timestamp || Date.now(),
+                ...(existing?.attachments ? { attachments: existing.attachments } : {}),
+              }));
+              persistHermesMessagesNow(hermesRunMessages);
+            }
             if (isCurrentHermesRun()) {
               setError(error);
-              setMessages(prev => {
-                const next = upsertHermesAssistantMessage(prev, (existing) => ({
-                  id: assistantMsgId,
-                  role: "assistant" as ChatMessageRole,
-                  content: `Error: ${error}`,
-                  timestamp: existing?.timestamp || Date.now(),
-                  ...(existing?.attachments ? { attachments: existing.attachments } : {}),
-                }));
-                hermesRunMessages = next;
-                persistHermesMessagesNow(next);
-                return next;
-              });
+              if (shouldPersistError) {
+                setMessages(prev => {
+                  const next = upsertHermesAssistantMessage(prev, (existing) => ({
+                    id: assistantMsgId,
+                    role: "assistant" as ChatMessageRole,
+                    content: `Error: ${error}`,
+                    timestamp: existing?.timestamp || Date.now(),
+                    ...(existing?.attachments ? { attachments: existing.attachments } : {}),
+                  }));
+                  hermesRunMessages = next;
+                  persistHermesMessagesNow(next);
+                  return next;
+                });
+              }
             }
             finishHermesRun();
           },
@@ -2716,28 +2853,33 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
         stopHermesHistoryPolling();
         if ((err as Error).name !== "AbortError") {
           const msg = err instanceof Error ? err.message : "Failed to send";
-          hermesRunMessages = upsertHermesAssistantMessage(hermesRunMessages, (existing) => ({
-            id: assistantMsgId,
-            role: "assistant" as ChatMessageRole,
-            content: `Error: ${msg}`,
-            timestamp: existing?.timestamp || Date.now(),
-            ...(existing?.attachments ? { attachments: existing.attachments } : {}),
-          }));
-          persistHermesMessagesNow(hermesRunMessages);
+          const shouldPersistError = msg !== EMPTY_MODEL_RESPONSE_MESSAGE;
+          if (shouldPersistError) {
+            hermesRunMessages = upsertHermesAssistantMessage(hermesRunMessages, (existing) => ({
+              id: assistantMsgId,
+              role: "assistant" as ChatMessageRole,
+              content: `Error: ${msg}`,
+              timestamp: existing?.timestamp || Date.now(),
+              ...(existing?.attachments ? { attachments: existing.attachments } : {}),
+            }));
+            persistHermesMessagesNow(hermesRunMessages);
+          }
           if (isCurrentHermesRun()) {
             setError(msg);
-            setMessages(prev => {
-              const next = upsertHermesAssistantMessage(prev, (existing) => ({
-                id: assistantMsgId,
-                role: "assistant" as ChatMessageRole,
-                content: `Error: ${msg}`,
-                timestamp: existing?.timestamp || Date.now(),
-                ...(existing?.attachments ? { attachments: existing.attachments } : {}),
-              }));
-              hermesRunMessages = next;
-              persistHermesMessagesNow(next);
-              return next;
-            });
+            if (shouldPersistError) {
+              setMessages(prev => {
+                const next = upsertHermesAssistantMessage(prev, (existing) => ({
+                  id: assistantMsgId,
+                  role: "assistant" as ChatMessageRole,
+                  content: `Error: ${msg}`,
+                  timestamp: existing?.timestamp || Date.now(),
+                  ...(existing?.attachments ? { attachments: existing.attachments } : {}),
+                }));
+                hermesRunMessages = next;
+                persistHermesMessagesNow(next);
+                return next;
+              });
+            }
           }
         }
         finishHermesRun();
@@ -2751,28 +2893,45 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       try {
         const config = await getGatewayConfig();
         if (!config.gatewayUrl) {
-          setError("No hub configured");
-          setIsLoading(false);
-          currentRunIdRef.current = null;
-          markAgentRunFinished(runId);
-          return;
-        }
-        connectGatewayWs(config.gatewayUrl, {
-          token: config.token,
-          hubMode: config.hubMode,
-          hubDeviceId: config.hubDeviceId,
-        });
-        // Wait for connection (max 5s) using state subscription
-        await new Promise<void>((resolve, reject) => {
-          const timeout = setTimeout(() => { unsub(); reject(new Error("Connection timeout")); }, 5000);
-          const unsub = subscribeGatewayConnection(() => {
-            const s = getGatewayConnectionState();
-            if (s.connected) { clearTimeout(timeout); unsub(); resolve(); }
-            else if (s.error) { clearTimeout(timeout); unsub(); reject(new Error(s.error)); }
+          const connector = await probeConnectorHealth(1000);
+          if (!connector.healthy) {
+            setError(getGatewayUnavailableMessage());
+            setIsLoading(false);
+            currentRunIdRef.current = null;
+            markAgentRunFinished(runId);
+            return;
+          }
+          setError(null);
+          // Connector is reachable — fall through to WS connect on default local gateway.
+          // Assigns config.gatewayUrl equivalent so the block below runs.
+          connectGatewayWs("http://127.0.0.1:18789", { hubMode: false });
+          await new Promise<void>((resolve, reject) => {
+            const timeout = setTimeout(() => { unsub(); reject(new Error("Connection timeout")); }, 5000);
+            const unsub = subscribeGatewayConnection(() => {
+              const s = getGatewayConnectionState();
+              if (s.connected) { clearTimeout(timeout); unsub(); resolve(); }
+              else if (s.error) { clearTimeout(timeout); unsub(); reject(new Error(s.error)); }
+            });
+            if (gatewayConnection.isConnected()) { clearTimeout(timeout); unsub(); resolve(); }
           });
-          // Check immediately in case already connected
-          if (gatewayConnection.isConnected()) { clearTimeout(timeout); unsub(); resolve(); }
-        });
+        } else {
+          connectGatewayWs(config.gatewayUrl, {
+            token: config.token,
+            hubMode: config.hubMode,
+            hubDeviceId: config.hubDeviceId,
+          });
+          // Wait for connection (max 5s) using state subscription
+          await new Promise<void>((resolve, reject) => {
+            const timeout = setTimeout(() => { unsub(); reject(new Error("Connection timeout")); }, 5000);
+            const unsub = subscribeGatewayConnection(() => {
+              const s = getGatewayConnectionState();
+              if (s.connected) { clearTimeout(timeout); unsub(); resolve(); }
+              else if (s.error) { clearTimeout(timeout); unsub(); reject(new Error(s.error)); }
+            });
+            // Check immediately in case already connected
+            if (gatewayConnection.isConnected()) { clearTimeout(timeout); unsub(); resolve(); }
+          });
+        }
       } catch (e) {
         setError(e instanceof Error ? e.message : "Auto-connect failed");
         currentRunIdRef.current = null;
@@ -2805,9 +2964,9 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
 
     receivedEventRef.current = false;
 
-    // No-response check: if no streaming events arrive within 15s after send,
-    // check history — the agent may have completed while events were filtered
-    // (e.g. session key changed mid-flight) or never relayed (hub issue).
+    // No-response check: if no visible chat events arrive within 15s after send,
+    // check history. Do not mark the run empty here: OpenClaw can spend >15s in
+    // thinking/tool execution before the first visible assistant token arrives.
     if (noResponseRef.current) clearTimeout(noResponseRef.current);
     noResponseRef.current = setTimeout(() => {
       noResponseRef.current = null;
@@ -2929,9 +3088,11 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       }
       markAgentRunFinished(runIdToClear);
     }
-    writeChatClearMarker(key);
-    if (hermesSessionIdToClear) {
-      writeChatClearMarker(`hermes:${hermesSessionIdToClear}`);
+    if (backend !== "openclaw") {
+      writeChatClearMarker(key);
+      if (hermesSessionIdToClear) {
+        writeChatClearMarker(`hermes:${hermesSessionIdToClear}`);
+      }
     }
     if (backend === "hermes") {
       hermesAbortRef.current?.abort();
@@ -2944,7 +3105,6 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       hermesSessionState.delete(key);
     } else if (backend === "openclaw") {
       gatewayConnection.invalidateChatHistoryCache(getTransportSessionKey());
-      gatewayConnection.clearChatHistory({ sessionKey: getTransportSessionKey() }).catch(() => {});
       if (gatewayConnection.isConnected() && runIdToClear) {
         gatewayConnection
           .abortChat({ sessionKey: getTransportSessionKey(), runId: runIdToClear })
@@ -2956,6 +3116,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
     setError(null);
     setIsLoading(false);
     streamContentRef.current = "";
+    loadChatHistoryInFlightRef.current = null;
     clearRunIdOwnership(key);
     currentRunIdRef.current = null;
     currentStatusAgentIdRef.current = undefined;
@@ -2967,7 +3128,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       clearTimeout(noResponseRef.current);
       noResponseRef.current = null;
     }
-  }, [agentId, backend, statusAgentId]);
+  }, [agentId, backend, getTransportSessionKey, statusAgentId]);
 
   // Clear loading/finalize timeouts when isLoading becomes false
   useEffect(() => {

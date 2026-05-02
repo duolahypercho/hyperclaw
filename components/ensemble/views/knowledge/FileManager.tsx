@@ -8,8 +8,10 @@ import {
   ChevronRight, Folder,
   ArrowLeft,
   Music, Search, Plus, Users, Database, Activity, Loader2,
+  Trash2, Upload,
   type LucideIcon,
 } from "lucide-react";
+import { AlertDelete } from "$/components/UI/AlertDelete";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import type { HyperclawAgent, KnowledgeCollectionEntry, KnowledgeFileEntry } from "../../hooks/useKnowledgeData";
@@ -506,82 +508,121 @@ function SubfolderCard({
 }
 
 function FileCard({
-  file, onClick, companyId, agents, isList = false,
+  file, onClick, companyId, agents, isList = false, onDelete,
 }: {
   file: KnowledgeFileEntry;
   onClick: () => void;
   companyId: string;
   agents: HyperclawAgent[];
   isList?: boolean;
+  onDelete?: () => void;
 }) {
   const displayName = displayFileName(file.name);
   const writer = file.agentId ? agents.find((agent) => agent.id === file.agentId) : agents[0];
 
-  if (isList) {
-    return (
+  const deleteButton = onDelete ? (
+    <AlertDelete
+      dialogTitle={`Delete "${file.name}"?`}
+      dialogDescription="This permanently removes the file from the knowledge base. Other agents will lose access to it."
+      deleteButtonTitle="Delete"
+      onDelete={onDelete}
+    >
       <button
         type="button"
-        onClick={onClick}
-        className="group flex w-full items-center justify-center gap-1 rounded-xl border border-border border-solid bg-card/80 px-3 py-2 text-left transition-all hover:border-primary/30 hover:bg-secondary/50 active:scale-[0.99]"
+        aria-label={`Delete ${file.name}`}
+        onClick={(event) => {
+          event.stopPropagation();
+        }}
+        className="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
       >
-        <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground">
-          <FileText size={13} style={{ color: "var(--ink-3)" }} />
-        </div>
-        <div className="min-w-0 flex-1 flex flex-row items-center justify-between gap-1">
-          <div className="flex min-h-[20px] flex-col items-start justify-between gap-1">
-            <div className="min-w-0 truncate text-[13px] font-medium capitalize text-foreground">
-              {displayName}
+        <Trash2 size={13} />
+      </button>
+    </AlertDelete>
+  ) : null;
+
+  if (isList) {
+    return (
+      <div className="group relative flex w-full items-stretch gap-1 rounded-xl border border-border border-solid bg-card/80 transition-all hover:border-primary/30 hover:bg-secondary/50">
+        <button
+          type="button"
+          onClick={onClick}
+          className="flex flex-1 items-center gap-1 bg-transparent border-0 px-3 py-2 text-left active:scale-[0.99] cursor-pointer"
+        >
+          <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground">
+            <FileText size={13} style={{ color: "var(--ink-3)" }} />
+          </div>
+          <div className="min-w-0 flex-1 flex flex-row items-center justify-between gap-1">
+            <div className="flex min-h-[20px] flex-col items-start justify-between gap-1">
+              <div className="min-w-0 truncate text-[13px] font-medium capitalize text-foreground">
+                {displayName}
+              </div>
+            </div>
+            <div className="flex shrink-0 items-center justify-center gap-2">
+                {writer && (
+                  <div className="hidden min-w-0 items-center gap-1.5 md:flex">
+                    <AgentBadge agent={writer} size={18} />
+                    <span className="max-w-[80px] truncate font-mono text-[10.5px] text-muted-foreground">
+                      {writer.name}
+                    </span>
+                  </div>
+                )}
+                <span className="hidden whitespace-nowrap font-mono text-[10.5px] text-muted-foreground sm:inline">
+                  {getFileMeta(file)}
+                </span>
+                <span className="whitespace-nowrap font-mono text-[10.5px] text-muted-foreground">
+                  {relTime(file.updatedAt)}
+                </span>
+                <ChevronRight size={13} className="text-muted-foreground opacity-50 transition-transform group-hover:translate-x-0.5 group-hover:opacity-100" />
             </div>
           </div>
-          <div className="flex shrink-0 items-center justify-center gap-2">
-              {writer && (
-                <div className="hidden min-w-0 items-center gap-1.5 md:flex">
-                  <AgentBadge agent={writer} size={18} />
-                  <span className="max-w-[80px] truncate font-mono text-[10.5px] text-muted-foreground">
-                    {writer.name}
-                  </span>
-                </div>
-              )}
-              <span className="hidden whitespace-nowrap font-mono text-[10.5px] text-muted-foreground sm:inline">
-                {getFileMeta(file)}
-              </span>
-              <span className="whitespace-nowrap font-mono text-[10.5px] text-muted-foreground">
-                {relTime(file.updatedAt)}
-              </span>
-              <ChevronRight size={13} className="text-muted-foreground opacity-50 transition-transform group-hover:translate-x-0.5 group-hover:opacity-100" />
+        </button>
+        {deleteButton && (
+          <div className="flex items-center pr-2">
+            {deleteButton}
           </div>
-        </div>
-      </button>
+        )}
+      </div>
     );
   }
 
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="flex flex-col gap-2 p-3 rounded-lg border border-border border-solid bg-card text-left transition-all hover:border-foreground/20 hover:bg-secondary/60 active:scale-[0.98]"
-    >
-    <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground">
-      <FileIconTile name={file.name} size={28} />
+    <div className="group relative">
+      <button
+        type="button"
+        onClick={onClick}
+        className="flex w-full flex-col gap-2 p-3 rounded-lg border border-border border-solid bg-card text-left transition-all hover:border-foreground/20 hover:bg-secondary/60 active:scale-[0.98]"
+      >
+        <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground">
+          <FileIconTile name={file.name} size={28} />
+        </div>
+        <div className="min-w-0 w-full">
+          <div className="truncate font-medium text-[12.5px] text-foreground">
+            {displayName}
+          </div>
+          <FileTextPreview file={file} companyId={companyId} />
+          <div className="mt-1 flex gap-2 font-mono text-[10.5px] text-muted-foreground">
+            <span>{getFileMeta(file)}</span>
+            <span>·</span>
+            <span>{relTime(file.updatedAt)}</span>
+          </div>
+        </div>
+      </button>
+      {deleteButton && (
+        <div className="absolute right-2 top-2">
+          {deleteButton}
+        </div>
+      )}
     </div>
-      <div className="min-w-0 w-full">
-        <div className="truncate font-medium text-[12.5px] text-foreground">
-          {displayName}
-        </div>
-        <FileTextPreview file={file} companyId={companyId} />
-        <div className="mt-1 flex gap-2 font-mono text-[10.5px] text-muted-foreground">
-          <span>{getFileMeta(file)}</span>
-          <span>·</span>
-          <span>{relTime(file.updatedAt)}</span>
-        </div>
-      </div>
-    </button>
   );
 }
+
+const UPLOAD_ACCEPT_ATTR =
+  ".md,.mdx,.txt,.csv,.tsv,.pdf,image/*,video/*";
 
 function FileGrid({
   node, collection, companyId, agents, activeFilter, searchQuery, onFilterChange,
   onSearchChange, onSelectFolder, onSelectFile, onBackToCollections, onCreateFile,
+  onUploadFiles, onDeleteFile,
 }: {
   node: FolderNode;
   collection: KnowledgeCollectionEntry;
@@ -595,6 +636,8 @@ function FileGrid({
   onSelectFile: (file: KnowledgeFileEntry) => void;
   onBackToCollections: () => void;
   onCreateFile?: (name: string) => void;
+  onUploadFiles?: (files: File[]) => Promise<{ uploaded: string[]; failed: { name: string; error: string }[] }>;
+  onDeleteFile?: (relativePath: string) => Promise<boolean>;
 }) {
   const isEmpty = node.files.length === 0 && node.subfolders.length === 0;
   const breadcrumbs = folderBreadcrumbs(node.path);
@@ -633,6 +676,16 @@ function FileGrid({
   const [isCreatingFile, setIsCreatingFile] = useState(false);
   const [newFileName, setNewFileName] = useState("");
   const canCreateFile = Boolean(onCreateFile);
+  const canUpload = Boolean(onUploadFiles);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState<
+    | { kind: "success"; message: string }
+    | { kind: "error"; message: string }
+    | null
+  >(null);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const dragCounterRef = useRef(0);
 
   const submitNewFile = () => {
     const nextName = newFileName.trim();
@@ -642,8 +695,132 @@ function FileGrid({
     setIsCreatingFile(false);
   };
 
+  const handleUploadFiles = useCallback(
+    async (files: File[]) => {
+      if (!onUploadFiles || files.length === 0) return;
+      setIsUploading(true);
+      setUploadStatus(null);
+      try {
+        const result = await onUploadFiles(files);
+        if (result.uploaded.length > 0 && result.failed.length === 0) {
+          setUploadStatus({
+            kind: "success",
+            message: `Uploaded ${result.uploaded.length} file${result.uploaded.length === 1 ? "" : "s"}.`,
+          });
+        } else if (result.uploaded.length > 0) {
+          setUploadStatus({
+            kind: "error",
+            message: `Uploaded ${result.uploaded.length}, failed ${result.failed.length}: ${result.failed[0].name} — ${result.failed[0].error}`,
+          });
+        } else if (result.failed.length > 0) {
+          setUploadStatus({
+            kind: "error",
+            message: `Upload failed: ${result.failed[0].error}`,
+          });
+        }
+      } catch (e) {
+        setUploadStatus({
+          kind: "error",
+          message: e instanceof Error ? e.message : "Upload failed",
+        });
+      } finally {
+        setIsUploading(false);
+      }
+    },
+    [onUploadFiles],
+  );
+
+  const onPickFiles = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      const list = event.target.files;
+      if (!list || list.length === 0) return;
+      void handleUploadFiles(Array.from(list));
+      event.target.value = "";
+    },
+    [handleUploadFiles],
+  );
+
+  const onDragEnter = useCallback(
+    (event: React.DragEvent) => {
+      if (!canUpload) return;
+      if (!event.dataTransfer.types.includes("Files")) return;
+      dragCounterRef.current += 1;
+      setIsDragOver(true);
+    },
+    [canUpload],
+  );
+
+  const onDragLeave = useCallback(() => {
+    if (!canUpload) return;
+    dragCounterRef.current = Math.max(0, dragCounterRef.current - 1);
+    if (dragCounterRef.current === 0) setIsDragOver(false);
+  }, [canUpload]);
+
+  const onDragOver = useCallback(
+    (event: React.DragEvent) => {
+      if (!canUpload) return;
+      if (!event.dataTransfer.types.includes("Files")) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+    },
+    [canUpload],
+  );
+
+  const onDrop = useCallback(
+    (event: React.DragEvent) => {
+      if (!canUpload) return;
+      event.preventDefault();
+      dragCounterRef.current = 0;
+      setIsDragOver(false);
+      const files = Array.from(event.dataTransfer.files ?? []);
+      if (files.length === 0) return;
+      void handleUploadFiles(files);
+    },
+    [canUpload, handleUploadFiles],
+  );
+
+  // Auto-clear the status banner after a few seconds.
+  useEffect(() => {
+    if (!uploadStatus) return;
+    const timer = window.setTimeout(() => setUploadStatus(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [uploadStatus]);
+
   return (
-    <div className="flex-1 overflow-y-auto bg-background p-5">
+    <div
+      className={cn(
+        "relative flex-1 overflow-y-auto bg-background p-5",
+        isDragOver && "ring-2 ring-primary/40 ring-inset",
+      )}
+      onDragEnter={onDragEnter}
+      onDragLeave={onDragLeave}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
+    >
+      {canUpload && (
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept={UPLOAD_ACCEPT_ATTR}
+          multiple
+          className="hidden"
+          onChange={onPickFiles}
+        />
+      )}
+      {isDragOver && (
+        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-background/70 backdrop-blur-sm">
+          <div className="rounded-xl border border-dashed border-primary/50 bg-card/90 px-6 py-4 text-center shadow-lg">
+            <Upload size={20} className="mx-auto mb-2 text-primary" />
+            <p className="text-[13px] font-medium text-foreground">
+              Drop to upload into{" "}
+              <span className="font-mono">{collection.id}</span>
+            </p>
+            <p className="mt-1 font-mono text-[10.5px] uppercase tracking-[0.1em] text-muted-foreground">
+              up to 25 MiB per file
+            </p>
+          </div>
+        </div>
+      )}
       <div className="mb-5 grid grid-cols-1 items-end gap-4 lg:grid-cols-[1fr_auto]">
         <div className="min-w-0">
           <h1 className="truncate text-[28px] font-semibold leading-tight tracking-[-0.045em] text-foreground">
@@ -677,8 +854,40 @@ function FileGrid({
             <Plus size={13} />
             Add document
           </Button>
+          {canUpload && (
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              className="h-8 gap-1.5 text-[12px]"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isUploading}
+              title="Upload files (max 25 MiB each)"
+            >
+              {isUploading ? (
+                <Loader2 size={13} className="animate-spin" />
+              ) : (
+                <Upload size={13} />
+              )}
+              {isUploading ? "Uploading…" : "Upload"}
+            </Button>
+          )}
         </div>
       </div>
+
+      {uploadStatus && (
+        <div
+          role="status"
+          className={cn(
+            "mb-4 rounded-lg border border-solid px-3 py-2 text-[12px]",
+            uploadStatus.kind === "success"
+              ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
+              : "border-destructive/40 bg-destructive/10 text-destructive",
+          )}
+        >
+          {uploadStatus.message}
+        </div>
+      )}
 
       <div className="ens-grid-kpi mb-7">
         <CollectionKpiCard
@@ -829,6 +1038,11 @@ function FileGrid({
                   agents={agents}
                   isList
                   onClick={() => onSelectFile(file)}
+                  onDelete={
+                    onDeleteFile
+                      ? () => void onDeleteFile(file.relativePath)
+                      : undefined
+                  }
                 />
               ))}
             </div>
@@ -922,13 +1136,15 @@ interface FileManagerPanelProps {
   onContentChange: (v: string | null) => void;
   onSave: () => void;
   onCreateFile?: (name: string) => void;
+  onUploadFiles?: (files: File[]) => Promise<{ uploaded: string[]; failed: { name: string; error: string }[] }>;
+  onDeleteFile?: (relativePath: string) => Promise<boolean>;
   onOpenGraph?: () => void;
 }
 
 export function FileManagerPanel({
   collection, companyId, agents, selectedPath, content, loading, error,
   saving, hasUnsavedChanges, onSelectFile, onDeselectFile, onBackToCollections,
-  onContentChange, onSave, onCreateFile, onOpenGraph,
+  onContentChange, onSave, onCreateFile, onUploadFiles, onDeleteFile, onOpenGraph,
 }: FileManagerPanelProps) {
   const [selectedFolder, setSelectedFolder] = useState("");
   const [editMode, setEditMode] = useState(false);
@@ -977,6 +1193,17 @@ export function FileManagerPanel({
             onSave={onSave}
             onBack={onDeselectFile}
             onSelectFile={onSelectFile}
+            onDeleteFile={
+              onDeleteFile
+                ? async (relativePath) => {
+                    const ok = await onDeleteFile(relativePath);
+                    if (ok && relativePath === selectedFile.relativePath) {
+                      onDeselectFile();
+                    }
+                    return ok;
+                  }
+                : undefined
+            }
             onOpenGraph={onOpenGraph}
           />
         ) : (
@@ -993,6 +1220,8 @@ export function FileManagerPanel({
             onSelectFile={(f) => onSelectFile(f.relativePath)}
             onBackToCollections={onBackToCollections}
             onCreateFile={onCreateFile}
+            onUploadFiles={onUploadFiles}
+            onDeleteFile={onDeleteFile}
           />
         )}
       </div>

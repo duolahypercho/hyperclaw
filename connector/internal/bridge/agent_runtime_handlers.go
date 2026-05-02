@@ -199,10 +199,10 @@ func (b *BridgeHandler) runAgentTask(params map[string]interface{}) actionResult
 //
 // This is the agent-to-agent (A2A) entry point. It's a wrapper around
 // adapter.RunTask but with three differences from runAgentTask:
-//   1. runtime is looked up by id, not passed in
-//   2. message is decorated with the sender's id for context
-//   3. response shape includes from/to/runtime so the caller can render the
-//      conversation without a second round-trip to find out who said what
+//  1. runtime is looked up by id, not passed in
+//  2. message is decorated with the sender's id for context
+//  3. response shape includes from/to/runtime so the caller can render the
+//     conversation without a second round-trip to find out who said what
 //
 // Params:
 //   - toAgentId (required): recipient agent id

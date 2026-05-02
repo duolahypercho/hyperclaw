@@ -37,6 +37,7 @@ func ParseClaudeCodeSessionFile(path string) ([]store.TokenUsageRow, error) {
 	absPath, _ := filepath.Abs(path)
 	h := sha256.Sum256([]byte(absPath))
 	pathKey := fmt.Sprintf("%x", h[:6])
+	sessionID := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 
 	var rows []store.TokenUsageRow
 	scanner := bufio.NewScanner(f)
@@ -110,6 +111,7 @@ func ParseClaudeCodeSessionFile(path string) ([]store.TokenUsageRow, error) {
 		rows = append(rows, store.TokenUsageRow{
 			DedupKey:        fmt.Sprintf("claude-code:%s:%d", pathKey, lineIdx),
 			Runtime:         "claude-code",
+			SessionID:       sessionID,
 			Model:           model,
 			InputTokens:     inputTokens,
 			OutputTokens:    outputTokens,

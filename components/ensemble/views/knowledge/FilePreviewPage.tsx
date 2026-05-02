@@ -19,8 +19,10 @@ import {
   Image as ImageIcon,
   Loader2,
   Music,
+  Trash2,
   type LucideIcon,
 } from "lucide-react";
+import { AlertDelete } from "$/components/UI/AlertDelete";
 
 import remarkGfm from "remark-gfm";
 import remarkBreaks from "remark-breaks";
@@ -67,6 +69,7 @@ interface FilePreviewPageProps {
   onSave: () => void;
   onBack: () => void;
   onSelectFile: (relativePath: string) => void;
+  onDeleteFile?: (relativePath: string) => Promise<boolean>;
   onOpenGraph?: () => void;
 }
 
@@ -1182,6 +1185,7 @@ export function FilePreviewPage({
   onSave,
   onBack,
   onSelectFile,
+  onDeleteFile,
   onOpenGraph,
 }: FilePreviewPageProps) {
   const typeName = fileNameForType(file);
@@ -1309,6 +1313,25 @@ export function FilePreviewPage({
                 variant="icon"
                 onClick={onOpenGraph}
               />
+            ) : null}
+            {onDeleteFile ? (
+              <AlertDelete
+                dialogTitle={`Delete "${file.name}"?`}
+                dialogDescription="This permanently removes the file from the knowledge base. Other agents will lose access to it."
+                deleteButtonTitle="Delete"
+                onDelete={() => {
+                  void onDeleteFile(file.relativePath);
+                }}
+              >
+                <button
+                  type="button"
+                  aria-label={`Delete ${file.name}`}
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-solid border-border bg-card text-muted-foreground transition-colors hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
+                  title="Delete file"
+                >
+                  <Trash2 size={12} className="opacity-90" />
+                </button>
+              </AlertDelete>
             ) : null}
           </div>
         </header>

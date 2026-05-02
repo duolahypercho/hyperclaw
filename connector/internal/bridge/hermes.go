@@ -82,6 +82,96 @@ func hermesCLISessionExists(agentId, sessionID string) bool {
 	return err == nil
 }
 
+func hermesRequiredProviderEnvKeys(provider string) []string {
+	provider = hermesProviderID(provider)
+	switch provider {
+	case "custom":
+		return []string{"OPENAI_API_KEY"}
+	case "kimi-coding":
+		return []string{"KIMI_API_KEY"}
+	default:
+		return hermesProviderEnvKeys[provider]
+	}
+}
+
+func hermesEnvValueIsSet(value string) bool {
+	value = strings.Trim(strings.TrimSpace(value), `"'`)
+	if value == "" {
+		return false
+	}
+	switch strings.ToLower(value) {
+	case "none", "null", "undefined":
+		return false
+	default:
+		return true
+	}
+}
+
+func readHermesDotEnv(path string) map[string]string {
+	values := map[string]string{}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return values
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		values[strings.TrimSpace(key)] = strings.TrimSpace(value)
+	}
+	return values
+}
+
+func hermesHomeDirForAgent(agentId string) string {
+	home, _ := os.UserHomeDir()
+	agentId = normalizeHermesAgentId(agentId)
+	if agentId == "" || isHermesMainAgent(agentId) {
+		return filepath.Join(home, ".hermes")
+	}
+	return filepath.Join(home, ".hermes", "profiles", agentId)
+}
+
+func hermesProfileCredentialError(agentId string) string {
+	agentId = normalizeHermesAgentId(agentId)
+	hermesHome := hermesHomeDirForAgent(agentId)
+	configData, err := os.ReadFile(filepath.Join(hermesHome, "config.yaml"))
+	if err != nil {
+		return ""
+	}
+	cfg := parseHermesModelConfig(string(configData))
+	envKeys := hermesRequiredProviderEnvKeys(cfg.Provider)
+	if len(envKeys) == 0 {
+		return ""
+	}
+
+	envValues := readHermesDotEnv(filepath.Join(hermesHome, ".env"))
+	for _, envKey := range envKeys {
+		if hermesEnvValueIsSet(os.Getenv(envKey)) || hermesEnvValueIsSet(envValues[envKey]) {
+			return ""
+		}
+	}
+
+	profileLabel := agentId
+	envPath := filepath.Join("~", ".hermes", ".env")
+	if profileLabel == "" || isHermesMainAgent(profileLabel) {
+		profileLabel = "main"
+	} else {
+		envPath = filepath.Join("~", ".hermes", "profiles", profileLabel, ".env")
+	}
+	return fmt.Sprintf(
+		"Hermes profile %q is configured for provider %q, but %s is not available to the connector. Add it to %s or re-run Hermes onboarding, then retry.",
+		profileLabel,
+		cfg.Provider,
+		strings.Join(envKeys, " or "),
+		envPath,
+	)
+}
+
 func latestHermesCLISessionID(agentId, userMessage string, notBefore time.Time) string {
 	dbPath := hermesStateDBPath(agentId)
 	if _, err := os.Stat(dbPath); err != nil {
@@ -560,6 +650,9 @@ func (b *BridgeHandler) hermesChatViaCLI(query string, params map[string]interfa
 
 	agentIdRaw, _ := params["agentId"].(string)
 	agentId := normalizeHermesAgentId(agentIdRaw)
+	if credentialErr := hermesProfileCredentialError(agentId); credentialErr != "" {
+		return errResultStatus(credentialErr, 400)
+	}
 
 	args := []string{"chat", "-q", query, "-Q"}
 	args = appendHermesCLIResumeArg(args, agentId, params)
@@ -660,6 +753,14 @@ func (b *BridgeHandler) hermesChatStreamViaCLI(
 
 	agentIdRaw, _ := params["agentId"].(string)
 	agentId := normalizeHermesAgentId(agentIdRaw)
+	if credentialErr := hermesProfileCredentialError(agentId); credentialErr != "" {
+		sendHermesStreamResponse(requestID, protocol.StatusError, map[string]interface{}{
+			"error":     credentialErr,
+			"sessionId": sessionID,
+			"mode":      "cli",
+		}, toHub)
+		return
+	}
 
 	args := []string{"chat", "-q", query, "-Q"}
 	args = appendHermesCLIResumeArg(args, agentId, params)

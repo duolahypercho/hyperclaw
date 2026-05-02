@@ -205,14 +205,18 @@ export const InputContainer: React.FC<InputContainerProps> = ({
   // Models from centralized context
   const { models: contextModels } = useHyperclawContext();
   const [internalCurrentModel, setInternalCurrentModel] = useState<string>("");
-  const [isLoadingModels, setIsLoadingModels] = useState(false);
 
-  // When runtimeModels are provided (provider tabs), use those; otherwise use OpenClaw models
+  // Prefer caller-provided runtime models when available; otherwise use the
+  // global OpenClaw context models as a fallback.
   const hasRuntimeModels = runtimeModels && runtimeModels.length > 0;
   const availableModels = (() => {
     const raw = hasRuntimeModels
-      ? runtimeModels.map(m => ({ id: m.id, label: m.label, provider: undefined as string | undefined }))
-      : contextModels;
+      ? runtimeModels.map((m) => ({ id: m.id, label: m.label, provider: undefined as string | undefined }))
+      : contextModels.map((m) => ({
+          id: m.id,
+          label: m.displayName || m.id,
+          provider: m.provider,
+        }));
     const seen = new Set<string>();
     return raw.filter(m => {
       if (seen.has(m.id)) return false;
@@ -221,9 +225,12 @@ export const InputContainer: React.FC<InputContainerProps> = ({
     });
   })();
 
-  // Use external model state when provided (provider tabs), otherwise internal state (OpenClaw)
+  // Use external model state when provided (provider tabs), otherwise internal state (OpenClaw).
+  // A caller may still provide runtimeModels for OpenClaw; that should only change
+  // the options list, not bypass the OpenClaw session patch below.
   const currentModel = externalCurrentModel !== undefined ? externalCurrentModel : internalCurrentModel;
   const setCurrentModel = externalOnModelChange || setInternalCurrentModel;
+  const isModelExternallyControlled = externalCurrentModel !== undefined || Boolean(externalOnModelChange);
   const isControlled = controlledValue !== undefined;
   const currentValue = isControlled ? controlledValue : inputValue;
   const baseSetValue = isControlled ? controlledOnChange : setInputValue;
@@ -259,10 +266,11 @@ export const InputContainer: React.FC<InputContainerProps> = ({
 
   // Get session model when sessionKey changes; fall back to agent default from openclaw.json
   useEffect(() => {
+    if (isModelExternallyControlled) return;
     let cancelled = false;
     (async () => {
       // 1. Try session-level model from gateway
-      if (sessionKey && gatewayConnection.connected) {
+      if (sessionKey) {
         try {
           const sessionModel = await gatewayConnection.getSessionModel(sessionKey);
           if (!cancelled && sessionModel) {
@@ -290,7 +298,7 @@ export const InputContainer: React.FC<InputContainerProps> = ({
       }
     })();
     return () => { cancelled = true; };
-  }, [sessionKey, agentId]);
+  }, [sessionKey, agentId, isModelExternallyControlled, setCurrentModel]);
 
   // Use external attachments if provided, otherwise use internal state
   const currentAttachments: AttachmentUnion[] =
@@ -369,8 +377,8 @@ export const InputContainer: React.FC<InputContainerProps> = ({
 
   // Handle model change
   const handleModelChange = async (modelId: string) => {
-    // For runtime models (provider tabs), just update the external state — no gateway patch needed
-    if (hasRuntimeModels) {
+    // For externally controlled runtime tabs, update parent state — no OpenClaw session patch.
+    if (isModelExternallyControlled) {
       setCurrentModel(modelId);
       return;
     }
@@ -847,7 +855,7 @@ export const InputContainer: React.FC<InputContainerProps> = ({
         className="flex flex-row items-end justify-between w-full"
       >
         <div className="flex flex-row items-end gap-0">
-          {showActions && ((isLoadingModels || runtimeModelsLoading) ? (
+          {showActions && (runtimeModelsLoading ? (
             <div className="flex items-center gap-1.5 h-[30px] px-2">
               <div className="w-3 h-3 rounded-sm bg-muted-foreground/20 animate-pulse" />
               <div className="w-[80px] h-3 rounded bg-muted-foreground/20 animate-pulse" />
@@ -860,14 +868,10 @@ export const InputContainer: React.FC<InputContainerProps> = ({
                   size="sm"
                   className="h-fit py-1.5 px-2 gap-1.5 text-xs font-normal hover:bg-primary/10 transition-colors"
                 >
-                  {isLoadingModels ? (
-                    <RefreshCw className="w-3 h-3 animate-spin" />
-                  ) : (
-                    <Cpu className="w-3 h-3" />
-                  )}
+                  <Cpu className="w-3 h-3" />
                   <span className="max-w-[100px] truncate">
                     {currentModel
-                      ? (availableModels.find(m => m.id === currentModel) as any)?.label
+                      ? availableModels.find(m => m.id === currentModel)?.label
                         || currentModel.split('/').pop()
                         || currentModel
                       : "Default Model"}
@@ -909,7 +913,7 @@ export const InputContainer: React.FC<InputContainerProps> = ({
                     const filtered = q
                       ? availableModels.filter(m =>
                           m.id.toLowerCase().includes(q)
-                          || ((m as any).label || "").toLowerCase().includes(q)
+                          || m.label.toLowerCase().includes(q)
                         )
                       : availableModels;
                     if (filtered.length === 0) {
@@ -936,7 +940,7 @@ export const InputContainer: React.FC<InputContainerProps> = ({
                           }}
                         >
                           <Cpu className={cn("w-3 h-3 flex-shrink-0", isSelected && "text-primary")} />
-                          <span className="truncate">{(model as any).label || model.id.split('/').pop() || model.id}</span>
+                          <span className="truncate">{model.label || model.id.split('/').pop() || model.id}</span>
                         </Button>
                       );
                     });
@@ -980,7 +984,6 @@ export const InputContainer: React.FC<InputContainerProps> = ({
     isPopoverOpen,
     availableModels,
     currentModel,
-    isLoadingModels,
     runtimeModelsLoading,
     handleModelChange,
     setIsPopoverOpen,

@@ -267,7 +267,7 @@ export const GatewayChatCustomHeader: React.FC<GatewayChatHeaderProps> = ({
           <Button variant="ghost" size="sm" onClick={onReloadChat} className="h-7 w-7 p-0" title="Reload chat">
             <RefreshCw className="w-3.5 h-3.5" />
           </Button>
-          <Button variant="ghost" size="sm" onClick={onNewChat} className="h-7 w-7 p-0" title="Clear chat">
+          <Button variant="ghost" size="sm" onClick={onNewChat} className="h-7 w-7 p-0" title="New chat">
             <Plus className="w-3.5 h-3.5" />
           </Button>
           <SessionHistoryDropdown
@@ -278,7 +278,7 @@ export const GatewayChatCustomHeader: React.FC<GatewayChatHeaderProps> = ({
             onLoadSession={onSessionChange || (() => {})}
             onNewChat={onNewChat || (() => {})}
             onFetchSessions={onFetchSessions || (() => {})}
-            newChatLabel="Clear Session"
+            newChatLabel="+ New Chat"
           />
         </div>
       </div>

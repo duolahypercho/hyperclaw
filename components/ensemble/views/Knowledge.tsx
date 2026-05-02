@@ -935,6 +935,8 @@ export default function Knowledge() {
     setContent,
     saveDoc,
     createDoc,
+    deleteDoc,
+    uploadFiles,
   } = useKnowledgeData();
 
   const activeCollection = collections.find((c) => c.id === selectedCollection);
@@ -1005,6 +1007,8 @@ export default function Knowledge() {
         onContentChange={setContent}
         onSave={() => void saveDoc()}
         onCreateFile={(name) => void createDoc(activeCollection.id, name)}
+        onUploadFiles={(files) => uploadFiles(activeCollection.id, files)}
+        onDeleteFile={(relativePath) => deleteDoc(relativePath)}
         onOpenGraph={() => setViewMode("graph")}
       />
     );

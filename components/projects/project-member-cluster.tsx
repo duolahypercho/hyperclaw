@@ -3,6 +3,7 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
 import { AgentMonogram } from "./agent-monogram";
+import { useProjectAgentLookup } from "./use-agent-roster";
 
 type ClusterSize = "xs" | "sm" | "md";
 
@@ -44,14 +45,21 @@ export function ProjectMemberCluster({
   size = "sm",
   className,
 }: ProjectMemberClusterProps) {
+  const liveAgents = useProjectAgentLookup();
+  const liveAgentIds = React.useMemo(
+    () => agentIds.filter((id) => liveAgents.has(id)),
+    [agentIds, liveAgents]
+  );
+  const activeLeadAgentId = leadAgentId && liveAgents.has(leadAgentId) ? leadAgentId : undefined;
+
   // Lead ordering stays — it gives the cluster a stable visual anchor across
   // re-renders even though we no longer ring the lead avatar.
   const ordered = React.useMemo(() => {
-    if (!leadAgentId || !agentIds.includes(leadAgentId)) return agentIds;
-    return [leadAgentId, ...agentIds.filter((id) => id !== leadAgentId)];
-  }, [agentIds, leadAgentId]);
+    if (!activeLeadAgentId || !liveAgentIds.includes(activeLeadAgentId)) return liveAgentIds;
+    return [activeLeadAgentId, ...liveAgentIds.filter((id) => id !== activeLeadAgentId)];
+  }, [activeLeadAgentId, liveAgentIds]);
 
-  if (agentIds.length === 0) {
+  if (liveAgentIds.length === 0) {
     return (
       <span
         className="font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground"

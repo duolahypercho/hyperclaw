@@ -8,6 +8,7 @@ import { ProjectCardMenu } from "./project-card-menu";
 import { StatusPill } from "./status-pill";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "./ui/card";
 import type { NodeStatus, Project } from "./types";
+import { useProjectAgentLookup } from "./use-agent-roster";
 
 interface ProjectCardProps {
   project: Project;
@@ -44,6 +45,14 @@ export function ProjectCard({
   onRemove,
 }: ProjectCardProps) {
   const targetHref = href ?? `/Tool/Projects/${project.id}`;
+  const liveAgents = useProjectAgentLookup();
+  const liveAgentIds = React.useMemo(
+    () => project.agents.filter((id) => liveAgents.has(id)),
+    [liveAgents, project.agents]
+  );
+  const activeLeadAgentId = project.leadAgentId && liveAgents.has(project.leadAgentId)
+    ? project.leadAgentId
+    : undefined;
 
   const fallbackOpen = project.nodes.filter((node) =>
     OPEN_WORKFLOW_STATUSES.includes(node.status)
@@ -103,14 +112,14 @@ export function ProjectCard({
         <CardContent className="pt-0">
           <div className="flex items-center justify-between">
             <ProjectMemberCluster
-              agentIds={project.agents}
-              leadAgentId={project.leadAgentId}
+              agentIds={liveAgentIds}
+              leadAgentId={activeLeadAgentId}
               size="sm"
             />
             <span
               className="font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground"
             >
-              {project.agents.length} {project.agents.length === 1 ? "agent" : "agents"}
+              {liveAgentIds.length} {liveAgentIds.length === 1 ? "agent" : "agents"}
             </span>
           </div>
         </CardContent>

@@ -11,6 +11,7 @@ import {
 import { useSession } from "next-auth/react";
 import { setCachedToken, clearCachedToken } from "$/lib/auth-token-cache";
 import { clearTokenCache, clearAuthExpired } from "$/lib/hub-direct";
+import { loadLocalUserProfile } from "$/lib/hyperclaw-bridge-client";
 import { getUserId } from "../utils";
 import { channelData } from "../types/next-auth";
 import { useRouter } from "next/router";
@@ -147,6 +148,21 @@ export const UserProvider = ({ children }: { children: ReactNode }) => {
         }, 300);
         return;
       }
+      const localProfile = await loadLocalUserProfile().catch(() => null);
+      if (localProfile?.success && localProfile.profile) {
+        const name = localProfile.profile.name || "Local User";
+        const [firstName = "Local", ...lastNameParts] = name.split(" ");
+        setuserInfo({
+          email: localProfile.profile.email || "",
+          profilePic: localProfile.profile.profilePic || "",
+          channel: undefined,
+          Firstname: firstName,
+          Lastname: lastNameParts.join(" "),
+          username: name,
+          aboutme: localProfile.profile.aboutme || "",
+        });
+      }
+
       // If we get here without sessionData, reflect unauthenticated state
       setStatus("unauthenticated");
     } catch (e: any) {
@@ -175,6 +191,10 @@ export const UserProvider = ({ children }: { children: ReactNode }) => {
     }
 
     if (sessionStatus === "authenticated" && sessionUserId) {
+      setId();
+      return;
+    }
+    if (sessionStatus === "unauthenticated") {
       setId();
       return;
     }

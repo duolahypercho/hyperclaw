@@ -129,8 +129,21 @@ export function ProjectIssueDetail({
     [issue.assignedAgentId, rosterAgents],
   );
   const mockAssigneeAgent = issue.assignedAgentId ? getAgent(issue.assignedAgentId) : undefined;
-  const assignee = rosterAgent?.name ?? getIssueAssignee(issue);
-  const assigneeSubtitle = rosterAgent?.subtitle ?? mockAssigneeAgent?.title;
+  const hasDeletedAssignee = Boolean(
+    issue.assignedAgentId && !rosterAgent && !mockAssigneeAgent,
+  );
+  const deletedAssigneeName = hasDeletedAssignee
+    ? issue.assignedAgent || issue.assignedAgentId || "Deleted agent"
+    : null;
+  const hasActiveAssignee = Boolean(
+    rosterAgent || mockAssigneeAgent || (!issue.assignedAgentId && issue.assignedAgent),
+  );
+  const assignee = hasActiveAssignee
+    ? rosterAgent?.name ?? getIssueAssignee(issue)
+    : "Unassigned";
+  const assigneeSubtitle = hasActiveAssignee
+    ? rosterAgent?.subtitle ?? mockAssigneeAgent?.title
+    : undefined;
   const totalSteps = issue.steps.completed + issue.steps.uncompleted;
   const dueLabel = formatDueLabel(issue.dueDate);
   const StatusIcon = status.icon;
@@ -389,13 +402,23 @@ export function ProjectIssueDetail({
           {/* Activity */}
           <Section label="Activity">
             <ul className="space-y-4">
-              {issue.assignedAgent ? (
+              {hasActiveAssignee && issue.assignedAgent ? (
                 <ActivityItem
-                  who={issue.assignedAgent}
+                  who={assignee}
                   monogramTask={issue}
                   kind="comment"
                   timeLabel={formatRelativeIssueTime(issue.updatedAt)}
                   body="Working through this — will post a draft for review shortly."
+                />
+              ) : null}
+              {deletedAssigneeName ? (
+                <ActivityItem
+                  who={deletedAssigneeName}
+                  kind="comment"
+                  timeLabel={formatRelativeIssueTime(issue.updatedAt)}
+                  body="Previously assigned here, but this agent has since been deleted."
+                  avatarName={deletedAssigneeName}
+                  deletedAgent
                 />
               ) : null}
               <ActivityItem
@@ -450,7 +473,7 @@ export function ProjectIssueDetail({
         </main>
 
         {/* === SIDEBAR === */}
-        <aside className="min-h-full w-full px-4 py-4 bg-secondary space-y-6 lg:sticky lg:top-6 lg:self-start lg:w-[320px]">
+        <aside className="min-h-full w-full px-4 py-4 bg-secondary space-y-6 lg:sticky lg:top-6 lg:self-start lg:w-[320px] border-l border-r-0 border-t-0 border-b-0 border-solid border-border/60">
           {/* Status */}
           <SidebarRow label="Status">
             <StatusDropdown
@@ -470,6 +493,7 @@ export function ProjectIssueDetail({
               issue={issue}
               assigneeName={assignee}
               assigneeSubtitle={assigneeSubtitle}
+              hasActiveAssignee={hasActiveAssignee}
               rosterAgents={rosterAgents}
               onReassign={onReassign}
             />
@@ -521,7 +545,7 @@ export function ProjectIssueDetail({
           </SidebarRow>
 
           {/* Run a workflow card */}
-          <div className="rounded-lg border border-border/70 bg-card/60 p-3">
+          <div className="rounded-lg border border-solid border-border/70 bg-card/60 p-3">
             <div
               className="mb-2 text-[10.5px] uppercase tracking-[0.08em] text-muted-foreground/70"
               style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)" }}
@@ -710,17 +734,30 @@ function ActivityItem({
   timeLabel,
   body,
   monogramTask,
+  avatarName,
+  deletedAgent = false,
 }: {
   who: string;
   kind: "comment" | "created";
   timeLabel: string;
   body: string;
   monogramTask?: Task;
+  avatarName?: string;
+  deletedAgent?: boolean;
 }) {
   return (
     <li className="flex gap-3">
       {monogramTask ? (
         <AgentMonogram task={monogramTask} size="sm" className="mt-0.5" />
+      ) : avatarName ? (
+        <AgentMonogram
+          name={avatarName}
+          initials="?"
+          status={deletedAgent ? "deleting" : undefined}
+          title={deletedAgent ? `${avatarName} (deleted agent)` : avatarName}
+          size="sm"
+          className="mt-0.5 opacity-70 grayscale"
+        />
       ) : (
         <AgentMonogram name={who} size="sm" className="mt-0.5" />
       )}
@@ -732,6 +769,11 @@ function ActivityItem({
           <span className="text-foreground/80">{who}</span>
           <span>· {kind}</span>
           <span>· {timeLabel}</span>
+          {deletedAgent ? (
+            <span className="rounded border border-border px-1 py-px text-[9px] tracking-wide text-muted-foreground">
+              deleted agent
+            </span>
+          ) : null}
         </div>
         <p className="mt-1 text-[13px] leading-relaxed text-muted-foreground/80">{body}</p>
       </div>
@@ -786,12 +828,14 @@ function ReassignPicker({
   issue,
   assigneeName,
   assigneeSubtitle,
+  hasActiveAssignee,
   rosterAgents,
   onReassign,
 }: {
   issue: Task;
   assigneeName: string;
   assigneeSubtitle?: string;
+  hasActiveAssignee: boolean;
   rosterAgents: ProjectRosterAgent[];
   onReassign?: (issueId: string, agentId: string) => void;
 }) {
@@ -800,11 +844,18 @@ function ReassignPicker({
   const card = (
     <div
       className={cn(
-        "flex w-full items-center gap-2.5 rounded border border-border/70 bg-card/60 px-2.5 py-2",
+        "flex w-full items-center gap-2.5 rounded border border-solid border-border/70 bg-card/60 px-2.5 py-2",
         canReassign && "transition-colors hover:bg-card/80",
       )}
     >
-      <AgentMonogram task={issue} size="md" />
+      {hasActiveAssignee ? (
+        <AgentMonogram task={issue} size="md" />
+      ) : (
+        <span
+          aria-hidden
+          className="h-6 w-6 rounded-[5px] border border-dashed border-border bg-muted/40"
+        />
+      )}
       <div className="min-w-0 flex-1 text-left">
         <div className="truncate text-[12.5px] font-medium text-foreground">
           {assigneeName}
@@ -896,7 +947,7 @@ function StatusDropdown({
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          className="inline-flex items-center gap-2 rounded border border-border/70 bg-card/60 px-2 py-1 text-[12px] uppercase tracking-[0.08em] text-foreground transition-colors hover:border-foreground/40"
+          className="inline-flex items-center gap-2 rounded border border-solid border-border/70 bg-card/60 px-2 py-1 text-[12px] uppercase tracking-[0.08em] text-foreground transition-colors hover:border-foreground/40"
         >
           <Icon className={cn("h-3 w-3", meta.iconClass)} />
           {meta.title}

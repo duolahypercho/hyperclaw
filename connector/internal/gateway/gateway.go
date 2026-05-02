@@ -194,6 +194,104 @@ func (g *Gateway) Connect(toHub chan<- []byte, fromHub <-chan []byte, events cha
 	return nil
 }
 
+// RequestOnce performs a single authenticated gateway request without exposing
+// the local OpenClaw WebSocket to the dashboard. It is used by the connector's
+// local HTTP bridge as the local-only equivalent of the Hub GatewayRouter.
+func RequestOnce(cfg *config.Config, method string, params interface{}, timeout time.Duration) (interface{}, error) {
+	if cfg == nil {
+		cfg = &config.Config{}
+	}
+	cfgCopy := *cfg
+	cfg = &cfgCopy
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	if cfg.GatewayHost == "" {
+		cfg.GatewayHost = "127.0.0.1"
+	}
+	if cfg.GatewayPort == 0 {
+		cfg.GatewayPort = 18789
+	}
+
+	g := New(cfg)
+	url := g.cfg.GatewayURL
+	if url == "" {
+		url = fmt.Sprintf("ws://%s:%d/gateway", g.cfg.GatewayHost, g.cfg.GatewayPort)
+	}
+
+	dialer := &websocket.Dialer{HandshakeTimeout: 10 * time.Second}
+	conn, _, err := dialer.Dial(url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to dial gateway: %w", err)
+	}
+	defer conn.Close()
+	conn.SetReadLimit(maxGatewayMessageBytes)
+	g.conn = conn
+
+	if _, err := g.handshake(); err != nil {
+		return nil, fmt.Errorf("handshake failed: %w", err)
+	}
+
+	requestID := fmt.Sprintf("local_%d", time.Now().UnixNano())
+	req := GatewayMessage{
+		Type:   "req",
+		ID:     requestID,
+		Method: method,
+		Params: params,
+	}
+	if err := conn.WriteJSON(req); err != nil {
+		return nil, fmt.Errorf("failed to send gateway request: %w", err)
+	}
+
+	deadline := time.Now().Add(timeout)
+	ignoredMessages := 0
+	for {
+		if err := conn.SetReadDeadline(deadline); err != nil {
+			return nil, err
+		}
+		var msg GatewayMessage
+		if err := conn.ReadJSON(&msg); err != nil {
+			return nil, fmt.Errorf("gateway request %s failed: %w", method, err)
+		}
+		if msg.Type != "res" || msg.ID != requestID {
+			ignoredMessages++
+			if ignoredMessages > 1000 {
+				return nil, fmt.Errorf("too many unrelated gateway messages while waiting for %s", method)
+			}
+			continue
+		}
+		if msg.Ok != nil && !*msg.Ok {
+			return nil, fmt.Errorf("%s", gatewayErrorString(msg.Error))
+		}
+		if msg.Error != nil {
+			return nil, fmt.Errorf("%s", gatewayErrorString(msg.Error))
+		}
+		return msg.Payload, nil
+	}
+}
+
+func gatewayErrorString(value interface{}) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case map[string]interface{}:
+		if message, ok := v["message"].(string); ok && message != "" {
+			return message
+		}
+		if code, ok := v["code"].(string); ok && code != "" {
+			return code
+		}
+	}
+	if value == nil {
+		return "gateway request failed"
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return "gateway request failed"
+	}
+	return string(raw)
+}
+
 func (g *Gateway) handshake() (prelude [][]byte, err error) {
 	deadline := time.Now().Add(10 * time.Second)
 

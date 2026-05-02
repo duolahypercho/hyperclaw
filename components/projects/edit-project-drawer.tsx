@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Crown, Pencil, Users } from "lucide-react";
+import { Check, Crown, Loader2, Users } from "lucide-react";
 import {
   Sheet,
   SheetContent,
@@ -16,17 +16,20 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { cn } from "@/lib/utils";
+import {
   useProjects,
   type Project as StoredProject,
   type ProjectMember,
 } from "$/components/Tool/Projects/provider/projectsProvider";
-import { useProjectAgentRoster } from "./use-agent-roster";
-import {
-  AgentMultiSelect,
-  EmojiPicker,
-  EmptyAgentRoster,
-  LeadAgentSelect,
-} from "./project-drawer-parts";
+import { AgentMonogram } from "./agent-monogram";
+import { useProjectAgentRoster, type ProjectRosterAgent } from "./use-agent-roster";
 
 export interface EditProjectDrawerProps {
   /**
@@ -42,6 +45,7 @@ export interface EditProjectDrawerProps {
 }
 
 const DEFAULT_EMOJI = "📁";
+const EMOJI_OPTIONS = ["📁", "🚀", "⚡", "🧠", "🎯", "🔬", "💡", "🛠️", "🌐", "🤖", "🔥", "✨"];
 
 /**
  * Right-side drawer for editing an existing project. Mirrors
@@ -229,6 +233,7 @@ export function EditProjectDrawer({
           if (!base.memberIds.has(id)) additions.push(id);
         }
         for (const id of base.memberIds) {
+          if (id === leadAgentId) continue;
           if (!memberIds.has(id)) removals.push(id);
         }
 
@@ -317,140 +322,300 @@ export function EditProjectDrawer({
     <Sheet open={open} onOpenChange={handleOpenChange}>
       <SheetContent
         side="right"
-        className="ensemble-root w-[520px] sm:w-[520px] flex flex-col gap-0 p-0 border-l border-[var(--line)] bg-[var(--paper)] text-[var(--ink)]"
+        className="w-[390px] flex flex-col gap-0 p-0"
       >
-        <SheetHeader className="px-6 pt-6 pb-4 border-b border-[var(--line)]">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-[var(--paper-2)] border border-[var(--line)] flex items-center justify-center text-[var(--ink)]">
-              <Pencil className="w-4 h-4" />
+        <SheetHeader className="px-5 pt-5 pb-3 border-b border-border">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center text-lg">
+              {emoji}
             </div>
             <div>
-              <SheetTitle className="ens-h2">Edit Project</SheetTitle>
-              <SheetDescription className="ens-sub mt-0.5">
-                Update the name, lead, and crew on this project.
+              <SheetTitle className="text-base">Project Settings</SheetTitle>
+              <SheetDescription className="mt-0.5 text-xs">
+                Update the name, lead, and crew
               </SheetDescription>
             </div>
           </div>
         </SheetHeader>
 
         <form
+          id="project-settings-form"
           onSubmit={handleSubmit}
-          className="flex-1 min-h-0 overflow-y-auto px-6 py-5 space-y-6"
+          className="flex-1 min-h-0 overflow-y-auto px-5 py-4 space-y-5"
         >
           <AnimatePresence mode="wait">
             {error && (
               <motion.p
                 key="error"
+                role="alert"
                 initial={{ opacity: 0, y: -4 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0 }}
-                className="text-sm text-destructive bg-destructive/10 px-3 py-2 rounded-lg"
+                className="text-xs text-destructive bg-destructive/10 px-2.5 py-2 rounded-lg"
               >
                 {error}
               </motion.p>
             )}
           </AnimatePresence>
 
-          {/* Identity ─────────────────────────────────────────────── */}
-          <section className="space-y-2.5">
-            <Label htmlFor="prj-edit-name" className="ens-sh">
-              Name & icon
-            </Label>
-            <div className="flex items-stretch gap-2">
-              <EmojiPicker value={emoji} onChange={setEmoji} />
-              <Input
-                id="prj-edit-name"
-                placeholder="e.g. Earnings brief"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                autoFocus
-                required
-                className="h-9 flex-1 border-[var(--line)] bg-[var(--paper-2)] text-[13px]"
-              />
+          {/* Icon */}
+          <section className="space-y-2">
+            <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
+              Icon
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {EMOJI_OPTIONS.map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  onClick={() => setEmoji(option)}
+                  className={cn(
+                    "w-9 h-9 rounded-lg text-lg flex items-center justify-center transition-all",
+                    emoji === option
+                      ? "bg-primary/15 ring-1 ring-primary/60 scale-110"
+                      : "bg-muted hover:bg-muted/80 hover:scale-105"
+                  )}
+                  aria-label={`Use ${option} as project icon`}
+                  aria-pressed={emoji === option}
+                >
+                  {option}
+                </button>
+              ))}
             </div>
           </section>
 
+          {/* Name */}
           <section className="space-y-2">
-            <Label htmlFor="prj-edit-desc" className="ens-sh">
-              Description
+            <Label
+              htmlFor="prj-edit-name"
+              className="text-[11px] uppercase tracking-wider text-muted-foreground"
+            >
+              Name
             </Label>
+            <Input
+              id="prj-edit-name"
+              placeholder="e.g. Earnings brief"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              autoFocus
+              className="h-8 text-[13px]"
+            />
+          </section>
+
+          {/* Description */}
+          <section className="space-y-2">
+            <div className="flex items-center gap-2">
+              <Label
+                htmlFor="prj-edit-desc"
+                className="text-[11px] uppercase tracking-wider text-muted-foreground"
+              >
+                Description
+              </Label>
+              <span className="text-[11px] text-muted-foreground/50">optional</span>
+            </div>
             <Textarea
               id="prj-edit-desc"
               rows={3}
-              placeholder="What does this crew do? One or two sentences."
+              placeholder="What's this project about? What's the goal?"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              className="resize-none border-[var(--line)] bg-[var(--paper-2)] text-[13px]"
+              className="resize-none text-[13px]"
             />
           </section>
 
           {/* Lead picker (required) ───────────────────────────────── */}
-          <section className="space-y-2.5">
+          <section className="space-y-2">
             <div className="flex items-baseline justify-between">
-              <Label className="ens-sh flex items-center gap-1.5">
+              <Label
+                htmlFor="prj-edit-lead"
+                className="text-[11px] uppercase tracking-wider text-muted-foreground flex items-center gap-1.5"
+              >
                 <Crown className="w-3 h-3" />
                 Project lead
                 <span className="text-destructive">*</span>
               </Label>
-              <span className="text-[11px] text-muted-foreground">
+              <span className="text-[10.5px] text-muted-foreground">
                 Routes posts & owns issues
               </span>
             </div>
 
             {hasAgents ? (
-              <LeadAgentSelect
+              <ProjectLeadSelect
+                triggerId="prj-edit-lead"
                 agents={agents}
                 value={leadAgentId}
                 onChange={handleLeadChange}
               />
             ) : (
-              <EmptyAgentRoster onClose={() => onOpenChange(false)} />
+              <EmptyAgentRosterNotice />
             )}
           </section>
 
           {/* Member multi-select (optional) ───────────────────────── */}
           {hasAgents ? (
-            <section className="space-y-2.5">
+            <section className="space-y-2">
               <div className="flex items-baseline justify-between">
-                <Label className="ens-sh flex items-center gap-1.5">
+                <p className="text-[11px] uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
                   <Users className="w-3 h-3" />
                   Agents
-                </Label>
-                <span className="text-[11px] text-muted-foreground">
+                </p>
+                <span className="text-[10.5px] text-muted-foreground">
                   {selectedCrew.length} selected
                 </span>
               </div>
-              <AgentMultiSelect
+              <ProjectAgentPicker
                 agents={agents}
                 leadAgentId={leadAgentId}
                 selectedIds={memberIds}
-                selectedAgents={selectedCrew}
                 onToggle={toggleMember}
               />
             </section>
           ) : null}
         </form>
 
-        <SheetFooter className="px-6 py-4 border-t border-[var(--line)] flex flex-row gap-2">
+        <SheetFooter className="px-5 py-3 border-t border-border flex flex-row gap-2">
           <Button
             type="button"
             variant="outline"
             onClick={() => handleOpenChange(false)}
             disabled={submitting}
-            className="flex-1"
+            className="h-8 flex-1 text-[12.5px]"
           >
             Cancel
           </Button>
           <Button
-            type="button"
-            onClick={() => void handleSubmit()}
+            type="submit"
+            form="project-settings-form"
             disabled={!canSubmit}
-            className="flex-1"
+            className="h-8 flex-1 text-[12.5px]"
           >
-            {submitting ? "Saving…" : "Save changes"}
+            {submitting && <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" />}
+            {submitting ? "Saving..." : "Save Changes"}
           </Button>
         </SheetFooter>
       </SheetContent>
     </Sheet>
+  );
+}
+
+function ProjectLeadSelect({
+  triggerId,
+  agents,
+  value,
+  onChange,
+}: {
+  triggerId: string;
+  agents: ProjectRosterAgent[];
+  value: string | null;
+  onChange: (id: string) => void;
+}) {
+  return (
+    <Select value={value ?? undefined} onValueChange={onChange}>
+      <SelectTrigger id={triggerId} className="h-8 text-[12.5px]">
+        <SelectValue placeholder="Select a lead" />
+      </SelectTrigger>
+      <SelectContent className="max-h-64">
+        {agents.map((agent) => (
+          <SelectItem key={agent.id} value={agent.id} className="text-[12.5px]">
+            <span className="flex min-w-0 items-center gap-2">
+              <AgentMonogram
+                agentId={agent.id}
+                name={agent.name}
+                initials={agent.emoji ?? agent.initials}
+                runtime={agent.runtime}
+                status={agent.status}
+                avatarData={agent.avatarData}
+                size="xs"
+              />
+              <span className="min-w-0">
+                <span className="block truncate text-[12.5px]">{agent.name}</span>
+              </span>
+            </span>
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
+function ProjectAgentPicker({
+  agents,
+  leadAgentId,
+  selectedIds,
+  onToggle,
+}: {
+  agents: ProjectRosterAgent[];
+  leadAgentId: string | null;
+  selectedIds: Set<string>;
+  onToggle: (id: string) => void;
+}) {
+  return (
+    <div className="grid grid-cols-1 gap-1">
+      {agents.map((agent) => {
+        const isLead = agent.id === leadAgentId;
+        const selected = isLead || selectedIds.has(agent.id);
+
+        return (
+          <button
+            key={agent.id}
+            type="button"
+            disabled={isLead}
+            aria-pressed={selected}
+            onClick={() => onToggle(agent.id)}
+            className={cn(
+              "flex items-center gap-2.5 rounded-lg border px-2.5 py-2 text-left transition-all",
+              selected
+                ? "border-primary/60 bg-primary/[0.08] ring-1 ring-primary/30"
+                : "border-border/50 bg-muted/20 hover:bg-muted/40",
+              isLead && "cursor-default"
+            )}
+          >
+            <AgentMonogram
+              agentId={agent.id}
+              name={agent.name}
+              initials={agent.emoji ?? agent.initials}
+              runtime={agent.runtime}
+              status={agent.status}
+              avatarData={agent.avatarData}
+              size="xs"
+            />
+            <span className="min-w-0 flex-1">
+              <span className="flex items-center gap-1.5">
+                <span className="truncate text-[12.5px] font-medium text-foreground">
+                  {agent.name}
+                </span>
+                {isLead ? (
+                  <span className="rounded-full bg-primary/15 px-1.5 py-0.5 text-[10.5px] font-medium text-primary">
+                    Lead
+                  </span>
+                ) : null}
+              </span>
+              <span className="block truncate text-[10.5px] text-muted-foreground">
+                {agent.subtitle}
+              </span>
+            </span>
+            {selected ? (
+              <Check className="h-3.5 w-3.5 text-primary" />
+            ) : (
+              <span className="h-3.5 w-3.5 rounded-full border border-border" />
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function EmptyAgentRosterNotice() {
+  return (
+    <div className="rounded-lg border border-dashed border-border bg-muted/30 p-3 text-center">
+      <Users className="mx-auto h-4 w-4 text-muted-foreground" />
+      <p className="mt-2 text-xs text-foreground">
+        You don&apos;t have any agents yet.
+      </p>
+      <p className="mt-1 text-[10.5px] text-muted-foreground">
+        Add an agent before assigning a project lead.
+      </p>
+    </div>
   );
 }

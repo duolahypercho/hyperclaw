@@ -1978,7 +1978,76 @@ func (b *BridgeHandler) codexLoadHistory(params map[string]interface{}) actionRe
 
 // findCodexSessionFile returns the path to the JSONL file for the given Codex session UUID.
 // Sessions are stored under ~/.codex/sessions/YYYY/MM/DD/rollout-*-<id>.jsonl
+type codexSessionFileCacheEntry struct {
+	path string
+}
+
+var (
+	codexSessionFileCacheMu    sync.Mutex
+	codexSessionFileCache      = make(map[string]codexSessionFileCacheEntry)
+	codexSessionFileCacheWalks int
+)
+
+const codexSessionFileCacheMaxEntries = 512
+
+func resetCodexSessionFileCacheForTest() {
+	codexSessionFileCacheMu.Lock()
+	defer codexSessionFileCacheMu.Unlock()
+	codexSessionFileCache = make(map[string]codexSessionFileCacheEntry)
+	codexSessionFileCacheWalks = 0
+}
+
+type codexSessionFileCacheStats struct {
+	walks int
+}
+
+func codexSessionFileCacheStatsForTest() codexSessionFileCacheStats {
+	codexSessionFileCacheMu.Lock()
+	defer codexSessionFileCacheMu.Unlock()
+	return codexSessionFileCacheStats{walks: codexSessionFileCacheWalks}
+}
+
+func validateCodexSessionFileCacheEntry(entry codexSessionFileCacheEntry, sessionId string) bool {
+	if entry.path == "" || !strings.Contains(filepath.Base(entry.path), sessionId) || !strings.HasSuffix(entry.path, ".jsonl") {
+		return false
+	}
+	info, err := os.Stat(entry.path)
+	if err != nil || info.IsDir() {
+		return false
+	}
+	return true
+}
+
+func codexSessionFileCacheKey(home, sessionId string) string {
+	return home + "\x00" + sessionId
+}
+
 func findCodexSessionFile(home, sessionId string) string {
+	cacheKey := codexSessionFileCacheKey(home, sessionId)
+	var cachedEntry codexSessionFileCacheEntry
+	var hasCachedEntry bool
+	codexSessionFileCacheMu.Lock()
+	if entry, ok := codexSessionFileCache[cacheKey]; ok {
+		cachedEntry = entry
+		hasCachedEntry = true
+	}
+	codexSessionFileCacheMu.Unlock()
+
+	if hasCachedEntry {
+		if validateCodexSessionFileCacheEntry(cachedEntry, sessionId) {
+			return cachedEntry.path
+		}
+		codexSessionFileCacheMu.Lock()
+		if current, ok := codexSessionFileCache[cacheKey]; ok && current.path == cachedEntry.path {
+			delete(codexSessionFileCache, cacheKey)
+		}
+		codexSessionFileCacheMu.Unlock()
+	}
+
+	codexSessionFileCacheMu.Lock()
+	codexSessionFileCacheWalks++
+	codexSessionFileCacheMu.Unlock()
+
 	sessionsDir := filepath.Join(home, ".codex", "sessions")
 	found := ""
 	_ = filepath.WalkDir(sessionsDir, func(path string, d os.DirEntry, err error) error {
@@ -1991,6 +2060,21 @@ func findCodexSessionFile(home, sessionId string) string {
 		}
 		return nil
 	})
+	if found != "" {
+		if info, err := os.Stat(found); err == nil && !info.IsDir() {
+			codexSessionFileCacheMu.Lock()
+			if len(codexSessionFileCache) >= codexSessionFileCacheMaxEntries {
+				for key := range codexSessionFileCache {
+					delete(codexSessionFileCache, key)
+					if len(codexSessionFileCache) <= codexSessionFileCacheMaxEntries*3/4 {
+						break
+					}
+				}
+			}
+			codexSessionFileCache[cacheKey] = codexSessionFileCacheEntry{path: found}
+			codexSessionFileCacheMu.Unlock()
+		}
+	}
 	return found
 }
 

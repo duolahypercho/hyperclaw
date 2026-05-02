@@ -35,9 +35,6 @@ function buildCSP() {
 
   if (isDev) {
     connectParts.push("http://127.0.0.1:9979", "http://localhost:9979");
-    // Cursor debug ingest in local development. This is not part of the
-    // connector path, but allowing it keeps dev-only instrumentation from
-    // flooding the console with CSP violations.
     connectParts.push("http://127.0.0.1:7509", "http://localhost:7509");
     // Local connector bridge
     connectParts.push("http://127.0.0.1:18790", "http://localhost:18790");

@@ -12,6 +12,8 @@ export const PING_INTERVAL = 30_000;
 /** Actions that take longer and need an extended timeout. */
 const LONG_ACTIONS = new Set([
   'openclaw-doctor-fix',
+  'openclaw-security-audit-deep',
+  'openclaw-status-all',
   'gateway-restart',
   'intel-execute',
   'cron-run',

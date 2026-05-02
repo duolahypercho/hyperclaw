@@ -82,14 +82,12 @@ func SyncTeamModeBehavior(s *store.Store, paths Paths) error {
 			LeadProjectIDs:   leadProjectIDsByAgent[identity.ID],
 			MembersByProject: membersByProject,
 		}
-		switch {
-		case strings.EqualFold(identity.ID, "main"), strings.EqualFold(identity.ID, "orchestrator"):
-			ctx.Role = roleOrchestrator
-		case len(ctx.LeadProjectIDs) > 0:
-			ctx.Role = roleLeadManager
-		case len(ctx.Projects) > 0:
-			ctx.Role = roleWorker
-		default:
+		if role, ok := teamRoleForIdentity(identity, ctx); ok {
+			ctx.Role = role
+		} else {
+			if err := cleanupAgentTeamBehavior(paths, s, identity); err != nil {
+				return err
+			}
 			continue
 		}
 		if err := syncAgentTeamBehavior(paths, s, ctx); err != nil {
@@ -98,6 +96,17 @@ func SyncTeamModeBehavior(s *store.Store, paths Paths) error {
 	}
 
 	return nil
+}
+
+func teamRoleForIdentity(identity store.AgentIdentity, ctx teamBehaviorContext) (teamRole, bool) {
+	switch {
+	case strings.EqualFold(identity.ID, "main"), strings.EqualFold(identity.ID, "orchestrator"):
+		return roleOrchestrator, true
+	case len(ctx.LeadProjectIDs) > 0:
+		return roleLeadManager, true
+	default:
+		return "", false
+	}
 }
 
 func dedupeProjects(projects []store.Project) []store.Project {
@@ -140,15 +149,9 @@ func syncAgentTeamBehavior(paths Paths, s *store.Store, ctx teamBehaviorContext)
 
 	// Only update agents whose directory already exists on disk.
 	// Never auto-create — that's the job of setupAgent / onboarding.
-	agentDir := paths.AgentDir(runtime, ctx.Identity.ID)
-	if _, err := os.Stat(agentDir); os.IsNotExist(err) {
-		// Fallback: legacy un-prefixed layout (pre-0.5.6)
-		legacy := paths.LegacyAgentDir(ctx.Identity.ID)
-		if _, lerr := os.Stat(legacy); lerr == nil {
-			agentDir = legacy
-		} else {
-			return nil
-		}
+	agentDir, ok := existingTeamAgentDir(paths, runtime, ctx.Identity.ID)
+	if !ok {
+		return nil
 	}
 
 	personality := LoadAgentPersonality(agentDir, ctx.Identity.ID)
@@ -190,6 +193,119 @@ func syncAgentTeamBehavior(paths Paths, s *store.Store, ctx teamBehaviorContext)
 	return nil
 }
 
+func cleanupAgentTeamBehavior(paths Paths, s *store.Store, identity store.AgentIdentity) error {
+	runtime := identity.Runtime
+	if runtime == "" {
+		runtime = "openclaw"
+	}
+	if s != nil {
+		if err := disableManagedTeamSkill(s, identity.ID); err != nil {
+			return err
+		}
+	}
+	agentDir, ok := existingTeamAgentDir(paths, runtime, identity.ID)
+	if !ok {
+		return nil
+	}
+	personality := LoadAgentPersonality(agentDir, identity.ID)
+	changed, err := stripTeamBlocksFromPersonalityFiles(agentDir, &personality)
+	if err != nil {
+		return err
+	}
+	if RuntimeType(runtime) == RuntimeClaude {
+		claudePath := filepath.Join(agentDir, "CLAUDE.md")
+		shouldRewriteClaudeMd := changed
+		if !shouldRewriteClaudeMd {
+			if existing, err := os.ReadFile(claudePath); err == nil && strings.Contains(string(existing), teamManagedStart) {
+				shouldRewriteClaudeMd = true
+			}
+		}
+		if shouldRewriteClaudeMd {
+			claudeMd := AssembleClaudeMd(personality)
+			if err := os.WriteFile(claudePath, []byte(claudeMd), 0600); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func existingTeamAgentDir(paths Paths, runtime, agentID string) (string, bool) {
+	agentDir := paths.AgentDir(runtime, agentID)
+	if _, err := os.Stat(agentDir); err == nil {
+		return agentDir, true
+	}
+	// Fallback: legacy un-prefixed layout (pre-0.5.6)
+	legacy := paths.LegacyAgentDir(agentID)
+	if _, err := os.Stat(legacy); err == nil {
+		return legacy, true
+	}
+	return "", false
+}
+
+func stripTeamBlocksFromPersonalityFiles(agentDir string, personality *AgentPersonality) (bool, error) {
+	files := []struct {
+		name  string
+		field *string
+	}{
+		{"AGENTS.md", &personality.Agents},
+		{"TOOLS.md", &personality.Tools},
+		{"HEARTBEAT.md", &personality.Heartbeat},
+		{"MEMORY.md", &personality.Memory},
+	}
+	changed := false
+	for _, file := range files {
+		path := filepath.Join(agentDir, file.name)
+		existing, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		stripped, ok := stripManagedTeamBlock(string(existing))
+		if !ok {
+			continue
+		}
+		next := []byte(stripped)
+		if gErr := guardPersonalityWrite(path, existing, next); gErr != nil {
+			return changed, gErr
+		}
+		if err := os.WriteFile(path, next, 0600); err != nil {
+			return changed, fmt.Errorf("failed to update %s: %w", file.name, err)
+		}
+		*file.field = strings.TrimSpace(stripped)
+		changed = true
+	}
+	if changed {
+		invalidatePersonalityCache(agentDir)
+	}
+	return changed, nil
+}
+
+func stripManagedTeamBlock(existing string) (string, bool) {
+	stripped := existing
+	changed := false
+	for {
+		start := strings.Index(stripped, teamManagedStart)
+		if start < 0 {
+			break
+		}
+		end := strings.Index(stripped[start:], teamManagedEnd)
+		if end < 0 {
+			break
+		}
+		end = start + end + len(teamManagedEnd)
+		stripped = stripped[:start] + stripped[end:]
+		changed = true
+	}
+	if !changed {
+		return existing, false
+	}
+	stripped = strings.TrimSpace(stripped)
+	if stripped == "" {
+		return "", true
+	}
+	return stripped + "\n", true
+}
+
 func upsertManagedBlock(existing, body string) string {
 	body = strings.TrimSpace(body)
 	if body == "" {
@@ -200,13 +316,17 @@ func upsertManagedBlock(existing, body string) string {
 	if existing == "" {
 		return block
 	}
-	if start := strings.Index(existing, teamManagedStart); start >= 0 {
-		if end := strings.Index(existing, teamManagedEnd); end >= start {
-			end += len(teamManagedEnd)
-			updated := strings.TrimSpace(existing[:start] + block + existing[end:])
-			return strings.TrimSpace(updated)
+	if strings.Contains(existing, teamManagedStart) {
+		stripped, ok := stripManagedTeamBlock(existing)
+		if ok {
+			stripped = strings.TrimSpace(stripped)
+			if stripped == "" {
+				return block
+			}
+			return stripped + "\n\n" + block
 		}
 	}
+	// Malformed old block: keep user content as-is and append a fresh managed block.
 	return strings.TrimSpace(existing + "\n\n" + block)
 }
 
@@ -234,6 +354,21 @@ func upsertManagedTeamSkill(s *store.Store, ctx teamBehaviorContext) error {
 	}
 	_, err = s.AddAgentSkill(ctx.Identity.ID, teamSkillName, "Managed HyperClaw Team Mode operating guide", content, "custom", "", "HyperClaw", "1", []string{"team-mode", string(ctx.Role)})
 	return err
+}
+
+func disableManagedTeamSkill(s *store.Store, agentID string) error {
+	skills, err := s.ListAgentSkills(agentID)
+	if err != nil {
+		return err
+	}
+	for _, skill := range skills {
+		if skill.Name == teamSkillName && skill.Enabled {
+			if err := s.ToggleAgentSkill(skill.ID, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func buildTeamSkillContent(ctx teamBehaviorContext) string {

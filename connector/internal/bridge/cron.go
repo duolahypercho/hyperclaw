@@ -84,35 +84,6 @@ func readCronJobsFile(p Paths) ([]map[string]interface{}, error) {
 	return file.Jobs, nil
 }
 
-func getLastRunForJob(p Paths, jobID string) (runAtMs float64, status string, found bool) {
-	runsDir := p.CronRunsDir()
-	filePath := filepath.Join(runsDir, jobID+".jsonl")
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return 0, "", false
-	}
-	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	// Scan from end for last line with runAtMs
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(lines[i])
-		if line == "" {
-			continue
-		}
-		var obj map[string]interface{}
-		if err := json.Unmarshal([]byte(line), &obj); err != nil {
-			continue
-		}
-		if ram, ok := obj["runAtMs"].(float64); ok {
-			s, _ := obj["status"].(string)
-			if s == "" {
-				s = "idle"
-			}
-			return ram, strings.ToLower(s), true
-		}
-	}
-	return 0, "", false
-}
-
 // getCronsFromJSON reads crons from jobs.json and enriches with last run data.
 func getCronsFromJSON(p Paths) []parsedCronJob {
 	jobs, err := readCronJobsFile(p)
@@ -170,12 +141,32 @@ func getCronsFromJSON(p Paths) []parsedCronJob {
 			lastStatus, _ = state["lastStatus"].(string)
 		}
 
-		// Fall back to run file if no last run info in state
-		if lastRunAtMs == nil && id != "" {
-			if ram, s, found := getLastRunForJob(p, id); found {
-				v := int64(ram)
-				lastRunAtMs = &v
-				lastStatus = s
+		// Fall back to the latest run file because OpenClaw jobs.json may keep state empty.
+		if id != "" && (lastRunAtMs == nil || nextRun == nil || !hasFutureMillis(*nextRun) || strings.TrimSpace(lastStatus) == "") {
+			runs := readRunsForJob(p, id)
+			if len(runs) > 0 {
+				latest := runs[len(runs)-1]
+				if lastRunAtMs == nil {
+					if ram, ok := numericMillis(latest["runAtMs"]); ok {
+						lastRunAtMs = &ram
+					}
+				}
+				if nextRun == nil || !hasFutureMillis(*nextRun) {
+					if nrm, ok := numericMillis(latest["nextRunAtMs"]); ok && nrm > nowMillis() {
+						nextRun = &nrm
+					}
+				}
+				if strings.TrimSpace(lastStatus) == "" {
+					if s, ok := latest["status"].(string); ok && s != "" {
+						lastStatus = strings.ToLower(s)
+					}
+				}
+			}
+		}
+
+		if nextRun == nil || !hasFutureMillis(*nextRun) {
+			if nextRunAtMs, ok := computeNextOpenClawRunAtMs(job); ok {
+				nextRun = &nextRunAtMs
 			}
 		}
 

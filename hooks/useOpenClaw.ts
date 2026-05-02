@@ -19,6 +19,7 @@ import {
   probeGatewayHealth,
   probeConnectorHealth,
 } from "$/lib/openclaw-gateway-ws";
+import { shouldBlockRemoteHubFallback } from "$/lib/local-connector-routing";
 import type {
   OpenClawCommandResult,
   OpenClawInstallCheck,
@@ -316,11 +317,12 @@ export function useOpenClaw(autoRefreshMs = 0) {
   const fetchModels = useCallback(async () => {
     try {
       const { gatewayConnection, subscribeGatewayConnection, getGatewayConnectionState } = await import("$/lib/openclaw-gateway-ws");
+      const localOnly = shouldBlockRemoteHubFallback();
 
       // If not connected yet, wait up to 8s for the gateway to connect.
       // This avoids a race where refreshAll fires before the WS handshake completes,
       // causing models to silently stay as defaults until the next 30s refresh cycle.
-      if (!gatewayConnection.connected) {
+      if (!gatewayConnection.connected && !localOnly) {
         const connected = await new Promise<boolean>((resolve) => {
           // Already connected by the time we check
           if (gatewayConnection.connected) { resolve(true); return; }

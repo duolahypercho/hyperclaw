@@ -68,6 +68,20 @@ export function AgentMonogram({
   const resolvedAgentId = agentId ?? task?.assignedAgentId;
   const rosterAgent = resolvedAgentId ? lookup.get(resolvedAgentId) : undefined;
   const mockAgent = resolvedAgentId ? getAgent(resolvedAgentId) : undefined;
+  const isUnassignedName = name?.trim().toLowerCase() === "unassigned";
+
+  if (task && !task.assignedAgentId && !task.assignedAgent) {
+    return null;
+  }
+
+  if (!task && !agentId && isUnassignedName) {
+    return null;
+  }
+
+  if (task?.assignedAgentId && !rosterAgent && !mockAgent) {
+    return null;
+  }
+
   const resolvedName =
     name ??
     rosterAgent?.name ??

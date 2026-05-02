@@ -13,7 +13,7 @@ const HyperchoIcon = ({ className }: Props) => {
       height={100}
       priority
       className={cn(
-        "logo w-auto h-[1.6em] my-0 mx-[0.3em] rounded ",
+        "logo w-auto h-[1.6em] my-0 mx-[0.3em] rounded-sm ",
         className
       )}
     />

@@ -35,6 +35,7 @@ import { createMergeToolCalls } from "./gateway-chat/mergeToolCallsWithResults";
 import { exportChatAsMarkdown } from "./gateway-chat/exportChat";
 import { SlashCommandMenu } from "./gateway-chat/SlashCommandMenu";
 import { SLASH_COMMANDS, type SlashCommand } from "./gateway-chat/slashCommands";
+import { createNewChatSessionKey } from "./gateway-chat/sessionKeys";
 import { useRuntimeModels } from "@OS/AI/core/hook/use-runtime-models";
 import { OPEN_AGENT_CHAT_EVENT } from "./StatusWidget";
 
@@ -430,6 +431,18 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
     setSessionKey(newSessionKey);
   }, [activeTab, setSessionKey]);
 
+  const handleStartNewChat = useCallback(() => {
+    if (isLoading) stopGeneration();
+    const newSessionKey = createNewChatSessionKey(currentAgentId, activeTab);
+    setSelectedSessionKey(newSessionKey);
+    setSessionKey(newSessionKey);
+    setMessageQueue([]);
+    setQuotedMessage(null);
+    resetToolStates();
+    setShowScrollButton(false);
+    inputHandleRef.current?.clear();
+  }, [activeTab, currentAgentId, isLoading, resetToolStates, setSessionKey, stopGeneration]);
+
   // Drag and drop state
   const [isDragging, setIsDragging] = useState(false);
   const [dragCounter, setDragCounter] = useState(0);
@@ -631,13 +644,15 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
     };
   }, []);
 
-  // Reset chat
-  const reset = useCallback(() => {
+  const clearVisibleChat = useCallback(() => {
     if (isLoading) stopGeneration();
     clearChat();
+    setMessageQueue([]);
+    setQuotedMessage(null);
+    resetToolStates();
     setShowScrollButton(false);
     inputHandleRef.current?.clear();
-  }, [isLoading, stopGeneration, clearChat]);
+  }, [isLoading, stopGeneration, clearChat, resetToolStates]);
 
   // Lightweight input change handler — only updates slash state when needed
   const handleInputChange = useCallback((value: string) => {
@@ -658,10 +673,10 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
 
       switch (cmd.name) {
         case "/new":
-          reset();
+          handleStartNewChat();
           break;
         case "/clear":
-          reset();
+          clearVisibleChat();
           break;
         case "/stop":
           stopGeneration();
@@ -676,7 +691,7 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
           break;
       }
     },
-    [reset, stopGeneration, handleExport, handleReloadChat]
+    [handleStartNewChat, clearVisibleChat, stopGeneration, handleExport, handleReloadChat]
   );
 
   // Handle send — queues the message if AI is still generating
@@ -890,7 +905,7 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
             onAgentChange={handleAgentChange}
             selectedSessionKey={selectedSessionKey}
             onSessionChange={handleSessionChange}
-            onNewChat={reset}
+            onNewChat={handleStartNewChat}
             onReloadChat={handleReloadChat}
             onExport={handleExport}
             onFetchSessions={fetchSessions}
@@ -1331,9 +1346,9 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
                   inputRef={inputHandleRef}
                   tokenUsage={tokenUsage}
                   contextLimit={contextLimit}
+                  runtimeModels={runtimeModels}
+                  runtimeModelsLoading={runtimeModelsLoading}
                   {...(activeTab !== "openclaw" ? {
-                    runtimeModels,
-                    runtimeModelsLoading,
                     currentModel: currentModel || "",
                     onModelChange: setCurrentModel,
                   } : {})}

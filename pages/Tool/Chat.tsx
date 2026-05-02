@@ -40,7 +40,7 @@ const Index = () => {
           },
           {
             id: "chat-clear-current",
-            label: "Clear chat",
+            label: "New chat",
             icon: <Plus />,
             variant: "secondary" as const,
             onClick: () =>

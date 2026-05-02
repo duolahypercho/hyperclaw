@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { hubFetch } from "$/lib/hub-direct";
+import { shouldBlockRemoteHubFallback } from "$/lib/local-connector-routing";
 import { useUser } from "$/Providers/UserProv";
 
 interface PairingInfo {
@@ -174,7 +175,7 @@ export default function DeviceSetup({ onComplete, embedded }: DeviceSetupProps) 
         if (!gatewayConnection.wsUrl) {
           const token = await getUserToken();
           const hubUrl = process.env.NEXT_PUBLIC_HUB_API_URL || "";
-          if (token && hubUrl) {
+          if (token && hubUrl && !shouldBlockRemoteHubFallback()) {
             connectGatewayWs(hubUrl, { token, hubMode: true });
           }
         }
@@ -338,7 +339,7 @@ export default function DeviceSetup({ onComplete, embedded }: DeviceSetupProps) 
                   {/* Action */}
                   <div className="flex justify-end pt-2">
                     <Button size="sm" onClick={() => setStep("waiting")}>
-                      I've run it
+                      I&apos;ve run it
                     </Button>
                   </div>
                 </div>

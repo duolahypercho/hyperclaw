@@ -5,13 +5,14 @@ import { Button } from "@/components/ui/button";
 import { useUser } from "$/Providers/UserProv";
 import { useToast } from "@/components/ui/use-toast";
 import SettingsSkeleton from "$/components/Tool/Setting/pages/skelenton";
+import { saveLocalUserProfile } from "$/lib/hyperclaw-bridge-client";
 import HyperchoLogoInput, {
   HyperchoLogoInputRef,
 } from "$/components/UI/HyperchoLogoInput";
 import { Loader2 } from "lucide-react";
 
 const General = () => {
-  const { userInfo, setId } = useUser();
+  const { userInfo, setId, status } = useUser();
   const profilePicRef = useRef<HyperchoLogoInputRef>(null);
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
@@ -20,7 +21,7 @@ const General = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [aboutme, setAboutme] = useState("");
   const [hasPendingAboutme, setHasPendingAboutme] = useState(false);
-  const { toast, dismiss } = useToast();
+  const { toast } = useToast();
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -48,7 +49,15 @@ const General = () => {
   const handleProfilePicChange = (value: string | File) => {
     if (typeof value === "string") {
       setProfilePic(value);
+      return;
     }
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        setProfilePic(reader.result);
+      }
+    };
+    reader.readAsDataURL(value);
   };
 
   const handleSaveChanges = async () => {
@@ -57,6 +66,7 @@ const General = () => {
       // Prepare update data object
       const updateData: {
         username?: string;
+        email?: string;
         profilePic?: string;
         aboutme?: string;
       } = {};
@@ -64,16 +74,22 @@ const General = () => {
       // Handle profile picture upload if needed
       if (hasPendingProfilePic && profilePicRef.current) {
         try {
-          // Upload new file if exists (component handles S3 cleanup automatically)
-          const uploadedKey = await profilePicRef.current.upload();
+          let newProfilePicValue = profilePic;
 
-          // Update profile picture (either with new key or empty string for removal)
-          const newProfilePicValue = uploadedKey || profilePic;
+          if (status === "authenticated") {
+            // Upload new file if exists (component handles S3 cleanup automatically)
+            const uploadedKey = await profilePicRef.current.upload();
+            newProfilePicValue = uploadedKey || profilePic;
+          } else {
+            profilePicRef.current.resetPendingChanges();
+          }
+
+          // Update profile picture (either with new key/data URI or empty string for removal)
           updateData.profilePic = newProfilePicValue;
           setProfilePic(newProfilePicValue);
 
           // Reset pending state
-          if (!uploadedKey) {
+          if (!newProfilePicValue) {
             profilePicRef.current.resetPendingChanges();
           }
           setHasPendingProfilePic(false);
@@ -94,24 +110,65 @@ const General = () => {
         updateData.username = username;
       }
 
+      // Add email if changed. Self-hosted/local mode persists this as profile metadata.
+      if (email !== userInfo?.email) {
+        updateData.email = email;
+      }
+
       // Add about me if changed
       if (hasPendingAboutme && aboutme !== userInfo?.aboutme) {
         updateData.aboutme = aboutme;
         setHasPendingAboutme(false);
       }
 
-      // Community Edition stores profile changes in the local session context.
+      // Community Edition stores profile changes in the local connector SQLite DB.
       if (Object.keys(updateData).length > 0) {
-        await setId({
+        const nextName = updateData.username ?? userInfo.username;
+        const [nextFirstName = "Local", ...nextLastNameParts] = nextName.split(" ");
+        const nextUserInfo = {
           ...userInfo,
-          username: updateData.username ?? userInfo.username,
+          email: updateData.email ?? userInfo.email,
+          username: nextName,
+          Firstname: nextFirstName,
+          Lastname: nextLastNameParts.join(" "),
           profilePic: updateData.profilePic ?? userInfo.profilePic,
           aboutme: updateData.aboutme ?? userInfo.aboutme,
+        };
+
+        let localSaveError = "";
+        let localSaveStorage: "sqlite" | "browser" = "sqlite";
+        if (status !== "authenticated") {
+          const saved = await saveLocalUserProfile({
+            name: nextUserInfo.username,
+            email: nextUserInfo.email,
+            profilePic: nextUserInfo.profilePic,
+            aboutme: nextUserInfo.aboutme,
+            updatedAt: Date.now(),
+          });
+          if (saved.success === false) {
+            localSaveError = saved.error || "Failed to save profile locally";
+          }
+          localSaveStorage = saved.storage ?? "sqlite";
+        }
+
+        await setId({
+          ...nextUserInfo,
         });
+
+        if (localSaveError) {
+          throw new Error(
+            `Profile updated for this session, but local persistence failed: ${localSaveError}`
+          );
+        }
 
         toast({
           title: "Success",
-          description: "Profile updated locally",
+          description:
+            status === "authenticated"
+              ? "Profile updated for this session"
+              : localSaveStorage === "browser"
+              ? "Profile saved in browser storage. Restart the connector to enable SQLite persistence."
+              : "Profile saved locally",
         });
       }
     } catch (error) {
@@ -129,6 +186,7 @@ const General = () => {
   const checkforUpdate = () => {
     return (
       username !== userInfo?.username ||
+      email !== userInfo?.email ||
       hasPendingProfilePic ||
       hasPendingAboutme
     );
@@ -168,10 +226,10 @@ const General = () => {
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="username">Username</Label>
+          <Label htmlFor="username">Name</Label>
           <HyperchoInput
             id="username"
-            placeholder="Enter your username"
+            placeholder="Enter your name"
             value={username || ""}
             onChange={(e) => setUsername(e.target.value)}
             variant={"hypercho"}
@@ -183,8 +241,10 @@ const General = () => {
             id="email"
             type="email"
             placeholder="Enter your email"
-            disabled={true}
+            disabled={status === "authenticated"}
             value={email || ""}
+            onChange={(e) => setEmail(e.target.value)}
+            variant={"hypercho"}
           />
         </div>
         <div className="space-y-2">

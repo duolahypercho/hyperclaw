@@ -52,7 +52,7 @@ export function ProjectIssueBoard({
         return (
           <section
             key={column.id}
-            className="bg-secondary flex min-w-[260px] flex-col rounded-xl border border-solid border-border/70 bg-card/40"
+            className="bg-secondary flex min-w-[240px] flex-col rounded-xl border border-solid border-border/70 bg-card/40"
           >
             <header className="flex items-center justify-between border-b border-l-0 border-r-0 border-t-0 border-solid border-border px-3 py-2.5">
               <div className="flex items-center gap-2 text-[12.5px] font-medium text-foreground">

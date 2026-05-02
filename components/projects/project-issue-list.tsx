@@ -55,7 +55,7 @@ export function ProjectIssueList({
   }
 
   return (
-    <div className="space-y-6">
+    <div>
       {PROJECT_ISSUE_COLUMNS.map((column) => {
         const columnIssues = grouped[column.id] ?? [];
         if (columnIssues.length === 0) return null;
@@ -70,7 +70,7 @@ export function ProjectIssueList({
               onToggle={() => toggle(column.id)}
             />
             {!isCollapsed ? (
-              <ul className="divide-y divide-border/60 border-b border-border/60">
+              <ul className="divide-y divide-border/60 border-l-0 border-r-0 border-t-0 border-solid border-b-1 border-border/60">
                 {columnIssues.map((issue) => (
                   <ListIssueRow
                     key={issue._id}
@@ -107,7 +107,7 @@ function ListGroupHeader({
       type="button"
       onClick={onToggle}
       aria-expanded={!collapsed}
-      className="flex w-full items-center gap-2 border-b border-border/60 py-2 text-left transition-colors hover:bg-muted/30"
+      className="flex w-full items-center gap-2 border-b border-l-0 border-r-0 border-t-0 border-solid border-border/60 py-3 px-4 text-left transition-colors hover:bg-muted/30"
     >
       <Chevron className="h-3 w-3 text-muted-foreground/70" />
       <Icon className={cn("h-3.5 w-3.5", column.iconClass)} />
@@ -151,7 +151,7 @@ function ListIssueRow({
             onOpenIssue(issue._id);
           }
         }}
-        className="grid cursor-pointer grid-cols-[88px_44px_1fr_auto] items-center gap-3 px-1 py-2 transition-colors hover:bg-muted/30"
+        className="grid cursor-pointer grid-cols-[55px_44px_1fr_auto] items-center gap-3 px-4 py-3 transition-colors hover:bg-muted/30"
       >
         {/* Issue key */}
         <span
@@ -165,7 +165,7 @@ function ListIssueRow({
         <PriorityChip rank={priority.rank} dotClass={priority.dotClass} />
 
         {/* Title */}
-        <span className="truncate text-[13px] font-medium text-foreground">
+        <span className="truncate text-[13px] font-normal text-foreground/90">
           {issue.title || "Untitled issue"}
         </span>
 

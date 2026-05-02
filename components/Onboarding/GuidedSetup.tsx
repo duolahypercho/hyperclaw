@@ -67,6 +67,12 @@ const AGENT_NAME_MAX_LENGTH = 40;
 const AGENT_ROLE_MAX_LENGTH = 64;
 const AGENT_DESCRIPTION_MAX_LENGTH = 220;
 const CHANNEL_TARGET_MAX_LENGTH = 120;
+const OPENCLAW_DOCTOR_FIX_TIMEOUT_MS = 600_000;
+const OPENCLAW_DOCTOR_FIX_MAX_ATTEMPTS = 2;
+const OPENCLAW_SECURITY_AUDIT_TIMEOUT_MS = 600_000;
+const OPENCLAW_SECURITY_AUDIT_MAX_ATTEMPTS = 2;
+const OPENCLAW_STATUS_ALL_TIMEOUT_MS = 120_000;
+const OPENCLAW_STATUS_ALL_MAX_ATTEMPTS = 2;
 
 interface GuidedState {
   completedSteps: number[];
@@ -557,15 +563,35 @@ function buildLaunchPlan(state: GuidedState): LaunchProgressItem[] {
   }
 
   plan.push({
-    key: "runtime-verify",
-    label: "Verify selected runtimes",
-    detail: "Confirm each runtime is reachable before agent setup starts.",
-    status: "pending",
-  });
-  plan.push({
     key: "workspace-state",
     label: "Save workspace setup",
     detail: "Persist company, provider, and channel data for this workspace.",
+    status: "pending",
+  });
+  if (runtimeChoices.includes("openclaw")) {
+    plan.push({
+      key: "openclaw-doctor",
+      label: "Run OpenClaw Doctor",
+      detail: "Repair OpenClaw config after install and channel setup.",
+      status: "pending",
+    });
+    plan.push({
+      key: "openclaw-security-audit",
+      label: "Run OpenClaw security audit",
+      detail: "Run a deep security audit after OpenClaw config repair.",
+      status: "pending",
+    });
+    plan.push({
+      key: "openclaw-status",
+      label: "Check OpenClaw status",
+      detail: "Capture a full OpenClaw status snapshot after setup checks.",
+      status: "pending",
+    });
+  }
+  plan.push({
+    key: "runtime-verify",
+    label: "Verify selected runtimes",
+    detail: "Confirm each runtime is reachable before agent setup starts.",
     status: "pending",
   });
 
@@ -1866,6 +1892,135 @@ export default function GuidedSetup({ onComplete }: GuidedSetupProps) {
       guidedState.agentProfiles || [],
       guidedState.runtimeChannelConfigs || [],
     );
+    let openClawDoctorCompleted = false;
+    let openClawSecurityAuditCompleted = false;
+    let openClawStatusCompleted = false;
+
+    const runOpenClawDoctorFix = async () => {
+      if (!runtimeChoices.includes("openclaw") || openClawDoctorCompleted) return;
+      await runProgressStep("openclaw-doctor", async () => {
+        let lastError = "OpenClaw Doctor could not fix the configuration.";
+        for (let attempt = 1; attempt <= OPENCLAW_DOCTOR_FIX_MAX_ATTEMPTS; attempt += 1) {
+          try {
+            let timeoutId: ReturnType<typeof setTimeout> | undefined;
+            const result = await Promise.race([
+              bridgeInvoke("openclaw-doctor-fix", {}),
+              new Promise<never>((_, reject) => {
+                timeoutId = setTimeout(() => reject(new Error("OpenClaw Doctor timed out.")), OPENCLAW_DOCTOR_FIX_TIMEOUT_MS);
+              }),
+            ]).finally(() => {
+              if (timeoutId) clearTimeout(timeoutId);
+            }) as {
+              success?: boolean;
+              error?: string;
+              stdout?: string;
+              stderr?: string;
+            };
+            if (result?.success) {
+              openClawDoctorCompleted = true;
+              return "OpenClaw Doctor completed.";
+            }
+            lastError = result?.error || result?.stderr || lastError;
+          } catch (error) {
+            lastError = error instanceof Error ? error.message : lastError;
+          }
+          if (attempt < OPENCLAW_DOCTOR_FIX_MAX_ATTEMPTS) {
+            updateProgress("openclaw-doctor", {
+              status: "running",
+              detail: `OpenClaw Doctor did not finish cleanly. Retrying (${attempt + 1}/${OPENCLAW_DOCTOR_FIX_MAX_ATTEMPTS})…`,
+            });
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+          }
+        }
+        throw new Error(lastError);
+      });
+    };
+
+    const runOpenClawSecurityAuditDeep = async () => {
+      if (!runtimeChoices.includes("openclaw") || openClawSecurityAuditCompleted) return;
+      await runProgressStep("openclaw-security-audit", async () => {
+        let lastError = "OpenClaw security audit could not finish.";
+        for (let attempt = 1; attempt <= OPENCLAW_SECURITY_AUDIT_MAX_ATTEMPTS; attempt += 1) {
+          try {
+            let timeoutId: ReturnType<typeof setTimeout> | undefined;
+            const result = await Promise.race([
+              bridgeInvoke("openclaw-security-audit-deep", {}),
+              new Promise<never>((_, reject) => {
+                timeoutId = setTimeout(() => reject(new Error("OpenClaw security audit timed out.")), OPENCLAW_SECURITY_AUDIT_TIMEOUT_MS);
+              }),
+            ]).finally(() => {
+              if (timeoutId) clearTimeout(timeoutId);
+            }) as {
+              success?: boolean;
+              error?: string;
+              stdout?: string;
+              stderr?: string;
+            };
+            if (result?.success) {
+              openClawSecurityAuditCompleted = true;
+              return "OpenClaw deep security audit completed.";
+            }
+            lastError = result?.error || result?.stderr || lastError;
+          } catch (error) {
+            lastError = error instanceof Error ? error.message : lastError;
+          }
+          if (attempt < OPENCLAW_SECURITY_AUDIT_MAX_ATTEMPTS) {
+            updateProgress("openclaw-security-audit", {
+              status: "running",
+              detail: `OpenClaw security audit did not finish cleanly. Retrying (${attempt + 1}/${OPENCLAW_SECURITY_AUDIT_MAX_ATTEMPTS})…`,
+            });
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+          }
+        }
+        throw new Error(lastError);
+      });
+    };
+
+    const runOpenClawStatusAll = async () => {
+      if (!runtimeChoices.includes("openclaw") || openClawStatusCompleted) return;
+      await runProgressStep("openclaw-status", async () => {
+        let lastError = "OpenClaw status check could not finish.";
+        for (let attempt = 1; attempt <= OPENCLAW_STATUS_ALL_MAX_ATTEMPTS; attempt += 1) {
+          try {
+            let timeoutId: ReturnType<typeof setTimeout> | undefined;
+            const result = await Promise.race([
+              bridgeInvoke("openclaw-status-all", {}),
+              new Promise<never>((_, reject) => {
+                timeoutId = setTimeout(() => reject(new Error("OpenClaw status check timed out.")), OPENCLAW_STATUS_ALL_TIMEOUT_MS);
+              }),
+            ]).finally(() => {
+              if (timeoutId) clearTimeout(timeoutId);
+            }) as {
+              success?: boolean;
+              error?: string;
+              stdout?: string;
+              stderr?: string;
+            };
+            if (result?.success) {
+              openClawStatusCompleted = true;
+              return "OpenClaw status snapshot completed.";
+            }
+            lastError = result?.error || result?.stderr || lastError;
+          } catch (error) {
+            lastError = error instanceof Error ? error.message : lastError;
+          }
+          if (attempt < OPENCLAW_STATUS_ALL_MAX_ATTEMPTS) {
+            updateProgress("openclaw-status", {
+              status: "running",
+              detail: `OpenClaw status check did not finish cleanly. Retrying (${attempt + 1}/${OPENCLAW_STATUS_ALL_MAX_ATTEMPTS})…`,
+            });
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+          }
+        }
+        throw new Error(lastError);
+      });
+    };
+
+    const runOpenClawPostInstallChecks = async () => {
+      await runOpenClawDoctorFix();
+      await runOpenClawSecurityAuditDeep();
+      await runOpenClawStatusAll();
+    };
 
     const runLegacyProvisionWorkspace = async () => {
       const legacyResult = await bridgeInvoke("onboarding-provision-workspace", {
@@ -1903,6 +2058,7 @@ export default function GuidedSetup({ onComplete }: GuidedSetupProps) {
       if (!legacyResult?.success) {
         throw new Error(legacyResult?.error || "Workspace provisioning failed.");
       }
+      await runOpenClawPostInstallChecks();
     };
 
     const isLegacyOnboardingActionError = (value: unknown): boolean => {
@@ -2490,6 +2646,8 @@ export default function GuidedSetup({ onComplete }: GuidedSetupProps) {
         updateProgress("workspace-state", { status: "failed", detail: err instanceof Error ? err.message : "Failed." });
         throw err;
       }
+
+      await runOpenClawPostInstallChecks();
 
       // Verify runtimes are reachable before provisioning agents.
       updateProgress("runtime-verify", { status: "running", detail: "Confirming runtimes\u2026" });

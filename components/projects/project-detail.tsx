@@ -18,6 +18,14 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { useProjects } from "$/components/Tool/Projects/provider/projectsProvider";
@@ -37,6 +45,7 @@ import {
   type ProjectIssueFiltersValue,
 } from "./project-issue-filters";
 import { ProjectIssueList } from "./project-issue-list";
+import { EditProjectDrawer } from "./edit-project-drawer";
 import {
   collectAssignees,
   collectLabels,
@@ -49,6 +58,7 @@ import {
   type ProjectIssueStatus,
 } from "./project-issue-utils";
 import type { Task } from "./task-types";
+import { useProjectLeadHeartbeat } from "./use-project-lead-heartbeat";
 import { useProjectTasks } from "./use-project-tasks";
 
 interface ProjectIssueWorkspaceProps {
@@ -77,14 +87,26 @@ export function ProjectIssueWorkspace({ projectId }: ProjectIssueWorkspaceProps)
     handleAddNextStep,
     handleEditTask,
     handleStatusChange,
+    refresh: refreshTasks,
   } = useProjectTasks();
-  const { projects, selectedProject, selectProject, loading } = useProjects();
+  const {
+    projects,
+    selectedProject,
+    selectProject,
+    loading,
+    refresh: refreshProjects,
+    updateProject,
+    addMember,
+  } = useProjects();
   const { agents: rosterAgents, byId: rosterById } = useProjectAgentRoster();
 
   const [filters, setFilters] = React.useState<ProjectIssueFiltersValue>(DEFAULT_FILTERS);
   const [isCreating, setIsCreating] = React.useState(false);
   const [pendingCreateStatus, setPendingCreateStatus] =
     React.useState<ProjectIssueStatus>("pending");
+  const [editingProjectId, setEditingProjectId] = React.useState<string | null>(null);
+  const [leadDialogDismissedFor, setLeadDialogDismissedFor] = React.useState<string | null>(null);
+  const [assigningLeadId, setAssigningLeadId] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     if (projectId) void selectProject(projectId);
@@ -110,7 +132,7 @@ export function ProjectIssueWorkspace({ projectId }: ProjectIssueWorkspaceProps)
         name: realProject.name,
         description: realProject.description,
         leadAgentId: realProject.leadAgentId ?? null,
-        owner: realProject.leadAgentId || "Project lead",
+        owner: "Project lead",
         status: realProject.status,
         agents: realProject.members?.map((m) => m.agentId) ?? [],
         emoji: realProject.emoji as string | undefined,
@@ -153,13 +175,23 @@ export function ProjectIssueWorkspace({ projectId }: ProjectIssueWorkspaceProps)
   const leadRosterAgent = project.leadAgentId
     ? rosterById.get(project.leadAgentId)
     : undefined;
-  const leadMockAgent = project.leadAgentId ? getAgent(project.leadAgentId) : undefined;
+  const leadMockAgent = !realProject && project.leadAgentId ? getAgent(project.leadAgentId) : undefined;
+  const activeLeadAgentId = leadRosterAgent ? project.leadAgentId : null;
   const leadName =
-    leadRosterAgent?.name || leadMockAgent?.name || project.owner || "Unassigned";
+    leadRosterAgent?.name || leadMockAgent?.name || "Unassigned";
   // Display-only adapter so existing code that read leadAgent.emoji keeps working.
   const leadAgent = leadRosterAgent
     ? { name: leadRosterAgent.name, emoji: leadRosterAgent.emoji ?? leadRosterAgent.initials }
     : leadMockAgent;
+  const projectRosterAgents = React.useMemo(() => {
+    const projectAgentIds = new Set(project.agents);
+    return rosterAgents.filter((agent) => projectAgentIds.has(agent.id));
+  }, [project.agents, rosterAgents]);
+  const shouldShowLeadDialog =
+    Boolean(realProject && realProject.id === projectId)
+    && !activeLeadAgentId
+    && projectRosterAgents.length > 0
+    && leadDialogDismissedFor !== projectId;
 
   const issuePrefix = React.useMemo(() => getProjectIssuePrefix(project), [project]);
 
@@ -214,6 +246,10 @@ export function ProjectIssueWorkspace({ projectId }: ProjectIssueWorkspaceProps)
     () => projectIssues.find((task) => task._id === selectedIssueId) ?? null,
     [projectIssues, selectedIssueId]
   );
+
+  React.useEffect(() => {
+    if (selectedIssue) setEditingProjectId(null);
+  }, [selectedIssue]);
 
   const updateRouteQuery = React.useCallback(
     (patch: Record<string, string | undefined>) => {
@@ -275,7 +311,7 @@ export function ProjectIssueWorkspace({ projectId }: ProjectIssueWorkspaceProps)
       if (!title) return { ok: false, error: "Title is required." };
 
       try {
-        const leadFallback = project.leadAgentId ?? undefined;
+        const leadFallback = activeLeadAgentId ?? undefined;
         const assignedAgentId = input.assignedAgentId ?? leadFallback;
         const assignedAgentName = assignedAgentId
           ? rosterById.get(assignedAgentId)?.name
@@ -314,7 +350,7 @@ export function ProjectIssueWorkspace({ projectId }: ProjectIssueWorkspaceProps)
       handleAddTask,
       handleOpenIssue,
       pendingCreateStatus,
-      project.leadAgentId,
+      activeLeadAgentId,
       project.name,
       projectId,
       rosterById,
@@ -387,7 +423,46 @@ export function ProjectIssueWorkspace({ projectId }: ProjectIssueWorkspaceProps)
   const nextDueLabel = formatDueLabel(nextDue);
 
   const totalIssues = projectIssues.length;
-  const agentCount = project.agents.length || AGENTS.length;
+  const agentCount = projectRosterAgents.length || (!realProject ? AGENTS.length : 0);
+  const refreshProjectState = React.useCallback(async () => {
+    await Promise.all([
+      refreshTasks(),
+      refreshProjects(),
+      selectProject(projectId),
+    ]);
+  }, [projectId, refreshProjects, refreshTasks, selectProject]);
+  const handleSettingsOpenChange = React.useCallback((open: boolean) => {
+    if (!open) setEditingProjectId(null);
+  }, []);
+  const handleSettingsSaved = React.useCallback(() => {
+    void refreshProjectState();
+  }, [refreshProjectState]);
+  const assignProjectLead = React.useCallback(async (agentId: string) => {
+    setAssigningLeadId(agentId);
+    try {
+      await updateProject(projectId, { leadAgentId: agentId, teamModeEnabled: true });
+      await addMember(projectId, agentId, "lead");
+      setLeadDialogDismissedFor(projectId);
+      await refreshProjectState();
+    } finally {
+      setAssigningLeadId(null);
+    }
+  }, [addMember, projectId, refreshProjectState, updateProject]);
+  const heartbeat = useProjectLeadHeartbeat({
+    projectId,
+    enabled: Boolean(realProject && realProject.id === projectId),
+    onAfterHeartbeat: refreshProjectState,
+  });
+  const heartbeatAssignments = heartbeat.lastResult?.assignments?.length ?? 0;
+  const heartbeatDispatches = heartbeat.lastResult?.dispatches?.length ?? 0;
+  const heartbeatBlockers =
+    heartbeat.lastResult?.dispatches?.filter((dispatch) => dispatch.taskStatus === "blocked").length ?? 0;
+  const heartbeatTimestamp = heartbeat.lastResult?.heartbeatAt
+    ? new Date(heartbeat.lastResult.heartbeatAt).toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : null;
 
   /* ── Detail mode: render the full-page issue view in place ── */
   if (selectedIssue) {
@@ -439,9 +514,9 @@ export function ProjectIssueWorkspace({ projectId }: ProjectIssueWorkspaceProps)
               }}
             >
               <span className="inline-flex items-center gap-1.5">
-                {project.leadAgentId ? (
+                {activeLeadAgentId ? (
                   <AgentMonogram
-                    agentId={project.leadAgentId}
+                    agentId={activeLeadAgentId}
                     name={leadName}
                     initials={leadAgent?.emoji}
                     runtime={leadRosterAgent?.runtime}
@@ -488,6 +563,23 @@ export function ProjectIssueWorkspace({ projectId }: ProjectIssueWorkspaceProps)
                   </span>
                 </>
               ) : null}
+              <MetaDot />
+              <span className="inline-flex items-center gap-1.5">
+                <span className="text-muted-foreground/70">heartbeat</span>
+                <span className={cn("text-foreground", heartbeat.running && "animate-pulse")}>
+                  {heartbeat.running
+                    ? "running"
+                    : heartbeatTimestamp
+                      ? `${heartbeatTimestamp} · ${heartbeatAssignments} assigned · ${heartbeatDispatches} dispatched${heartbeatBlockers ? ` · ${heartbeatBlockers} blocked` : ""}`
+                      : "watching"}
+                </span>
+              </span>
+              {heartbeat.lastError ? (
+                <>
+                  <MetaDot />
+                  <MetaItem label="heartbeat blocked" accent />
+                </>
+              ) : null}
             </div>
           </div>
 
@@ -499,6 +591,7 @@ export function ProjectIssueWorkspace({ projectId }: ProjectIssueWorkspaceProps)
               size="icon"
               className="h-8 w-8 text-muted-foreground hover:text-foreground"
               aria-label="Project settings"
+              onClick={() => setEditingProjectId(projectId)}
             >
               <Settings2 className="h-3.5 w-3.5" />
             </Button>
@@ -513,6 +606,68 @@ export function ProjectIssueWorkspace({ projectId }: ProjectIssueWorkspaceProps)
           </div>
         </header>
 
+        <Dialog
+          open={shouldShowLeadDialog}
+          onOpenChange={(open) => {
+            if (!open) setLeadDialogDismissedFor(projectId);
+          }}
+        >
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Assign a project lead?</DialogTitle>
+              <DialogDescription>
+                This project does not have an active lead. Choose one of this project&apos;s agents to route new issues and heartbeat assignments.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="max-h-72 space-y-2 overflow-y-auto">
+              {projectRosterAgents.map((agent) => (
+                <button
+                  key={agent.id}
+                  type="button"
+                  disabled={assigningLeadId !== null}
+                  onClick={() => void assignProjectLead(agent.id)}
+                  className="flex w-full items-center gap-3 rounded-lg border border-border bg-secondary/60 px-3 py-2 text-left transition-colors hover:bg-secondary disabled:opacity-60"
+                >
+                  <AgentMonogram
+                    agentId={agent.id}
+                    name={agent.name}
+                    initials={agent.emoji ?? agent.initials}
+                    runtime={agent.runtime}
+                    status={agent.status}
+                    avatarData={agent.avatarData}
+                    size="sm"
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium text-foreground">
+                      {agent.name}
+                    </span>
+                    <span className="block truncate text-xs text-muted-foreground">
+                      {agent.subtitle}
+                    </span>
+                  </span>
+                  {assigningLeadId === agent.id ? (
+                    <span className="text-xs text-muted-foreground">Assigning...</span>
+                  ) : null}
+                </button>
+              ))}
+            </div>
+            <DialogFooter>
+              <Button
+                variant="secondary"
+                onClick={() => setLeadDialogDismissedFor(projectId)}
+                disabled={assigningLeadId !== null}
+              >
+                Not now
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+        <EditProjectDrawer
+          projectId={editingProjectId}
+          onOpenChange={handleSettingsOpenChange}
+          onSaved={handleSettingsSaved}
+        />
+
         {/* Inline create — three-tab composer surfaced when "+ New issue" or
          *  a column "+" is clicked. The composer owns its own draft state so
          *  switching tabs preserves what the user has typed. */}
@@ -520,7 +675,7 @@ export function ProjectIssueWorkspace({ projectId }: ProjectIssueWorkspaceProps)
           <InlineIssueComposer
             issuePrefix={issuePrefix}
             status={pendingCreateStatus}
-            defaultAssigneeId={project.leadAgentId ?? undefined}
+            defaultAssigneeId={activeLeadAgentId ?? undefined}
             defaultWorkflowTemplateId={
               realProject?.defaultWorkflowTemplateId ?? null
             }
@@ -548,7 +703,7 @@ export function ProjectIssueWorkspace({ projectId }: ProjectIssueWorkspaceProps)
           />
         </div>
 
-        <div className="min-h-0 flex-1 overflow-auto px-6 py-4 customScrollbar2">
+        <div className="min-h-0 flex-1 overflow-auto px-0 py-0 customScrollbar2">
         {/* Body */}
         {totalIssues === 0 && !loading ? (
           <div className="rounded-xl border border-dashed border-border/70 bg-card/30 p-12 text-center">
@@ -567,7 +722,7 @@ export function ProjectIssueWorkspace({ projectId }: ProjectIssueWorkspaceProps)
             resolveIssueIndex={resolveIssueIndex}
           />
         ) : (
-          <div className={cn("h-full min-h-[560px]")}>
+          <div className={cn("h-full min-h-[560px] py-3 px-2")}>
             <ProjectIssueBoard
               issues={visibleIssues}
               issuePrefix={issuePrefix}
