@@ -7,10 +7,10 @@ const Index: NextPage & { getLayout?: (page: NextPage) => JSX.Element } = () => 
   return (
     <>
       <Head>
-        <title>HyperClaw - OpenClaw Mission Control</title>
+        <title>HyperClaw - Local-first mission control for AI agents</title>
         <meta
           name="description"
-          content="Your local command center for AI assistants. Download OpenClaw Dashboard and manage your AI deployment."
+          content="Run Claude Code, Codex, OpenClaw, Hermes, projects, workflows, knowledge, data, and channels from one local-first AI agent command center."
         />
       </Head>
       <HomeContent />
