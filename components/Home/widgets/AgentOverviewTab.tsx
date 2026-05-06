@@ -30,7 +30,9 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
 import { CronsProvider, useCrons } from "$/components/Tool/Crons/provider/cronsProvider";
-import { getJobNextRunDate } from "$/components/Tool/Crons/utils";
+import { CronJobDetailDialog } from "$/components/Tool/Crons/CronJobDetailDialog";
+import { fetchCronRunsFromBridge, getJobNextRunDate } from "$/components/Tool/Crons/utils";
+import type { CronRunRecord, OpenClawCronJobJson } from "$/types/electron";
 import { formatDistanceToNow } from "date-fns";
 import {
   type AgentStatsSnapshot,
@@ -441,8 +443,22 @@ function ErrorLogSection({ sessions, onOpenSession, showAll, onToggleShowAll }: 
 
 // ── Crons summary (must be inside CronsProvider) ─────────────────────────────────
 
-function CronsSummaryInner({ agentId, showAllCrons, onToggleShowAll }: { agentId: string; showAllCrons?: boolean; onToggleShowAll?: () => void }) {
+function CronsSummaryInner({
+  agentId,
+  showAllCrons,
+  onToggleShowAll,
+  onOpenCronJob,
+  selectedCronJobId,
+}: {
+  agentId: string;
+  showAllCrons?: boolean;
+  onToggleShowAll?: () => void;
+  onOpenCronJob?: (jobId: string) => void;
+  selectedCronJobId?: string | null;
+}) {
   const { jobsForList, parsedCronJobs, runningJobIds } = useCrons();
+  const [runsByJobId, setRunsByJobId] = useState<Record<string, CronRunRecord[]>>({});
+  const [selectedJob, setSelectedJob] = useState<OpenClawCronJobJson | null>(null);
 
   const agentJobs = useMemo(
     () => jobsForList.filter((j) => j.agentId === agentId),
@@ -466,6 +482,37 @@ function CronsSummaryInner({ agentId, showAllCrons, onToggleShowAll }: { agentId
 
   const displayedJobs = showAllCrons ? sortedJobs : sortedJobs.slice(0, 4);
   const hasErrors = agentJobs.some((j) => j.state?.lastStatus === "error");
+  const agentJobIdsKey = useMemo(
+    () => agentJobs.map((job) => job.id).filter(Boolean).join(","),
+    [agentJobs]
+  );
+
+  useEffect(() => {
+    setSelectedJob(null);
+  }, [agentId]);
+
+  useEffect(() => {
+    if (!selectedCronJobId) setSelectedJob(null);
+  }, [selectedCronJobId]);
+
+  useEffect(() => {
+    const jobIds = agentJobIdsKey ? agentJobIdsKey.split(",") : [];
+    if (jobIds.length === 0) {
+      setRunsByJobId({});
+      return;
+    }
+    let cancelled = false;
+    fetchCronRunsFromBridge(jobIds)
+      .then((runs) => {
+        if (!cancelled) setRunsByJobId(runs);
+      })
+      .catch(() => {
+        if (!cancelled) setRunsByJobId({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [agentJobIdsKey]);
 
   if (agentJobs.length === 0) return null;
 
@@ -489,84 +536,134 @@ function CronsSummaryInner({ agentId, showAllCrons, onToggleShowAll }: { agentId
           {hasErrors && <span className="w-1.5 h-1.5 rounded-full bg-destructive/70" />}
         </span>
       </SectionLabel>
-      <div className="space-y-1">
+      <div className="space-y-1 min-w-0">
         {displayedJobs.map((job) => {
-          const isRunning = runningJobIds.includes(job.id);
-          const lastStatus = job.state?.lastStatus;
-          const lastRunMs = job.state?.lastRunAtMs;
-          const nextRun = getJobNextRunDate(job, parsedCronJobs);
-          const nextRunStr = nextRun ? formatDistanceToNow(nextRun, { addSuffix: true }) : "—";
-          const lastRunStr = lastRunMs ? formatDistanceToNow(new Date(lastRunMs), { addSuffix: true }) : "never";
-          const isError = lastStatus === "error";
+            const isRunning = runningJobIds.includes(job.id);
+            const isSelected = onOpenCronJob
+              ? selectedCronJobId === job.id
+              : selectedJob?.id === job.id;
+            const lastStatus = job.state?.lastStatus;
+            const lastRunMs = job.state?.lastRunAtMs;
+            const latestRun = runsByJobId[job.id]?.[0];
+            const resultText = latestRun?.status === "error"
+              ? latestRun.error || latestRun.summary
+              : latestRun?.summary;
+            const nextRun = getJobNextRunDate(job, parsedCronJobs);
+            const nextRunStr = nextRun ? formatDistanceToNow(nextRun, { addSuffix: true }) : "—";
+            const lastRunStr = lastRunMs ? formatDistanceToNow(new Date(lastRunMs), { addSuffix: true }) : "never";
+            const isError = lastStatus === "error";
+            const isSuccess = lastStatus === "success" || lastStatus === "ok" || lastStatus === "completed";
 
-          return (
-            <div
-              key={job.id}
-              className={cn(
-                "flex items-start gap-2 px-2.5 py-1.5 rounded-md border border-solid text-[11px]",
-                isRunning
-                  ? "border-emerald-500/30 bg-emerald-500/5"
-                  : isError
-                  ? "border-destructive/20 bg-destructive/5"
-                  : "border-border"
-              )}
-            >
-              <div className="shrink-0 mt-0.5">
-                {isRunning ? (
-                  <Loader2 className="w-3 h-3 text-emerald-500 animate-spin" />
-                ) : lastStatus === "success" ? (
-                  <CheckCircle2 className="w-3 h-3 text-emerald-500/60" />
-                ) : isError ? (
-                  <XCircle className="w-3 h-3 text-destructive/70" />
-                ) : (
-                  <Clock className="w-3 h-3 text-muted-foreground/30" />
+            return (
+              <button
+                type="button"
+                key={job.id}
+                onClick={() => {
+                  setSelectedJob(job);
+                  onOpenCronJob?.(job.id);
+                }}
+                className={cn(
+                  "flex w-full items-start gap-2 px-2.5 py-1.5 rounded-md border border-solid text-left text-[11px] transition-colors hover:bg-muted/10",
+                  isRunning
+                    ? "border-emerald-500/30 bg-emerald-500/5"
+                    : isError
+                    ? "border-destructive/20 bg-destructive/5"
+                    : "border-border",
+                  isSelected && "border-primary/50 bg-primary/5 hover:bg-primary/10"
                 )}
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-baseline gap-1.5">
-                  <p className="truncate text-foreground/80 flex-1">{job.name || job.id}</p>
-                  {lastStatus && !isRunning && (
-                    <span className={cn(
-                      "text-[8px] font-medium px-1 py-0.5 rounded-full shrink-0",
-                      lastStatus === "success"
-                        ? "bg-emerald-500/10 text-emerald-500"
-                        : "bg-destructive/10 text-destructive"
-                    )}>
-                      {lastStatus}
-                    </span>
+              >
+                <div className="shrink-0 mt-0.5">
+                  {isRunning ? (
+                    <Loader2 className="w-3 h-3 text-emerald-500 animate-spin" />
+                  ) : isSuccess ? (
+                    <CheckCircle2 className="w-3 h-3 text-emerald-500/60" />
+                  ) : isError ? (
+                    <XCircle className="w-3 h-3 text-destructive/70" />
+                  ) : (
+                    <Clock className="w-3 h-3 text-muted-foreground/30" />
                   )}
                 </div>
-                <p className="text-[10px] text-muted-foreground/50 truncate mt-0.5">
-                  {isRunning ? (
-                    "Running now..."
-                  ) : (
-                    <>
-                      <span className="text-muted-foreground/40">Last:</span> {lastRunStr}
-                      <span className="mx-1">·</span>
-                      <span className="text-muted-foreground/40">Next:</span> {nextRunStr}
-                    </>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-baseline gap-1.5">
+                    <p className="truncate text-foreground/80 flex-1">{job.name || job.id}</p>
+                    {lastStatus && !isRunning && (
+                      <span className={cn(
+                        "text-[8px] font-medium px-1 py-0.5 rounded-full shrink-0",
+                        isSuccess
+                          ? "bg-emerald-500/10 text-emerald-500"
+                          : "bg-destructive/10 text-destructive"
+                      )}>
+                        {isSuccess ? "success" : lastStatus}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[10px] text-muted-foreground/50 truncate mt-0.5">
+                    {isRunning ? (
+                      "Running now..."
+                    ) : (
+                      <>
+                        <span className="text-muted-foreground/40">Last:</span> {lastRunStr}
+                        <span className="mx-1">·</span>
+                        <span className="text-muted-foreground/40">Next:</span> {nextRunStr}
+                      </>
+                    )}
+                  </p>
+                  {resultText && (
+                    <p className={cn(
+                      "mt-1 line-clamp-2 whitespace-pre-wrap break-words text-[10px]",
+                      latestRun?.status === "error" ? "text-destructive/70" : "text-foreground/65"
+                    )}>
+                      {resultText}
+                    </p>
                   )}
-                </p>
-              </div>
-            </div>
-          );
+                  <p className="mt-1 text-[9px] text-muted-foreground/45">
+                    Click to view run result and logs
+                  </p>
+                </div>
+              </button>
+            );
         })}
       </div>
+      <CronJobDetailDialog
+        open={!onOpenCronJob && selectedJob !== null}
+        onOpenChange={(open) => {
+          if (!open) setSelectedJob(null);
+        }}
+        job={selectedJob}
+      />
     </div>
   );
 }
 
-function CronsSummary({ agentId, showAllCrons, onToggleShowAll }: { agentId: string; showAllCrons?: boolean; onToggleShowAll?: () => void }) {
+function CronsSummary({
+  agentId,
+  showAllCrons,
+  onToggleShowAll,
+  onOpenCronJob,
+  selectedCronJobId,
+}: {
+  agentId: string;
+  showAllCrons?: boolean;
+  onToggleShowAll?: () => void;
+  onOpenCronJob?: (jobId: string) => void;
+  selectedCronJobId?: string | null;
+}) {
   return (
     <CronsProvider>
-      <CronsSummaryInner agentId={agentId} showAllCrons={showAllCrons} onToggleShowAll={onToggleShowAll} />
+      <CronsSummaryInner
+        agentId={agentId}
+        showAllCrons={showAllCrons}
+        onToggleShowAll={onToggleShowAll}
+        onOpenCronJob={onOpenCronJob}
+        selectedCronJobId={selectedCronJobId}
+      />
     </CronsProvider>
   );
 }
 
 // ── Memory Search toggle ─────────────────────────────────────────────────────────
 
-function MemorySearchToggle({ agentId }: { agentId: string }) {
+export function MemorySearchToggle({ agentId, embedded = false }: { agentId: string; embedded?: boolean }) {
   const [enabled, setEnabled] = useState(false);
   const [provider, setProvider] = useState(MEMORY_SEARCH_PROVIDERS[0].id);
   const [model, setModel] = useState(getDefaultMemorySearchModel(MEMORY_SEARCH_PROVIDERS[0].id));
@@ -692,15 +789,20 @@ function MemorySearchToggle({ agentId }: { agentId: string }) {
     : [model, ...selectedProvider.models];
 
   return (
-    <div className="rounded-xl border border-solid border-primary/10 bg-background/45 p-3 shadow-sm">
+    <div className={cn(
+      "space-y-3",
+      !embedded && "rounded-xl border border-solid border-primary/10 bg-background/45 p-3 shadow-sm"
+    )}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 space-y-1">
-          <div className="flex items-center gap-1.5">
-            <Database className="h-3.5 w-3.5 text-primary" />
-            <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-              Memory Search
-            </span>
-          </div>
+          {!embedded && (
+            <div className="flex items-center gap-1.5">
+              <Database className="h-3.5 w-3.5 text-primary" />
+              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                Memory Search
+              </span>
+            </div>
+          )}
           <p className="text-[11px] leading-5 text-muted-foreground/70">
             {enabled
               ? `Semantic recall is using ${selectedProvider.name}.`
@@ -719,7 +821,7 @@ function MemorySearchToggle({ agentId }: { agentId: string }) {
         </div>
       </div>
 
-      <div className={cn("mt-3 grid gap-2 sm:grid-cols-2", !enabled && "opacity-60")}>
+      <div className={cn("grid gap-2 sm:grid-cols-2", !enabled && "opacity-60")}>
         <div className="space-y-1.5">
           <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/60">
             Provider
@@ -785,6 +887,8 @@ interface AgentOverviewTabProps {
   readSessions: Set<string>;
   unreadCount: number;
   onOpenSession?: (key: string) => void;
+  onOpenCronJob?: (jobId: string) => void;
+  selectedCronJobId?: string | null;
   onNewChat?: () => void;
   /** If true, the runtime is unavailable and chat actions are disabled */
   runtimeUnavailable?: boolean;
@@ -799,6 +903,8 @@ export default function AgentOverviewTab({
   readSessions,
   unreadCount,
   onOpenSession,
+  onOpenCronJob,
+  selectedCronJobId,
   onNewChat,
   runtimeUnavailable = false,
 }: AgentOverviewTabProps) {
@@ -1089,12 +1195,9 @@ export default function AgentOverviewTab({
         agentId={agentId}
         showAllCrons={showAllCrons}
         onToggleShowAll={() => setShowAllCrons((v) => !v)}
+        onOpenCronJob={onOpenCronJob}
+        selectedCronJobId={selectedCronJobId}
       />
-
-      {/* ── Memory Search toggle (OpenClaw agents only) ── */}
-      {agentRuntime === "openclaw" && (
-        <MemorySearchToggle agentId={agentId} />
-      )}
 
       {/* ── Stats row ── */}
       <div className="space-y-1.5">
@@ -1193,7 +1296,7 @@ export default function AgentOverviewTab({
                 !readSessions.has(s.key) &&
                 lastSeenTs > 0 &&
                 (s.updatedAt || 0) > lastSeenTs;
-              const isActive = s.status === "active";
+              const isRunning = s.status === "active" || s.status === "running";
               const isWaiting = s.status === "waiting";
               const isSuccess =
                 s.status === "completed" || s.status === "success" || s.status === "done";
@@ -1207,15 +1310,20 @@ export default function AgentOverviewTab({
                   onClick={() => onOpenSession?.(s.key)}
                   disabled={!onOpenSession}
                   className={cn(
-                    "flex items-start gap-2 w-full px-2.5 py-2 rounded-md border border-solid border-border transition-colors text-left",
-                    onOpenSession ? "hover:bg-muted/10" : "cursor-default opacity-60"
+                    "flex items-start gap-2 w-full px-2.5 py-2 rounded-md border border-solid transition-colors text-left",
+                    isRunning
+                      ? "border-amber-400/40 bg-amber-400/10 shadow-[0_0_0_1px_rgba(251,191,36,0.08)]"
+                      : "border-border",
+                    onOpenSession
+                      ? isRunning ? "hover:bg-amber-400/15" : "hover:bg-muted/10"
+                      : "cursor-default opacity-60"
                   )}
                 >
                   <div className="shrink-0 w-3 flex items-center justify-center mt-1">
-                    {isActive ? (
+                    {isRunning ? (
                       <span className="relative flex w-2 h-2">
-                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                        <span className="relative inline-flex rounded-full w-2 h-2 bg-emerald-500" />
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
+                        <span className="relative inline-flex rounded-full w-2 h-2 bg-amber-600 dark:bg-amber-500" />
                       </span>
                     ) : isWaiting ? (
                       <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
@@ -1237,18 +1345,27 @@ export default function AgentOverviewTab({
                       <span
                         className={cn(
                           "flex-1 min-w-0 truncate text-[11px]",
-                          isUnread ? "font-semibold text-foreground" : "text-foreground/70"
+                          isRunning
+                            ? "font-semibold text-amber-700 dark:text-amber-300"
+                            : isUnread
+                            ? "font-semibold text-foreground"
+                            : "text-foreground/70"
                         )}
                       >
                         {title}
                       </span>
                       <div className="flex items-center gap-1 shrink-0">
+                        {isRunning && (
+                          <span className="text-[8px] font-semibold text-amber-800 dark:text-amber-300 bg-amber-400/15 border border-amber-400/25 px-1 py-0.5 rounded-full">
+                            RUNNING
+                          </span>
+                        )}
                         {isUnread && (
                           <span className="text-[8px] font-semibold text-primary bg-primary/10 px-1 py-0.5 rounded-full">
                             NEW
                           </span>
                         )}
-                        {s.updatedAt && !isActive && (
+                        {s.updatedAt && !isRunning && (
                           <span className="text-[10px] text-muted-foreground/40">
                             {relTime(s.updatedAt)}
                           </span>
@@ -1256,7 +1373,12 @@ export default function AgentOverviewTab({
                       </div>
                     </div>
                     {s.preview && (
-                      <p className="text-[10px] text-muted-foreground/55 line-clamp-2 mt-0.5 [overflow-wrap:anywhere]">
+                      <p
+                        className={cn(
+                          "text-[10px] line-clamp-2 mt-0.5 [overflow-wrap:anywhere]",
+                          isRunning ? "text-amber-800/75 dark:text-amber-100/65" : "text-muted-foreground/55"
+                        )}
+                      >
                         {s.preview}
                       </p>
                     )}

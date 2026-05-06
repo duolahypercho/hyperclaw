@@ -35,6 +35,7 @@ import {
 } from "@/components/ui/table";
 
 const PAGE_SIZE = 50;
+const INTERNAL_ROWID_COLUMN = "__hyperclaw_rowid";
 
 // ── Cell rendering helpers ────────────────────────────────────────────────────
 
@@ -231,13 +232,71 @@ function FieldInput({
 
 // ── Row key ────────────────────────────────────────────────────────────────────
 
+function getCompletePkParts(row: Record<string, unknown>, columns: ColumnInfo[]): unknown[] | null {
+  const pkCols = columns.filter((c) => c.pk);
+  if (pkCols.length === 0) return null;
+
+  const parts = pkCols.map((c) => row[c.name]);
+  return parts.some((part) => part == null) ? null : parts;
+}
+
 function getRowKey(row: Record<string, unknown>, columns: ColumnInfo[]): string {
   if (row.__optimistic_key != null) return String(row.__optimistic_key);
-  const pkCols = columns.filter((c) => c.pk);
-  if (pkCols.length > 0) return `pk:${pkCols.map((c) => String(row[c.name] ?? "")).join("|")}`;
+  const pkParts = getCompletePkParts(row, columns);
+  if (pkParts) return `pk:${JSON.stringify(pkParts)}`;
+  if (row[INTERNAL_ROWID_COLUMN] != null) return `rowid:${String(row[INTERNAL_ROWID_COLUMN])}`;
   if (row.rowid != null) return `rowid:${String(row.rowid)}`;
   if (row.id != null) return `id:${String(row.id)}`;
   return JSON.stringify(row);
+}
+
+function getStableRowDisambiguator(row: Record<string, unknown>): string | null {
+  const rowid = row[INTERNAL_ROWID_COLUMN] ?? row.rowid;
+  if (rowid != null) return `rowid:${String(rowid)}`;
+  if (row.id != null) return `id:${String(row.id)}`;
+  return null;
+}
+
+function getRowKeyEntries(
+  rows: Record<string, unknown>[],
+  columns: ColumnInfo[],
+  offset = 0
+): { key: string; row: Record<string, unknown> }[] {
+  const baseKeys = rows.map((row) => getRowKey(row, columns));
+  const baseCounts = new Map<string, number>();
+  const disambiguatorCounts = new Map<string, number>();
+
+  rows.forEach((row, index) => {
+    const baseKey = baseKeys[index];
+    baseCounts.set(baseKey, (baseCounts.get(baseKey) ?? 0) + 1);
+  });
+
+  rows.forEach((row, index) => {
+    const baseKey = baseKeys[index];
+    const disambiguator = getStableRowDisambiguator(row);
+    if (!disambiguator || (baseCounts.get(baseKey) ?? 0) <= 1) return;
+    const candidate = `${baseKey}|${disambiguator}`;
+    disambiguatorCounts.set(candidate, (disambiguatorCounts.get(candidate) ?? 0) + 1);
+  });
+
+  const seenDuplicateKeys = new Map<string, number>();
+  return rows.map((row, index) => {
+    const baseKey = baseKeys[index];
+    if ((baseCounts.get(baseKey) ?? 0) <= 1) return { key: baseKey, row };
+
+    const disambiguator = getStableRowDisambiguator(row);
+    const candidate = disambiguator ? `${baseKey}|${disambiguator}` : null;
+    if (candidate && disambiguatorCounts.get(candidate) === 1) {
+      return { key: candidate, row };
+    }
+
+    const duplicateIndex = seenDuplicateKeys.get(baseKey) ?? 0;
+    seenDuplicateKeys.set(baseKey, duplicateIndex + 1);
+    return {
+      key: `${baseKey}|${disambiguator ?? "no-rowid"}|dup:${offset + index}:${duplicateIndex}`,
+      row,
+    };
+  });
 }
 
 // ── DataGrid ───────────────────────────────────────────────────────────────────
@@ -269,12 +328,6 @@ export const DataGrid = forwardRef<DataGridHandle>(function DataGrid(_, ref) {
   useImperativeHandle(ref, () => ({
     triggerAddRow: () => { setAddingRow(true); setNewRowData({}); },
   }));
-
-  const rowKeyMap = useMemo(() => {
-    const map = new Map<string, Record<string, unknown>>();
-    rows.forEach((row) => map.set(getRowKey(row, columns), row));
-    return map;
-  }, [columns, rows]);
 
   const displayColumns = useMemo(
     () => columns.filter((c) =>
@@ -320,6 +373,10 @@ export const DataGrid = forwardRef<DataGridHandle>(function DataGrid(_, ref) {
     () => sortedRows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE),
     [sortedRows, page]
   );
+  const pageRowEntries = useMemo(
+    () => getRowKeyEntries(pageRows, columns, page * PAGE_SIZE),
+    [columns, page, pageRows]
+  );
   const totalPages = Math.max(1, Math.ceil(sortedRows.length / PAGE_SIZE));
 
   useEffect(() => { setPage(0); }, [selectedTable, searchTerm, statusFilter, freshnessFilter]);
@@ -332,24 +389,23 @@ export const DataGrid = forwardRef<DataGridHandle>(function DataGrid(_, ref) {
 
   const getPkWhere = useCallback((row: Record<string, unknown>) => {
     const pkCols = columns.filter((c) => c.pk);
-    if (pkCols.length > 0) {
+    if (pkCols.length > 0 && pkCols.every((c) => row[c.name] != null)) {
       const where: Record<string, unknown> = {};
       pkCols.forEach((c) => (where[c.name] = row[c.name]));
       return where;
     }
+    if (row[INTERNAL_ROWID_COLUMN] != null) return { rowid: row[INTERNAL_ROWID_COLUMN] };
     if (row.rowid != null) return { rowid: row.rowid };
     if (row.id    != null) return { id: row.id };
     return {};
   }, [columns]);
 
-  const handleCellEdit = useCallback(async (rowKey: string, col: ColumnInfo) => {
-    const row = rowKeyMap.get(rowKey);
-    if (!row) return;
+  const handleCellEdit = useCallback(async (row: Record<string, unknown>, col: ColumnInfo) => {
     const where = getPkWhere(row);
     if (Object.keys(where).length === 0) return;
     const ok = await updateRow({ [col.name]: coerceInputValue(editValue, col) }, where);
     if (ok) setEditingCell(null);
-  }, [editValue, getPkWhere, rowKeyMap, updateRow]);
+  }, [editValue, getPkWhere, updateRow]);
 
   const handleAddRow = useCallback(async () => {
     const data: Record<string, unknown> = {};
@@ -496,8 +552,7 @@ export const DataGrid = forwardRef<DataGridHandle>(function DataGrid(_, ref) {
             )}
 
             {/* ── Data rows ── */}
-            {pageRows.map((row, rowIdx) => {
-              const rowKey      = getRowKey(row, columns);
+            {pageRowEntries.map(({ key: rowKey, row }, rowIdx) => {
               const isOptimistic = row.__optimistic === true;
               const globalIdx   = page * PAGE_SIZE + rowIdx + 1;
 
@@ -534,7 +589,7 @@ export const DataGrid = forwardRef<DataGridHandle>(function DataGrid(_, ref) {
                             onKeyDown={(e) => {
                               if (e.key === "Enter" && !(e.shiftKey && e.currentTarget.tagName === "TEXTAREA")) {
                                 e.preventDefault();
-                                handleCellEdit(rowKey, col);
+                                handleCellEdit(row, col);
                               }
                               if (e.key === "Escape") setEditingCell(null);
                             }}
@@ -596,7 +651,7 @@ export const DataGrid = forwardRef<DataGridHandle>(function DataGrid(_, ref) {
 
       {/* ── Pagination ── */}
       {totalPages > 1 && (
-        <div className="flex items-center justify-between px-4 py-2 border-t border-solid border-border bg-muted/10 text-[12px] text-muted-foreground shrink-0">
+        <div className="flex items-center justify-between px-4 py-2 border-t border-b-0 border-l-0 border-r-0 border-solid border-border bg-muted/10 text-[12px] text-muted-foreground shrink-0">
           <span>
             Page {page + 1} of {totalPages} · {sortedRows.length.toLocaleString()} rows
           </span>

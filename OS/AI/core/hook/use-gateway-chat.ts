@@ -9,6 +9,8 @@ import {
   gatewayConnection,
   probeGatewayHealth,
   probeConnectorHealth,
+  type ChatEventPayload,
+  type ChatEventState,
 } from "$/lib/openclaw-gateway-ws";
 import { v4 as uuidv4 } from "uuid";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
@@ -23,13 +25,17 @@ import {
   readChatClearMarker,
   writeChatClearMarker,
 } from "./chat-clear-boundary";
-import { getGatewayUnavailableMessage } from "$/lib/local-connector-routing";
+import { getGatewayUnavailableMessage, shouldBlockRemoteHubFallback } from "$/lib/local-connector-routing";
 
 // Module-level registry: maps active runId → sessionKey.
 // Prevents cross-chat event bleed when multiple useGatewayChat instances
 // are streaming simultaneously and events arrive without sessionKey.
 const RUN_ID_OWNERS_CAP = 100;
 const runIdOwners = new Map<string, string>();
+const OPENCLAW_AGENT_LIVE_OWNERS_CAP = 100;
+const OPENCLAW_AGENT_LIVE_OWNER_TTL_MS = 5 * 60_000;
+const OPENCLAW_AGENT_LATE_EVENT_GRACE_MS = 15_000;
+const openClawAgentLiveOwners = new Map<string, { sessionKey: string; expiresAt: number }>();
 
 /** Register a runId → sessionKey mapping with LRU eviction. */
 function registerRunId(runId: string, sessionKey: string) {
@@ -51,10 +57,56 @@ const clearRunIdOwnership = (sessionKey: string) => {
   });
 };
 
+function claimOpenClawAgentLiveOwner(agentId: string | undefined, sessionKey: string): void {
+  if (!agentId) return;
+  const now = Date.now();
+  const existing = openClawAgentLiveOwners.get(agentId);
+  if (existing && existing.sessionKey !== sessionKey && existing.expiresAt > now) {
+    return;
+  }
+  openClawAgentLiveOwners.set(agentId, {
+    sessionKey,
+    expiresAt: now + OPENCLAW_AGENT_LIVE_OWNER_TTL_MS,
+  });
+  if (openClawAgentLiveOwners.size > OPENCLAW_AGENT_LIVE_OWNERS_CAP) {
+    for (const [key, owner] of openClawAgentLiveOwners) {
+      if (owner.expiresAt <= now) openClawAgentLiveOwners.delete(key);
+    }
+  }
+}
+
+function getOpenClawAgentLiveOwnerSession(agentId: string | undefined): string | undefined {
+  if (!agentId) return undefined;
+  const owner = openClawAgentLiveOwners.get(agentId);
+  if (!owner) return undefined;
+  if (owner.expiresAt <= Date.now()) {
+    openClawAgentLiveOwners.delete(agentId);
+    return undefined;
+  }
+  return owner.sessionKey;
+}
+
+function shortenOpenClawAgentLiveOwnerGrace(agentId: string | undefined, sessionKey: string): void {
+  if (!agentId) return;
+  const owner = openClawAgentLiveOwners.get(agentId);
+  if (!owner || owner.sessionKey !== sessionKey) return;
+  owner.expiresAt = Date.now() + OPENCLAW_AGENT_LATE_EVENT_GRACE_MS;
+}
+
+function releaseOpenClawAgentLiveOwner(agentId: string | undefined, sessionKey: string): void {
+  if (!agentId) return;
+  const owner = openClawAgentLiveOwners.get(agentId);
+  if (owner?.sessionKey === sessionKey) {
+    openClawAgentLiveOwners.delete(agentId);
+  }
+}
+
 const TRANSIENT_CHAT_STATE_TTL_MS = 5 * 60_000;
 const INITIAL_HISTORY_LIMIT = 100;
 const HISTORY_TIERS = [INITIAL_HISTORY_LIMIT, 200, 500, 1000] as const;
 const FINALIZE_HISTORY_LIMIT = INITIAL_HISTORY_LIMIT;
+const LOCAL_OPENCLAW_HISTORY_LIMIT = 1000;
+const LOCAL_OPENCLAW_HISTORY_MAX_CHARS = 500_000;
 const HERMES_POLL_HISTORY_LIMIT = 50;
 const HERMES_POLL_INTERVAL_MS = 1_500;
 const HERMES_LATEST_SESSION_CACHE_TTL_MS = 5_000;
@@ -151,15 +203,7 @@ export interface ChatMessage {
   }>;
 }
 
-export type ChatEventState = "delta" | "final" | "aborted" | "error";
-
-export interface ChatEventPayload {
-  runId: string;
-  sessionKey: string;
-  state: ChatEventState;
-  message?: unknown;
-  errorMessage?: string;
-}
+export type { ChatEventPayload, ChatEventState };
 
 export interface GatewayChatMessage {
   id: string;
@@ -982,6 +1026,7 @@ function isPlaceholderHermesSessionId(sessionId: string): boolean {
     sessionId === "default" ||
     /^chat-\d+$/.test(sessionId) ||
     sessionId.endsWith(":main") ||
+    (sessionId.startsWith("agent:") && sessionId.endsWith(":hyperclaw")) ||
     /:chat-\d+$/.test(sessionId)
   );
 }
@@ -997,7 +1042,7 @@ function getHermesHistorySessionId(sessionKey: string): string | null {
 
   // Historical Hermes keys can arrive embedded in agent session keys, for
   // example "agent:ceo:hermes:session-9". UI placeholders such as
-  // "agent:hermes:rell:main" are intentionally rejected below.
+  // "agent:hermes:rell:hyperclaw" are intentionally rejected below.
   const marker = ":hermes:";
   const markerIndex = trimmedKey.lastIndexOf(marker);
   if (markerIndex >= 0) {
@@ -1018,7 +1063,7 @@ function seedHermesSession(chatSessionKey: string, hermesSessionId: string): voi
 }
 
 function usesGatewayHealthProbe(backend: GatewayChatBackend): boolean {
-  return backend === "openclaw";
+  return backend === "openclaw" && !shouldBlockRemoteHubFallback();
 }
 
 function getErrorMessage(err: unknown, fallback = "Gateway not reachable"): string {
@@ -1033,7 +1078,6 @@ function isTransientGatewayStartupError(err: unknown): boolean {
     msg.includes("failed to communicate with device") ||
     msg.includes("device not connected") ||
     msg.includes("connector is offline") ||
-    msg.includes("chat.history unavailable during gateway startup") ||
     msg.includes("closed (1005)")
   );
 }
@@ -1059,6 +1103,7 @@ const getHermesAgentSessionStorageKey = (agentId?: string) =>
 
 function resetGatewayChatRuntimeStateForTests(): void {
   runIdOwners.clear();
+  openClawAgentLiveOwners.clear();
   hermesSessionState.clear();
   transientGatewayChatState.clear();
 }
@@ -1075,6 +1120,7 @@ function isDefaultHermesChatSessionKey(sessionKey: string): boolean {
     trimmed === "main" ||
     trimmed === "default" ||
     (trimmed.startsWith("agent:") && trimmed.endsWith(":main")) ||
+    (trimmed.startsWith("agent:") && trimmed.endsWith(":hyperclaw")) ||
     trimmed.startsWith("ensemble:dm:")
   );
 }
@@ -1392,6 +1438,8 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       setIsLoading(cached?.isLoading ?? false);
       setError(null);
       clearRunIdOwnership(oldKey);
+      releaseOpenClawAgentLiveOwner(openClawLiveOwnerAgentIdRef.current || statusAgentId || agentId || extractAgentIdFromSessionKey(oldKey), oldKey);
+      openClawLiveOwnerAgentIdRef.current = undefined;
       currentRunIdRef.current = cached?.runId ?? null;
       currentStatusAgentIdRef.current = undefined;
       streamContentRef.current = "";
@@ -1409,11 +1457,15 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
         clearTimeout(disconnectGraceRef.current);
         disconnectGraceRef.current = null;
       }
+      if (loadingTimeoutRef.current) {
+        clearTimeout(loadingTimeoutRef.current);
+        loadingTimeoutRef.current = null;
+      }
       // Reset history pagination state for new session
       historyTierRef.current = 0;
       setHasMoreHistory(false);
     }
-  }, [agentId, backend, getTransportSessionKey, statusAgentId]);
+  }, [agentId, backend, statusAgentId]);
 
   useEffect(() => {
     if (!initialSessionKey || initialSessionKey === prevPropKeyRef.current) return;
@@ -1424,6 +1476,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
   // Refs
   const currentRunIdRef = useRef<string | null>(initialTransientState?.runId ?? null);
   const currentStatusAgentIdRef = useRef<string | undefined>(undefined);
+  const openClawLiveOwnerAgentIdRef = useRef<string | undefined>(undefined);
   const streamContentRef = useRef<string>("");
   const unsubscribeRef = useRef<(() => void) | null>(null);
   const loadingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1443,6 +1496,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
   const loadChatHistoryInFlightRef = useRef<string | null>(null);
   const historyLoadInflightRef = useRef<Map<string, Promise<{ messages?: unknown[] }>>>(new Map());
   const clearedRunIdsRef = useRef<Set<string>>(new Set());
+  const stoppedRunIdsRef = useRef<Set<string>>(new Set());
   const successfulFinalRunIdsRef = useRef<Set<string>>(new Set());
   latestBackendRef.current = backend;
   latestAgentIdRef.current = agentId;
@@ -1469,14 +1523,19 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
 
   const loadHistoryForBackend = useCallback(async (limit?: number): Promise<{ messages?: unknown[] }> => {
     const sessionKey = sessionKeyRef.current;
+    const isLocalOpenClawHistory = backend === "openclaw" && shouldBlockRemoteHubFallback();
     const effectiveLimit = limit ?? INITIAL_HISTORY_LIMIT;
-    const cacheKey = `${backend}:${agentId || ""}:${sessionKey}:${effectiveLimit}`;
+    const maxChars = isLocalOpenClawHistory ? LOCAL_OPENCLAW_HISTORY_MAX_CHARS : undefined;
+    const cacheKey = `${backend}:${agentId || ""}:${sessionKey}:${effectiveLimit}:${maxChars ?? "default"}`;
     const inflight = historyLoadInflightRef.current.get(cacheKey);
     if (inflight) return inflight;
 
     const request = (async (): Promise<{ messages?: unknown[] }> => {
       if (backend === "openclaw") {
-        return gatewayConnection.getChatHistory(getTransportSessionKey(), effectiveLimit);
+        return gatewayConnection.getChatHistory(getTransportSessionKey(), effectiveLimit, {
+          ...(maxChars ? { maxChars } : {}),
+          cache: gatewayConnection.shouldCacheChatHistory(),
+        });
       }
 
       const sessionId = getRuntimeHistorySessionId(backend, sessionKey);
@@ -1521,10 +1580,20 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
   const mergeHistoryAndMaybeFinalize = useCallback((autoFinalize: boolean) => {
     if (isMergingRef.current) return; // skip if a merge is already in progress
     isMergingRef.current = true;
+    const requestSessionKey = sessionKeyRef.current;
+    const requestBackend = backend;
+    const requestAgentId = agentId;
     if (backend === "openclaw") {
       gatewayConnection.invalidateChatHistoryCache(getTransportSessionKey());
     }
     loadHistoryForBackend(FINALIZE_HISTORY_LIMIT).then((response) => {
+      if (
+        sessionKeyRef.current !== requestSessionKey ||
+        latestBackendRef.current !== requestBackend ||
+        latestAgentIdRef.current !== requestAgentId
+      ) {
+        return;
+      }
       if (!response.messages?.length) return;
       const loaded: GatewayChatMessage[] = [];
       for (const m of response.messages) {
@@ -1533,7 +1602,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       }
       const deduped = filterMessagesAfterClear(
         deduplicateMessages(loaded),
-        backend === "openclaw" ? null : readChatClearMarker(sessionKeyRef.current)
+        backend === "openclaw" ? null : readChatClearMarker(requestSessionKey)
       );
       const lastHistoryMessage = deduped[deduped.length - 1];
       if (
@@ -1569,7 +1638,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
     }).catch(() => {}).finally(() => {
       isMergingRef.current = false;
     });
-  }, [backend, getTransportSessionKey, loadHistoryForBackend]);
+  }, [agentId, backend, getTransportSessionKey, loadHistoryForBackend]);
 
   // Shared helper: start (or restart) the 3s finalization debounce.
   // 3s allows enough headroom for multi-tool agent runs where there can be
@@ -1580,6 +1649,10 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
   const startFinalizeDebounce = useCallback(() => {
     if (finalDebounceRef.current) clearTimeout(finalDebounceRef.current);
     finalDebounceRef.current = setTimeout(() => {
+      if (backend === "openclaw") {
+        const currentAgentId = statusAgentId || agentId || extractAgentIdFromSessionKey(sessionKeyRef.current);
+        shortenOpenClawAgentLiveOwnerGrace(currentAgentId, sessionKeyRef.current);
+      }
       currentRunIdRef.current = null;
       setIsLoading(false);
       mergeHistoryAndMaybeFinalize(false);
@@ -1588,11 +1661,14 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       // Final re-check after 8s for slow server commits
       setTimeout(() => mergeHistoryAndMaybeFinalize(false), 8000);
     }, 3000);
-  }, [mergeHistoryAndMaybeFinalize]);
+  }, [agentId, backend, mergeHistoryAndMaybeFinalize, statusAgentId]);
 
   // Handle incoming chat events
   const handleChatEvent = useCallback((payload: ChatEventPayload) => {
     if (payload.runId && clearedRunIdsRef.current.has(payload.runId)) {
+      return;
+    }
+    if (backend === "openclaw" && payload.runId && stoppedRunIdsRef.current.has(payload.runId)) {
       return;
     }
     // Deduplicate terminal events (final/aborted/error) to prevent double-processing.
@@ -1613,17 +1689,42 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
 
     // Session key filter — prevent cross-session bleed.
     // Events WITH a sessionKey must match ours exactly.
-    // Events WITHOUT a sessionKey: during an active conversation, accept events
-    // from ANY runId — tool events (agent path) and text events (chat path) often
-    // carry different runIds, and sub-agents have their own runIds. This matches
-    // OpenClaw's approach of filtering by sessionKey only, never by runId.
+    // Events WITHOUT a sessionKey: first use agentId if OpenClaw provided it,
+    // then fall back to runId ownership. Tool events (agent path) and text events
+    // (chat path) can carry different runIds, and sub-agents have their own
+    // runIds, so runId alone is only a fallback.
     // When idle (no active run), use runId to decide whether to re-activate.
     if (payload.sessionKey) {
       const matchesCurrentSession = sessionKeysMatchForBackend(payload.sessionKey, sessionKeyRef.current, backend, agentId, statusAgentId);
-      if (!matchesCurrentSession) {
+      const ownerSession = payload.runId ? runIdOwners.get(payload.runId) : undefined;
+      const currentAgentId = statusAgentId || agentId || extractAgentIdFromSessionKey(sessionKeyRef.current);
+      const sameOpenClawAgent =
+        backend === "openclaw" &&
+        !!payload.agentId &&
+        !!currentAgentId &&
+        payload.agentId === currentAgentId &&
+        payload.sessionKey.startsWith(`agent:${currentAgentId}:`) &&
+        sessionKeyRef.current.startsWith(`agent:${currentAgentId}:`);
+      const matchesOwnedRun = !!ownerSession && ownerSession === sessionKeyRef.current;
+      const activeAgentOwnerSession = getOpenClawAgentLiveOwnerSession(currentAgentId);
+      const canAdoptActiveAgentRun =
+        !ownerSession &&
+        activeAgentOwnerSession === sessionKeyRef.current &&
+        sameOpenClawAgent;
+      if (!matchesCurrentSession && !matchesOwnedRun && !canAdoptActiveAgentRun) {
         return;
       }
-    } else if (currentRunIdRef.current !== null) {
+      if (!matchesCurrentSession && canAdoptActiveAgentRun && payload.runId) {
+        registerRunId(payload.runId, sessionKeyRef.current);
+      }
+    } else {
+      const currentAgentId = statusAgentId || agentId || extractAgentIdFromSessionKey(sessionKeyRef.current);
+      if (payload.agentId && currentAgentId && payload.agentId !== currentAgentId) {
+        return;
+      }
+    }
+
+    if (!payload.sessionKey && currentRunIdRef.current !== null) {
       // Active conversation — check the runId registry to prevent cross-chat bleed.
       // If the event's runId is registered to a DIFFERENT session, reject it.
       // Unknown runIds (sub-agents) are claimed by the first instance to process
@@ -1652,7 +1753,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
         currentRunIdRef.current = payload.runId;
         registerRunId(payload.runId, sessionKeyRef.current);
       }
-    } else {
+    } else if (!payload.sessionKey) {
       // No active conversation and no sessionKey — only accept if this is a
       // late-arriving delta that should re-activate the conversation.
       if (!payload.runId) return;
@@ -1878,7 +1979,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
             if (extends_) {
               if (prev[ownIdx].content === text) return prev; // no change
               const updated = [...prev];
-                updated[ownIdx] = { ...prev[ownIdx], content: text };
+              updated[ownIdx] = { ...prev[ownIdx], content: text };
               return updated;
             }
 
@@ -1998,7 +2099,13 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       const finalText = extractText(payload.message);
       const cleanFinalText = typeof finalText === "string" ? stripProtocolMarkers(finalText) : null;
       if (cleanFinalText && cleanFinalText.trim()) {
-        if (payload.runId) successfulFinalRunIdsRef.current.add(payload.runId);
+        if (payload.runId) {
+          successfulFinalRunIdsRef.current.add(payload.runId);
+          if (successfulFinalRunIdsRef.current.size > RUN_ID_OWNERS_CAP) {
+            const oldest = successfulFinalRunIdsRef.current.values().next().value;
+            if (oldest) successfulFinalRunIdsRef.current.delete(oldest);
+          }
+        }
         setError(null);
         setMessages((prev) => applyFinalAssistantText(prev, cleanFinalText, payload.runId));
       } else if (
@@ -2072,7 +2179,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
         loadingTimeoutRef.current = null;
       }
     }
-  }, [agentId, backend, getTransportSessionKey, mergeHistoryAndMaybeFinalize, startFinalizeDebounce, statusAgentId]);
+  }, [agentId, backend, mergeHistoryAndMaybeFinalize, startFinalizeDebounce, statusAgentId]);
 
   // Track current fetch limit and whether more history may exist.
   // Start with 100 so the user sees a meaningful history on first load.
@@ -2089,8 +2196,11 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
     const requestSessionKey = sessionKeyRef.current;
     const requestBackend = backend;
     const requestAgentId = agentId;
-    if (backend === "openclaw" && !gatewayConnection.isConnected()) return;
-    const fetchLimit = limit ?? HISTORY_TIERS[historyTierRef.current];
+    if (backend === "openclaw" && !gatewayConnection.isConnected() && !shouldBlockRemoteHubFallback()) return;
+    const isFullLocalOpenClawHistory = backend === "openclaw" && shouldBlockRemoteHubFallback();
+    const fetchLimit = isFullLocalOpenClawHistory
+      ? LOCAL_OPENCLAW_HISTORY_LIMIT
+      : limit ?? HISTORY_TIERS[historyTierRef.current];
     try {
       const response = await loadHistoryForBackend(fetchLimit);
       if (
@@ -2108,7 +2218,12 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
         }
       }
       // Only OpenClaw supports paginated history windows via chat.history.
-      setHasMoreHistory(backend === "openclaw" && loaded.length >= fetchLimit && fetchLimit < 1000);
+      setHasMoreHistory(
+        backend === "openclaw" &&
+        !isFullLocalOpenClawHistory &&
+        loaded.length >= fetchLimit &&
+        fetchLimit < 1000
+      );
       const deduped = filterMessagesAfterClear(
         deduplicateMessages(loaded),
         backend === "openclaw" ? null : readChatClearMarker(requestSessionKey)
@@ -2335,6 +2450,8 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
       }
       // Clean up runId registry to prevent stale entries (primary + sub-agent runIds)
       clearRunIdOwnership(sessionKeyRef.current);
+      releaseOpenClawAgentLiveOwner(openClawLiveOwnerAgentIdRef.current || extractAgentIdFromSessionKey(sessionKeyRef.current), sessionKeyRef.current);
+      openClawLiveOwnerAgentIdRef.current = undefined;
     };
   }, []);
 
@@ -2385,7 +2502,7 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to connect");
     }
-  }, [backend, getTransportSessionKey]);
+  }, [backend]);
 
   // Disconnect — do NOT kill the singleton WS, just unsubscribe from state.
   // The singleton is shared with useOpenClaw and other consumers.
@@ -2456,11 +2573,9 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
     };
 
     try {
-      // For OpenClaw, probe gateway health first to avoid a 60s timeout on a
-      // dead relay chain (dashboard → hub → connector → gateway). The probe
-      // uses a shorter 12s timeout with one retry and fails fast.
-      // If the WS isn't connected yet (initial mount race), skip silently —
-      // the reconnect subscription handler will load history when WS is ready.
+      // Remote OpenClaw history still uses the gateway relay, so keep its
+      // health probe. Local OpenClaw history is connector file-backed and does
+      // not depend on the OpenClaw gateway WebSocket being connected.
       if (usesGatewayHealthProbe(backend)) {
         if (!gatewayConnection.isConnected()) {
           // Not connected yet — don't error, just stop loading.
@@ -2578,7 +2693,11 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
     currentRunIdRef.current = runId;
     currentStatusAgentIdRef.current = backend === "hermes" ? resolvedStatusAgentId : undefined;
     registerRunId(runId, sessionKeyRef.current);
-    markAgentRunStarted(runId, resolvedStatusAgentId);
+    if (backend === "openclaw") {
+      claimOpenClawAgentLiveOwner(resolvedStatusAgentId, sessionKeyRef.current);
+      openClawLiveOwnerAgentIdRef.current = resolvedStatusAgentId;
+    }
+    markAgentRunStarted(runId, resolvedStatusAgentId, sessionKeyRef.current);
     streamContentRef.current = "";
 
     if (backend === "hermes") {
@@ -2956,8 +3075,13 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
     if (loadingTimeoutRef.current) clearTimeout(loadingTimeoutRef.current);
     loadingTimeoutRef.current = setTimeout(() => {
       const timedOutRunId = currentRunIdRef.current;
+      const timedOutAgentId = openClawLiveOwnerAgentIdRef.current || statusAgentId || agentId || extractAgentIdFromSessionKey(sessionKeyRef.current);
       currentRunIdRef.current = null;
       if (timedOutRunId) markAgentRunFinished(timedOutRunId);
+      if (backend === "openclaw") {
+        releaseOpenClawAgentLiveOwner(timedOutAgentId, sessionKeyRef.current);
+        openClawLiveOwnerAgentIdRef.current = undefined;
+      }
       setIsLoading(false);
       mergeHistoryAndMaybeFinalize(false);
     }, 300_000);
@@ -3011,9 +3135,13 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
 
       currentRunIdRef.current = null;
       markAgentRunFinished(runId);
+      if (backend === "openclaw") {
+        releaseOpenClawAgentLiveOwner(resolvedStatusAgentId, sessionKeyRef.current);
+        openClawLiveOwnerAgentIdRef.current = undefined;
+      }
       setIsLoading(false);
     }
-  }, [agentId, backend, getSessionKey, getTransportSessionKey, mergeHistoryAndMaybeFinalize, statusAgentId]);
+  }, [agentId, backend, getTransportSessionKey, mergeHistoryAndMaybeFinalize, statusAgentId]);
 
   // Stop generation
   const stopGeneration = useCallback(async () => {
@@ -3033,6 +3161,14 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
     // which may be slow or never arrive (e.g. disconnected, hub relay delay).
     const runIdToAbort = currentRunIdRef.current;
     const streamedText = streamContentRef.current;
+    const visibleSessionKey = getSessionKey();
+    if (backend === "openclaw" && runIdToAbort) {
+      stoppedRunIdsRef.current.add(runIdToAbort);
+      if (stoppedRunIdsRef.current.size > RUN_ID_OWNERS_CAP) {
+        const oldest = stoppedRunIdsRef.current.values().next().value;
+        if (oldest) stoppedRunIdsRef.current.delete(oldest);
+      }
+    }
     if (streamedText.trim()) {
       setMessages((prev) => {
         const lastMsg = prev[prev.length - 1];
@@ -3056,20 +3192,24 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
     streamContentRef.current = "";
     currentRunIdRef.current = null;
     if (runIdToAbort) markAgentRunFinished(runIdToAbort);
+    if (backend === "openclaw") {
+      releaseOpenClawAgentLiveOwner(openClawLiveOwnerAgentIdRef.current || statusAgentId || agentId || extractAgentIdFromSessionKey(sessionKeyRef.current), sessionKeyRef.current);
+      openClawLiveOwnerAgentIdRef.current = undefined;
+    }
     setIsLoading(false);
 
     // Best-effort: tell the gateway to abort (fire-and-forget)
     if (gatewayConnection.isConnected() && runIdToAbort) {
       gatewayConnection
         .abortChat({
-          sessionKey: getSessionKey(),
+          sessionKey: visibleSessionKey,
           runId: runIdToAbort,
         })
         .catch(() => {
           /* abort is best-effort; hub/device timeouts are expected */
         });
     }
-  }, [backend, getSessionKey]);
+  }, [agentId, backend, getSessionKey, statusAgentId]);
 
   // Clear chat
   const clearChat = useCallback(() => {
@@ -3118,6 +3258,8 @@ export function useGatewayChat(options: UseGatewayChatOptions = {}): UseGatewayC
     streamContentRef.current = "";
     loadChatHistoryInFlightRef.current = null;
     clearRunIdOwnership(key);
+    releaseOpenClawAgentLiveOwner(openClawLiveOwnerAgentIdRef.current || statusAgentId || agentId || extractAgentIdFromSessionKey(key), key);
+    openClawLiveOwnerAgentIdRef.current = undefined;
     currentRunIdRef.current = null;
     currentStatusAgentIdRef.current = undefined;
     if (finalDebounceRef.current) {

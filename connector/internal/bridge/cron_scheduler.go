@@ -85,7 +85,7 @@ func (s *CronScheduler) tick() {
 			go func() {
 				defer s.wg.Done()
 				defer func() { <-s.workerSem }()
-				s.runJob(jobCopy, rawCopy)
+				s.runJob(jobCopy, rawCopy, "scheduler")
 			}()
 		default:
 			log.Printf("[cron] worker pool full (%d slots), skipping job %s", cap(s.workerSem), jobCopy.ID)
@@ -102,7 +102,7 @@ func cronJobIsDue(rawObj map[string]interface{}, now time.Time) bool {
 	return nextRunAtMs > 0 && int64(nextRunAtMs) <= now.UnixMilli()
 }
 
-func (s *CronScheduler) runJob(job store.CronJob, rawObj map[string]interface{}) {
+func (s *CronScheduler) runJob(job store.CronJob, rawObj map[string]interface{}, triggerSource string) {
 	payload, _ := rawObj["payload"].(map[string]interface{})
 	if payload == nil {
 		payload = make(map[string]interface{})
@@ -170,21 +170,37 @@ func (s *CronScheduler) runJob(job store.CronJob, rawObj map[string]interface{})
 		return
 	}
 
+	if s.bridge.store != nil {
+		if err := s.bridge.store.InsertCronRun(job.ID, job.Runtime, runID, triggerSource, runAtMs); err != nil {
+			log.Printf("CronScheduler: InsertCronRun %s/%s: %v", job.ID, runID, err)
+		}
+	}
+
 	result := s.bridge.Dispatch(action, params)
 	durationMs := time.Now().UnixMilli() - runAtMs
 
 	eventType := "completed"
+	runStatus := "ok"
+	jobStatus := "completed"
 	summary := extractCronSummary(result)
+	errorMsg := ""
 	if m, ok := result.(map[string]interface{}); ok {
 		if e, _ := m["error"].(string); e != "" {
 			eventType = "error"
+			runStatus = "error"
+			jobStatus = "error"
 			summary = e
+			errorMsg = e
 		}
 	}
+	fullLog := stringifyCronResult(result)
 
 	if s.bridge.store != nil {
 		metadata, _ := json.Marshal(map[string]interface{}{"runAtMs": runAtMs, "durationMs": durationMs})
 		s.bridge.store.UpdateRunningCronAnnounce(job.ID, runID, summary, eventType, string(metadata))
+		if err := s.bridge.store.FinalizeCronRun(runID, runStatus, summary, fullLog, errorMsg, time.Now().UnixMilli(), durationMs); err != nil {
+			log.Printf("CronScheduler: FinalizeCronRun %s/%s: %v", job.ID, runID, err)
+		}
 	}
 
 	// For one-shot jobs: disable after run
@@ -199,7 +215,7 @@ func (s *CronScheduler) runJob(job store.CronJob, rawObj map[string]interface{})
 				rawObj["state"] = state
 			}
 			state["lastRunAtMs"] = runAtMs
-			state["lastStatus"] = eventType
+			state["lastStatus"] = jobStatus
 			state["nextRunAtMs"] = nil
 			updated, _ := json.Marshal(rawObj)
 			_ = s.bridge.store.UpdateCronJobRawJSON(job.ID, string(updated))
@@ -207,7 +223,7 @@ func (s *CronScheduler) runJob(job store.CronJob, rawObj map[string]interface{})
 		return
 	}
 
-	s.advanceNextRun(job, rawObj)
+	s.advanceNextRun(job, rawObj, jobStatus)
 }
 
 // RunJobManual triggers a non-OpenClaw cron job immediately, bypassing the due-time
@@ -219,7 +235,7 @@ func (s *CronScheduler) RunJobManual(job store.CronJob, rawObj map[string]interf
 		go func() {
 			defer s.wg.Done()
 			defer func() { <-s.workerSem }()
-			s.runJob(job, rawObj)
+			s.runJob(job, rawObj, "manual")
 		}()
 	default:
 		log.Printf("[cron-run-manual] worker pool full, skipping manual trigger for job %s", job.ID)
@@ -248,7 +264,7 @@ func (s *CronScheduler) isOpenClawJobAlreadyRunning(jobID string) bool {
 	return false
 }
 
-func (s *CronScheduler) advanceNextRun(job store.CronJob, rawObj map[string]interface{}) {
+func (s *CronScheduler) advanceNextRun(job store.CronJob, rawObj map[string]interface{}, lastStatus string) {
 	if s.bridge.store == nil {
 		return
 	}
@@ -289,6 +305,7 @@ func (s *CronScheduler) advanceNextRun(job store.CronJob, rawObj map[string]inte
 	}
 	state["nextRunAtMs"] = nextMs
 	state["lastRunAtMs"] = now.UnixMilli()
+	state["lastStatus"] = lastStatus
 
 	updated, err := json.Marshal(rawObj)
 	if err != nil {
@@ -328,6 +345,17 @@ func extractCronSummary(result interface{}) string {
 		return resp
 	}
 	return "completed"
+}
+
+func stringifyCronResult(result interface{}) string {
+	if result == nil {
+		return ""
+	}
+	data, err := json.MarshalIndent(result, "", "  ")
+	if err == nil {
+		return string(data)
+	}
+	return fmt.Sprint(result)
 }
 
 func newCronRunID() string {

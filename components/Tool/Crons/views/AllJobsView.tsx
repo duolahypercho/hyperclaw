@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import { motion } from "framer-motion";
 import { Loader2, Server, CalendarClock, Inbox, ChevronRight } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
+import { cn } from "@/lib/utils";
 import {
   Tooltip,
   TooltipContent,
@@ -76,21 +77,22 @@ export function AllJobsView() {
           </span>
         </div>
 
-        {jobsForList.length === 0 ? (
-          <motion.div
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="flex flex-col items-center justify-center py-16 px-4 rounded-xl border border-dashed border-border/60 bg-muted/20"
-          >
-            <Inbox className="w-10 h-10 text-muted-foreground/50 mb-3" />
-            <p className="text-sm font-medium text-foreground">No cron jobs yet</p>
-            <p className="text-xs text-muted-foreground text-center mt-1 max-w-[240px]">
-              Create a scheduled job to automate tasks across any runtime.
-            </p>
-          </motion.div>
-        ) : (
-          <div className="space-y-1.5">
-            {jobsForList.map((job, i) => {
+        <div className="space-y-4">
+          {jobsForList.length === 0 ? (
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="flex flex-col items-center justify-center py-16 px-4 rounded-xl border border-dashed border-border/60 bg-muted/20"
+            >
+              <Inbox className="w-10 h-10 text-muted-foreground/50 mb-3" />
+              <p className="text-sm font-medium text-foreground">No cron jobs yet</p>
+              <p className="text-xs text-muted-foreground text-center mt-1 max-w-[240px]">
+                Create a scheduled job to automate tasks across any runtime.
+              </p>
+            </motion.div>
+          ) : (
+            <div className="space-y-1.5 min-w-0">
+              {jobsForList.map((job, i) => {
               const nextRun = getJobNextRunDate(job, parsedCronJobs);
               const nextRunStr = nextRun
                 ? formatDistanceToNow(nextRun, { addSuffix: true })
@@ -218,15 +220,19 @@ export function AllJobsView() {
                   </button>
                 </motion.div>
               );
-            })}
-          </div>
-        )}
+              })}
+            </div>
+          )}
+          <CronJobDetailDialog
+            open={detailOpen}
+            onOpenChange={(open) => {
+              setDetailOpen(open);
+              if (!open) setDetailJob(null);
+            }}
+            job={detailJob}
+          />
+        </div>
       </div>
-      <CronJobDetailDialog
-        open={detailOpen}
-        onOpenChange={setDetailOpen}
-        job={detailJob}
-      />
     </ScrollArea>
   );
 }

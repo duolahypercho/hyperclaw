@@ -1,15 +1,15 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Plug, Plus, Search, Settings as SettingsIcon, Grid3x3, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { EnsShell, Kpi } from "$/components/ensemble";
 import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { BRIDGE_CATEGORIES, type BridgeCategoryId } from "./bridges-catalog";
 import { useBridges, type LiveBridge } from "./useBridges";
 import { ConnectDrawer } from "./ConnectDrawer";
+import { BridgeAvatar } from "./BridgeAvatar";
 
 type View = "grid" | "catalog";
 type StatusFilter = "all" | "connected" | "needs-auth" | "paused" | "off";
@@ -28,8 +28,64 @@ function statusDotClass(s: LiveBridge["status"]): string {
   return "ens-dot offline";
 }
 
-function bridgeInitials(name: string): string {
-  return name.replace(/[^A-Za-z]/g, "").slice(0, 2).toUpperCase();
+interface BridgeRowProps {
+  bridge: LiveBridge;
+  onOpen: (bridgeId: string) => void;
+}
+
+function BridgeRow({ bridge: b, onOpen }: BridgeRowProps) {
+  const action = (() => {
+    if (b.status === "off") return { label: "Connect", icon: <Plus className="w-3 h-3" />, variant: "default" as const };
+    if (b.status === "needs-auth") return { label: "Reauthorize", icon: null, variant: "default" as const };
+    return { label: "Manage", icon: <SettingsIcon className="w-3 h-3" />, variant: "secondary" as const };
+  })();
+
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(b.id)}
+      className={cn(
+        "w-full grid items-center gap-3 px-3.5 py-2.5 text-left transition-colors",
+        "border-b border-t-0 border-l-0 border-r-0 border-solid border-border last:border-b-0",
+        "hover:bg-muted/40 focus-visible:outline-none focus-visible:bg-muted/60",
+        b.status === "needs-auth" && "bg-accent/30 hover:bg-accent/40",
+      )}
+      style={{ gridTemplateColumns: "28px minmax(160px, 1.4fr) minmax(120px, 1fr) 110px 130px auto" }}
+    >
+      <BridgeAvatar bridge={b} />
+      <span className="min-w-0">
+        <div className="text-[12.5px] font-medium text-foreground truncate">{b.name}</div>
+        <div className="font-mono text-[9.5px] uppercase tracking-wide text-muted-foreground/80 truncate">
+          {b.kind} · {b.tagline}
+        </div>
+      </span>
+      <span className="font-mono text-[11px] text-muted-foreground truncate" title={b.account}>
+        {b.account}
+      </span>
+      <span className="font-mono text-[11px] text-muted-foreground/70">
+        {b.addedAt ? new Date(b.addedAt).toLocaleDateString() : "—"}
+      </span>
+      <span className="inline-flex items-center gap-1.5 font-mono text-[11px] uppercase tracking-wide">
+        <span className={statusDotClass(b.status)} />
+        <span
+          className={cn(
+            b.status === "connected" && "text-emerald-600 dark:text-emerald-400",
+            b.status === "needs-auth" && "text-foreground",
+            b.status === "paused" && "text-amber-600 dark:text-amber-400",
+            b.status === "off" && "text-muted-foreground",
+          )}
+        >
+          {STATUS_LABEL[b.status]}
+        </span>
+      </span>
+      <span className="flex justify-end">
+        <Badge variant={action.variant} className="gap-1 px-2 py-1 cursor-pointer">
+          {action.icon}
+          {action.label}
+        </Badge>
+      </span>
+    </button>
+  );
 }
 
 export function BridgesView() {
@@ -41,6 +97,17 @@ export function BridgesView() {
   const [query, setQuery] = useState("");
   const [openId, setOpenId] = useState<string | null>(null);
 
+  const selectStatusFilter = useCallback((status: StatusFilter) => {
+    setStatusFilter(status);
+    if (status === "off") {
+      setView("catalog");
+      setCat("all");
+    } else if (status !== "all" && view === "catalog") {
+      setView("grid");
+      setCat("all");
+    }
+  }, [view]);
+
   // Listen for "Connect bridge" button event from page header
   useEffect(() => {
     const handler = () => setView("catalog");
@@ -49,17 +116,27 @@ export function BridgesView() {
   }, []);
 
   const catCounts = useMemo(() => {
-    const c: Record<string, number> = { all: bridges.length };
-    bridges.forEach((b) => { c[b.cat] = (c[b.cat] || 0) + 1; });
+    const scoped = bridges.filter((b) => {
+      if (view === "catalog" && b.status !== "off") return false;
+      if (view === "grid" && b.status === "off") return false;
+      if (statusFilter !== "all" && b.status !== statusFilter) return false;
+      if (query) {
+        const q = query.toLowerCase();
+        if (!`${b.name} ${b.kind} ${b.blurb}`.toLowerCase().includes(q)) return false;
+      }
+      return true;
+    });
+    const c: Record<string, number> = { all: scoped.length };
+    scoped.forEach((b) => { c[b.cat] = (c[b.cat] || 0) + 1; });
     return c;
-  }, [bridges]);
+  }, [bridges, query, statusFilter, view]);
 
   const list = useMemo(() => {
     return bridges.filter((b) => {
+      if (view === "catalog" && b.status !== "off") return false;
+      if (view === "grid" && b.status === "off") return false;
       if (cat !== "all" && b.cat !== cat) return false;
       if (statusFilter !== "all" && b.status !== statusFilter) return false;
-      if (view === "catalog" && b.status !== "off") return false;
-      if (view === "grid" && cat === "all" && statusFilter === "all" && b.status === "off") return false;
       if (query) {
         const q = query.toLowerCase();
         if (!`${b.name} ${b.kind} ${b.blurb}`.toLowerCase().includes(q)) return false;
@@ -71,12 +148,12 @@ export function BridgesView() {
   const groups = useMemo(() => {
     if (cat !== "all") {
       const meta = BRIDGE_CATEGORIES.find((c) => c.id === cat);
-      return [{ cat: meta?.label || cat, desc: meta?.desc, items: list }];
+      return [{ id: cat, cat: meta?.label || cat, desc: meta?.desc, items: list }];
     }
     const map: Record<string, LiveBridge[]> = {};
     list.forEach((b) => { (map[b.cat] = map[b.cat] || []).push(b); });
     return BRIDGE_CATEGORIES.filter((c) => c.id !== "all" && map[c.id])
-      .map((c) => ({ cat: c.label, desc: c.desc, items: map[c.id] }));
+      .map((c) => ({ id: c.id, cat: c.label, desc: c.desc, items: map[c.id] }));
   }, [cat, list]);
 
   const stats = useMemo(() => {
@@ -89,83 +166,11 @@ export function BridgesView() {
 
   const open = openId ? bridges.find((b) => b.id === openId) ?? null : null;
 
-  const Row: React.FC<{ b: LiveBridge }> = ({ b }) => {
-    const initials = bridgeInitials(b.name);
-    const action = (() => {
-      if (b.status === "off") return { label: "Connect", icon: <Plus className="w-3 h-3" />, variant: "default" as const };
-      if (b.status === "needs-auth") return { label: "Reauthorize", icon: null, variant: "default" as const };
-      return null;
-    })();
-
-    return (
-      <button
-        type="button"
-        onClick={() => setOpenId(b.id)}
-        className={cn(
-          "w-full grid items-center gap-3 px-3.5 py-2.5 text-left transition-colors",
-          "border-b border-solid border-border last:border-b-0",
-          "hover:bg-muted/40 focus-visible:outline-none focus-visible:bg-muted/60",
-          b.status === "needs-auth" && "bg-accent/30 hover:bg-accent/40",
-        )}
-        style={{ gridTemplateColumns: "28px minmax(160px, 1.4fr) minmax(120px, 1fr) 110px 130px auto" }}
-      >
-        <span
-          className={cn(
-            "w-6 h-6 grid place-items-center rounded-md font-mono font-bold text-[9.5px]",
-            "border border-solid",
-            b.cat === "AI models"
-              ? "bg-primary text-primary-foreground border-primary"
-              : "bg-card text-foreground border-border",
-          )}
-        >
-          {initials}
-        </span>
-        <span className="min-w-0">
-          <div className="text-[12.5px] font-medium text-foreground truncate">{b.name}</div>
-          <div className="font-mono text-[9.5px] uppercase tracking-wide text-muted-foreground/80 truncate">
-            {b.kind} · {b.tagline}
-          </div>
-        </span>
-        <span className="font-mono text-[11px] text-muted-foreground truncate" title={b.account}>
-          {b.account}
-        </span>
-        <span className="font-mono text-[11px] text-muted-foreground/70">
-          {b.addedAt ? new Date(b.addedAt).toLocaleDateString() : "—"}
-        </span>
-        <span className="inline-flex items-center gap-1.5 font-mono text-[11px] uppercase tracking-wide">
-          <span className={statusDotClass(b.status)} />
-          <span
-            className={cn(
-              b.status === "connected" && "text-emerald-600 dark:text-emerald-400",
-              b.status === "needs-auth" && "text-foreground",
-              b.status === "paused" && "text-amber-600 dark:text-amber-400",
-              b.status === "off" && "text-muted-foreground",
-            )}
-          >
-            {STATUS_LABEL[b.status]}
-          </span>
-        </span>
-        <span className="flex justify-end">
-          {action ? (
-            <Badge variant={action.variant} className="gap-1 px-2 py-1 cursor-pointer">
-              {action.icon}
-              {action.label}
-            </Badge>
-          ) : (
-            <span className="text-muted-foreground">
-              <SettingsIcon className="w-3.5 h-3.5" />
-            </span>
-          )}
-        </span>
-      </button>
-    );
-  };
-
   return (
     <EnsShell padded={false} className="flex flex-col">
       <div className="grid h-full min-h-0 overflow-hidden" style={{ gridTemplateColumns: "220px 1fr" }}>
         {/* Sidebar */}
-        <aside className="border-r border-solid border-border bg-card/40 overflow-y-auto p-4 flex flex-col gap-5">
+        <aside className="border-r border-t-0 border-b-0 border-l-0 border-solid border-border bg-card/40 overflow-y-auto p-4 flex flex-col gap-5">
           <div className="flex flex-col gap-0.5">
             <div className="ens-sh px-2 pb-1.5">View</div>
             {([
@@ -175,7 +180,7 @@ export function BridgesView() {
               <button
                 key={v.id}
                 type="button"
-                onClick={() => { setView(v.id); setStatusFilter("all"); }}
+                onClick={() => { setView(v.id); setStatusFilter("all"); setCat("all"); }}
                 className={cn(
                   "flex items-center gap-2 px-2 py-1.5 rounded-md text-[12px] text-left transition-colors",
                   "hover:bg-muted/60 hover:text-foreground",
@@ -220,7 +225,7 @@ export function BridgesView() {
               <button
                 key={s.id}
                 type="button"
-                onClick={() => setStatusFilter(s.id)}
+                onClick={() => selectStatusFilter(s.id)}
                 className={cn(
                   "flex items-center px-2 py-1.5 rounded-md text-[12px] text-left transition-colors",
                   "hover:bg-muted/60 hover:text-foreground",
@@ -243,9 +248,6 @@ export function BridgesView() {
                 encrypted on the connector daemon — never sent to the hub.
               </p>
             </div>
-            <Button onClick={() => setView("catalog")} className="gap-1.5">
-              <Plus className="w-3.5 h-3.5" /> Connect bridge
-            </Button>
           </div>
 
           {!deviceId && !loading && (
@@ -293,7 +295,7 @@ export function BridgesView() {
                 <button
                   key={v}
                   type="button"
-                  onClick={() => setView(v)}
+                  onClick={() => { setView(v); setStatusFilter("all"); setCat("all"); }}
                   className={cn(
                     "h-6 px-3 text-[11.5px] font-medium rounded-[3px] transition-colors",
                     view === v
@@ -307,8 +309,8 @@ export function BridgesView() {
             </div>
           </div>
 
-          {groups.map((g, gi) => (
-            <div key={gi}>
+          {groups.map((g) => (
+            <div key={g.id}>
               {cat === "all" && (
                 <div className="flex items-baseline gap-2.5 mb-2.5 mt-5">
                   <h2 className="ens-h2">{g.cat}</h2>
@@ -321,7 +323,7 @@ export function BridgesView() {
                   className={cn(
                     "grid items-center gap-3 px-3.5 py-2 bg-muted/50",
                     "font-mono text-[9.5px] uppercase tracking-wide text-muted-foreground",
-                    "border-b border-solid border-border",
+                    "border-b border-t-0 border-l-0 border-r-0 border-solid border-border",
                   )}
                   style={{ gridTemplateColumns: "28px minmax(160px, 1.4fr) minmax(120px, 1fr) 110px 130px auto" }}
                 >
@@ -332,7 +334,7 @@ export function BridgesView() {
                   <div>Status</div>
                   <div />
                 </div>
-                {g.items.map((b) => <Row key={b.id} b={b} />)}
+                {g.items.map((b) => <BridgeRow key={b.id} bridge={b} onOpen={setOpenId} />)}
               </div>
             </div>
           ))}

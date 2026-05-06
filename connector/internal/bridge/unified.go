@@ -31,7 +31,7 @@ func (b *BridgeHandler) getAllAgents(params map[string]interface{}) actionResult
 func (b *BridgeHandler) getAllCrons(params map[string]interface{}) actionResult {
 	if b.store == nil {
 		// Fallback to file-based read
-		return b.getCrons()
+		return b.getCrons(params)
 	}
 
 	runtime, _ := params["runtime"].(string)
@@ -41,15 +41,21 @@ func (b *BridgeHandler) getAllCrons(params map[string]interface{}) actionResult 
 	}
 	agentID, _ := params["agentId"].(string)
 	agentID = strings.TrimSpace(agentID)
+	if agentID != "" {
+		if err := ValidateAgentID(agentID); err != nil {
+			return errResultStatus(err.Error(), 400)
+		}
+	}
 	jobs, err := b.store.GetCronJobsFiltered(runtime, agentID)
 	if err != nil {
 		return errResult("failed to read cron jobs: " + err.Error())
 	}
 
-	// If SQLite is empty and no filters are present, fall back to file-based read.
-	// Runtime-filtered calls must return an empty list instead of leaking OpenClaw jobs.
-	if len(jobs) == 0 && runtime == "" && agentID == "" {
-		return b.getCrons()
+	// If SQLite has not been seeded yet, fall back to the OpenClaw jobs.json
+	// source for unscoped or OpenClaw-scoped calls. Other runtime filters must
+	// stay empty instead of leaking OpenClaw jobs.
+	if len(jobs) == 0 && (runtime == "" || runtime == "openclaw") {
+		return b.getCrons(params)
 	}
 
 	jobs = b.enrichOpenClawCronJobsFromRuns(jobs)

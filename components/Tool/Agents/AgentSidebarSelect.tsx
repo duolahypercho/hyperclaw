@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { Bot, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -11,29 +11,30 @@ import {
 } from "@/components/ui/select";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useAgents } from "./provider/agentsProvider";
-import { useAgentIdentities, resolveAvatarUrl, isAvatarText } from "$/hooks/useAgentIdentity";
+import { useAgentIdentities, resolveAvatarUrl } from "$/hooks/useAgentIdentity";
 
-function AgentIcon({ agentId, identities }: { agentId: string; identities: Map<string, { avatar?: string; emoji?: string; name?: string }> }) {
+function AgentIcon({ agentId, agentName, identities }: { agentId: string; agentName: string; identities: Map<string, { avatar?: string; emoji?: string; name?: string }> }) {
   const identity = identities.get(agentId);
   const avatarUrl = resolveAvatarUrl(identity?.avatar);
-  const avatarText = isAvatarText(identity?.avatar) ? identity!.avatar! : undefined;
+  const displayName = identity?.name || agentName || agentId;
+  const fallbackInitials = (displayName || agentId || "AI").slice(0, 2).toUpperCase();
 
   if (avatarUrl) {
     return (
       <Avatar className="h-4 w-4 shrink-0">
         <AvatarImage src={avatarUrl} />
         <AvatarFallback className="text-[8px] bg-primary/10">
-          {avatarText || identity?.emoji || <Bot className="h-2.5 w-2.5" />}
+          {identity?.emoji || fallbackInitials}
         </AvatarFallback>
       </Avatar>
     );
   }
 
-  if (avatarText || identity?.emoji) {
-    return <span className="text-sm shrink-0">{avatarText || identity!.emoji}</span>;
+  if (identity?.emoji) {
+    return <span className="text-sm shrink-0">{identity.emoji}</span>;
   }
 
-  return <Bot className="h-3.5 w-3.5 text-muted-foreground shrink-0" />;
+  return <span className="text-[10px] text-muted-foreground shrink-0">{fallbackInitials}</span>;
 }
 
 export function AgentSidebarSelect() {
@@ -77,7 +78,7 @@ export function AgentSidebarSelect() {
                 <span className="flex items-center gap-2">
                   {isHiring
                     ? <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground shrink-0" />
-                    : <AgentIcon agentId={agent.id} identities={identities} />
+                    : <AgentIcon agentId={agent.id} agentName={agent.name} identities={identities} />
                   }
                   <span className={isHiring ? "truncate text-muted-foreground" : "truncate"}>
                     {identities.get(agent.id)?.name || agent.name}

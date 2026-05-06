@@ -20,8 +20,6 @@ import { cn } from "@/lib/utils";
 import { useGatewayChat, GatewayChatMessage, GatewayChatAttachment, seedHermesSession } from "@OS/AI/core/hook/use-gateway-chat";
 import { useClaudeCodeChat } from "@OS/AI/core/hook/use-claude-code-chat";
 import { useCodexChat } from "@OS/AI/core/hook/use-codex-chat";
-import { gatewayConnection } from "$/lib/openclaw-gateway-ws";
-import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
 import { useUser } from "$/Providers/UserProv";
 import { useHyperclawContext } from "$/Providers/HyperclawProv";
 import { getMediaUrl } from "$/utils";
@@ -44,7 +42,7 @@ import { createMergeToolCalls } from "./gateway-chat/mergeToolCallsWithResults";
 import { exportChatAsMarkdown } from "./gateway-chat/exportChat";
 import { SlashCommandMenu } from "./gateway-chat/SlashCommandMenu";
 import { SLASH_COMMANDS, type SlashCommand } from "./gateway-chat/slashCommands";
-import { createNewChatSessionKey } from "./gateway-chat/sessionKeys";
+import { createAgentPrimarySessionKey, createNewChatSessionKey } from "./gateway-chat/sessionKeys";
 import { useRuntimeModels } from "@OS/AI/core/hook/use-runtime-models";
 import { AgentDetailDialog } from "$/components/Tool/Agents/AgentDetailDialog";
 import SessionHistoryDropdown from "$/components/SessionHistoryDropdown";
@@ -52,11 +50,14 @@ import type { BackendTab } from "./gateway-chat/GatewayChatHeader";
 import { OPEN_AGENT_CHAT_EVENT } from "./StatusWidget";
 import { useAgentStatus } from "$/components/ensemble";
 import { resolveClearedChatSessionKey } from "@OS/AI/core/hook/chat-clear-boundary";
+import { fetchAgentSessions, filterDirectChatSessions, type AgentSessionListItem } from "./agent-session-list";
 
 /* ── Panel event ─────────────────────────────────────────── */
 
 export const OPEN_AGENT_PANEL_EVENT = "open-agent-panel";
 export const CLEAR_AGENT_CHAT_EVENT = "agent-chat:clear-current";
+export const RELOAD_AGENT_CHAT_EVENT = "agent-chat:reload-current";
+export const AGENT_CHAT_ACTIVE_EVENT = "agent-chat:active-changed";
 
 export function dispatchOpenAgentPanel(agentId: string, sessionKey?: string) {
   window.dispatchEvent(
@@ -67,9 +68,10 @@ export function dispatchOpenAgentPanel(agentId: string, sessionKey?: string) {
 /* ── Types ────────────────────────────────────────────────── */
 
 type PanelTab = "chat" | "edit";
-type SessionListItem = { key: string; label?: string; updatedAt?: number; status?: string; trigger?: string; preview?: string };
+type SessionListItem = AgentSessionListItem;
 
 const SESSION_LIST_CACHE_TTL_MS = 15_000;
+const HISTORY_READY_TIMEOUT_MS = 12_000;
 
 interface AgentChatPanelProps {
   open: boolean;
@@ -313,7 +315,7 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
   const { models: runtimeModels, loading: runtimeModelsLoading } = useRuntimeModels(backendTab);
 
   // Session key — prefer the primary session key when provided
-  const sessionKey = selectedSessionKeyForActiveAgent || initialSessionKey || `agent:${agentId}:main`;
+  const sessionKey = selectedSessionKeyForActiveAgent || initialSessionKey || createAgentPrimarySessionKey(agentId);
 
   // Determine effective provider
   const effectiveProvider = backendTab === "claude-code" ? "claude-code"
@@ -375,16 +377,35 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
     setChatSessionKey(sessionKey);
   }, [sessionKey, setChatSessionKey]);
 
-  // Initial load — cached session lists skip the skeleton, not the chat history.
+  // Initial load — session lists and message history are separate data sources.
+  // Keep the skeleton visible until history resolves, otherwise cached sessions
+  // can briefly render the empty state before messages appear.
   const initialLoadDoneRef = useRef(false);
-  const [initialReady, setInitialReady] = useState(hadInitialSessionsRef.current);
+  const historyReadyTokenRef = useRef(0);
+  const [initialReady, setInitialReady] = useState(() => messages.length > 0);
+  const waitForHistoryReady = useCallback(async () => {
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        loadChatHistory(),
+        new Promise<void>((resolve) => {
+          timeoutId = setTimeout(resolve, HISTORY_READY_TIMEOUT_MS);
+        }),
+      ]);
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
+    }
+  }, [loadChatHistory]);
 
   useEffect(() => {
     if (initialLoadDoneRef.current) return;
     initialLoadDoneRef.current = true;
-    loadChatHistory()
+    const token = ++historyReadyTokenRef.current;
+    waitForHistoryReady()
       .catch(() => {})
       .finally(() => {
+        const stale = historyReadyTokenRef.current !== token;
+        if (stale) return;
         setInitialReady(true);
         // Only fetch sessions if parent didn't provide cached ones.
         // Session list cache and message history are separate data sources.
@@ -408,11 +429,16 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
       suppressNextSessionReloadRef.current = null;
       return;
     }
+    const token = ++historyReadyTokenRef.current;
     setInitialReady(false);
-    loadChatHistory()
+    waitForHistoryReady()
       .catch(() => {})
-      .finally(() => setInitialReady(true));
-  }, [sessionKey, loadChatHistory]);
+      .finally(() => {
+        const stale = historyReadyTokenRef.current !== token;
+        if (stale) return;
+        setInitialReady(true);
+      });
+  }, [agentId, backendTab, sessionKey, waitForHistoryReady]);
 
   // Fetch sessions
   const fetchSessions = useCallback(async () => {
@@ -442,8 +468,9 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
     const cached = sessionFetchCacheRef.current.get(fetchKey);
     if (cached && Date.now() - cached.ts < SESSION_LIST_CACHE_TTL_MS) {
       if (isCurrentRequest()) {
-        setSessions(cached.sessions);
-        onSessionsUpdate?.(cached.sessions);
+        const directSessions = filterDirectChatSessions(cached.sessions);
+        setSessions(directSessions);
+        onSessionsUpdate?.(directSessions);
         setSessionsLoading(false);
       }
       return;
@@ -454,69 +481,27 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
     try {
       let request = sessionFetchInflightRef.current.get(fetchKey);
       if (!request) {
-        request = (async (): Promise<SessionListItem[]> => {
-          let result: SessionListItem[] = [];
-          if (requestBackendTab === "openclaw") {
-            if (gatewayConnection.isConnected()) {
-              const r = await gatewayConnection.listSessions(requestAgentId, 50).catch(() => ({ sessions: [] as any[] }));
-              result = (r.sessions || []).map((s: any) => ({
-                ...s,
-                label: s.label || s.key,
-                trigger: s.kind || s.trigger,
-                preview: s.preview || s.lastMessage,
-              }));
-            }
-          } else if (requestBackendTab === "claude-code") {
-            const r = await bridgeInvoke("claude-code-list-sessions", { agentId: requestAgentId, limit: 50, ...(projectPath ? { projectPath } : {}) }).catch(() => ({ sessions: [] })) as any;
-            result = (r?.sessions || []).map((s: any) => ({
-              key: s.key || `claude:${s.id}`,
-              label: s.label || s.id?.slice(0, 8),
-              updatedAt: s.updatedAt,
-              status: s.status,
-              trigger: s.kind || s.trigger,
-              preview: s.preview,
-            }));
-          } else if (requestBackendTab === "codex") {
-            const r = await bridgeInvoke("codex-list-sessions", { agentId: requestAgentId, limit: 50, ...(projectPath ? { projectPath } : {}) }).catch(() => ({ sessions: [] })) as any;
-            result = (r?.sessions || []).map((s: any) => ({
-              key: s.key || `codex:${s.id}`,
-              label: s.label || s.id?.slice(0, 8),
-              updatedAt: s.updatedAt,
-              status: s.status,
-              trigger: s.kind || s.trigger,
-              preview: s.preview,
-            }));
-          } else if (requestBackendTab === "hermes") {
-            // Strip "hermes:" prefix — the connector expects the bare profile name
-            const hermesProfileId = requestAgentId.startsWith("hermes:") ? requestAgentId.slice(7) : requestAgentId;
-            const r = await bridgeInvoke("hermes-sessions", { agentId: hermesProfileId }).catch(() => ({ sessions: [] })) as any;
-            result = (r?.sessions || []).map((s: any) => ({
-              key: `hermes:${s.key || s.id}`,
-              label: s.label || (s.key || s.id)?.slice(0, 16),
-              updatedAt: s.updatedAt,
-              status: s.status,
-              trigger: s.kind || s.trigger,
-              preview: s.preview,
-            }));
-          }
-          result.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-          // Safety cap at 100 — the dropdown is scrollable and has a built-in
-          // search filter, so we no longer need the aggressive 15-item cut-off
-          // that was previously hiding legitimate Codex/Claude history.
-          return result.slice(0, 100);
-        })().finally(() => {
+        request = fetchAgentSessions({
+          agentId: requestAgentId,
+          backendTab: requestBackendTab,
+          projectPath,
+          limit: 100,
+        }).finally(() => {
           sessionFetchInflightRef.current.delete(fetchKey);
         });
         sessionFetchInflightRef.current.set(fetchKey, request);
       }
 
       const capped = await request;
-      sessionFetchCacheRef.current.set(fetchKey, { sessions: capped, ts: Date.now() });
+      const directSessions = filterDirectChatSessions(capped);
+      sessionFetchCacheRef.current.set(fetchKey, { sessions: directSessions, ts: Date.now() });
       if (!isCurrentRequest()) return;
-      setSessions(capped);
-      onSessionsUpdate?.(capped);
+      setSessions(directSessions);
+      onSessionsUpdate?.(directSessions);
     } catch {
       if (isCurrentRequest()) {
+        setSessions([]);
+        onSessionsUpdate?.([]);
         setSessionsError("Failed to load sessions");
       }
     } finally {
@@ -576,9 +561,17 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
       setOwnedSelectedSessionKey(initialSessionKey);
       setChatSessionKey(initialSessionKey);
       // Load chat history for the newly-arrived primary session key
-      loadChatHistory().catch(() => {});
+      const token = ++historyReadyTokenRef.current;
+      setInitialReady(false);
+      waitForHistoryReady()
+        .catch(() => {})
+        .finally(() => {
+          const stale = historyReadyTokenRef.current !== token;
+          if (stale) return;
+          setInitialReady(true);
+        });
     }
-  }, [initialSessionKey, setChatSessionKey, loadChatHistory, setOwnedSelectedSessionKey]);
+  }, [agentId, backendTab, initialSessionKey, setChatSessionKey, waitForHistoryReady, setOwnedSelectedSessionKey]);
 
   // Sync sessions from parent when initialSessions prop changes (e.g., parent has cached sessions for new agent)
   const prevInitialSessionsRef = useRef(initialSessions);
@@ -590,42 +583,38 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
     }
   }, [initialSessions]);
 
-  // Reset on agent change — skip skeleton and session fetch if parent provided cached sessions
+  // Reset on agent change — cached session lists should not skip the chat-history skeleton.
   useEffect(() => {
     if (prevAgentRef.current === agentId) return;
     prevAgentRef.current = agentId;
     // Use the primary session key if provided, otherwise fall back to the default.
     // When initialSessionKey is undefined (primary key still resolving from connector),
     // use the fallback — the sync effect will update when the real key arrives.
-    const newKey = initialSessionKey || `agent:${agentId}:main`;
+    const newKey = initialSessionKey || createAgentPrimarySessionKey(agentId);
     suppressNextSessionReloadRef.current = newKey;
     setOwnedSelectedSessionKey(newKey);
     setChatSessionKey(newKey);
 
-    // If parent provided fresh cached sessions, skip the skeleton and session fetch
+    // If parent provided fresh cached sessions, only skip the session-list fetch.
     const hasCachedSessions = initialSessions && initialSessions.length > 0;
     if (hasCachedSessions) {
-      initialLoadDoneRef.current = true;
       hadInitialSessionsRef.current = true;
-      setInitialReady(true);
       setSessions(initialSessions);
-      // Only load chat history if we have the real primary key — otherwise the sync
-      // effect will trigger it when initialSessionKey arrives.
-      if (initialSessionKey) {
-        loadChatHistory().catch(() => {});
-      }
     } else {
-      // No cached sessions — show skeleton while loading
-      initialLoadDoneRef.current = false;
-      setInitialReady(false);
       hadInitialSessionsRef.current = false;
-      loadChatHistory().catch(() => {}).finally(() => {
-        initialLoadDoneRef.current = true;
-        setInitialReady(true);
-        fetchSessionsRef.current();
-      });
     }
-  }, [agentId, setChatSessionKey, loadChatHistory, initialSessions, initialSessionKey, setOwnedSelectedSessionKey]);
+
+    const token = ++historyReadyTokenRef.current;
+    setInitialReady(false);
+    waitForHistoryReady().catch(() => {}).finally(() => {
+      const stale = historyReadyTokenRef.current !== token;
+      if (stale) return;
+      setInitialReady(true);
+      if (!hasCachedSessions) {
+        fetchSessionsRef.current();
+      }
+    });
+  }, [agentId, backendTab, setChatSessionKey, waitForHistoryReady, initialSessions, initialSessionKey, setOwnedSelectedSessionKey]);
 
   // Merge tool calls
   const mergeToolCalls = useMemo(() => createMergeToolCalls(), []);
@@ -779,7 +768,8 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
   // Auto-send queued messages
   const prevLoadingRef = useRef(isLoading);
   useEffect(() => {
-    if (prevLoadingRef.current && !isLoading && messageQueue.length > 0) {
+    const loadingJustEnded = prevLoadingRef.current && !isLoading;
+    if (loadingJustEnded && messageQueue.length > 0) {
       const [next, ...rest] = messageQueue;
       setMessageQueue(rest);
       sendMessage(next.text, next.attachments);
@@ -936,7 +926,14 @@ export const PanelChatView = forwardRef<PanelChatViewHandle, PanelChatViewProps>
 
       await sendMessage(finalMessage, gatewayAttachments);
     },
-    [sendMessage, quotedMessage, isLoading, toGatewayAttachments, handleSlashCommand, inputBlocked]
+    [
+      handleSlashCommand,
+      inputBlocked,
+      isLoading,
+      quotedMessage,
+      sendMessage,
+      toGatewayAttachments,
+    ]
   );
 
   // Callbacks

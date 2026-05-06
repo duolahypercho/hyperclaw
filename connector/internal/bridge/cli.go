@@ -456,7 +456,8 @@ func (b *BridgeHandler) resolveTeamFast() []TeamAgent {
 		}
 	}
 	// Store empty or unavailable — fall through to config/workspace/CLI resolution.
-	return b.ResolveTeam()
+	result := b.ResolveTeam()
+	return result
 }
 
 func (b *BridgeHandler) listAgents() actionResult {
@@ -539,14 +540,16 @@ func (b *BridgeHandler) openclawConfigSet(params map[string]interface{}) actionR
 
 var agentNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_.-]+$`)
 
-const openClawAgentAddTimeoutMs = 480000
+// First-run OpenClaw agent creation may stage bundled plugin runtime deps before
+// it reaches the config write path. Slow networks can exceed eight minutes.
+const openClawAgentAddTimeoutMs = 900000
 
 // openClawAgentDeleteTimeoutMs covers the same first-run plugin-staging cost
 // that openClawAgentAddTimeoutMs covers. `openclaw agents delete` lazily
 // stages bundled plugin runtime deps before reaching the config write path,
-// which can easily exceed 25s on a fresh install or after an OpenClaw upgrade.
+// which can exceed eight minutes on a fresh install or after an OpenClaw upgrade.
 // Matching the add budget keeps both sides of the agent lifecycle consistent.
-const openClawAgentDeleteTimeoutMs = 480000
+const openClawAgentDeleteTimeoutMs = openClawAgentAddTimeoutMs
 
 const openClawDoctorFixTimeoutMs = 600000
 const openClawSecurityAuditDeepTimeoutMs = 600000
@@ -580,13 +583,18 @@ func (b *BridgeHandler) addAgent(params map[string]interface{}) actionResult {
 		"agents", "add", name, "--workspace", workspacePath, "--non-interactive",
 	}, openClawAgentAddTimeoutMs)
 	if err != nil {
-		msg := strings.TrimSpace(stderr)
-		if msg == "" {
-			msg = strings.TrimSpace(stdout)
+		// `openclaw agents add` can exit non-zero after writing openclaw.json
+		// (or after our timeout fires late in plugin staging). The config is the
+		// source of truth for whether the agent exists.
+		if agentExistsInConfig(b.paths, normalizedID) {
+			log.Printf("[addAgent] openclaw agents add %q returned %v but config now contains the agent; treating as success (stderr=%q)", name, err, strings.TrimSpace(stderr))
+			b.InvalidateTeamCache()
+			if b.onAgentsChanged != nil {
+				go b.onAgentsChanged()
+			}
+			return okResult(map[string]interface{}{"success": true})
 		}
-		if msg == "" {
-			msg = err.Error()
-		}
+		msg := openClawCommandFailureMessage(stdout, stderr, err)
 		log.Printf("[addAgent] openclaw agents add %q failed: err=%v stdout=%q stderr=%q", name, err, stdout, stderr)
 		return okResult(map[string]interface{}{"success": false, "error": msg})
 	}
@@ -598,6 +606,31 @@ func (b *BridgeHandler) addAgent(params map[string]interface{}) actionResult {
 	}
 
 	return okResult(map[string]interface{}{"success": true})
+}
+
+func openClawCommandFailureMessage(stdout, stderr string, err error) string {
+	stderr = strings.TrimSpace(stderr)
+	stdout = strings.TrimSpace(stdout)
+	if errors.Is(err, errOpenClawCommandTimedOut) {
+		msg := strings.TrimSpace(err.Error())
+		if stderr != "" {
+			return msg + ": " + stderr
+		}
+		if stdout != "" {
+			return msg + ": " + stdout
+		}
+		return msg
+	}
+	if stderr != "" {
+		return stderr
+	}
+	if stdout != "" {
+		return stdout
+	}
+	if err != nil {
+		return err.Error()
+	}
+	return "openclaw command failed"
 }
 
 // agentExistsInConfig reads openclaw.json directly to check if an agent exists.
@@ -653,18 +686,14 @@ func (b *BridgeHandler) deleteAgent(params map[string]interface{}) actionResult 
 	inConfig := agentExistsInConfig(b.paths, normalizedID)
 
 	if inConfig {
-		_, stderr, err := runOpenClaw(context.Background(), b.paths, []string{
+		stdout, stderr, err := runOpenClaw(context.Background(), b.paths, []string{
 			"agents", "delete", normalizedID, "--force",
 		}, openClawAgentDeleteTimeoutMs)
 		if err != nil {
 			// openclaw CLI may exit 1 even when the deletion succeeded.
 			// Verify via config file (not CLI, to avoid gateway deadlock).
 			if agentExistsInConfig(b.paths, normalizedID) {
-				msg := strings.TrimSpace(stderr)
-				if msg == "" {
-					msg = err.Error()
-				}
-				return okResult(map[string]interface{}{"success": false, "error": msg})
+				return okResult(map[string]interface{}{"success": false, "error": openClawCommandFailureMessage(stdout, stderr, err)})
 			}
 			// Agent is gone from config — treat as success despite non-zero exit
 		}
@@ -786,8 +815,19 @@ func (b *BridgeHandler) deleteAgent(params map[string]interface{}) actionResult 
 
 // ── get-crons (CLI) ─────────────────────────────────────────────────────────
 
-func (b *BridgeHandler) getCrons() actionResult {
-	crons := getCronsFromJSON(b.paths)
+func (b *BridgeHandler) getCrons(params map[string]interface{}) actionResult {
+	agentID := strings.TrimSpace(strParam(params, "agentId"))
+	if agentID != "" {
+		if err := ValidateAgentID(agentID); err != nil {
+			return errResultStatus(err.Error(), 400)
+		}
+	}
+	jobID := strings.TrimSpace(strParam(params, "jobId"))
+	if jobID != "" && !uuidRegex.MatchString(jobID) {
+		return errResultStatus("Job not found", 404)
+	}
+
+	crons := getCronsFromJSONFiltered(b.paths, agentID, jobID)
 	return okResult(crons)
 }
 
@@ -1025,6 +1065,9 @@ func (b *BridgeHandler) cronAddDirect(p map[string]interface{}, runtime string) 
 			"lastRunAtMs": nil,
 			"lastStatus":  "idle",
 		},
+	}
+	if agentID != "" {
+		rawObj["agentId"] = agentID
 	}
 	rawJSON, err := json.Marshal(rawObj)
 	if err != nil {

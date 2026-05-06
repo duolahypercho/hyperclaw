@@ -43,6 +43,8 @@ export interface BridgeDef {
   models?: BridgeModel[];
   /** Onboarding provider id (matches PROVIDERS[].id) when this bridge is an LLM. */
   providerId?: string;
+  /** Domain used to resolve the provider's company favicon/logo. */
+  logoDomain?: string;
 }
 
 export type BridgeCategoryId =
@@ -97,6 +99,24 @@ const PROVIDER_META: Record<string, { kind: string; tagline: string; blurb: stri
   perplexity: { kind: "Search", tagline: "Cited search", blurb: "Sonar — live web search with cited answers.", pricing: "$1 / 1k", docsUrl: "docs.perplexity.ai" },
 };
 
+const PROVIDER_LOGO_DOMAINS: Record<string, string> = {
+  anthropic: "anthropic.com",
+  openai: "openai.com",
+  google: "gemini.google.com",
+  openrouter: "openrouter.ai",
+  deepseek: "deepseek.com",
+  mistral: "mistral.ai",
+  xai: "x.ai",
+  groq: "groq.com",
+  together: "together.ai",
+  minimax: "minimax.io",
+  moonshot: "moonshot.cn",
+  cerebras: "cerebras.ai",
+  huggingface: "huggingface.co",
+  nvidia: "nvidia.com",
+  perplexity: "perplexity.ai",
+};
+
 function categoryForProvider(p: ProviderDef): BridgeCategoryId {
   if (p.id === "huggingface" || p.id === "groq" || p.id === "together" || p.id === "cerebras" || p.id === "nvidia") return "AI infra";
   if (p.id === "perplexity") return "Search & RAG";
@@ -120,6 +140,7 @@ const PROVIDER_BRIDGES: BridgeDef[] = PROVIDERS.map((p) => {
     tagline: meta.tagline,
     models: p.models.map((m) => ({ name: m.id, ctx: undefined, price: undefined })),
     providerId: p.id,
+    logoDomain: PROVIDER_LOGO_DOMAINS[p.id],
   };
 });
 
@@ -130,97 +151,97 @@ const EXTRA_BRIDGES: BridgeDef[] = [
   { id: "tavily", name: "Tavily", kind: "Search", cat: "Search & RAG", auth: "apikey",
     fields: [{ key: "apiKey", label: "API key", ph: "tvly-...", secret: true }],
     scopes: ["search", "extract"], pricing: "$8 / 1k", docsUrl: "docs.tavily.com",
-    blurb: "Agent-grade web search & page extract.", tagline: "Agent search" },
+    blurb: "Agent-grade web search & page extract.", tagline: "Agent search", logoDomain: "tavily.com" },
   { id: "exa", name: "Exa", kind: "Search", cat: "Search & RAG", auth: "apikey",
     fields: [{ key: "apiKey", label: "API key", ph: "...", secret: true }],
     scopes: ["search", "contents", "similar"], pricing: "$10 / 1k", docsUrl: "docs.exa.ai",
-    blurb: "Neural web search built for LLMs.", tagline: "Neural search" },
+    blurb: "Neural web search built for LLMs.", tagline: "Neural search", logoDomain: "exa.ai" },
   { id: "firecrawl", name: "Firecrawl", kind: "Scraping", cat: "Search & RAG", auth: "apikey",
     fields: [{ key: "apiKey", label: "API key", ph: "fc-...", secret: true }],
     scopes: ["scrape", "crawl", "map"], pricing: "per page", docsUrl: "firecrawl.dev",
-    blurb: "Crawl any site → clean Markdown.", tagline: "Scrape" },
+    blurb: "Crawl any site → clean Markdown.", tagline: "Scrape", logoDomain: "firecrawl.dev" },
   { id: "pinecone", name: "Pinecone", kind: "Vector DB", cat: "Search & RAG", auth: "apikey",
     fields: [{ key: "apiKey", label: "API key", ph: "...", secret: true }, { key: "env", label: "Environment", ph: "us-east-1" }],
     scopes: ["query", "upsert", "delete"], pricing: "per pod", docsUrl: "docs.pinecone.io",
-    blurb: "Managed vector DB.", tagline: "Vectors" },
+    blurb: "Managed vector DB.", tagline: "Vectors", logoDomain: "pinecone.io" },
 
   // Voice & vision
   { id: "elevenlabs", name: "ElevenLabs", kind: "Voice", cat: "Voice & vision", auth: "apikey",
     fields: [{ key: "apiKey", label: "API key", ph: "...", secret: true }],
     scopes: ["tts", "voices", "clone"], pricing: "per char", docsUrl: "elevenlabs.io/docs",
-    blurb: "Studio-grade TTS + voice cloning.", tagline: "Voice synthesis" },
+    blurb: "Studio-grade TTS + voice cloning.", tagline: "Voice synthesis", logoDomain: "elevenlabs.io" },
   { id: "deepgram", name: "Deepgram", kind: "Voice", cat: "Voice & vision", auth: "apikey",
     fields: [{ key: "apiKey", label: "API key", ph: "...", secret: true }],
     scopes: ["transcribe", "live", "tts"], pricing: "per minute", docsUrl: "developers.deepgram.com",
-    blurb: "Nova speech → text. Streaming.", tagline: "Real-time STT" },
+    blurb: "Nova speech → text. Streaming.", tagline: "Real-time STT", logoDomain: "deepgram.com" },
 
   // Communication
   { id: "gmail", name: "Gmail", kind: "Email", cat: "Communication", auth: "oauth",
     fields: [], scopes: ["read", "send", "label", "draft"], pricing: "free", docsUrl: "developers.google.com/gmail",
-    blurb: "Read, label, draft, and send.", tagline: "Email" },
+    blurb: "Read, label, draft, and send.", tagline: "Email", logoDomain: "mail.google.com" },
   { id: "slack", name: "Slack", kind: "Messaging", cat: "Communication", auth: "oauth",
     fields: [], scopes: ["channels:read", "chat:write", "reactions"], pricing: "free", docsUrl: "api.slack.com",
-    blurb: "Read channels, post, react, summarize.", tagline: "Team chat" },
+    blurb: "Read channels, post, react, summarize.", tagline: "Team chat", logoDomain: "slack.com" },
   { id: "resend", name: "Resend", kind: "Email", cat: "Communication", auth: "apikey",
     fields: [{ key: "apiKey", label: "API key", ph: "re_...", secret: true }],
     scopes: ["emails:send", "domains"], pricing: "$20 / mo", docsUrl: "resend.com/docs",
-    blurb: "Transactional email built for devs.", tagline: "Tx email" },
+    blurb: "Transactional email built for devs.", tagline: "Tx email", logoDomain: "resend.com" },
   { id: "twilio", name: "Twilio", kind: "Messaging", cat: "Communication", auth: "token",
     fields: [{ key: "sid", label: "Account SID", ph: "AC..." }, { key: "token", label: "Auth token", ph: "...", secret: true }],
     scopes: ["sms", "voice", "verify"], pricing: "per message", docsUrl: "twilio.com/docs",
-    blurb: "SMS + voice + verify.", tagline: "SMS & voice" },
+    blurb: "SMS + voice + verify.", tagline: "SMS & voice", logoDomain: "twilio.com" },
 
   // Productivity
   { id: "notion", name: "Notion", kind: "Docs", cat: "Productivity", auth: "oauth",
     fields: [], scopes: ["read", "write", "blocks"], pricing: "free", docsUrl: "developers.notion.com",
-    blurb: "Read + write pages, databases, blocks.", tagline: "Workspace" },
+    blurb: "Read + write pages, databases, blocks.", tagline: "Workspace", logoDomain: "notion.so" },
   { id: "linear", name: "Linear", kind: "Issues", cat: "Productivity", auth: "oauth",
     fields: [], scopes: ["issues:read", "issues:write"], pricing: "free", docsUrl: "developers.linear.app",
-    blurb: "Issue triage and updates.", tagline: "Issues" },
+    blurb: "Issue triage and updates.", tagline: "Issues", logoDomain: "linear.app" },
   { id: "gcal", name: "Google Calendar", kind: "Scheduling", cat: "Productivity", auth: "oauth",
     fields: [], scopes: ["events.read", "events.write"], pricing: "free", docsUrl: "developers.google.com/calendar",
-    blurb: "Defend maker time, schedule.", tagline: "Calendar" },
+    blurb: "Defend maker time, schedule.", tagline: "Calendar", logoDomain: "calendar.google.com" },
   { id: "gdrive", name: "Google Drive", kind: "File store", cat: "Productivity", auth: "oauth",
     fields: [], scopes: ["read", "write", "share"], pricing: "free", docsUrl: "developers.google.com/drive",
-    blurb: "Files, docs, attachments.", tagline: "Files" },
+    blurb: "Files, docs, attachments.", tagline: "Files", logoDomain: "drive.google.com" },
 
   // Code & deploy
   { id: "github", name: "GitHub", kind: "Code host", cat: "Code & deploy", auth: "oauth",
     fields: [], scopes: ["repo", "pull_requests", "issues", "actions"], pricing: "free", docsUrl: "docs.github.com/rest",
-    blurb: "PRs, issues, actions, code review.", tagline: "Code" },
+    blurb: "PRs, issues, actions, code review.", tagline: "Code", logoDomain: "github.com" },
   { id: "vercel", name: "Vercel", kind: "Deploy", cat: "Code & deploy", auth: "oauth",
     fields: [], scopes: ["deployments", "projects", "env"], pricing: "free", docsUrl: "vercel.com/docs/rest-api",
-    blurb: "Deploy previews, env, observability.", tagline: "Edge deploy" },
+    blurb: "Deploy previews, env, observability.", tagline: "Edge deploy", logoDomain: "vercel.com" },
   { id: "sentry", name: "Sentry", kind: "Monitoring", cat: "Code & deploy", auth: "token",
     fields: [{ key: "token", label: "Auth token", ph: "sntrys_...", secret: true }, { key: "org", label: "Org slug", ph: "your-org" }],
     scopes: ["event:read", "issue:read"], pricing: "usage", docsUrl: "docs.sentry.io",
-    blurb: "Errors and performance issues.", tagline: "Errors" },
+    blurb: "Errors and performance issues.", tagline: "Errors", logoDomain: "sentry.io" },
 
   // Data & storage
   { id: "postgres", name: "Postgres", kind: "Database", cat: "Data & storage", auth: "token",
     fields: [{ key: "host", label: "Host", ph: "db.example.co" }, { key: "db", label: "Database", ph: "prod" }, { key: "user", label: "User", ph: "agent_ro" }, { key: "pass", label: "Password", ph: "...", secret: true }],
     scopes: ["select", "schema"], pricing: "self-hosted", docsUrl: "postgresql.org/docs",
-    blurb: "Read-only against a Postgres replica.", tagline: "OLTP" },
+    blurb: "Read-only against a Postgres replica.", tagline: "OLTP", logoDomain: "postgresql.org" },
   { id: "s3", name: "S3", kind: "Object store", cat: "Data & storage", auth: "iam",
     fields: [{ key: "bucket", label: "Bucket", ph: "my-bucket" }, { key: "region", label: "Region", ph: "us-east-1" }, { key: "access", label: "Access key", ph: "AKIA..." }, { key: "secret", label: "Secret", ph: "...", secret: true }],
     scopes: ["get", "put", "list"], pricing: "pass-through", docsUrl: "docs.aws.amazon.com/s3",
-    blurb: "Object storage for files and dumps.", tagline: "Objects" },
+    blurb: "Object storage for files and dumps.", tagline: "Objects", logoDomain: "aws.amazon.com" },
   { id: "supabase", name: "Supabase", kind: "Database", cat: "Data & storage", auth: "apikey",
     fields: [{ key: "url", label: "Project URL", ph: "https://....supabase.co" }, { key: "key", label: "Service role key", ph: "...", secret: true }],
     scopes: ["rest", "realtime", "storage"], pricing: "free + paid", docsUrl: "supabase.com/docs",
-    blurb: "Postgres + auth + storage in one.", tagline: "Backend" },
+    blurb: "Postgres + auth + storage in one.", tagline: "Backend", logoDomain: "supabase.com" },
 
   // Sales & support
   { id: "stripe", name: "Stripe", kind: "Payments", cat: "Sales & support", auth: "apikey",
     fields: [{ key: "secret", label: "Secret key", ph: "sk_live_...", secret: true }, { key: "whsec", label: "Webhook signing secret", ph: "whsec_...", secret: true }],
     scopes: ["read", "write", "webhooks"], pricing: "pass-through", docsUrl: "stripe.com/docs/api",
-    blurb: "Payments, subscriptions, invoices.", tagline: "Payments" },
+    blurb: "Payments, subscriptions, invoices.", tagline: "Payments", logoDomain: "stripe.com" },
 
   // Custom
   { id: "mcp", name: "Model Context Protocol", kind: "MCP", cat: "Custom", auth: "token",
     fields: [{ key: "url", label: "MCP server URL", ph: "https://..." }, { key: "token", label: "Auth token (optional)", ph: "...", secret: true }],
     scopes: ["resources", "tools"], pricing: "self-hosted", docsUrl: "modelcontextprotocol.io",
-    blurb: "Connect any MCP server.", tagline: "MCP" },
+    blurb: "Connect any MCP server.", tagline: "MCP", logoDomain: "modelcontextprotocol.io" },
   { id: "webhook", name: "HTTP / Webhook", kind: "HTTP", cat: "Custom", auth: "token",
     fields: [{ key: "url", label: "Endpoint", ph: "https://..." }, { key: "secret", label: "Signing secret", ph: "...", secret: true }],
     scopes: ["inbound", "outbound", "signature"], pricing: "free", docsUrl: "—",

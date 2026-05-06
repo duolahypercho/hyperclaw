@@ -22,6 +22,18 @@ export function createMergeToolCalls() {
   let prevOutputRef: GatewayChatMessage[] | null = null;
   const mergedCache = new Map<string, GatewayChatMessage>();
 
+  const getToolResultCallId = (msg: GatewayChatMessage): string | undefined =>
+    (msg as any).toolCallId ||
+    (msg as any).toolResults?.[0]?.toolCallId;
+
+  const messageHasToolCallId = (msg: GatewayChatMessage, toolCallId: string): boolean => {
+    if (msg.role !== "assistant") return false;
+    if (msg.toolCalls?.some((tc) => tc.id === toolCallId)) {
+      return true;
+    }
+    return !!msg.contentBlocks?.some((block: any) => block.type === "toolCall" && block.id === toolCallId);
+  };
+
   return function mergeToolCallsWithResults(
     messages: GatewayChatMessage[]
   ): GatewayChatMessage[] {
@@ -36,9 +48,14 @@ export function createMergeToolCalls() {
     for (let i = 0; i < messages.length; i++) {
       const msg = messages[i];
 
-      // Skip tool result messages - they'll be merged
+      // Skip tool result messages only once their matching tool call exists.
+      // OpenClaw can stream result/end events before the call/start event reaches
+      // React; keeping orphan results visible prevents a blank gap in live UI.
       if ((msg.role as string) === "toolResult" || msg.role === "tool") {
-        continue;
+        const toolCallId = getToolResultCallId(msg);
+        if (toolCallId && messages.some((m) => messageHasToolCallId(m, toolCallId))) {
+          continue;
+        }
       }
 
       // Check if this is an assistant message with tool calls
@@ -54,14 +71,12 @@ export function createMergeToolCalls() {
 
         // Merge tool results from subsequent messages
         const mergedToolCalls = toolCalls.map((tc) => {
-          const toolId = tc.id || tc.function?.name || "";
+          const toolId = tc.id || "";
 
           const toolResultMsg = messages.find((m) => {
             const role = m.role as string;
             if (role !== "tool" && role !== "toolResult") return false;
-            const msgToolCallId =
-              (m as any).toolCallId ||
-              (m as any).toolResults?.[0]?.toolCallId;
+            const msgToolCallId = getToolResultCallId(m);
             return msgToolCallId === toolId;
           });
 
@@ -85,13 +100,11 @@ export function createMergeToolCalls() {
 
         // Merge content blocks with results
         const mergedContentBlocks = contentBlocks.map((block: any) => {
-          const toolId = block.id;
+          const toolId = block.id || "";
           const toolResultMsg = messages.find((m) => {
             const role = m.role as string;
             if (role !== "tool" && role !== "toolResult") return false;
-            const msgToolCallId =
-              (m as any).toolCallId ||
-              (m as any).toolResults?.[0]?.toolCallId;
+            const msgToolCallId = getToolResultCallId(m);
             return msgToolCallId === toolId;
           });
 

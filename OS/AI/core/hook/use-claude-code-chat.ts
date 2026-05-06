@@ -406,7 +406,7 @@ export function useClaudeCodeChat(
       const requestId = `cc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const statusAgentId = agentId || extractAgentIdFromSessionKey(currentSessionKey);
       activeRequestIdRef.current = requestId;
-      markAgentRunStarted(requestId, statusAgentId);
+      markAgentRunStarted(requestId, statusAgentId, currentSessionKey);
 
       try {
         const activeSkills = agentId ? getActiveSkillsContent(agentId) : "";

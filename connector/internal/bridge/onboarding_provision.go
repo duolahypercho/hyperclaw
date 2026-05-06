@@ -43,7 +43,10 @@ var onboardingCLITokenPatterns = []onboardingCLISecretPattern{
 	{pattern: regexp.MustCompile(`\bAIza[0-9A-Za-z_-]{20,}\b`), replacement: "[redacted]"},
 }
 
+var openClawBindingTargetPattern = regexp.MustCompile(`(?i)(telegram|discord|slack|whatsapp):[^\s|,]+`)
+
 const openClawChannelDoctorFixTimeoutMs = 300000
+const maxOpenClawBindingReassignments = 8
 
 var onboardingAllowedChannelIDs = map[string]bool{
 	"telegram": true,
@@ -375,6 +378,13 @@ func onboardingWorkspaceDir(paths Paths, runtimeName, agentID string) string {
 	default:
 		return paths.AgentDir(runtimeName, agentID)
 	}
+}
+
+func shouldApplyProvisionChannelConfig(runtimeName, agentID string, exists bool) bool {
+	if !exists {
+		return true
+	}
+	return (runtimeName == "openclaw" || runtimeName == "hermes") && agentID == "main"
 }
 
 // knowledgeSection returns a markdown section pointing agents to the shared
@@ -1915,6 +1925,82 @@ const (
 	openClawAgentBindTimeoutMs = 480000
 )
 
+type openClawAgentBinding struct {
+	AgentID string `json:"agentId"`
+	Match   struct {
+		Channel   string `json:"channel"`
+		AccountID string `json:"accountId"`
+	} `json:"match"`
+}
+
+func sanitizeDebugOpenClawBindOutput(value string) string {
+	value = scrubOnboardingCLIOutput(value)
+	return openClawBindingTargetPattern.ReplaceAllString(value, "$1:[target]")
+}
+
+func canonicalOpenClawBindingSpec(channel, accountID string) string {
+	channel = strings.TrimSpace(channel)
+	accountID = strings.TrimSpace(accountID)
+	if channel == "" || accountID == "" {
+		return ""
+	}
+	return channel + ":" + accountID
+}
+
+func (b *BridgeHandler) reassignOpenClawBindingClaims(agentID string, bindings []string) error {
+	stdout, stderr, err := runOpenClaw(context.Background(), b.paths, []string{"agents", "bindings", "--json"}, 15000)
+	if err != nil {
+		msg := strings.TrimSpace(stderr)
+		if msg == "" {
+			msg = err.Error()
+		}
+		return fmt.Errorf("list OpenClaw agent bindings: %s", sanitizeDebugOpenClawBindOutput(msg))
+	}
+	var existing []openClawAgentBinding
+	if err := json.Unmarshal([]byte(stdout), &existing); err != nil {
+		return fmt.Errorf("parse OpenClaw agent bindings: %w", err)
+	}
+
+	reassignmentCount := 0
+	for _, binding := range bindings {
+		channel := binding
+		target := ""
+		if idx := strings.Index(binding, ":"); idx >= 0 {
+			channel = binding[:idx]
+			target = strings.TrimSpace(binding[idx+1:])
+		}
+		if target == "" {
+			continue
+		}
+		for _, current := range existing {
+			if current.AgentID == "" || current.AgentID == agentID {
+				continue
+			}
+			if current.Match.Channel != channel || current.Match.AccountID != target {
+				continue
+			}
+			if reassignmentCount >= maxOpenClawBindingReassignments {
+				return fmt.Errorf("too many OpenClaw binding reassignments for %s", agentID)
+			}
+			canonicalBinding := canonicalOpenClawBindingSpec(current.Match.Channel, current.Match.AccountID)
+			if canonicalBinding == "" {
+				continue
+			}
+			unbindArgs := []string{"agents", "unbind", "--agent", current.AgentID, "--bind", canonicalBinding, "--json"}
+			_, unbindStderr, unbindErr := runOpenClaw(context.Background(), b.paths, unbindArgs, 30000)
+			if unbindErr != nil {
+				msg := strings.TrimSpace(unbindStderr)
+				if msg == "" {
+					msg = unbindErr.Error()
+				}
+				return fmt.Errorf("unbind OpenClaw agent %s: %s", current.AgentID, sanitizeDebugOpenClawBindOutput(msg))
+			}
+			reassignmentCount++
+		}
+	}
+	return nil
+}
+
 func (b *BridgeHandler) ensureOpenClawAgentBindings(agentID string, channelConfigs []onboardingChannelConfig, progressKey ...string) error {
 	agentID, err := sanitizeOnboardingAgentID(agentID)
 	if err != nil {
@@ -1965,6 +2051,9 @@ func (b *BridgeHandler) ensureOpenClawAgentBindings(agentID string, channelConfi
 	if err := b.ensureOpenClawPluginEntriesEnabled(bindingChannels); err != nil {
 		log.Printf("[onboarding] ensureOpenClawPluginEntriesEnabled: %v", err)
 	}
+	if err := b.reassignOpenClawBindingClaims(agentID, bindings); err != nil {
+		return err
+	}
 	args := []string{"agents", "bind", "--agent", agentID}
 	for _, binding := range bindings {
 		args = append(args, "--bind", binding)
@@ -1997,6 +2086,9 @@ func (b *BridgeHandler) ensureOpenClawAgentBindings(agentID string, channelConfi
 			} else {
 				log.Printf("[onboarding] OpenClaw agent bind timed out after success output; treating %s as bound", agentID)
 			}
+			if err := b.restartOpenClawGatewayAfterChannelBinding(agentID, len(bindings)); err != nil {
+				return err
+			}
 			return nil
 		}
 		// The openclaw CLI sometimes prints the actionable error to stdout while
@@ -2016,6 +2108,27 @@ func (b *BridgeHandler) ensureOpenClawAgentBindings(agentID string, channelConfi
 			parts = append(parts, "stdout: "+stdoutMsg)
 		}
 		return fmt.Errorf("failed to bind OpenClaw agent %s: %s", agentID, strings.Join(parts, " | "))
+	}
+	return b.restartOpenClawGatewayAfterChannelBinding(agentID, len(bindings))
+}
+
+func (b *BridgeHandler) restartOpenClawGatewayAfterChannelBinding(agentID string, bindingCount int) error {
+	if bindingCount <= 0 {
+		return nil
+	}
+	stdout, stderr, err := runOpenClaw(context.Background(), b.paths, []string{"daemon", "restart"}, 60000)
+	if err != nil {
+		msg := strings.TrimSpace(stderr)
+		if msg == "" {
+			msg = strings.TrimSpace(stdout)
+		}
+		if msg == "" {
+			msg = err.Error()
+		}
+		return fmt.Errorf("restart OpenClaw gateway after channel bind: %s", sanitizeDebugOpenClawBindOutput(msg))
+	}
+	if !waitForGatewayHealthy(45*time.Second, nil) {
+		return fmt.Errorf("OpenClaw gateway did not become healthy after channel bind restart")
 	}
 	return nil
 }
@@ -3068,7 +3181,16 @@ func (b *BridgeHandler) saveOnboardingState(companyName, companyDescription, com
 	if err := write("onboarding-company-profile", companyProfile); err != nil {
 		return err
 	}
-	if err := write("onboarding-provider-configs", providerConfigs); err != nil {
+	providers := decodeProviderConfigs(providerConfigs)
+	if count, err := b.saveOnboardingProviderCredentials(providers); err != nil {
+		return fmt.Errorf("save onboarding provider credentials: %w", err)
+	} else if count > 0 {
+		log.Printf("[onboarding] saved %d provider credential(s) to encrypted credentials store", count)
+	}
+	if err := write(onboardingProviderConfigsKey, redactedOnboardingProviderConfigs(providers)); err != nil {
+		return err
+	}
+	if err := b.store.KVSet(onboardingProviderCredentialsSyncedKey, "true"); err != nil {
 		return err
 	}
 	if err := write("onboarding-runtime-channels", channelConfigs); err != nil {
@@ -3341,6 +3463,13 @@ func (b *BridgeHandler) onboardingConfigureWorkspace(params map[string]interface
 	if err != nil {
 		return errResultStatus("invalid agent channel configs", 400)
 	}
+	agentChannelConfigsToApply := agentChannelConfigs
+	if rawApplyConfigs, ok := params["applyAgentChannelConfigs"]; ok {
+		agentChannelConfigsToApply, err = decodeOnboardingChannelConfigs(rawApplyConfigs)
+		if err != nil {
+			return errResultStatus("invalid channel configs to apply", 400)
+		}
+	}
 
 	if err := b.saveOnboardingState(companyName, companyDescription, companyAvatarDataUri, providerConfigs, runtimeChoices, channelConfigs); err != nil {
 		return errResult("Failed to save workspace state: " + err.Error())
@@ -3350,7 +3479,9 @@ func (b *BridgeHandler) onboardingConfigureWorkspace(params map[string]interface
 		if err := b.saveAgentChannelConfigs(agentChannelConfigs); err != nil {
 			return errResult("Failed to save agent channel state: " + err.Error())
 		}
-		if err := b.applyAgentChannelConfigs(agentChannelConfigs); err != nil {
+	}
+	if len(agentChannelConfigsToApply) > 0 {
+		if err := b.applyAgentChannelConfigs(agentChannelConfigsToApply); err != nil {
 			return errResult("Saved workspace state, but channel runtime update failed: " + err.Error())
 		}
 	}
@@ -3447,6 +3578,7 @@ func (b *BridgeHandler) onboardingProvisionAgent(params map[string]interface{}) 
 		}
 	}
 	log.Printf("[onboarding-provision] exists=%v, entering switch for runtime=%q", exists, profile.Runtime)
+	applyChannelConfig := shouldApplyProvisionChannelConfig(profile.Runtime, agentID, exists)
 
 	// Resolve company knowledge directory for the agent's config files.
 	companyName, _ := params["companyName"].(string)
@@ -3511,11 +3643,13 @@ func (b *BridgeHandler) onboardingProvisionAgent(params map[string]interface{}) 
 			log.Printf("[onboarding-provision] setupAgent FAILED: %s", msg)
 			return errResult(msg)
 		}
-		if len(channelConfigByRuntime["openclaw"]) > 0 {
+		if applyChannelConfig && len(channelConfigByRuntime["openclaw"]) > 0 {
 			b.emitProvisionProgress(stepKey, "running", "Binding OpenClaw channels… this can take a few minutes on first run")
 		}
-		if err := b.ensureOpenClawAgentBindings(agentID, channelConfigByRuntime["openclaw"], stepKey); err != nil {
-			return errResult("OpenClaw agent binding failed: " + err.Error())
+		if applyChannelConfig {
+			if err := b.ensureOpenClawAgentBindings(agentID, channelConfigByRuntime["openclaw"], stepKey); err != nil {
+				return errResult("OpenClaw agent binding failed: " + err.Error())
+			}
 		}
 		log.Printf("[onboarding-provision] openclaw setup done, proceeding to SQLite")
 
@@ -3575,7 +3709,7 @@ func (b *BridgeHandler) onboardingProvisionAgent(params map[string]interface{}) 
 		// during onboarding-install-runtime, but re-applying here ensures the env
 		// is up to date even if only the agent is re-provisioned.
 		hermesChannels := channelConfigByRuntime["hermes"]
-		if len(hermesChannels) > 0 {
+		if applyChannelConfig && len(hermesChannels) > 0 {
 			targets := map[string]string{}
 			var creds []onboardingChannelConfig
 			for _, hch := range hermesChannels {
@@ -3675,12 +3809,16 @@ func (b *BridgeHandler) onboardingProvisionAgent(params map[string]interface{}) 
 		"runtime":     profile.Runtime,
 	}
 	if len(agentChannels) > 0 {
-		agentConfig["channels"] = agentChannels
-		agentConfig["channelConfig"] = onboardingRuntimeChannelConfig{
-			Runtime:   profile.Runtime,
-			AgentID:   agentID,
-			AgentName: name,
-			Channels:  agentChannels,
+		if applyChannelConfig {
+			agentConfig["channels"] = agentChannels
+			agentConfig["channelConfig"] = onboardingRuntimeChannelConfig{
+				Runtime:   profile.Runtime,
+				AgentID:   agentID,
+				AgentName: name,
+				Channels:  agentChannels,
+			}
+		} else {
+			log.Printf("[onboarding-provision] preserving existing channel config for existing agent %q", agentID)
 		}
 	}
 	if profile.MainModel != "" {
@@ -3944,6 +4082,7 @@ func (b *BridgeHandler) onboardingProvisionWorkspace(params map[string]interface
 				exists = true
 			}
 		}
+		applyChannelConfig := shouldApplyProvisionChannelConfig(profile.Runtime, agentID, exists)
 
 		bulkWsDir := onboardingWorkspaceDir(b.paths, profile.Runtime, agentID)
 		bulkAvatarPath := saveOnboardingAvatar(bulkWsDir, onboardingSlug(name), profile.AvatarDataURI)
@@ -3982,11 +4121,13 @@ func (b *BridgeHandler) onboardingProvisionWorkspace(params map[string]interface
 			if setupResult.err != nil {
 				return fail(stepKey, setupResult.err.Error())
 			}
-			if len(channelConfigByRuntime["openclaw"]) > 0 {
+			if applyChannelConfig && len(channelConfigByRuntime["openclaw"]) > 0 {
 				progress(stepKey, "running", "Binding OpenClaw channels… this can take a few minutes on first run")
 			}
-			if err := b.ensureOpenClawAgentBindings(agentID, channelConfigByRuntime["openclaw"], stepKey); err != nil {
-				return fail(stepKey, "OpenClaw agent binding failed: "+err.Error())
+			if applyChannelConfig {
+				if err := b.ensureOpenClawAgentBindings(agentID, channelConfigByRuntime["openclaw"], stepKey); err != nil {
+					return fail(stepKey, "OpenClaw agent binding failed: "+err.Error())
+				}
 			}
 		case "hermes":
 			hermesAdapter := NewHermesAdapter(b.paths)
@@ -4090,8 +4231,20 @@ func (b *BridgeHandler) onboardingProvisionWorkspace(params map[string]interface
 			"companyDescription": strings.TrimSpace(companyDescription),
 			"runtime":            profile.Runtime,
 			"mainModel":          profile.MainModel,
-			"channels":           channelConfigByRuntime[profile.Runtime],
 			"providers":          providerConfigs,
+		}
+		if agentChannels := channelConfigByRuntime[profile.Runtime]; len(agentChannels) > 0 {
+			if applyChannelConfig {
+				bulkAgentConfig["channels"] = agentChannels
+				bulkAgentConfig["channelConfig"] = onboardingRuntimeChannelConfig{
+					Runtime:   profile.Runtime,
+					AgentID:   agentID,
+					AgentName: name,
+					Channels:  agentChannels,
+				}
+			} else {
+				log.Printf("[onboarding-provision] preserving existing channel config for existing agent %q", agentID)
+			}
 		}
 		if knowledgeDir != "" {
 			bulkAgentConfig["knowledgeCollections"] = []string{"fundamental"}

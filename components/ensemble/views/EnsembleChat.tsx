@@ -30,6 +30,7 @@ import {
 import type { EnsembleAgent, RuntimeKind } from "../agents";
 import AgentChatWidget from "$/components/Home/widgets/AgentChatWidget";
 import { OPEN_AGENT_CHAT_EVENT, AGENT_READ_EVENT, consumePendingOpenAgent } from "$/components/Home/widgets/StatusWidget";
+import { createEnsembleDmSessionKey } from "$/components/Home/widgets/gateway-chat/sessionKeys";
 import type { Widget } from "$/components/Home/Dashboard";
 import type { BackendTab } from "$/components/Home/widgets/gateway-chat/GatewayChatHeader";
 import RoomChatView from "./RoomChatView";
@@ -185,7 +186,7 @@ export default function EnsembleChat() {
 
     if (resolvedActive?.type === "dm") {
       agentId = resolvedActive.agentId;
-      sessionKey = `ensemble:dm:${resolvedActive.agentId}`;
+      sessionKey = createEnsembleDmSessionKey(resolvedActive.agentId);
     } else if (resolvedActive?.type === "room" && activeRoomId) {
       agentId = activeRoomAgentId;
       sessionKey = `ensemble:room:${activeRoomId}`;
@@ -247,7 +248,7 @@ export default function EnsembleChat() {
     }
     window.dispatchEvent(
       new CustomEvent(OPEN_AGENT_CHAT_EVENT, {
-        detail: { agentId: agent.id, sessionKey: `ensemble:dm:${agent.id}`, runtime: agent.kind, hiring: isHiring },
+        detail: { agentId: agent.id, sessionKey: createEnsembleDmSessionKey(agent.id), runtime: agent.kind, hiring: isHiring },
       })
     );
   }, []);

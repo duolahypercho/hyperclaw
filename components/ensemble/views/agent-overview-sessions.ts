@@ -1,5 +1,6 @@
 import type { OverviewSession } from "$/components/Home/widgets/AgentOverviewTab";
 import type { RuntimeKind } from "$/components/ensemble/agents";
+import { createAgentPrimarySessionKey } from "$/components/Home/widgets/gateway-chat/sessionKeys";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
 import { gatewayConnection } from "$/lib/openclaw-gateway-ws";
 
@@ -35,7 +36,7 @@ export async function loadAgentOverviewSessions({
       .catch(() => ({ sessions: [] }));
 
     result = (response?.sessions || []).map((session) => ({
-      key: session.key || `agent:${agentId}:main`,
+      key: session.key || createAgentPrimarySessionKey(agentId),
       label: session.label || session.key?.split(":").pop(),
       updatedAt: session.updatedAt,
       status: session.status,

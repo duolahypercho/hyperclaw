@@ -24,12 +24,20 @@ import {
   FolderOpen,
   ChevronDown,
   Search,
+  CalendarClock,
+  ArrowUpRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { useFocusMode } from "./hooks/useFocusMode";
 import { useHyperclawContext } from "$/Providers/HyperclawProv";
@@ -42,18 +50,33 @@ import {
 import {
   useAgentIdentities,
   resolveAvatarUrl,
-  resolveAvatarText,
   type AgentIdentity,
 } from "$/hooks/useAgentIdentity";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
 import { OPEN_AGENT_PANEL_EVENT } from "./AgentChatPanel";
 import { AddAgentDialog } from "$/components/Tool/Agents/AddAgentDialog";
+import { AddCronDialog } from "$/components/Tool/Crons/AddCronDialog";
+import { CronsProvider } from "$/components/Tool/Crons/provider/cronsProvider";
+import {
+  fetchCronsFromBridge,
+  fetchCronRunsFromBridge,
+} from "$/components/Tool/Crons/utils";
+import { getRunningJobIds, subscribeToRunningCrons } from "$/lib/crons-running-store";
+import type { CronRunRecord, OpenClawCronJobJson } from "$/types/electron";
 import { ProjectsProvider, useProjects } from "$/components/Tool/Projects/provider/projectsProvider";
 import { CreateProjectDialog } from "$/components/Tool/Projects/CreateProjectDialog";
 import { ClaudeCodeIcon, CodexIcon, HermesIcon } from "$/components/Onboarding/RuntimeIcons";
 import { dispatchOpenProjectPanel } from "./ProjectWidgetEvents";
 import { ConnectorStatusIndicator } from "./ConnectorStatusIndicator";
-import { StatusDot, useAgentStatus, normalizeAgentState, type AgentState } from "$/components/ensemble";
+import { StatusDot, useAgentStatus, useWorkingSessionKeys, normalizeAgentState, type AgentState } from "$/components/ensemble";
+import { createAgentPrimarySessionKey } from "./gateway-chat/sessionKeys";
+import {
+  fetchAgentSessions as fetchAgentSessionList,
+  filterDirectChatSessions,
+  type AgentSessionListItem,
+} from "./agent-session-list";
+import type { BackendTab } from "./gateway-chat/GatewayChatHeader";
+import { useRouter } from "next/router";
 
 // Returns the branded React SVG icon for known runtimes, null otherwise.
 function getRuntimeIcon(runtime?: string): React.ComponentType<{ className?: string }> | null {
@@ -77,12 +100,16 @@ function isCustomImageAvatar(avatarUrl: string | undefined): boolean {
   return !avatarUrl.startsWith("data:image/svg+xml");
 }
 
+function agentInitials(displayName: string, agentId: string): string {
+  return (displayName || agentId || "AI").slice(0, 2).toUpperCase();
+}
+
 // ── Custom event for cross-widget communication ──
 // StatusWidget dispatches this; GatewayChatWidget listens.
 export const OPEN_AGENT_CHAT_EVENT = "open-agent-chat";
 
 // ── Pending agent for first-visit navigation ──
-// Set before navigating to Chat; consumed by EnsembleChat on mount.
+// Set before navigating to Chat; consumed by the chat surface on mount.
 let _pendingOpenAgent: { agentId: string; runtime?: string } | null = null;
 export const setPendingOpenAgent = (agentId: string, runtime?: string) => {
   _pendingOpenAgent = { agentId, runtime };
@@ -98,7 +125,7 @@ export const AGENT_READ_EVENT = "agent-read";
 export function dispatchOpenAgentChat(
   agentId: string,
   sessionKey?: string,
-  meta?: { runtime?: string; runtimeUnavailable?: boolean; hiring?: boolean }
+  meta?: { runtime?: string; runtimeUnavailable?: boolean; hiring?: boolean; newChat?: boolean }
 ) {
   window.dispatchEvent(
     new CustomEvent(OPEN_AGENT_CHAT_EVENT, { detail: { agentId, sessionKey, ...meta } })
@@ -108,7 +135,15 @@ export function dispatchOpenAgentChat(
 export function dispatchOpenAgentPanel(
   agentId: string,
   sessionKey?: string,
-  meta?: { sessionCount?: number; unreadCount?: number; lastSeenTs?: number; runtime?: string; runtimeUnavailable?: boolean; hiring?: boolean }
+  meta?: {
+    sessionCount?: number;
+    unreadCount?: number;
+    lastSeenTs?: number;
+    runtime?: string;
+    runtimeUnavailable?: boolean;
+    hiring?: boolean;
+    cronJobId?: string;
+  }
 ) {
   window.dispatchEvent(
     new CustomEvent(OPEN_AGENT_PANEL_EVENT, { detail: { agentId, sessionKey, ...meta } })
@@ -137,6 +172,18 @@ interface AgentStatus {
   lastSeenTs: number;
   errorMessage?: string;
   runtime?: string;
+}
+
+interface AgentSessionActivity {
+  sessionCount: number;
+  lastActivity?: number;
+  recentMessages: string[];
+  hasRunningSession?: boolean;
+}
+
+interface AgentCronActivity {
+  lastActivity?: number;
+  hasRunningCron: boolean;
 }
 
 // ── Inbox types ──
@@ -186,6 +233,18 @@ const QUIET_HOURS = 48;
 const STATUS_WIDGET_BRIDGE_TIMEOUT_MS = 3500;
 const STATUS_WIDGET_SESSION_TIMEOUT_MS = 5000;
 const STATUS_WIDGET_CHAT_HISTORY_TIMEOUT_MS = 2500;
+const CHAT_SIDEBAR_SESSION_READ_KEY = "hyperclaw.tool-chat.session-read";
+const CHAT_SIDEBAR_CACHE_TTL_MS = 15_000;
+const CHAT_SIDEBAR_SCROLL_AREA_CLASS = cn(
+  "flex-1 min-h-0 w-full min-w-0 overflow-hidden",
+  "[&_[data-radix-scroll-area-viewport]]:w-full",
+  "[&_[data-radix-scroll-area-viewport]]:max-w-full",
+  "[&_[data-radix-scroll-area-viewport]]:min-w-0",
+  "[&_[data-radix-scroll-area-viewport]>div]:!block",
+  "[&_[data-radix-scroll-area-viewport]>div]:!w-full",
+  "[&_[data-radix-scroll-area-viewport]>div]:!min-w-0",
+  "[&_[data-radix-scroll-area-viewport]>div]:!max-w-full",
+);
 
 // ── LocalStorage helpers ──
 
@@ -218,6 +277,175 @@ function setLastSeenLocal(agentId: string, ts: number, msgText?: string) {
   try {
     localStorage.setItem(LAST_SEEN_KEY, JSON.stringify(map));
   } catch { /* ignore */ }
+}
+
+function getSessionReadMap(): Record<string, number> {
+  try {
+    const raw = localStorage.getItem(CHAT_SIDEBAR_SESSION_READ_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const out: Record<string, number> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof value === "number") out[key] = value;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function setSessionReadLocal(readMap: Record<string, number>) {
+  try {
+    localStorage.setItem(CHAT_SIDEBAR_SESSION_READ_KEY, JSON.stringify(readMap));
+  } catch { /* ignore */ }
+}
+
+function readSessionKey(agentId: string, sessionKey: string): string {
+  return `${agentId}:${sessionKey}`;
+}
+
+// ── Cron-seen helpers ──
+// Tracks the runAtMs of the latest run the user has seen for each cron job.
+
+const CRON_SEEN_KEY = "hyperclaw.tool-chat.cron-seen";
+
+function getCronSeenMap(): Record<string, number> {
+  try {
+    const raw = localStorage.getItem(CRON_SEEN_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const out: Record<string, number> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof value === "number") out[key] = value;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function setCronSeenLocal(seenMap: Record<string, number>) {
+  try {
+    localStorage.setItem(CRON_SEEN_KEY, JSON.stringify(seenMap));
+  } catch { /* ignore */ }
+}
+
+function cronSeenKey(agentId: string, jobId: string): string {
+  return `${agentId}:cron:${jobId}`;
+}
+
+function cronRunActivityTs(run: CronRunRecord): number {
+  return run.runAtMs || run.ts || 0;
+}
+
+function numberFromUnknown(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function cronStatusIsRunning(status: unknown): boolean {
+  if (typeof status !== "string") return false;
+  const normalized = status.trim().toLowerCase();
+  return ["active", "in_progress", "running", "streaming"].includes(normalized);
+}
+
+function getCronJobAgentId(job: OpenClawCronJobJson): string {
+  return typeof job.agentId === "string" && job.agentId.trim() ? job.agentId.trim() : "main";
+}
+
+function getCronJobActivityTs(job: OpenClawCronJobJson): number {
+  return Math.max(
+    numberFromUnknown(job.state?.lastRunAtMs),
+    numberFromUnknown((job as Record<string, unknown>).lastRunAtMs),
+  );
+}
+
+function mergeAgentCronActivity(
+  map: Map<string, AgentCronActivity>,
+  agentId: string,
+  activityTs: number,
+  hasRunningCron: boolean,
+) {
+  const previous = map.get(agentId);
+  map.set(agentId, {
+    lastActivity: Math.max(previous?.lastActivity || 0, activityTs || 0) || undefined,
+    hasRunningCron: Boolean(previous?.hasRunningCron || hasRunningCron),
+  });
+}
+
+function mergeCronJobsById(jobGroups: OpenClawCronJobJson[][]): OpenClawCronJobJson[] {
+  const merged = new Map<string, OpenClawCronJobJson>();
+  for (const jobs of jobGroups) {
+    for (const job of jobs) {
+      if (!job.id) continue;
+      const previous = merged.get(job.id);
+      if (!previous) {
+        merged.set(job.id, job);
+        continue;
+      }
+      const previousLastRunAtMs = getCronJobActivityTs(previous);
+      const nextLastRunAtMs = getCronJobActivityTs(job);
+      merged.set(job.id, {
+        ...previous,
+        ...job,
+        state: {
+          ...(previous.state ?? {}),
+          ...(job.state ?? {}),
+          lastRunAtMs: Math.max(previousLastRunAtMs, nextLastRunAtMs) || undefined,
+        },
+      });
+    }
+  }
+  return [...merged.values()];
+}
+
+async function fetchCronActivityByAgent(agentIds: string[]): Promise<Map<string, AgentCronActivity>> {
+  const activityByAgent = new Map<string, AgentCronActivity>();
+  if (agentIds.length === 0) return activityByAgent;
+
+  const agentIdSet = new Set(agentIds);
+  const [allJobs, openClawJobs] = await Promise.all([
+    withTimeout(
+      fetchCronsFromBridge(),
+      STATUS_WIDGET_BRIDGE_TIMEOUT_MS,
+      [] as OpenClawCronJobJson[],
+    ),
+    withTimeout(
+      fetchCronsFromBridge({ runtime: "openclaw" }),
+      STATUS_WIDGET_BRIDGE_TIMEOUT_MS,
+      [] as OpenClawCronJobJson[],
+    ),
+  ]);
+  const jobs = mergeCronJobsById([allJobs, openClawJobs]);
+  const locallyRunningJobIds = new Set(getRunningJobIds());
+  const relevantJobs = jobs.filter((job) => agentIdSet.has(getCronJobAgentId(job)));
+  const jobIds = relevantJobs.map((job) => job.id).filter(Boolean);
+  const runsByJobId = jobIds.length > 0
+    ? await withTimeout(
+      fetchCronRunsFromBridge(jobIds),
+      STATUS_WIDGET_BRIDGE_TIMEOUT_MS,
+      {} as Record<string, CronRunRecord[]>,
+    )
+    : {};
+
+  for (const job of relevantJobs) {
+    const agentId = getCronJobAgentId(job);
+    const runs = (runsByJobId[job.id] ?? []).slice().sort((a, b) => cronRunActivityTs(b) - cronRunActivityTs(a));
+    const latestRun = runs[0];
+    const latestRunActivity = latestRun ? cronRunActivityTs(latestRun) : 0;
+    const hasRunningCron =
+      locallyRunningJobIds.has(job.id) ||
+      cronStatusIsRunning(job.state?.lastStatus) ||
+      cronStatusIsRunning(job.state?.lastRunStatus) ||
+      cronStatusIsRunning((job as Record<string, unknown>).status) ||
+      cronStatusIsRunning(latestRun?.status);
+    const activityTs = hasRunningCron
+      ? Date.now()
+      : Math.max(getCronJobActivityTs(job), latestRunActivity);
+
+    mergeAgentCronActivity(activityByAgent, agentId, activityTs, hasRunningCron);
+  }
+
+  return activityByAgent;
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
@@ -272,6 +500,42 @@ function timeAgo(ts: number): string {
   if (days === 1) return "yesterday";
   if (days < 7) return `${days}d ago`;
   return new Date(ts).toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+function cronSessionActivityTs(sessions: AgentSessionListItem[], jobId: string): number {
+  if (!jobId) return 0;
+  const cronKeyPart = `:cron:${jobId}`;
+  return sessions.reduce((latest, session) => {
+    if (!session.key.includes(cronKeyPart)) return latest;
+    return Math.max(latest, session.updatedAt || 0);
+  }, 0);
+}
+
+function parseBackendTab(runtime?: string): BackendTab {
+  if (runtime === "claude-code") return "claude-code";
+  if (runtime === "codex") return "codex";
+  if (runtime === "hermes") return "hermes";
+  return "openclaw";
+}
+
+function isRunningSessionStatus(status?: string): boolean {
+  const normalized = (status || "").toLowerCase();
+  return [
+    "active",
+    "running",
+    "in_progress",
+    "in-progress",
+    "streaming",
+    "working",
+    "generating",
+    "spawning",
+    "processing",
+    "busy",
+  ].includes(normalized);
+}
+
+function sessionDisplayTitle(session: AgentSessionListItem): string {
+  return session.label || session.key.split(":").pop() || session.key;
 }
 
 // ── Absolute time formatter for inbox items ──
@@ -423,8 +687,6 @@ const AgentExpandedRow = React.forwardRef<HTMLDivElement, {
 }>(function AgentExpandedRow({ status, identity, onClick, isActive, isHiring, isDeleting, isUnavailable }, ref) {
   const resolvedAvatarUrl = resolveAvatarUrl(identity?.avatar);
   const avatarUrl = isCustomImageAvatar(resolvedAvatarUrl) ? resolvedAvatarUrl : undefined;
-  const avatarText = resolveAvatarText(identity?.avatar);
-  const RuntimeIcon = getRuntimeIcon(identity?.runtime || status.runtime);
   const displayName = identity?.name || status.name || status.agentId;
   const runtime = identity?.runtime || status.runtime;
   const showRuntime = runtime && runtime !== "openclaw";
@@ -454,11 +716,9 @@ const AgentExpandedRow = React.forwardRef<HTMLDivElement, {
         <Avatar className="w-7 h-7">
           {avatarUrl && <AvatarImage src={avatarUrl} alt={displayName} />}
           <AvatarFallback className="bg-primary/10 text-primary text-[11px] select-none">
-            {identity?.emoji || avatarText
-              ? <span className="leading-[0]">{identity?.emoji || avatarText}</span>
-              : RuntimeIcon
-                ? <RuntimeIcon className="w-4 h-4" />
-                : <span className="leading-[0]">{displayName.slice(0, 2).toUpperCase()}</span>
+            {identity?.emoji
+              ? <span className="leading-[0]">{identity.emoji}</span>
+              : <span className="leading-[0]">{agentInitials(displayName, status.agentId)}</span>
             }
           </AvatarFallback>
         </Avatar>
@@ -631,6 +891,7 @@ function ProjectRow({ project }: { project: import("$/components/Tool/Projects/p
 
 const StatusWidgetContent = memo((props: CustomProps) => {
   const { isFocusModeActive } = useFocusMode();
+  const router = useRouter();
   const { className } = props;
   const { agents: openClawAgents } = useHyperclawContext();
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -652,6 +913,12 @@ const StatusWidgetContent = memo((props: CustomProps) => {
   const [activeAgentId, setActiveAgentId] = useState<string | null>(null);
   const activeAgentIdRef = useRef<string | null>(null);
   useEffect(() => { activeAgentIdRef.current = activeAgentId; }, [activeAgentId]);
+  // Tracks which specific session row is active (highlighted) in the sidebar
+  const [activeSessionKey, setActiveSessionKey] = useState<string | null>(null);
+  const workingSessionKeys = useWorkingSessionKeys();
+  // Tracks which cron job row is active — separate from chat session highlight.
+  // Format: `${agentId}:${jobId}` or null.
+  const [activeCronKey, setActiveCronKey] = useState<string | null>(null);
   const [addAgentOpen, setAddAgentOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [hiringAgentIds, setHiringAgentIds] = useState<Set<string>>(new Set());
@@ -683,6 +950,10 @@ const StatusWidgetContent = memo((props: CustomProps) => {
       s.name.toLowerCase().includes(q) || s.agentId.toLowerCase().includes(q)
     );
   }, [statuses, search]);
+  const unreadTotal = useMemo(
+    () => statuses.reduce((sum, status) => sum + status.unreadCount, 0),
+    [statuses]
+  );
 
   const filteredProjects = useMemo(() => {
     if (!search.trim()) return projects;
@@ -691,6 +962,13 @@ const StatusWidgetContent = memo((props: CustomProps) => {
       (p.name || "").toLowerCase().includes(q)
     );
   }, [projects, search]);
+
+  const openAgentProfile = useCallback((agentId: string) => {
+    void router.push(`/Tool/Agent/${agentId}`).catch((err: unknown) => {
+      if (err && typeof err === "object" && (err as { cancelled?: boolean }).cancelled) return;
+      console.error("Agent profile navigation failed:", err);
+    });
+  }, [router]);
 
   const fetchInbox = useCallback(async () => {
     setInboxLoading(true);
@@ -929,35 +1207,36 @@ const StatusWidgetContent = memo((props: CustomProps) => {
     return openClawAgentsRef.current as Agent[];
   }, []);
 
-  // Fetch session/activity data for a single agent, scoped to its primary session only.
-  // The primary session is resolved via the connector's "get-primary-session" bridge action.
-  // This ensures the StatusWidget only shows messages from the user's direct conversation,
-  // not background jobs or automated sessions.
+  // Fetch session/activity data for a single agent. The canonical freshness source is
+  // the session list sorted by updatedAt, so status rows reflect the newest chat across
+  // normal sessions, cron-owned sessions, and non-OpenClaw runtime sessions.
   const fetchAgentSessions = useCallback(
-    async (agent: Agent): Promise<{ sessionCount: number; lastActivity?: number; recentMessages: string[] }> => {
+    async (agent: Agent): Promise<AgentSessionActivity> => {
       const runtime = agent.runtime || "openclaw";
+      const backendTab = parseBackendTab(runtime);
       const empty = { sessionCount: 0, recentMessages: [] as string[] };
-
-      // Resolve the primary session key from the connector.
-      let primaryKey = "";
+      let sessions: AgentSessionListItem[] = [];
       try {
-        const psResult = await withTimeout(
-          bridgeInvoke("get-primary-session", { agentId: agent.id, runtime }) as Promise<{
-            success?: boolean;
-            data?: { sessionKey?: string };
-          }>,
-          STATUS_WIDGET_BRIDGE_TIMEOUT_MS,
-          { success: false }
+        sessions = await withTimeout(
+          fetchAgentSessionList({ agentId: agent.id, backendTab, includeDefault: false, limit: 100 }),
+          STATUS_WIDGET_SESSION_TIMEOUT_MS,
+          [] as AgentSessionListItem[]
         );
-        primaryKey = psResult?.success ? (psResult.data?.sessionKey || "") : "";
-      } catch { /* connector offline */ }
+      } catch { /* ignore */ }
 
-      // Non-OpenClaw runtimes: read messages from the primary session via bridge
+      const directSessions = filterDirectChatSessions(sessions);
+      const latestSession = sessions[0];
+      const latestDirectSession = directSessions[0];
+      const latestSessionActivity = latestSession?.updatedAt || 0;
+      const hasRunningSession = sessions.some((session) => isRunningSessionStatus(session.status));
+
+      // Non-OpenClaw runtimes: the connector can aggregate recent messages across
+      // all scoped sessions. Prefer the session-list updatedAt for freshness, but
+      // keep the runtime bridge as a fallback when the list is unavailable.
       if (runtime !== "openclaw") {
-        if (!primaryKey) return empty;
         try {
           const result = await withTimeout(
-            bridgeInvoke("get-runtime-sessions", { agentId: agent.id, runtime, primarySessionKey: primaryKey, limit: 20 }) as Promise<{
+            bridgeInvoke("get-runtime-sessions", { agentId: agent.id, runtime, limit: 20 }) as Promise<{
               success?: boolean;
               data?: { sessionCount?: number; lastActiveMs?: number; recentMessages?: Array<{ role: string; content: string; timestamp: number }> };
             }>,
@@ -971,18 +1250,26 @@ const StatusWidgetContent = memo((props: CustomProps) => {
               .filter(Boolean)
               .reverse();
             return {
-              sessionCount: result.data.sessionCount || 0,
-              lastActivity: result.data.lastActiveMs || undefined,
+              sessionCount: sessions.length > 0 ? directSessions.length : result.data.sessionCount || 0,
+              lastActivity: Math.max(latestSessionActivity, result.data.lastActiveMs || 0) || undefined,
               recentMessages: msgs,
+              hasRunningSession,
             };
           }
         } catch { /* ignore */ }
-        return empty;
+        return sessions.length > 0
+          ? {
+              sessionCount: directSessions.length,
+              lastActivity: latestSessionActivity || undefined,
+              recentMessages: [],
+              hasRunningSession,
+            }
+          : empty;
       }
 
-      // OpenClaw: fetch chat history from the primary session key only
-      if (!gatewayConnection.isConnected()) return empty;
-      const sessionKey = primaryKey || `agent:${agent.id}:main`;
+      // OpenClaw: aggregate activity from all sessions, but previews/read counts
+      // stay on the newest direct chat so cron-owned chats remain in cron history.
+      const sessionKey = latestDirectSession?.key || createAgentPrimarySessionKey(agent.id);
       try {
         let recentMessages: string[] = [];
         const history = await withTimeout(
@@ -993,12 +1280,21 @@ const StatusWidgetContent = memo((props: CustomProps) => {
         const messages = (history.messages || []) as Array<{ role?: string; content?: unknown }>;
         recentMessages = extractRecentAssistantTexts(messages, 10);
 
-        // Derive lastActivity from the newest message timestamp if available
-        const lastActivity = messages.length > 0 ? Date.now() : undefined;
-
-        return { sessionCount: 1, lastActivity, recentMessages };
+        return {
+          sessionCount: directSessions.length || (messages.length > 0 ? 1 : 0),
+          lastActivity: latestSessionActivity || undefined,
+          recentMessages,
+          hasRunningSession,
+        };
       } catch {
-        return empty;
+        return sessions.length > 0
+          ? {
+              sessionCount: directSessions.length,
+              lastActivity: latestSessionActivity || undefined,
+              recentMessages: [],
+              hasRunningSession,
+            }
+          : empty;
       }
     },
     []
@@ -1009,7 +1305,7 @@ const StatusWidgetContent = memo((props: CustomProps) => {
   const refresh = useCallback(async () => {
     if (!isMounted.current) return;
     const refreshSeq = ++refreshSeqRef.current;
-    setLoading(true);
+    if (statusesRef.current.length === 0) setLoading(true);
     setError(null);
     try {
       const rawAgentList = await fetchAgents();
@@ -1072,11 +1368,16 @@ const StatusWidgetContent = memo((props: CustomProps) => {
       if (isMounted.current) setLoading(false);
 
       // Hydrate session/unread in background with strict time budgets.
-      const [lastSeenMap, sessionInfos] = await Promise.all([
+      const [lastSeenMap, cronActivityByAgent, sessionInfos] = await Promise.all([
         withTimeout(
           fetchLastSeenFromBridge(agentList.map((a) => a.id)),
           STATUS_WIDGET_BRIDGE_TIMEOUT_MS,
           {} as Record<string, LastSeenEntry>
+        ),
+        withTimeout(
+          fetchCronActivityByAgent(agentList.map((a) => a.id)),
+          STATUS_WIDGET_BRIDGE_TIMEOUT_MS * 2,
+          new Map<string, AgentCronActivity>(),
         ),
         Promise.all(agentList.map((a) =>
           withTimeout(
@@ -1098,7 +1399,8 @@ const StatusWidgetContent = memo((props: CustomProps) => {
         const entry = lastSeenMap[agent.id];
         const lastSeen = entry?.ts || previous?.lastSeenTs || 0;
         const lastSeenMsg = entry?.msgText;
-        const lastActivity = info.lastActivity || 0;
+        const cronActivity = cronActivityByAgent.get(agent.id);
+        const lastActivity = Math.max(info.lastActivity || 0, cronActivity?.lastActivity || 0);
         const latestMsg = info.recentMessages[0]; // index 0 = newest (array is newest-first)
         // Unread if: there's been activity AND either the timestamp is newer
         // OR the latest message text differs from what was last seen.
@@ -1129,7 +1431,7 @@ const StatusWidgetContent = memo((props: CustomProps) => {
             ? "deleting"
             : registryState !== "idle"
               ? registryState
-              : activeRun ? "running" : "idle",
+              : activeRun || info.hasRunningSession || cronActivity?.hasRunningCron ? "running" : "idle",
           lastActivity: lastActivity || previous?.lastActivity || undefined,
           unreadCount,
           recentMessages: info.recentMessages.length > 0 ? info.recentMessages : (previous?.recentMessages || []),
@@ -1177,13 +1479,13 @@ const StatusWidgetContent = memo((props: CustomProps) => {
     prevAgentCountRef.current = openClawAgents.length;
   }, [openClawAgents, refresh]);
 
-  // Initial load + auto-refresh (30s, pauses when tab hidden)
+  // Initial load + auto-refresh (10s, pauses when tab hidden)
   useEffect(() => {
     isMounted.current = true;
     refresh();
 
     let timer: ReturnType<typeof setInterval> | null = null;
-    const start = () => { if (!timer) timer = setInterval(() => refresh(), 30_000); };
+    const start = () => { if (!timer) timer = setInterval(() => refresh(), 10_000); };
     const stop = () => { if (timer) { clearInterval(timer); timer = null; } };
     const onVisibility = () => { document.visibilityState === "visible" ? start() : stop(); };
 
@@ -1220,7 +1522,7 @@ const StatusWidgetContent = memo((props: CustomProps) => {
         activeRunsRef.current.set(runId, { agentId, ts: Date.now() });
         setStatuses((prev) =>
           prev.map((s) =>
-            s.agentId === agentId ? { ...s, state: "running" as const } : s
+            s.agentId === agentId ? { ...s, state: "running" as const, lastActivity: Date.now() } : s
           )
         );
       } else if (state === "final" || state === "aborted") {
@@ -1283,7 +1585,7 @@ const StatusWidgetContent = memo((props: CustomProps) => {
       }
     });
     return unsub;
-  }, []);
+  }, [fetchAgentSessions]);
 
   // Expire stale runs (>5min)
   useEffect(() => {
@@ -1299,10 +1601,207 @@ const StatusWidgetContent = memo((props: CustomProps) => {
   // Derive IDs from statuses (not agents) so optimistic hiring entries are included.
   const agentIds = useMemo(() => statuses.map((s) => s.agentId), [statuses]);
   const identities = useAgentIdentities(agentIds);
+  const isChatSidebarLayout = props.widget.config?.layout === "agent-accordion";
+  const [expandedAgentIds, setExpandedAgentIds] = useState<string[]>([]);
+  const expandedAgentIdsRef = useRef<string[]>([]);
+  useEffect(() => { expandedAgentIdsRef.current = expandedAgentIds; }, [expandedAgentIds]);
+  const [sidebarSessions, setSidebarSessions] = useState<Record<string, AgentSessionListItem[]>>({});
+  const sidebarSessionsRef = useRef<Record<string, AgentSessionListItem[]>>({});
+  useEffect(() => { sidebarSessionsRef.current = sidebarSessions; }, [sidebarSessions]);
+  const [sidebarSessionLoading, setSidebarSessionLoading] = useState<Record<string, boolean>>({});
+  const [sidebarCrons, setSidebarCrons] = useState<Record<string, OpenClawCronJobJson[]>>({});
+  const sidebarCronsRef = useRef<Record<string, OpenClawCronJobJson[]>>({});
+  useEffect(() => { sidebarCronsRef.current = sidebarCrons; }, [sidebarCrons]);
+  const [sidebarCronRuns, setSidebarCronRuns] = useState<Record<string, Record<string, CronRunRecord[]>>>({});
+  const [sidebarCronLoading, setSidebarCronLoading] = useState<Record<string, boolean>>({});
+  const [sidebarSessionsShowAll, setSidebarSessionsShowAll] = useState<Record<string, boolean>>({});
+  const [sidebarCacheTs, setSidebarCacheTs] = useState<Record<string, number>>({});
+  const sidebarCacheTsRef = useRef<Record<string, number>>({});
+  useEffect(() => { sidebarCacheTsRef.current = sidebarCacheTs; }, [sidebarCacheTs]);
+  const sidebarLoadInflightRef = useRef<Set<string>>(new Set());
+  const identitiesRef = useRef(identities);
+  useEffect(() => { identitiesRef.current = identities; }, [identities]);
+  const [sessionReadMap, setSessionReadMap] = useState<Record<string, number>>(() => getSessionReadMap());
+  const sessionReadMapRef = useRef<Record<string, number>>(sessionReadMap);
+  useEffect(() => { sessionReadMapRef.current = sessionReadMap; }, [sessionReadMap]);
+  const [cronSeenMap, setCronSeenMap] = useState<Record<string, number>>(() => getCronSeenMap());
+  const [addCronDefaults, setAddCronDefaults] = useState<{ agentId: string; runtime?: string } | null>(null);
 
   // Keep a ref so handleAgentClick can read latest statuses without stale closure
   const statusesRef = useRef<AgentStatus[]>([]);
   useEffect(() => { statusesRef.current = statuses; }, [statuses]);
+
+  const markSidebarSessionRead = useCallback((agentId: string, sessionKey: string, ts = Date.now()) => {
+    const storageKey = readSessionKey(agentId, sessionKey);
+    const previousReadTs = sessionReadMapRef.current[storageKey] ?? 0;
+    const sessionUpdatedAt = sidebarSessionsRef.current[agentId]?.find((s) => s.key === sessionKey)?.updatedAt ?? 0;
+    const shouldDecrementUnread = previousReadTs === 0 || (sessionUpdatedAt > 0 && sessionUpdatedAt > previousReadTs);
+    const next = { ...sessionReadMapRef.current, [storageKey]: ts };
+    sessionReadMapRef.current = next;
+    setSessionReadMap(next);
+    setSessionReadLocal(next);
+    setLastSeenLocal(agentId, ts);
+    if (shouldDecrementUnread) {
+      setStatuses((prev) => prev.map((s) => (
+        s.agentId === agentId
+          ? { ...s, unreadCount: Math.max(0, s.unreadCount - 1) }
+          : s
+      )));
+    }
+  }, []);
+
+  const loadSidebarAgentData = useCallback(async (status: AgentStatus, force = false, showLoading = false) => {
+    const agentId = status.agentId;
+    const identity = identitiesRef.current.get(agentId);
+    const runtime = identity?.runtime || status.runtime;
+    const backendTab = parseBackendTab(runtime);
+    const projectPath = identity?.project || "";
+    const cacheKey = `${agentId}:${backendTab}:${projectPath}`;
+    const cachedAt = sidebarCacheTsRef.current[cacheKey] ?? 0;
+
+    if (!force && cachedAt && Date.now() - cachedAt < CHAT_SIDEBAR_CACHE_TTL_MS) return;
+    if (sidebarLoadInflightRef.current.has(cacheKey)) return;
+    sidebarLoadInflightRef.current.add(cacheKey);
+
+    const runtimeUnavailable = runtime ? unavailableRuntimesRef.current.has(runtime) : false;
+    const shouldShowSessionLoading =
+      showLoading || !Object.prototype.hasOwnProperty.call(sidebarSessionsRef.current, agentId);
+    const shouldShowCronLoading =
+      showLoading || !Object.prototype.hasOwnProperty.call(sidebarCronsRef.current, agentId);
+
+    if (shouldShowSessionLoading) {
+      setSidebarSessionLoading((prev) => ({ ...prev, [agentId]: true }));
+    }
+    if (shouldShowCronLoading) {
+      setSidebarCronLoading((prev) => ({ ...prev, [agentId]: true }));
+    }
+
+    try {
+      const [sessions, jobs] = await Promise.all([
+        runtimeUnavailable
+          ? Promise.resolve([] as AgentSessionListItem[])
+          : fetchAgentSessionList({ agentId, backendTab, projectPath, includeDefault: false, limit: 100 }),
+        fetchCronsFromBridge({ agentId, runtime: backendTab === "openclaw" ? "openclaw" : runtime }),
+      ]);
+
+      if (!isMounted.current) return;
+
+      setSidebarSessions((prev) => ({ ...prev, [agentId]: sessions }));
+      setSidebarCrons((prev) => ({ ...prev, [agentId]: jobs }));
+      const cachedAtNext = Date.now();
+      sidebarCacheTsRef.current = { ...sidebarCacheTsRef.current, [cacheKey]: cachedAtNext };
+      setSidebarCacheTs((prev) => ({ ...prev, [cacheKey]: cachedAtNext }));
+
+      const jobIds = jobs.map((job) => job.id).filter(Boolean);
+      if (jobIds.length > 0) {
+        const runsByJobId = await fetchCronRunsFromBridge(jobIds).catch(() => ({}));
+        if (isMounted.current) {
+          setSidebarCronRuns((prev) => ({ ...prev, [agentId]: runsByJobId }));
+        }
+      } else {
+        setSidebarCronRuns((prev) => ({ ...prev, [agentId]: {} }));
+      }
+    } finally {
+      sidebarLoadInflightRef.current.delete(cacheKey);
+      if (isMounted.current) {
+        if (shouldShowSessionLoading) {
+          setSidebarSessionLoading((prev) => ({ ...prev, [agentId]: false }));
+        }
+        if (shouldShowCronLoading) {
+          setSidebarCronLoading((prev) => ({ ...prev, [agentId]: false }));
+        }
+      }
+    }
+  }, []);
+
+  // Manual "Run now" cron actions update a small running-cron store. Refresh
+  // both the top agent rows and any expanded cron rows immediately.
+  useEffect(() => subscribeToRunningCrons(() => {
+    refresh();
+    if (!isChatSidebarLayout) return;
+    const expanded = new Set(expandedAgentIdsRef.current);
+    statusesRef.current
+      .filter((status) => expanded.has(status.agentId))
+      .forEach((status) => {
+        void loadSidebarAgentData(status, true);
+      });
+  }), [isChatSidebarLayout, loadSidebarAgentData, refresh]);
+
+  const handleSidebarAccordionToggle = useCallback((agentId: string) => {
+    const isOpen = expandedAgentIds.includes(agentId);
+    setExpandedAgentIds((prev) => (
+      isOpen ? prev.filter((id) => id !== agentId) : [...prev, agentId]
+    ));
+    if (!isOpen) {
+      const status = statusesRef.current.find((item) => item.agentId === agentId);
+      if (status) void loadSidebarAgentData(status);
+    }
+  }, [expandedAgentIds, loadSidebarAgentData]);
+
+  useEffect(() => {
+    if (!isChatSidebarLayout) return;
+
+    const refreshExpandedAgents = () => {
+      if (expandedAgentIdsRef.current.length === 0) return;
+      const expanded = new Set(expandedAgentIdsRef.current);
+      statusesRef.current
+        .filter((status) => expanded.has(status.agentId))
+        .forEach((status) => {
+          void loadSidebarAgentData(status, true);
+        });
+    };
+
+    const timer = window.setInterval(refreshExpandedAgents, CHAT_SIDEBAR_CACHE_TTL_MS);
+    return () => window.clearInterval(timer);
+  }, [isChatSidebarLayout, loadSidebarAgentData]);
+
+  const openSidebarChatSession = useCallback((status: AgentStatus, sessionKey: string) => {
+    const runtime = identities.get(status.agentId)?.runtime || status.runtime;
+    const runtimeUnavailable = runtime ? unavailableRuntimesRef.current.has(runtime) : false;
+    markSidebarSessionRead(status.agentId, sessionKey);
+    setActiveAgentId(status.agentId);
+    setActiveSessionKey(sessionKey);
+    setActiveCronKey(null);
+    dispatchOpenAgentChat(status.agentId, sessionKey, {
+      runtime,
+      runtimeUnavailable,
+      hiring: status.state === "hiring",
+    });
+  }, [identities, markSidebarSessionRead]);
+
+  const openSidebarCronJob = useCallback((status: AgentStatus, cronJobId: string) => {
+    const runtime = identities.get(status.agentId)?.runtime || status.runtime;
+    const runtimeUnavailable = runtime ? unavailableRuntimesRef.current.has(runtime) : false;
+    setActiveAgentId(status.agentId);
+    setActiveSessionKey(null);
+    setActiveCronKey(`${status.agentId}:${cronJobId}`);
+    setLastSeenLocal(status.agentId, Date.now());
+    // Resolve the latest run's session key so chat-only surfaces can open the session directly
+    const jobRuns = (sidebarCronRuns[status.agentId] ?? {})[cronJobId] ?? [];
+    const latestRun = jobRuns.length > 0
+      ? [...jobRuns].sort((a, b) => cronRunActivityTs(b) - cronRunActivityTs(a))[0]
+      : undefined;
+    const cronSessionKey = latestRun?.sessionId;
+    // Mark this job's latest run as seen so the row can switch from dot → timeAgo
+    if (latestRun) {
+      const seenTs = latestRun.runAtMs || latestRun.ts;
+      const key = cronSeenKey(status.agentId, cronJobId);
+      setCronSeenMap((prev) => {
+        const next = { ...prev, [key]: seenTs };
+        setCronSeenLocal(next);
+        return next;
+      });
+    }
+    dispatchOpenAgentPanel(status.agentId, cronSessionKey, {
+      sessionCount: status.sessionCount,
+      unreadCount: status.unreadCount,
+      lastSeenTs: status.lastSeenTs,
+      runtime,
+      runtimeUnavailable,
+      hiring: status.state === "hiring",
+      cronJobId,
+    });
+  }, [identities, sidebarCronRuns]);
 
   // Click handler: open the agent panel (unread is NOT cleared here — cleared when session is opened)
   const handleAgentClick = useCallback((agentId: string) => {
@@ -1315,29 +1814,56 @@ const StatusWidgetContent = memo((props: CustomProps) => {
     const runtimeUnavailable = runtime ? unavailableRuntimesRef.current.has(runtime) : false;
 
     setActiveAgentId(agentId);
+    setActiveCronKey(null);
     dispatchOpenAgentPanel(agentId, undefined, { sessionCount, unreadCount, lastSeenTs, runtime, runtimeUnavailable, hiring });
   }, []);
 
-  // Decrement unread per session opened; persist + zero out when clearAll is true
+  // Decrement unread per session opened; persist + zero out when clearAll is true.
+  // Session-level reads are localStorage-backed so hard reloads do not mark
+  // already-opened sessions unread again.
   useEffect(() => {
     const handler = (e: Event) => {
-      const { agentId, clearAll } = (e as CustomEvent<{ agentId: string; clearAll?: boolean }>).detail ?? {};
+      const { agentId, sessionKey, clearAll } = (e as CustomEvent<{
+        agentId: string;
+        sessionKey?: string;
+        clearAll?: boolean;
+      }>).detail ?? {};
       if (!agentId) return;
+      const ts = Date.now();
+      if (sessionKey) {
+        markSidebarSessionRead(agentId, sessionKey, ts);
+        bridgeInvoke("set-agent-last-seen", { agentId, ts, msgText: "" }).catch(() => {
+          // Local session read state is the source of truth for sidebar rows.
+        });
+      }
       setStatuses((prev) => prev.map((s) => {
         if (s.agentId !== agentId) return s;
         if (clearAll) {
           const lastMsg = s.recentMessages[0]; // newest message
-          const ts = Date.now();
           bridgeInvoke("set-agent-last-seen", { agentId, ts, msgText: lastMsg || "" }).catch(() => {
             setLastSeenLocal(agentId, ts, lastMsg);
           });
           return { ...s, unreadCount: 0 };
         }
+        if (sessionKey) return s;
         return { ...s, unreadCount: Math.max(0, s.unreadCount - 1) };
       }));
     };
     window.addEventListener(AGENT_READ_EVENT, handler);
     return () => window.removeEventListener(AGENT_READ_EVENT, handler);
+  }, [markSidebarSessionRead]);
+
+  // Sync activeSessionKey when an external caller (GatewayChatWidget, new-chat button) opens a session
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { agentId, sessionKey } = (e as CustomEvent<{ agentId: string; sessionKey?: string }>).detail ?? {};
+      if (!agentId) return;
+      setActiveAgentId(agentId);
+      setActiveSessionKey(sessionKey ?? null);
+      setActiveCronKey(null);
+    };
+    window.addEventListener(OPEN_AGENT_CHAT_EVENT, handler);
+    return () => window.removeEventListener(OPEN_AGENT_CHAT_EVENT, handler);
   }, []);
 
   // Track agents being deleted (background bridge call in flight)
@@ -1466,6 +1992,474 @@ const StatusWidgetContent = memo((props: CustomProps) => {
       window.removeEventListener("agent.hire.failed", onHireFailed);
     };
   }, [refresh]);
+
+  useEffect(() => {
+    const onNewAgent = () => setAddAgentOpen(true);
+    window.addEventListener("ensemble:new-agent", onNewAgent);
+    return () => window.removeEventListener("ensemble:new-agent", onNewAgent);
+  }, []);
+
+  if (isChatSidebarLayout) {
+    return (
+      <motion.div
+        animate={{
+          opacity: isFocusModeActive ? 0.8 : 1,
+          scale: isFocusModeActive ? 0.98 : 1,
+        }}
+        transition={{ duration: 0.4, ease: "easeOut" }}
+        className="h-full w-full min-w-0 overflow-hidden"
+      >
+        <Card
+          className={cn(
+            "group h-full w-full min-w-0 flex flex-col overflow-hidden bg-card/70 backdrop-blur-xl border border-border transition-all duration-300 rounded-md",
+            isFocusModeActive && "border-transparent grayscale-[30%]",
+            className
+          )}
+        >
+          <div className="flex items-center justify-between gap-2 px-3 pt-2 pb-2 shrink-0">
+            <div className="flex items-center gap-2 min-w-0">
+              {props.isEditMode && (
+                <div className="cursor-move h-6 w-6 flex items-center justify-center shrink-0">
+                  <GripVertical className="w-3 h-3 text-muted-foreground" />
+                </div>
+              )}
+              <Activity className="w-3 h-3 text-primary shrink-0" />
+              <span className="text-[11px] font-medium text-foreground truncate">
+                Agents
+              </span>
+              {unreadTotal > 0 && (
+                <Badge
+                  variant="default"
+                  className="h-4 px-1.5 text-[10px] font-medium bg-primary text-primary-foreground"
+                >
+                  {unreadTotal} new
+                </Badge>
+              )}
+            </div>
+            <div className="flex items-center gap-1 shrink-0">
+              <Button
+                variant="ghost"
+                size="iconSm"
+                className="h-6 w-6"
+                onClick={() => refresh()}
+                disabled={loading}
+                title="Refresh agents"
+              >
+                <RefreshCw className={cn("w-3 h-3", loading && "animate-spin")} />
+              </Button>
+              <Button
+                variant="ghost"
+                size="iconSm"
+                className="h-6 w-6"
+                onClick={() => setAddAgentOpen(true)}
+                title="Add agent"
+              >
+                <Plus className="w-3 h-3" />
+              </Button>
+            </div>
+          </div>
+
+          <div className="px-3 pb-2 shrink-0">
+            <div className="relative">
+              <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-muted-foreground/50 pointer-events-none" />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search agents"
+                className="w-full h-7 pl-6 pr-2 rounded-md bg-muted/40 border border-border/30 text-xs text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary/40 transition-colors"
+              />
+            </div>
+          </div>
+
+          <div className="flex-1 overflow-hidden flex flex-col min-h-0 px-0 pb-2">
+            {loading && statuses.length === 0 ? (
+              <div className="space-y-1 px-2">
+                {Array.from({ length: 5 }).map((_, i) => (
+                  <div key={i} className="h-12 rounded-md border border-solid border-border/40 animate-pulse" />
+                ))}
+              </div>
+            ) : error && statuses.length === 0 ? (
+              <div className="flex-1 flex flex-col items-center justify-center gap-2 py-6 px-4">
+                <AlertTriangle className="w-6 h-6 text-destructive/60" />
+                <p className="text-xs text-destructive text-center">{error}</p>
+                <Button variant="outline" size="sm" className="h-6 text-xs mt-1" onClick={() => refresh()} disabled={loading}>
+                  <RefreshCw className={cn("w-3 h-3 mr-1", loading && "animate-spin")} />Retry
+                </Button>
+              </div>
+            ) : filteredStatuses.length === 0 ? (
+              <div className="flex-1 flex flex-col items-center justify-center gap-2 py-6">
+                <Activity className="w-6 h-6 text-muted-foreground/40" />
+                <p className="text-xs text-muted-foreground text-center">
+                  {search.trim() ? "No matching agents" : "No employees yet"}
+                </p>
+              </div>
+            ) : (
+              <ScrollArea className={CHAT_SIDEBAR_SCROLL_AREA_CLASS}>
+                <div className="box-border w-full max-w-full min-w-0 space-y-1 overflow-hidden px-2 pr-1 [contain:inline-size]">
+                  {filteredStatuses.map((status) => {
+                    const identity = identities.get(status.agentId);
+                    const resolvedAvatarUrl = resolveAvatarUrl(identity?.avatar);
+                    const avatarUrl = isCustomImageAvatar(resolvedAvatarUrl) ? resolvedAvatarUrl : undefined;
+                    const displayName = identity?.name || status.name || status.agentId;
+                    const runtime = identity?.runtime || status.runtime;
+                    const visualState: AgentState = deletingAgentIds.has(status.agentId)
+                      ? "deleting"
+                      : hiringAgentIds.has(status.agentId)
+                        ? "hiring"
+                        : status.state;
+                    const isOpen = expandedAgentIds.includes(status.agentId);
+                    const sessions = filterDirectChatSessions(sidebarSessions[status.agentId] ?? []);
+                    const sessionsLoading = Boolean(sidebarSessionLoading[status.agentId]);
+                    const jobs = sidebarCrons[status.agentId] ?? [];
+                    const cronsLoading = Boolean(sidebarCronLoading[status.agentId]);
+                    const isUnavailable = unavailableRuntimes.has(runtime || "");
+
+                    return (
+                      <div
+                        key={status.agentId}
+                        className={cn(
+                          "box-border w-full max-w-full min-w-0 overflow-hidden rounded-lg border border-solid border-border/60 bg-background/30 transition-colors",
+                          isUnavailable && "opacity-75"
+                        )}
+                      >
+                        {/* Header row: entire row is the expand/collapse target; inner controls stop propagation */}
+                        <div
+                          className="group box-border flex w-full max-w-full min-w-0 cursor-pointer items-center gap-1 overflow-hidden rounded-t-lg transition-colors hover:bg-muted/30"
+                          onClick={() => handleSidebarAccordionToggle(status.agentId)}
+                        >
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleSidebarAccordionToggle(status.agentId);
+                            }}
+                            className="box-border flex min-w-0 flex-1 items-center gap-2.5 px-2.5 py-2.5 text-left transition-colors"
+                            aria-label={`${isOpen ? "Collapse" : "Expand"} ${displayName}`}
+                          >
+                            <div className={cn("shrink-0 relative", isUnavailable && "grayscale opacity-60")}>
+                              <Avatar className="w-7 h-7">
+                                {avatarUrl && <AvatarImage src={avatarUrl} alt={displayName} />}
+                                <AvatarFallback className="bg-primary/10 text-primary text-[11px] select-none">
+                                  {identity?.emoji
+                                    ? <span className="leading-[0]">{identity.emoji}</span>
+                                    : <span className="leading-[0]">{agentInitials(displayName, status.agentId)}</span>
+                                  }
+                                </AvatarFallback>
+                              </Avatar>
+                              {status.unreadCount > 0 && visualState !== "running" && activeAgentId !== status.agentId && (
+                                <span className="absolute -top-0.5 -right-0.5 min-w-[14px] h-3.5 px-0.5 rounded-full bg-red-500 border border-card flex items-center justify-center text-[8px] font-normal text-white leading-none">
+                                  {status.unreadCount >= 99 ? "99+" : status.unreadCount}
+                                </span>
+                              )}
+                              <AgentRowStatusDot agentId={status.agentId} baseState={visualState} />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-1.5">
+                                <span className="truncate text-xs font-normal text-foreground">
+                                  {displayName}
+                                </span>
+                                {visualState === "running" && (
+                                  <span className="shrink-0 text-[9px] text-emerald-500 border border-emerald-500/30 rounded px-1 py-px leading-none">
+                                    Running
+                                  </span>
+                                )}
+                                {visualState === "hiring" && (
+                                  <span className="shrink-0 text-[9px] text-red-400/80 border border-red-400/30 rounded px-1 py-px leading-none">
+                                    Hiring
+                                  </span>
+                                )}
+                              </div>
+                              <p className="mt-0.5 truncate text-[10px] text-muted-foreground/55">
+                                {status.lastActivity ? timeAgo(status.lastActivity) : runtime || "openclaw"}
+                              </p>
+                            </div>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openAgentProfile(status.agentId);
+                            }}
+                            className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
+                            aria-label={`View ${displayName} profile`}
+                            title={`View ${displayName} profile`}
+                          >
+                            <ArrowUpRight className="w-3 h-3" />
+                          </button>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <button
+                                type="button"
+                                onClick={(e) => e.stopPropagation()}
+                                className="mr-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
+                                aria-label={`Add for ${displayName}`}
+                                title={`Add chat or cron for ${displayName}`}
+                              >
+                                <Plus className="w-3 h-3" />
+                              </button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent
+                              align="end"
+                              className="w-40 z-[80]"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <DropdownMenuItem
+                                className="gap-2 text-[11px]"
+                                onClick={(e) => e.stopPropagation()}
+                                onSelect={(event) => {
+                                  event.preventDefault();
+                                  setActiveAgentId(status.agentId);
+                                  dispatchOpenAgentChat(status.agentId, undefined, {
+                                    runtime,
+                                    runtimeUnavailable: isUnavailable,
+                                    hiring: visualState === "hiring",
+                                    newChat: true,
+                                  });
+                                }}
+                              >
+                                <MessageSquare className="w-3.5 h-3.5" />
+                                New chat
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                className="gap-2 text-[11px]"
+                                onClick={(e) => e.stopPropagation()}
+                                onSelect={(event) => {
+                                  event.preventDefault();
+                                  setAddCronDefaults({ agentId: status.agentId, runtime });
+                                }}
+                              >
+                                <CalendarClock className="w-3.5 h-3.5" />
+                                New cron job
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </div>
+
+                        <AnimatePresence initial={false}>
+                          {isOpen && (
+                            <motion.div
+                              initial={{ height: 0, opacity: 0 }}
+                              animate={{ height: "auto", opacity: 1 }}
+                              exit={{ height: 0, opacity: 0 }}
+                              transition={{ duration: 0.18 }}
+                              className="box-border w-full max-w-full min-w-0 overflow-hidden"
+                            >
+                              <div className="box-border w-full max-w-full min-w-0 overflow-hidden border-t border-border/50">
+                              <div className="box-border w-full max-w-full min-w-0 overflow-hidden space-y-3 px-2.5 py-2.5">
+                                <section className="box-border w-full max-w-full min-w-0 overflow-hidden space-y-1.5">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <p className="text-[10px] font-normal uppercase tracking-[0.14em] text-muted-foreground/60">
+                                      All chats
+                                    </p>
+                                  </div>
+                                  {sessionsLoading ? (
+                                    <div className="space-y-1">
+                                      {[0, 1, 2].map((i) => (
+                                        <div key={i} className="h-8 rounded-md bg-muted/40 animate-pulse" />
+                                      ))}
+                                    </div>
+                                  ) : sessions.length === 0 ? (
+                                    <p className="rounded-md border border-dashed border-border/60 px-2 py-2 text-[11px] text-muted-foreground/55">
+                                      No chats yet.
+                                    </p>
+                                  ) : (
+                                    <div className="box-border w-full max-w-full min-w-0 space-y-0.5 overflow-hidden">
+                                      {(() => {
+                                        const showAll = sidebarSessionsShowAll[status.agentId] ?? false;
+                                        const visibleSessions = showAll ? sessions : sessions.slice(0, 6);
+                                        const remainingCount = sessions.length - 6;
+                                        return (
+                                          <>
+                                            {visibleSessions.map((session) => {
+                                              const readTs = sessionReadMap[readSessionKey(status.agentId, session.key)] ?? status.lastSeenTs;
+                                              const isUnread = Boolean(session.updatedAt && session.updatedAt > readTs);
+                                              const isSessionRunning =
+                                                isRunningSessionStatus(session.status) ||
+                                                workingSessionKeys.has(session.key);
+                                              const hasTrailing = isSessionRunning || isUnread || Boolean(session.updatedAt);
+                                              return (
+                                                <button
+                                                  key={session.key}
+                                                  type="button"
+                                                  onClick={() => openSidebarChatSession(status, session.key)}
+                                                  className={cn(
+                                                    "box-border w-full max-w-full min-w-0 rounded-md px-2 py-1.5 text-left font-normal transition-colors hover:bg-muted/30",
+                                                    activeAgentId === status.agentId && activeSessionKey === session.key && "bg-muted/50",
+                                                    isSessionRunning && "hover:bg-amber-400/10",
+                                                    hasTrailing
+                                                      ? "grid grid-cols-[minmax(0,1fr)_auto] items-start gap-2"
+                                                      : "block",
+                                                  )}
+                                                >
+                                                  <span className={cn(
+                                                    "block min-w-0 truncate text-[11px] font-normal",
+                                                    isSessionRunning
+                                                      ? "text-amber-700 dark:text-amber-300"
+                                                      : isUnread
+                                                        ? "text-foreground"
+                                                        : "text-foreground/70",
+                                                  )}>
+                                                    {sessionDisplayTitle(session)}
+                                                  </span>
+                                                  {isSessionRunning ? (
+                                                    <span className="mt-1.5 flex w-2 shrink-0 justify-center">
+                                                      <span className="relative flex h-2 w-2">
+                                                        <span className="absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75 animate-ping" />
+                                                        <span className="relative inline-flex h-2 w-2 rounded-full bg-amber-500" />
+                                                      </span>
+                                                    </span>
+                                                  ) : !isUnread && session.updatedAt ? (
+                                                    <span className="shrink-0 pt-0.5 text-[9px] text-muted-foreground/45">
+                                                      {timeAgo(session.updatedAt)}
+                                                    </span>
+                                                  ) : null}
+                                                  {!isSessionRunning && isUnread && (
+                                                    <span className="mt-1.5 flex w-2 shrink-0 justify-center">
+                                                      <span className="h-1.5 w-1.5 rounded-full bg-primary" />
+                                                    </span>
+                                                  )}
+                                                </button>
+                                              );
+                                            })}
+                                            {!showAll && remainingCount > 0 && (
+                                              <button
+                                                type="button"
+                                                onClick={() => setSidebarSessionsShowAll((prev) => ({ ...prev, [status.agentId]: true }))}
+                                                className="box-border w-full max-w-full min-w-0 overflow-hidden rounded-md px-2 py-1 text-left text-[10px] font-normal text-muted-foreground/50 transition-colors hover:text-muted-foreground/80"
+                                              >
+                                                {remainingCount} more
+                                              </button>
+                                            )}
+                                          </>
+                                        );
+                                      })()}
+                                    </div>
+                                  )}
+                                </section>
+
+                                <section className="box-border w-full max-w-full min-w-0 overflow-hidden space-y-1.5">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <p className="text-[10px] font-normal uppercase tracking-[0.14em] text-muted-foreground/60">
+                                      Cron jobs
+                                    </p>
+                                    <span className="text-[9px] text-muted-foreground/45">
+                                      {jobs.length ? `${jobs.length}` : ""}
+                                    </span>
+                                  </div>
+                                  {cronsLoading ? (
+                                    <div className="space-y-1">
+                                      {[0, 1].map((i) => (
+                                        <div key={i} className="h-10 rounded-md bg-muted/40 animate-pulse" />
+                                      ))}
+                                    </div>
+                                  ) : jobs.length === 0 ? (
+                                    <p className="rounded-md border border-dashed border-border/60 px-2 py-2 text-[11px] text-muted-foreground/55">
+                                      No cron jobs for this agent.
+                                    </p>
+                                  ) : (
+                                    <div className="box-border w-full max-w-full min-w-0 space-y-0.5 overflow-hidden">
+                                      {jobs.map((job) => {
+                                        const cronRuns = sidebarCronRuns[status.agentId] ?? {};
+                                        const runs = (cronRuns[job.id] ?? []).slice().sort((a, b) => cronRunActivityTs(b) - cronRunActivityTs(a));
+                                        const latestRun = runs[0];
+                                        const rawStatus = job.state?.lastStatus ?? latestRun?.status ?? "";
+                                        const ls = rawStatus.toLowerCase();
+                                        const isRunning =
+                                          cronStatusIsRunning(job.state?.lastStatus) ||
+                                          cronStatusIsRunning(job.state?.lastRunStatus) ||
+                                          cronStatusIsRunning((job as Record<string, unknown>).status) ||
+                                          cronStatusIsRunning(latestRun?.status);
+                                        const isSuccess = !isRunning && ["ok", "success", "completed", "done"].includes(ls);
+                                        const isError = !isRunning && ["error", "failed", "aborted"].includes(ls);
+                                        const isDisabled = !job.enabled;
+                                        // Read/unread semantics:
+                                        // latestRunTs: canonical timestamp for the most recent run
+                                        const latestRunTs = Math.max(
+                                          latestRun ? cronRunActivityTs(latestRun) : 0,
+                                          getCronJobActivityTs(job),
+                                          cronSessionActivityTs(sidebarSessions[status.agentId] ?? [], job.id),
+                                        );
+                                        const seenTs = cronSeenMap[cronSeenKey(status.agentId, job.id)] ?? 0;
+                                        // A run is "seen" once the user has clicked the row (seenTs === the run's ts)
+                                        // Running is always shown as unseen/active dot — never show text while running
+                                        const isCronSeen = !isRunning && latestRunTs > 0 && seenTs >= latestRunTs;
+                                        const hasTrailing = isRunning || isSuccess || isError || isDisabled;
+                                        return (
+                                          <button
+                                            key={job.id}
+                                            type="button"
+                                            onClick={() => openSidebarCronJob(status, job.id)}
+                                            className={cn(
+                                              "box-border w-full min-w-0 max-w-full overflow-hidden rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted/30",
+                                              // Highlight the selected cron row — does NOT touch dot color
+                                              activeCronKey === `${status.agentId}:${job.id}` && "bg-muted/30",
+                                              hasTrailing ? "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2" : "block",
+                                            )}
+                                          >
+                                            <span className="block min-w-0 truncate text-[11px] font-normal text-foreground/70">
+                                              {job.name}
+                                            </span>
+                                            {hasTrailing && (
+                                              <span className="flex shrink-0 items-center gap-1">
+                                                {isCronSeen ? (
+                                                  <span className="shrink-0 text-[9px] text-muted-foreground/45">
+                                                    {timeAgo(latestRunTs)}
+                                                  </span>
+                                                ) : (
+                                                  <span className={cn(
+                                                    "h-1.5 w-1.5 shrink-0 rounded-full",
+                                                    isRunning && "bg-yellow-400",
+                                                    isSuccess && "bg-green-500",
+                                                    isError && "bg-red-500",
+                                                    !isRunning && !isSuccess && !isError && "bg-muted-foreground/35",
+                                                  )} />
+                                                )}
+                                              </span>
+                                            )}
+                                          </button>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
+                                </section>
+                              </div>
+                              </div>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </div>
+                    );
+                  })}
+                </div>
+              </ScrollArea>
+            )}
+          </div>
+        </Card>
+
+        <AddAgentDialog
+          open={addAgentOpen}
+          onOpenChange={setAddAgentOpen}
+        />
+        <CronsProvider>
+          <AddCronDialog
+            key={`${addCronDefaults?.agentId ?? "none"}:${addCronDefaults?.runtime ?? "openclaw"}`}
+            open={Boolean(addCronDefaults)}
+            onOpenChange={(open) => {
+              if (!open) setAddCronDefaults(null);
+            }}
+            defaultAgent={addCronDefaults?.agentId}
+            defaultRuntime={addCronDefaults?.runtime}
+            onSuccess={() => {
+              if (!addCronDefaults) return;
+              const status = statusesRef.current.find((item) => item.agentId === addCronDefaults.agentId);
+              if (status) void loadSidebarAgentData(status, true);
+            }}
+          />
+        </CronsProvider>
+      </motion.div>
+    );
+  }
 
   return (
     <motion.div

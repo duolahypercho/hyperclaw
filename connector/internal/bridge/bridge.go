@@ -38,6 +38,9 @@ var actionTimeouts = map[string]time.Duration{
 	"list-agents":                    10 * time.Second,
 	"get-config":                     10 * time.Second,
 	"gateway-request":                90 * time.Second,
+	"openclaw-local-sessions":        10 * time.Second,
+	"openclaw-local-history":         15 * time.Second,
+	"openclaw-local-archive-session": 10 * time.Second,
 	"get-team":                       10 * time.Second,
 	"get-todo-data":                  10 * time.Second,
 	"save-todo-data":                 10 * time.Second,
@@ -923,6 +926,12 @@ func (b *BridgeHandler) dispatch(action string, params map[string]interface{}) a
 		return b.getConfig()
 	case "gateway-request":
 		return b.gatewayRequest(params)
+	case "openclaw-local-sessions":
+		return b.openclawLocalSessions(params)
+	case "openclaw-local-history":
+		return b.openclawLocalHistory(params)
+	case "openclaw-local-archive-session":
+		return b.openclawLocalArchiveSession(params)
 	case "list-models":
 		return b.listModels(params)
 	case "load-local-usage":
@@ -1012,7 +1021,7 @@ func (b *BridgeHandler) dispatch(action string, params map[string]interface{}) a
 	case "delete-agent":
 		return b.deleteAgent(params)
 	case "get-crons":
-		return b.getCrons()
+		return b.getCrons(params)
 	case "cron-add":
 		return b.cronAdd(params)
 	case "cron-run":

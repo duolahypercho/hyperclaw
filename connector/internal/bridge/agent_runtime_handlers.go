@@ -696,6 +696,17 @@ func (b *BridgeHandler) listAvailableRuntimes() actionResult {
 		}
 	}
 
+	for i := range runtimes {
+		if runtimes[i].Name != string(RuntimeClaude) || !runtimes[i].Available {
+			continue
+		}
+		if claudeCliOAuthReady(paths.Home) {
+			runtimes[i].AuthStatus = "ready"
+		} else {
+			runtimes[i].AuthStatus = "needs_auth"
+		}
+	}
+
 	return okResult(map[string]interface{}{
 		"runtimes":       runtimes,
 		"agents":         agents,

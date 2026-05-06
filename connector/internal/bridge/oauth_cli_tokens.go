@@ -36,7 +36,10 @@ func writeClaudeCliOAuthTokens(home string, tokens *onboardingOAuthTokens) error
 	// Read existing credentials to preserve other fields
 	existing := make(map[string]interface{})
 	if data, err := os.ReadFile(credPath); err == nil {
-		json.Unmarshal(data, &existing)
+		if err := json.Unmarshal(data, &existing); err != nil {
+			log.Printf("[oauth] ignoring malformed Claude credentials file at %s: %v", credPath, err)
+			existing = make(map[string]interface{})
+		}
 	}
 
 	// Write the OAuth token fields
@@ -46,6 +49,8 @@ func writeClaudeCliOAuthTokens(home string, tokens *onboardingOAuthTokens) error
 	}
 	if tokens.ExpiresIn > 0 {
 		existing["expiresAt"] = time.Now().Unix() + int64(tokens.ExpiresIn)
+	} else {
+		delete(existing, "expiresAt")
 	}
 
 	data, err := json.MarshalIndent(existing, "", "  ")
@@ -59,6 +64,26 @@ func writeClaudeCliOAuthTokens(home string, tokens *onboardingOAuthTokens) error
 
 	log.Printf("[oauth] wrote Anthropic OAuth tokens to %s", credPath)
 	return nil
+}
+
+func claudeCliOAuthReady(home string) bool {
+	data, err := os.ReadFile(filepath.Join(home, ".claude", ".credentials.json"))
+	if err != nil {
+		return false
+	}
+
+	var creds claudeCliCredentials
+	if err := json.Unmarshal(data, &creds); err != nil {
+		return false
+	}
+
+	if creds.RefreshToken != "" {
+		return true
+	}
+	if creds.OAuthToken == "" {
+		return false
+	}
+	return creds.ExpiresAt == 0 || creds.ExpiresAt > time.Now().Unix()
 }
 
 // ── Codex CLI credential store ──────────────────────────────────────────

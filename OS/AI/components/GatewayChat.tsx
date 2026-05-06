@@ -18,6 +18,7 @@ import { rehypePlugins } from "@OS/AI/components/rehypeConfig";
 import HyperchoTooltip from "$/components/UI/HyperchoTooltip";
 import { ClaudeCodeIcon, CodexIcon } from "$/components/Onboarding/RuntimeIcons";
 import { PROVIDER_MODELS } from "$/components/Home/widgets/gateway-chat/GatewayChatHeader";
+import { createAgentPrimarySessionKey } from "$/components/Home/widgets/gateway-chat/sessionKeys";
 import { useGatewayChat, GatewayChatMessage, GatewayChatAttachment } from "@OS/AI/core/hook/use-gateway-chat";
 import { useClaudeCodeChat } from "@OS/AI/core/hook/use-claude-code-chat";
 import { useCodexChat } from "@OS/AI/core/hook/use-codex-chat";
@@ -292,6 +293,14 @@ const MessageBubble: React.FC<{
     <Bot className="w-4 h-4" />
   );
 
+  // Handle copy function
+  const handleCopy = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const textToCopy = message.content || "";
+    navigator.clipboard.writeText(textToCopy);
+    onCopy?.(message);
+  }, [message, onCopy]);
+
   // Handle tool messages - render using GenericToolMessage if available
   if (message.role === "tool") {
     return null; // Tool results are handled separately
@@ -333,14 +342,6 @@ const MessageBubble: React.FC<{
   }
 
   const hasThinking = message.thinking || (isLoading && !message.content.trim() && !isUser);
-
-  // Handle copy function
-  const handleCopy = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    const textToCopy = message.content || "";
-    navigator.clipboard.writeText(textToCopy);
-    onCopy?.(message);
-  }, [message.content, onCopy]);
 
   return (
     <motion.div
@@ -503,7 +504,7 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
   const isHermes = backend === "hermes";
 
   const [sessionKeyState, setSessionKeyState] = useState(
-    sessionKey || `agent:${currentAgentId}:main`
+    sessionKey || createAgentPrimarySessionKey(currentAgentId)
   );
 
   // AI provider switching (safe variant returns defaults if provider not mounted)
@@ -565,7 +566,7 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
   // Handle agent change
   const handleAgentChange = useCallback((agentId: string) => {
     setSelectedAgentId(agentId);
-    const newSessionKey = `agent:${agentId}:main`;
+    const newSessionKey = createAgentPrimarySessionKey(agentId);
     setSessionKeyState(newSessionKey);
     setHookSessionKey(newSessionKey);
   }, [setHookSessionKey]);
@@ -576,14 +577,24 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
     setSessionsError(null);
     try {
       const fetches: Promise<Array<{ key: string; label?: string; updatedAt?: number }>>[] = [];
+      const gatewayConnectedForSessions = gatewayConnection.isConnected();
 
-      if (gatewayConnection.isConnected()) {
-        fetches.push(
-          gatewayConnection.listSessions(currentAgentId, 50)
-            .then(r => (r.sessions || []).map((s: any) => ({ ...s, label: s.label || s.key })))
-            .catch(() => [])
-        );
-      }
+      fetches.push(
+        gatewayConnection.listOpenClawLocalSessions("", 50)
+          .then(async (localResult) => {
+            const result = localResult ?? (gatewayConnectedForSessions
+              ? await gatewayConnection.listSessions(currentAgentId, 50)
+              : { sessions: [] });
+            const openClawSessions = (result.sessions || []).map((s: any) => ({ ...s, label: s.label || s.key }));
+            return openClawSessions;
+          })
+          .catch(async (err) => {
+            if (!gatewayConnectedForSessions) return [];
+            return gatewayConnection.listSessions(currentAgentId, 50)
+              .then(r => (r.sessions || []).map((s: any) => ({ ...s, label: s.label || s.key })))
+              .catch(() => []);
+          })
+      );
 
       // Claude Code sessions (via connector relay) — scoped to current agent
       fetches.push(
@@ -644,6 +655,11 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
     // Refresh session list so the previous session appears in history
     fetchSessions();
   }, [setHookSessionKey, currentAgentId, fetchSessions]);
+
+  const handleArchiveSession = useCallback(async (targetSessionKey: string) => {
+    await gatewayConnection.archiveOpenClawLocalSession(targetSessionKey, "archive");
+    await fetchSessions();
+  }, [fetchSessions]);
 
   // Track previous message count for smart scrolling
   const prevMessagesLengthRef = useRef<number>(0);
@@ -916,6 +932,7 @@ export const GatewayChat: React.FC<GatewayChatProps> = ({
               onLoadSession={handleSessionChange}
               onNewChat={handleNewChat}
               onFetchSessions={fetchSessions}
+              onArchiveSession={handleArchiveSession}
             />
           </div>
         </div>

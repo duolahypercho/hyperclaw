@@ -59,6 +59,7 @@ import { GenericToolMessage } from "@OS/AI/components/GenericToolMessage";
 import { UnifiedToolState } from "@OS/AI/components/ToolRegistry";
 import { GroupedToolActions } from "$/components/Home/widgets/gateway-chat/GroupedToolActions";
 import { shouldShowAvatarLocal as shouldShowAvatarShared } from "$/components/Home/widgets/gateway-chat/EnhancedMessageBubble";
+import { createAgentPrimarySessionKey } from "$/components/Home/widgets/gateway-chat/sessionKeys";
 
 // Module-level guard: tracks which task IDs have already had auto-send fired.
 // Survives component unmount/remount (e.g. toggling the floating chat) so we
@@ -481,7 +482,7 @@ export function FloatingChatViewer({ agentId, sessionKey: providedSessionKey, ta
 
   const effectiveAgentId = currentAgentId || agentId || agents[0]?.id || "main";
   const isTaskMode = !!taskContext;
-  const defaultSessionKey = `agent:${effectiveAgentId}:main`;
+  const defaultSessionKey = createAgentPrimarySessionKey(effectiveAgentId);
   const [resolvedSessionKey, setResolvedSessionKey] = useState(defaultSessionKey);
 
   // Resolve session key.
@@ -508,7 +509,7 @@ export function FloatingChatViewer({ agentId, sessionKey: providedSessionKey, ta
       setSessionResolved(true);
       return;
     }
-    const fallback = `agent:${effectiveAgentId}:main`;
+    const fallback = createAgentPrimarySessionKey(effectiveAgentId);
     setSessionResolved(false);
     if (!gatewayConnection.isConnected()) {
       setResolvedSessionKey(fallback);
@@ -533,7 +534,7 @@ export function FloatingChatViewer({ agentId, sessionKey: providedSessionKey, ta
     const timer = setTimeout(() => {
       setResolvedSessionKey((prev) => {
         // Only apply fallback if still unresolved
-        if (prev === `agent:${effectiveAgentId}:main` || !prev) {
+        if (prev === createAgentPrimarySessionKey(effectiveAgentId) || !prev) {
           return `agent:${effectiveAgentId}:task-${taskContext._id}`;
         }
         return prev;

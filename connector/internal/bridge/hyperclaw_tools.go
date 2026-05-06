@@ -46,19 +46,20 @@ var hyperclawBuiltinTools = map[string]hyperclawToolDefinition{
 		InputSchema: hyperclawToolSchema(
 			[]string{"agentId", "runtime", "name", "description"},
 			map[string]string{
-				"agentId":     "string",
-				"runtime":     "string",
-				"name":        "string",
-				"description": "string",
-				"role":        "string",
-				"emoji":       "string",
-				"avatarDataUri":   "string",
-				"mainModel":   "string",
-				"companyName":      "string",
+				"agentId":            "string",
+				"runtime":            "string",
+				"name":               "string",
+				"description":        "string",
+				"role":               "string",
+				"emoji":              "string",
+				"avatarData":         "string",
+				"avatarDataUri":      "string",
+				"mainModel":          "string",
+				"companyName":        "string",
 				"companyDescription": "string",
-				"userName":    "string",
-				"userEmail":   "string",
-				"userAboutMe": "string",
+				"userName":           "string",
+				"userEmail":          "string",
+				"userAboutMe":        "string",
 			},
 		),
 	},
@@ -343,34 +344,35 @@ func (b *BridgeHandler) hyperclawToolList(params map[string]interface{}) actionR
 // Failure kinds — closed enum. Callers pattern-match on these to decide
 // what to do without parsing free-form error strings.
 const (
-	failureKindUnknownTool           = "unknown_tool"
-	failureKindBadArguments          = "bad_arguments"
-	failureKindConfirmationRequired  = "confirmation_required"
-	failureKindExecutionError        = "execution_error"
-	failureKindInternalError         = "internal_error"
+	failureKindUnknownTool          = "unknown_tool"
+	failureKindBadArguments         = "bad_arguments"
+	failureKindConfirmationRequired = "confirmation_required"
+	failureKindExecutionError       = "execution_error"
+	failureKindInternalError        = "internal_error"
 )
 
 // Next-action hints — what the caller should do about this failure.
 // These are CALLER-side actions, not infrastructure diagnostics. Agents
 // must follow these mechanically; they should not theorize alternatives.
 const (
-	nextActionRetry             = "retry"               // transient — safe to retry as-is
-	nextActionConfirmAndRetry   = "confirm_and_retry"   // re-call with confirmed: true
-	nextActionFixInputAndRetry  = "fix_input_and_retry" // arguments are wrong; fix and re-call
-	nextActionGiveUp            = "give_up"             // won't succeed without out-of-band action
-	nextActionEscalate          = "escalate"            // surface to a human operator
+	nextActionRetry            = "retry"               // transient — safe to retry as-is
+	nextActionConfirmAndRetry  = "confirm_and_retry"   // re-call with confirmed: true
+	nextActionFixInputAndRetry = "fix_input_and_retry" // arguments are wrong; fix and re-call
+	nextActionGiveUp           = "give_up"             // won't succeed without out-of-band action
+	nextActionEscalate         = "escalate"            // surface to a human operator
 )
 
 // hyperclawToolSuccess builds the canonical success envelope. The shape is
 // stable — agents read top-level `ok` and the `result` block; the dashboard
 // continues to read `success` and the spread domain fields.
 func hyperclawToolSuccess(toolName string, payload map[string]interface{}) map[string]interface{} {
+	payload = compactHyperclawToolPayload(toolName, payload)
 	resp := map[string]interface{}{
-		"ok":            true,
-		"success":       true, // dashboard back-compat
-		"tool":          toolName,
-		"toolName":      toolName, // back-compat alias; older callers (dashboard, tests) read `toolName`.
-		"humanSummary":  fmt.Sprintf("%s succeeded.", toolName),
+		"ok":           true,
+		"success":      true, // dashboard back-compat
+		"tool":         toolName,
+		"toolName":     toolName, // back-compat alias; older callers (dashboard, tests) read `toolName`.
+		"humanSummary": fmt.Sprintf("%s succeeded.", toolName),
 	}
 	resultBlock := map[string]interface{}{}
 	for key, value := range payload {
@@ -384,6 +386,76 @@ func hyperclawToolSuccess(toolName string, payload map[string]interface{}) map[s
 	}
 	resp["result"] = resultBlock
 	return resp
+}
+
+func compactHyperclawToolPayload(toolName string, payload map[string]interface{}) map[string]interface{} {
+	if toolName != "hyperclaw.agents.list" && toolName != "hyperclaw.agents.get" {
+		return payload
+	}
+	out := cloneMap(payload)
+	if data, ok := out["data"]; ok {
+		out["data"] = compactAgentToolData(data)
+	}
+	return out
+}
+
+func compactAgentToolData(data interface{}) interface{} {
+	switch v := data.(type) {
+	case []map[string]interface{}:
+		out := make([]map[string]interface{}, 0, len(v))
+		for _, row := range v {
+			out = append(out, compactAgentToolRow(row))
+		}
+		return out
+	case []interface{}:
+		out := make([]interface{}, 0, len(v))
+		for _, row := range v {
+			if m, ok := row.(map[string]interface{}); ok {
+				out = append(out, compactAgentToolRow(m))
+			} else {
+				out = append(out, row)
+			}
+		}
+		return out
+	case map[string]interface{}:
+		return compactAgentToolRow(v)
+	default:
+		return data
+	}
+}
+
+func compactAgentToolRow(row map[string]interface{}) map[string]interface{} {
+	out := cloneMap(row)
+	delete(out, "config")
+	raw, ok := out["avatarData"].(string)
+	if !ok || raw == "" {
+		return out
+	}
+	delete(out, "avatarData")
+	out["avatar"] = map[string]interface{}{
+		"present": true,
+		"bytes":   len(raw),
+		"kind":    avatarDataKind(raw),
+	}
+	return out
+}
+
+func avatarDataKind(raw string) string {
+	if strings.HasPrefix(raw, "data:") {
+		if semi := strings.Index(raw, ";"); semi > len("data:") {
+			return raw[len("data:"):semi]
+		}
+		return "data-uri"
+	}
+	return "raw"
+}
+
+func cloneMap(in map[string]interface{}) map[string]interface{} {
+	out := make(map[string]interface{}, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 // hyperclawToolFailure builds the canonical failure envelope. Agents should
@@ -636,6 +708,10 @@ func (b *BridgeHandler) dispatchHireAgent(args map[string]interface{}) actionRes
 // can supply the richer payload. Everything not provided is treated as "leave
 // it empty"; onboarding-provision-agent already tolerates blank optional fields.
 func normalizeHireAgentPayload(args map[string]interface{}) map[string]interface{} {
+	avatarDataURI := strFromArgs(args, "avatarDataUri")
+	if avatarDataURI == "" {
+		avatarDataURI = strFromArgs(args, "avatarData")
+	}
 	payload := map[string]interface{}{
 		"agentId":            strFromArgs(args, "agentId"),
 		"runtime":            strFromArgs(args, "runtime"),
@@ -644,7 +720,7 @@ func normalizeHireAgentPayload(args map[string]interface{}) map[string]interface
 		"role":               strFromArgs(args, "role"),
 		"emoji":              strFromArgs(args, "emoji"),
 		"emojiEnabled":       strFromArgs(args, "emoji") != "",
-		"avatarDataUri":      strFromArgs(args, "avatarDataUri"),
+		"avatarDataUri":      avatarDataURI,
 		"mainModel":          strFromArgs(args, "mainModel"),
 		"companyName":        strFromArgs(args, "companyName"),
 		"companyDescription": strFromArgs(args, "companyDescription"),

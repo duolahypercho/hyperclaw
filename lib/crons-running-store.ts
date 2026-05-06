@@ -7,7 +7,7 @@ const IDS_KEY = "hyperclaw-crons-running";
 const STARTED_AT_KEY = "hyperclaw-crons-running-started-at";
 const EVENT_NAME = "hyperclaw-crons-running-changed";
 
-const DEBUG = typeof window !== "undefined" && (window as unknown as { __CRONS_RUNNING_DEBUG?: boolean }).__CRONS_RUNNING_DEBUG !== false;
+const DEBUG = typeof window !== "undefined" && (window as unknown as { __CRONS_RUNNING_DEBUG?: boolean }).__CRONS_RUNNING_DEBUG === true;
 function debugLog(...args: unknown[]) {
   if (DEBUG) console.log("[crons-running-store]", ...args);
 }

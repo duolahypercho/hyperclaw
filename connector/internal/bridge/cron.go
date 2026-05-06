@@ -1,12 +1,15 @@
 package bridge
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/hypercho/hyperclaw-connector/internal/store"
@@ -14,7 +17,17 @@ import (
 
 const maxRunsPerJob = 200
 
-var uuidRegex = regexp.MustCompile(`^[a-f0-9-]{36}$`)
+var (
+	uuidRegex = regexp.MustCompile(`^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`)
+
+	cronSessionKeyAgentRegex  = regexp.MustCompile(`(?i)^agent:([^:]+)`)
+	cronAgentInferenceRegexes = []*regexp.Regexp{
+		regexp.MustCompile(`\bfor\s+(?:the\s+)?([a-z0-9_-]+)\s+agent\b`),
+		regexp.MustCompile(`\b([a-z0-9_-]+)\s+browser profile\b`),
+		regexp.MustCompile(`\bbrowser profile\s+([a-z0-9_-]+)\b`),
+		regexp.MustCompile(`--browser-profile\s+([a-z0-9_-]+)\b`),
+	}
+)
 
 // ── Cron data types ─────────────────────────────────────────────────────────
 
@@ -36,6 +49,7 @@ type parsedCronJob struct {
 	NextRun     *int64 `json:"nextRun,omitempty"`
 	LastRunAtMs *int64 `json:"lastRunAtMs,omitempty"`
 	LastStatus  string `json:"lastStatus,omitempty"`
+	RawJSON     string `json:"rawJson,omitempty"`
 }
 
 type cronRunLine struct {
@@ -84,18 +98,110 @@ func readCronJobsFile(p Paths) ([]map[string]interface{}, error) {
 	return file.Jobs, nil
 }
 
+func normalizeCronAgentID(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func cronJobStringField(job map[string]interface{}, key string) string {
+	value, _ := job[key].(string)
+	return strings.TrimSpace(value)
+}
+
+func cronJobNestedStringField(job map[string]interface{}, parentKey, key string) string {
+	parent, _ := job[parentKey].(map[string]interface{})
+	if parent == nil {
+		return ""
+	}
+	value, _ := parent[key].(string)
+	return strings.TrimSpace(value)
+}
+
+func inferCronJobAgentID(job map[string]interface{}) string {
+	if agentID := normalizeCronAgentID(cronJobStringField(job, "agentId")); agentID != "" {
+		return agentID
+	}
+	if agentID := normalizeCronAgentID(cronJobNestedStringField(job, "payload", "agentId")); agentID != "" {
+		return agentID
+	}
+	sessionKey := cronJobStringField(job, "sessionKey")
+	if sessionKey == "" {
+		sessionKey = cronJobNestedStringField(job, "payload", "sessionKey")
+	}
+	if match := cronSessionKeyAgentRegex.FindStringSubmatch(sessionKey); len(match) == 2 {
+		return normalizeCronAgentID(match[1])
+	}
+
+	text := strings.ToLower(strings.Join([]string{
+		cronJobStringField(job, "name"),
+		cronJobStringField(job, "description"),
+		sessionKey,
+		cronJobNestedStringField(job, "payload", "message"),
+		cronJobNestedStringField(job, "payload", "systemEvent"),
+		cronJobNestedStringField(job, "payload", "text"),
+	}, "\n"))
+	for _, pattern := range cronAgentInferenceRegexes {
+		if match := pattern.FindStringSubmatch(text); len(match) == 2 {
+			return normalizeCronAgentID(match[1])
+		}
+	}
+	return ""
+}
+
+func cronJobMatchesAgent(job map[string]interface{}, agentID string) bool {
+	target := normalizeCronAgentID(agentID)
+	if target == "" {
+		return true
+	}
+	inferred := inferCronJobAgentID(job)
+	if inferred != "" {
+		return inferred == target
+	}
+	return target == "main"
+}
+
+func storeCronJobMatchesAgent(job store.CronJob, agentID string) bool {
+	target := normalizeCronAgentID(agentID)
+	if target == "" {
+		return true
+	}
+	if normalizeCronAgentID(job.AgentID) == target {
+		return true
+	}
+	if strings.TrimSpace(job.RawJSON) == "" {
+		return target == "main" && strings.TrimSpace(job.AgentID) == ""
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal([]byte(job.RawJSON), &raw); err != nil {
+		return false
+	}
+	return cronJobMatchesAgent(raw, target)
+}
+
 // getCronsFromJSON reads crons from jobs.json and enriches with last run data.
 func getCronsFromJSON(p Paths) []parsedCronJob {
+	return getCronsFromJSONFiltered(p, "", "")
+}
+
+// getCronsFromJSONFiltered reads crons from jobs.json and optionally filters by
+// job ID and agent ID. An empty filter returns all OpenClaw jobs.
+func getCronsFromJSONFiltered(p Paths, agentID, jobID string) []parsedCronJob {
 	jobs, err := readCronJobsFile(p)
 	if err != nil {
 		return []parsedCronJob{}
 	}
 
+	jobID = strings.TrimSpace(jobID)
 	result := make([]parsedCronJob, 0, len(jobs))
 	for _, job := range jobs {
 		id, _ := job["id"].(string)
+		if jobID != "" && id != jobID {
+			continue
+		}
+		if !cronJobMatchesAgent(job, agentID) {
+			continue
+		}
 		name, _ := job["name"].(string)
-		agentID, _ := job["agentId"].(string)
+		jobAgentID, _ := job["agentId"].(string)
 		if name == "" {
 			name = id
 		}
@@ -170,15 +276,17 @@ func getCronsFromJSON(p Paths) []parsedCronJob {
 			}
 		}
 
+		rawJSON, _ := json.Marshal(job)
 		result = append(result, parsedCronJob{
 			ID:          id,
 			Name:        name,
 			Schedule:    scheduleStr,
-			AgentID:     agentID,
+			AgentID:     jobAgentID,
 			Status:      status,
 			NextRun:     nextRun,
 			LastRunAtMs: lastRunAtMs,
 			LastStatus:  lastStatus,
+			RawJSON:     string(rawJSON),
 		})
 	}
 
@@ -193,9 +301,19 @@ func (b *BridgeHandler) getCronByID(params map[string]interface{}) actionResult 
 	if jobID == "" || !uuidRegex.MatchString(jobID) {
 		return errResultStatus("Job not found", 404)
 	}
+	agentID, _ := params["agentId"].(string)
+	agentID = strings.TrimSpace(agentID)
+	if agentID != "" {
+		if err := ValidateAgentID(agentID); err != nil {
+			return errResultStatus(err.Error(), 400)
+		}
+	}
 
 	if b.store != nil {
 		if job, err := b.store.GetCronJobByID(jobID); err == nil && job != nil {
+			if !storeCronJobMatchesAgent(*job, agentID) {
+				return errResultStatus("Job not found", 404)
+			}
 			return okResult(job)
 		}
 	}
@@ -207,6 +325,9 @@ func (b *BridgeHandler) getCronByID(params map[string]interface{}) actionResult 
 
 	for _, job := range jobs {
 		if id, _ := job["id"].(string); id == jobID {
+			if !cronJobMatchesAgent(job, agentID) {
+				return errResultStatus("Job not found", 404)
+			}
 			return okResult(job)
 		}
 	}
@@ -250,7 +371,7 @@ func readRunsForJob(p Paths, jobID string) []map[string]interface{} {
 func cronRunToRecord(r store.CronRun) map[string]interface{} {
 	rec := map[string]interface{}{
 		"runAtMs": r.StartedAtMs,
-		"status":  r.Status,
+		"status":  normalizeCronRunStatus(r.Status),
 	}
 	if r.DurationMs != nil {
 		rec["durationMs"] = *r.DurationMs
@@ -265,6 +386,126 @@ func cronRunToRecord(r store.CronRun) map[string]interface{} {
 		rec["sessionId"] = r.RunID
 	}
 	return rec
+}
+
+func cronRunToDetail(r store.CronRun) map[string]interface{} {
+	rec := cronRunToRecord(r)
+	if r.ID != "" {
+		rec["id"] = r.ID
+	}
+	if r.CronID != "" {
+		rec["jobId"] = r.CronID
+	}
+	if r.Runtime != "" {
+		rec["runtime"] = r.Runtime
+	}
+	if r.FinishedAtMs != nil {
+		rec["finishedAtMs"] = *r.FinishedAtMs
+	}
+	if r.TriggerSource != "" {
+		rec["triggerSource"] = r.TriggerSource
+	}
+	if r.FullLog != nil {
+		rec["log"] = *r.FullLog
+		rec["output"] = *r.FullLog
+	}
+	return rec
+}
+
+func normalizeCronRunStatus(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "ok", "success", "completed", "done":
+		return "ok"
+	case "error", "failed", "aborted":
+		return "error"
+	case "running", "in_progress":
+		return "running"
+	default:
+		if status == "" {
+			return "error"
+		}
+		return status
+	}
+}
+
+func cronRunRecordMillis(record map[string]interface{}) (string, bool) {
+	if millis, ok := numericMillis(record["runAtMs"]); ok {
+		return fmt.Sprintf("%d", millis), true
+	}
+	return "", false
+}
+
+func cronRunRecordSessionID(record map[string]interface{}) string {
+	if sessionID, ok := record["sessionId"].(string); ok {
+		return strings.TrimSpace(sessionID)
+	}
+	return ""
+}
+
+func cronRunRecordComparableSignature(record map[string]interface{}) (string, bool) {
+	runAt, ok := cronRunRecordMillis(record)
+	if !ok {
+		return "", false
+	}
+	status, _ := record["status"].(string)
+	message, _ := record["summary"].(string)
+	if strings.TrimSpace(message) == "" {
+		message, _ = record["error"].(string)
+	}
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return "", false
+	}
+	return runAt + ":" + strings.ToLower(strings.TrimSpace(status)) + ":" + message, true
+}
+
+func sortCronRunRecords(records []map[string]interface{}) {
+	sort.SliceStable(records, func(i, j int) bool {
+		left, _ := records[i]["runAtMs"].(int64)
+		if left == 0 {
+			leftFloat, _ := records[i]["runAtMs"].(float64)
+			left = int64(leftFloat)
+		}
+		right, _ := records[j]["runAtMs"].(int64)
+		if right == 0 {
+			rightFloat, _ := records[j]["runAtMs"].(float64)
+			right = int64(rightFloat)
+		}
+		return left > right
+	})
+}
+
+func appendCronRunRecords(base []map[string]interface{}, extra []map[string]interface{}) []map[string]interface{} {
+	seen := make(map[string]bool, len(base)+len(extra))
+	baseComparable := make(map[string]bool, len(base))
+	out := make([]map[string]interface{}, 0, len(base)+len(extra))
+	add := func(record map[string]interface{}) {
+		runAt, hasRunAt := cronRunRecordMillis(record)
+		if !hasRunAt {
+			runAt = fmt.Sprint(record["runAtMs"])
+		}
+		sessionID := cronRunRecordSessionID(record)
+		key := runAt + ":" + sessionID
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		out = append(out, record)
+	}
+	for _, record := range base {
+		if signature, ok := cronRunRecordComparableSignature(record); ok {
+			baseComparable[signature] = true
+		}
+		add(record)
+	}
+	for _, record := range extra {
+		if signature, ok := cronRunRecordComparableSignature(record); ok && baseComparable[signature] {
+			continue
+		}
+		add(record)
+	}
+	sortCronRunRecords(out)
+	return out
 }
 
 func (b *BridgeHandler) getCronRuns(params map[string]interface{}) actionResult {
@@ -304,7 +545,12 @@ func (b *BridgeHandler) getCronRuns(params map[string]interface{}) actionResult 
 				for _, r := range runs {
 					records = append(records, cronRunToRecord(r))
 				}
-				runsByJobID[id] = records
+				jsonlRuns := readRunsForJob(b.paths, id)
+				merged := appendCronRunRecords(records, jsonlRuns)
+				if len(merged) > 100 {
+					merged = merged[:100]
+				}
+				runsByJobID[id] = merged
 			}
 
 			// Fall back to JSONL for job IDs not covered by SQLite
@@ -352,49 +598,45 @@ func (b *BridgeHandler) getCronRunsForJob(params map[string]interface{}) actionR
 	}
 
 	// Try SQLite first
+	sqliteRecords := make([]map[string]interface{}, 0)
 	if b.store != nil {
-		runs, total, err := b.store.GetCronRuns(jobID, limit, offset)
+		sqliteLimit := offset + limit
+		if sqliteLimit < maxRunsPerJob {
+			sqliteLimit = maxRunsPerJob
+		}
+		runs, _, err := b.store.GetCronRuns(jobID, sqliteLimit, 0)
 		if err != nil {
 			log.Printf("[get-cron-runs-for-job] SQLite query error for %s: %v", jobID, err)
-		} else if total > 0 {
-			records := make([]map[string]interface{}, 0, len(runs))
+		} else if len(runs) > 0 {
 			for _, r := range runs {
-				records = append(records, cronRunToRecord(r))
+				sqliteRecords = append(sqliteRecords, cronRunToRecord(r))
 			}
-			hasMore := (offset + len(records)) < total
-			return okResult(map[string]interface{}{"runs": records, "hasMore": hasMore})
 		}
 		// total == 0 means no SQLite rows — fall through to JSONL
 	}
 
 	// JSONL fallback
 	filePath := filepath.Join(b.paths.CronRunsDir(), jobID+".jsonl")
+	jsonlRecords := make([]map[string]interface{}, 0)
 	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return okResult(map[string]interface{}{"runs": []interface{}{}, "hasMore": false})
-	}
-
-	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	all := make([]map[string]interface{}, 0, 64)
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		var obj map[string]interface{}
-		if err := json.Unmarshal([]byte(line), &obj); err != nil {
-			continue
-		}
-		if _, ok := obj["runAtMs"]; ok {
-			all = append(all, obj)
+	if err == nil {
+		lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			var obj map[string]interface{}
+			if err := json.Unmarshal([]byte(line), &obj); err != nil {
+				continue
+			}
+			if _, ok := obj["runAtMs"]; ok {
+				jsonlRecords = append(jsonlRecords, obj)
+			}
 		}
 	}
 
-	// Reverse for newest first
-	for i, j := 0, len(all)-1; i < j; i, j = i+1, j-1 {
-		all[i], all[j] = all[j], all[i]
-	}
-
+	all := appendCronRunRecords(sqliteRecords, jsonlRecords)
 	jsonlTotal := len(all)
 	end := offset + limit
 	if end > jsonlTotal {
@@ -422,6 +664,24 @@ func (b *BridgeHandler) getCronRunDetail(params map[string]interface{}) actionRe
 	if !ok {
 		return errResultStatus("Run not found", 404)
 	}
+	runAtMsInt := int64(runAtMs)
+	sessionID, _ := params["sessionId"].(string)
+
+	if b.store != nil {
+		var run *store.CronRun
+		var err error
+		if strings.TrimSpace(sessionID) != "" {
+			run, err = b.store.GetCronRunByStartedAtAndRunID(jobID, runAtMsInt, strings.TrimSpace(sessionID))
+		} else {
+			run, err = b.store.GetCronRunByStartedAt(jobID, runAtMsInt)
+		}
+		if err == nil && run != nil {
+			return okResult(cronRunToDetail(*run))
+		}
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			log.Printf("[get-cron-run-detail] SQLite query error for %s/%d: %v", jobID, runAtMsInt, err)
+		}
+	}
 
 	filePath := filepath.Join(b.paths.CronRunsDir(), jobID+".jsonl")
 	data, err := os.ReadFile(filePath)
@@ -430,6 +690,25 @@ func (b *BridgeHandler) getCronRunDetail(params map[string]interface{}) actionRe
 	}
 
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if strings.TrimSpace(sessionID) != "" {
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			var obj map[string]interface{}
+			if err := json.Unmarshal([]byte(line), &obj); err != nil {
+				continue
+			}
+			if ram, ok := obj["runAtMs"].(float64); !ok || ram != runAtMs {
+				continue
+			}
+			if sid, ok := obj["sessionId"].(string); ok && sid == strings.TrimSpace(sessionID) {
+				return okResult(obj)
+			}
+		}
+		return errResultStatus("Run not found", 404)
+	}
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {

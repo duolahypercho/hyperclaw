@@ -35,7 +35,7 @@ import { createMergeToolCalls } from "./gateway-chat/mergeToolCallsWithResults";
 import { exportChatAsMarkdown } from "./gateway-chat/exportChat";
 import { SlashCommandMenu } from "./gateway-chat/SlashCommandMenu";
 import { SLASH_COMMANDS, type SlashCommand } from "./gateway-chat/slashCommands";
-import { createNewChatSessionKey } from "./gateway-chat/sessionKeys";
+import { createAgentPrimarySessionKey, createNewChatSessionKey } from "./gateway-chat/sessionKeys";
 import { useRuntimeModels } from "@OS/AI/core/hook/use-runtime-models";
 import { OPEN_AGENT_CHAT_EVENT } from "./StatusWidget";
 
@@ -205,7 +205,7 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
   // Generate session key - use selected session or create new one
   // When no session is selected, use the agent's main session to load existing chat history
   // The format follows OpenClaw's session key pattern: agent:{agentId}:main
-  const sessionKey = selectedSessionKey || `agent:${currentAgentId}:main`;
+  const sessionKey = selectedSessionKey || createAgentPrimarySessionKey(currentAgentId);
 
   // AI provider switching — driven by tab selection
   const { provider: activeProvider } = useAIProviderSafe();
@@ -399,7 +399,7 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
     const agentId = firstAgent?.id || tab;
     setSelectedAgentId(agentId);
     setUserHasSelectedAgent(true);
-    const newSessionKey = `agent:${agentId}:main`;
+    const newSessionKey = createAgentPrimarySessionKey(agentId);
     setSelectedSessionKey(newSessionKey);
     setSessionKey(newSessionKey);
   }, [agents, setSessionKey]);
@@ -411,7 +411,7 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
 
     // Generate new session key and persist both agent + session together
     // so the persist effect saves the correct pair to SQLite.
-    const newSessionKey = `agent:${agentId}:main`;
+    const newSessionKey = createAgentPrimarySessionKey(agentId);
     setSelectedSessionKey(newSessionKey);
     setSessionKey(newSessionKey); // This will clear state in the hook
   }, [setSessionKey]);
@@ -454,7 +454,6 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
   // Per-instance merge function (avoids cross-widget cache thrashing)
   const mergeToolCalls = useMemo(() => createMergeToolCalls(), []);
   const mergedMessages = useMemo(() => mergeToolCalls(messages), [mergeToolCalls, messages]);
-
   // Export chat as markdown file download
   const handleExport = useCallback(() => {
     exportChatAsMarkdown(mergedMessages, currentAgent.name);
@@ -497,7 +496,8 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
   // Auto-send next queued message when AI finishes generating
   const prevLoadingRef2 = useRef(isLoading);
   useEffect(() => {
-    if (prevLoadingRef2.current && !isLoading && messageQueue.length > 0) {
+    const loadingJustEnded = prevLoadingRef2.current && !isLoading;
+    if (loadingJustEnded && messageQueue.length > 0) {
       const [next, ...rest] = messageQueue;
       setMessageQueue(rest);
       sendMessage(next.text, next.attachments);
@@ -741,7 +741,13 @@ const GatewayChatWidgetContent: React.FC<CustomProps> = (props) => {
 
       await sendMessage(finalMessage, gatewayAttachments);
     },
-    [sendMessage, quotedMessage, isLoading, toGatewayAttachments, handleSlashCommand]
+    [
+      handleSlashCommand,
+      isLoading,
+      quotedMessage,
+      sendMessage,
+      toGatewayAttachments,
+    ]
   );
 
   // Determine if avatar should be shown (use mergedMessages since rendering iterates over it)

@@ -16,7 +16,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
+import { useToast } from "@/components/ui/use-toast";
 import type { LiveBridge } from "./useBridges";
+import { BridgeAvatar } from "./BridgeAvatar";
 
 const SCOPE_DESC: Record<string, string> = {
   read: "Read items", write: "Create or update", send: "Send messages",
@@ -49,7 +51,7 @@ interface ConnectDrawerProps {
   bridge: LiveBridge | null;
   open: boolean;
   onClose: () => void;
-  onSave: (bridgeId: string, apiKey: string, type?: string) => Promise<{ success: boolean; error?: string }>;
+  onSave: (bridgeId: string, apiKey: string, type?: string, models?: LiveBridge["models"]) => Promise<{ success: boolean; applied?: string[]; warning?: string; error?: string }>;
   onRemove: (bridgeId: string) => Promise<{ success: boolean; error?: string }>;
 }
 
@@ -67,6 +69,7 @@ function statusBadge(status: LiveBridge["status"]): { label: string; className: 
 }
 
 export function ConnectDrawer({ bridge: b, open, onClose, onSave, onRemove }: ConnectDrawerProps) {
+  const { toast } = useToast();
   const [scopes, setScopes] = useState<Record<string, boolean>>({});
   const [vals, setVals] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
@@ -89,7 +92,7 @@ export function ConnectDrawer({ bridge: b, open, onClose, onSave, onRemove }: Co
 
   const apiKeyField = useMemo(() => b?.fields.find((f) => f.key === "apiKey" || f.secret), [b]);
   const badge = b ? statusBadge(b.status) : null;
-  const initials = b ? b.name.replace(/[^A-Za-z]/g, "").slice(0, 2).toUpperCase() : "";
+  const routesToRuntimes = Boolean(b?.providerId);
 
   const handleTest = () => {
     setTested("testing");
@@ -105,10 +108,15 @@ export function ConnectDrawer({ bridge: b, open, onClose, onSave, onRemove }: Co
     }
     setSaving(true);
     setErrorMsg(null);
-    const result = await onSave(b.id, apiKey);
+    const result = await onSave(b.id, apiKey, "api_key", b.models);
     setSaving(false);
     if (!result.success) {
       setErrorMsg(result.error || "Failed to save credential.");
+      return;
+    }
+    if (result.warning) {
+      toast({ title: "Credential saved", description: result.warning });
+      onClose();
       return;
     }
     onClose();
@@ -134,19 +142,9 @@ export function ConnectDrawer({ bridge: b, open, onClose, onSave, onRemove }: Co
         side="right"
         className="sm:max-w-[540px] w-[540px] flex flex-col gap-0 p-0 ensemble-root"
       >
-        <SheetHeader className="px-6 pt-6 pb-4 border-b border-solid border-border space-y-0">
+        <SheetHeader className="px-6 pt-6 pb-4 border-b border-t-0 border-x-0 border-solid border-border space-y-0">
           <div className="flex items-start gap-3">
-            <span
-              className={cn(
-                "w-10 h-10 grid place-items-center rounded-md font-mono font-bold text-sm shrink-0",
-                "border border-solid",
-                b.cat === "AI models"
-                  ? "bg-primary text-primary-foreground border-primary"
-                  : "bg-card text-foreground border-border",
-              )}
-            >
-              {initials}
-            </span>
+            <BridgeAvatar key={b.id} bridge={b} size="lg" />
             <div className="flex-1 min-w-0">
               <SheetTitle className="text-lg leading-tight">{b.name}</SheetTitle>
               <SheetDescription className="text-[12.5px] mt-0.5">
@@ -181,6 +179,27 @@ export function ConnectDrawer({ bridge: b, open, onClose, onSave, onRemove }: Co
                 ))}
               </dl>
             </section>
+
+            {routesToRuntimes && (
+              <section className="ens-card-flat">
+                <div className="ens-sh mb-2.5">Runtime routing</div>
+                <p className="text-[12.5px] leading-relaxed text-foreground/90">
+                  Saving this API key stores it on the local connector and applies it to compatible
+                  runtime config files. Existing runtime connections are detected separately.
+                </p>
+                <div className="grid grid-cols-2 gap-2 mt-3">
+                  {["OpenClaw auth profile", "Hermes provider env"].map((label) => (
+                    <div
+                      key={label}
+                      className="flex items-center gap-2 rounded-md border border-solid border-border bg-background px-2.5 py-2 font-mono text-[11px]"
+                    >
+                      <span className="ens-dot offline" />
+                      <span>{label}</span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
 
             {/* Credentials */}
             {b.fields.length > 0 && (
@@ -242,7 +261,7 @@ export function ConnectDrawer({ bridge: b, open, onClose, onSave, onRemove }: Co
                       className={cn(
                         "w-full flex items-center gap-2.5 px-2.5 py-2 rounded-md text-left",
                         "border border-solid bg-background transition-colors",
-                        scopes[s] ? "border-foreground/60" : "border-border hover:border-muted-foreground/50",
+                        scopes[s] ? "border-border" : "border-border hover:border-muted-foreground/50",
                       )}
                     >
                       <span
@@ -293,7 +312,7 @@ export function ConnectDrawer({ bridge: b, open, onClose, onSave, onRemove }: Co
           </div>
         </ScrollArea>
 
-        <SheetFooter className="px-6 py-3.5 border-t border-solid border-border bg-card/30 flex-row sm:flex-row sm:justify-start gap-2 items-center">
+        <SheetFooter className="px-6 py-3.5 border-t border-x-0 border-b-0 border-solid border-border bg-card/30 flex-row sm:flex-row sm:justify-start gap-2 items-center">
           <span className="font-mono text-[10.5px] text-muted-foreground mr-auto">
             {tested === "testing"
               ? "◐ testing connection…"

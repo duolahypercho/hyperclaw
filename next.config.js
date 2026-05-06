@@ -48,7 +48,6 @@ function buildCSP() {
     connectParts.push("http://127.0.0.1:9979", "http://localhost:9979");
     connectParts.push("http://127.0.0.1:7509", "http://localhost:7509");
   }
-
   const directives = [
     "default-src 'self'",
     "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://va.vercel-scripts.com",

@@ -1,0 +1,11 @@
+{
+  "apps": {
+    "hyperclaw": {
+      "displayName": "Hyperclaw Connector",
+      "description": "Local connector bridge for Hyperclaw dashboard and agent runtimes.",
+      "localURL": "http://127.0.0.1:18790/bridge/health",
+      "mcpURL": "http://127.0.0.1:18790/mcp",
+      "fallbackCallURL": "http://127.0.0.1:18790/mcp/call"
+    }
+  }
+}

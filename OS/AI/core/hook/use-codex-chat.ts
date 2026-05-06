@@ -260,7 +260,7 @@ export function useCodexChat(
       const statusRunId = `codex-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const statusAgentId = agentId || extractAgentIdFromSessionKey(currentSessionKey);
       activeStatusRunIdRef.current = statusRunId;
-      markAgentRunStarted(statusRunId, statusAgentId);
+      markAgentRunStarted(statusRunId, statusAgentId, currentSessionKey);
 
       try {
         const activeSkills = agentId ? getActiveSkillsContent(agentId) : "";

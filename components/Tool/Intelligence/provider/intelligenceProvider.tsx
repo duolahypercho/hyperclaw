@@ -59,7 +59,10 @@ export function IntelProvider({ children }: { children: ReactNode }) {
   const [sqlConsoleOpen, setSqlConsoleOpen] = useState(false);
   const [createTableOpen, setCreateTableOpen] = useState(false);
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const selectedColumns = schema?.tables[selectedTable || ""]?.columns || [];
+  const selectedColumns = useMemo(
+    () => schema?.tables[selectedTable || ""]?.columns ?? [],
+    [schema, selectedTable]
+  );
 
   const refreshSchema = useCallback(async () => {
     setLoading(true);
@@ -82,7 +85,7 @@ export function IntelProvider({ children }: { children: ReactNode }) {
     setTableLoading(true);
     try {
       const res = (await bridgeInvoke("intel-query", {
-        sql: `SELECT * FROM "${tableName}" ORDER BY rowid DESC LIMIT 500`,
+        sql: `SELECT _rowid_ AS "__hyperclaw_rowid", * FROM "${tableName}" ORDER BY _rowid_ DESC LIMIT 500`,
       })) as { rows?: Record<string, unknown>[]; error?: string };
       if (res.error) {
         setError(res.error);

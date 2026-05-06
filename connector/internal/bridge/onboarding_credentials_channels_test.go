@@ -195,6 +195,27 @@ func TestSameAgentConfigIDAllowsHermesMainAlias(t *testing.T) {
 	}
 }
 
+func TestSanitizeDebugOpenClawBindOutputRedactsTargetsAndTokens(t *testing.T) {
+	raw := "telegram:891861452 failed for botToken 8623259433:AAE1tiGk4tT-NykEjKHt3c-eldw8d3jGWZk"
+	got := sanitizeDebugOpenClawBindOutput(raw)
+	if strings.Contains(got, "891861452") || strings.Contains(got, "AAE1tiGk4tT") {
+		t.Fatalf("expected target and token to be redacted, got %q", got)
+	}
+	if !strings.Contains(got, "telegram:[target]") {
+		t.Fatalf("expected channel target placeholder, got %q", got)
+	}
+}
+
+func TestCanonicalOpenClawBindingSpecUsesOpenClawMatchFields(t *testing.T) {
+	got := canonicalOpenClawBindingSpec(" telegram ", " 891861452 ")
+	if got != "telegram:891861452" {
+		t.Fatalf("unexpected canonical binding spec %q", got)
+	}
+	if got := canonicalOpenClawBindingSpec("telegram", ""); got != "" {
+		t.Fatalf("expected empty binding without account id, got %q", got)
+	}
+}
+
 func TestOnboardingProvisionAgentSeedsPersonalityFiles(t *testing.T) {
 	home := t.TempDir()
 	b := &BridgeHandler{

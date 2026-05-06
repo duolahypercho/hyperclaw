@@ -1,7 +1,8 @@
 const MAX_AGENT_ROW_PREVIEW_LENGTH = 120;
 const ENSEMBLE_DM_SESSION_PREFIX = "ensemble:dm:";
 const AGENT_MAIN_SESSION_PREFIX = "agent:";
-const AGENT_MAIN_SESSION_SUFFIX = ":main";
+const AGENT_MAIN_SESSION_SUFFIXES = [":hyperclaw", ":main"];
+const SCOPED_ENSEMBLE_DM_MARKER = ":ensemble:dm:";
 
 function cleanPreviewText(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
@@ -55,15 +56,22 @@ export function getAgentIdFromMainChatSessionKey(
     const agentId = sessionKey.slice(ENSEMBLE_DM_SESSION_PREFIX.length);
     return agentId || undefined;
   }
-  if (
-    sessionKey.startsWith(AGENT_MAIN_SESSION_PREFIX) &&
-    sessionKey.endsWith(AGENT_MAIN_SESSION_SUFFIX)
-  ) {
-    const agentId = sessionKey.slice(
-      AGENT_MAIN_SESSION_PREFIX.length,
-      -AGENT_MAIN_SESSION_SUFFIX.length
-    );
+  const scopedDmIndex = sessionKey.indexOf(SCOPED_ENSEMBLE_DM_MARKER);
+  if (sessionKey.startsWith(AGENT_MAIN_SESSION_PREFIX) && scopedDmIndex > AGENT_MAIN_SESSION_PREFIX.length) {
+    const agentId = sessionKey.slice(AGENT_MAIN_SESSION_PREFIX.length, scopedDmIndex);
     return agentId || undefined;
+  }
+  if (
+    sessionKey.startsWith(AGENT_MAIN_SESSION_PREFIX)
+  ) {
+    for (const suffix of AGENT_MAIN_SESSION_SUFFIXES) {
+      if (!sessionKey.endsWith(suffix)) continue;
+      const agentId = sessionKey.slice(
+        AGENT_MAIN_SESSION_PREFIX.length,
+        -suffix.length
+      );
+      return agentId || undefined;
+    }
   }
   return undefined;
 }

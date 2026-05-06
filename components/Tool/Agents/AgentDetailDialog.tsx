@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
-import { Save, Trash2, Loader2, ImagePlus, Package, ScrollText } from "lucide-react";
+import { Save, Trash2, Loader2, ImagePlus, Package, ScrollText, SmilePlus, ChevronDown, UserRound, SlidersHorizontal, BadgeInfo } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -21,6 +21,17 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "$/utils";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
 import {
@@ -488,237 +499,290 @@ export function InfoTab({
     ? ed.displayAvatarSrc
     : undefined;
   const runtime = agentRuntime || identity?.runtime || ed.runtime;
-  const InfoRuntimeIcon = !infoAvatarSrc
+  const InfoRuntimeIcon = !infoAvatarSrc && !ed.emoji
     ? (runtime === "claude-code" ? ClaudeCodeIcon
       : runtime === "codex" ? CodexIcon
       : runtime === "hermes" ? HermesIcon
       : null)
     : null;
+  const showHeartbeat = !runtime || runtime === "openclaw";
+  const showBehaviorSettings = runtime !== "codex" || showHeartbeat;
 
   return (
-    <div className="space-y-5">
-      {/* ── Avatar ─────────────────────────────── */}
-      <div>
-        <label className="block text-sm font-medium mb-2">Avatar</label>
-        <div className="flex items-start gap-4 mb-3">
-          <div className="relative shrink-0">
-            <Avatar className="h-16 w-16">
-              {infoAvatarSrc && <AvatarImage src={infoAvatarSrc} alt={ed.name} />}
-              <AvatarFallback className="bg-primary/10 text-primary text-2xl">
-                {InfoRuntimeIcon
-                  ? <InfoRuntimeIcon className="w-9 h-9" />
-                  : (ed.emoji || "🤖")
-                }
-              </AvatarFallback>
-            </Avatar>
-            <button
-              type="button"
-              onClick={() => ed.fileInputRef.current?.click()}
-              className="absolute inset-0 flex items-center justify-center rounded-md bg-black/50 opacity-0 hover:opacity-100 transition-opacity"
-            >
-              <ImagePlus className="h-5 w-5 text-white" />
-            </button>
-            <input
-              ref={ed.fileInputRef}
-              type="file"
-              accept="image/*"
-              onChange={ed.handleImageUpload}
-              className="hidden"
-            />
+    <Accordion
+      type="multiple"
+      defaultValue={["identity"]}
+      className="space-y-3"
+    >
+      <AccordionItem value="identity" className="rounded-xl border border-solid border-primary/10 bg-background/45 px-3 shadow-sm">
+        <AccordionTrigger className="py-3 hover:no-underline">
+          <div className="min-w-0 space-y-1 text-left">
+            <div className="flex items-center gap-1.5">
+              <UserRound className="h-3.5 w-3.5 text-primary/60 stroke-[1.8]" />
+              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                Identity
+              </span>
+            </div>
+            <p className="text-[11px] font-normal leading-5 text-muted-foreground/70">
+              Name, face, and quick visual cue for this agent.
+            </p>
           </div>
-          <div className="flex-1 min-w-0 space-y-1.5">
-            <Input
-              value={ed.avatarPreview ? "(uploaded image)" : ed.avatarPath}
-              onChange={(e) => {
-                ed.setAvatarPath(e.target.value);
-                ed.setAvatarPreview(null);
-              }}
-              disabled={!!ed.avatarPreview}
-              placeholder="Image URL or filename (e.g. avatar.png)"
-              className="h-8 text-xs"
-            />
-            <div className="flex items-center gap-2">
-              <Button
+        </AccordionTrigger>
+        <AccordionContent className="pb-3 pt-0">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+            <div className="relative shrink-0 overflow-hidden rounded-md">
+              <Avatar className="h-20 w-20 border border-primary/10 shadow-sm">
+                {infoAvatarSrc && <AvatarImage src={infoAvatarSrc} alt={ed.name} />}
+                <AvatarFallback className="bg-primary/10 text-primary text-3xl">
+                  {InfoRuntimeIcon
+                    ? <InfoRuntimeIcon className="w-10 h-10" />
+                    : (ed.emoji || "🤖")
+                  }
+                </AvatarFallback>
+              </Avatar>
+              <button
                 type="button"
-                variant="outline"
-                size="sm"
-                className="h-7 text-xs gap-1"
                 onClick={() => ed.fileInputRef.current?.click()}
+                className="absolute inset-0 flex items-center justify-center rounded-md bg-black/50 opacity-0 transition-opacity hover:opacity-100 focus-visible:opacity-100"
+                aria-label="Upload avatar image"
               >
-                <ImagePlus className="h-3 w-3" />
-                Upload image
-              </Button>
-              {ed.avatarPreview && (
+                <ImagePlus className="h-6 w-6 text-white" />
+              </button>
+              <input
+                ref={ed.fileInputRef}
+                type="file"
+                accept="image/*"
+                onChange={ed.handleImageUpload}
+                className="hidden"
+              />
+            </div>
+
+            <div className="min-w-0 flex-1 space-y-3">
+              <div className="space-y-1.5">
+                <label className="block text-[10px] font-medium uppercase tracking-wide text-muted-foreground/60">
+                  Name
+                </label>
+                <Input
+                  value={ed.name}
+                  onChange={(e) => ed.setName(e.target.value)}
+                  placeholder="Agent name"
+                  className="h-10 rounded-lg border-primary/10 bg-foreground/[0.035] text-sm font-medium shadow-none"
+                />
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
                 <Button
                   type="button"
-                  variant="ghost"
+                  variant="outline"
                   size="sm"
-                  className="h-7 text-xs text-muted-foreground"
-                  onClick={() => ed.setAvatarPreview(null)}
+                  className="h-8 rounded-lg border-primary/10 bg-foreground/[0.035] text-xs gap-1.5 shadow-none"
+                  onClick={() => ed.fileInputRef.current?.click()}
                 >
-                  Clear upload
+                  <ImagePlus className="h-3.5 w-3.5" />
+                  Upload image
                 </Button>
-              )}
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-8 gap-1.5 rounded-lg border-primary/10 bg-foreground/[0.035] px-2.5 text-xs shadow-none"
+                    >
+                      <SmilePlus className="h-3.5 w-3.5" />
+                      Emoji
+                      <ChevronDown className="h-3 w-3 text-muted-foreground" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="z-[102] w-64 rounded-xl border-primary/10 bg-popover/95 p-2 shadow-xl backdrop-blur-xl">
+                    <div className="grid grid-cols-8 gap-1">
+                      {EMOJI_OPTIONS.map((e) => (
+                        <button
+                          key={e}
+                          type="button"
+                          onClick={() => ed.setEmoji(e)}
+                          className={cn(
+                            "flex h-8 w-8 items-center justify-center rounded-xl text-xl transition-colors hover:bg-primary/10",
+                            ed.emoji === e && "bg-primary/15 ring-1 ring-primary/50"
+                          )}
+                          aria-label={`Use ${e} emoji`}
+                        >
+                          {e}
+                        </button>
+                      ))}
+                    </div>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                {ed.avatarPreview && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 rounded-lg text-xs text-muted-foreground"
+                    onClick={() => ed.setAvatarPreview(null)}
+                  >
+                    Clear upload
+                  </Button>
+                )}
+                <span className="text-[11px] text-muted-foreground/60">
+                  {ed.avatarPreview ? "Uploaded image ready to save" : ed.emoji ? `${ed.emoji} selected` : "Emoji fallback"}
+                </span>
+              </div>
             </div>
           </div>
-        </div>
-        {/* Emoji picker */}
-        <div className="flex flex-wrap gap-1.5">
-          {EMOJI_OPTIONS.map((e) => (
-            <button
-              key={e}
-              type="button"
-              onClick={() => ed.setEmoji(e)}
-              className={cn(
-                "text-xl p-1.5 rounded-md hover:bg-primary/10 transition-colors",
-                ed.emoji === e && "bg-primary/15 ring-2 ring-primary/50"
-              )}
-            >
-              {e}
-            </button>
-          ))}
-        </div>
-      </div>
+        </AccordionContent>
+      </AccordionItem>
 
-      {/* ── Model ──────────────────────────────── */}
-      {runtime !== "codex" && (
-        <div>
-          <label className="block text-sm font-medium mb-1.5">Model</label>
-          <Select value={ed.model || "__default__"} onValueChange={ed.setModel}>
-            <SelectTrigger className="h-10">
-              <SelectValue placeholder={runtime === "hermes" ? "Hermes default" : "Use default"} />
-            </SelectTrigger>
-            <SelectContent className="z-[102]">
-              <SelectItem value="__default__">-- Use Default Model --</SelectItem>
-              {ed.availableModels.map((m) => (
-                <SelectItem key={m} value={m}>
-                  {m}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <p className="text-[10px] text-muted-foreground/60 mt-1">
-            {runtime === "hermes"
-              ? "Model from Hermes profile config.yaml."
-              : runtime === "claude-code"
-              ? "Claude model for this agent."
-              : "AI model used by this agent. Leave empty to use OpenClaw default."}
-          </p>
-        </div>
+      {showBehaviorSettings && (
+        <AccordionItem value="behavior" className="rounded-xl border border-solid border-primary/10 bg-background/45 px-3 shadow-sm">
+          <AccordionTrigger className="py-3 hover:no-underline">
+            <div className="min-w-0 space-y-1 text-left">
+              <div className="flex items-center gap-1.5">
+                <SlidersHorizontal className="h-3.5 w-3.5 text-primary/60 stroke-[1.8]" />
+                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                  Behavior
+                </span>
+              </div>
+              <p className="text-[11px] font-normal leading-5 text-muted-foreground/70">
+                Model and heartbeat settings for how this agent runs.
+              </p>
+            </div>
+          </AccordionTrigger>
+          <AccordionContent className="space-y-4 pb-3 pt-0">
+            {runtime !== "codex" && (
+              <div>
+                <label className="block text-[10px] font-medium uppercase tracking-wide text-muted-foreground/60 mb-1.5">Model</label>
+                <Select value={ed.model || "__default__"} onValueChange={ed.setModel}>
+                  <SelectTrigger className="h-10 rounded-lg border-primary/10 bg-foreground/[0.035] text-sm shadow-none">
+                    <SelectValue placeholder={runtime === "hermes" ? "Hermes default" : "Use default"} />
+                  </SelectTrigger>
+                  <SelectContent className="z-[102]">
+                    <SelectItem value="__default__">-- Use Default Model --</SelectItem>
+                    {ed.availableModels.map((m) => (
+                      <SelectItem key={m} value={m}>
+                        {m}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-[10px] text-muted-foreground/60 mt-1">
+                  {runtime === "hermes"
+                    ? "Model from Hermes profile config.yaml."
+                    : runtime === "claude-code"
+                    ? "Claude model for this agent."
+                    : "AI model used by this agent. Leave empty to use OpenClaw default."}
+                </p>
+              </div>
+            )}
+
+            {showHeartbeat && (
+              <div>
+                <label className="block text-[10px] font-medium uppercase tracking-wide text-muted-foreground/60 mb-1.5">Heartbeat</label>
+                <div className="flex gap-2">
+                  <div className="flex-1">
+                    <Select value={ed.hbModel || "__default__"} onValueChange={ed.setHbModel}>
+                      <SelectTrigger className="h-10 rounded-lg border-primary/10 bg-foreground/[0.035] text-sm shadow-none">
+                        <SelectValue placeholder="Heartbeat model" />
+                      </SelectTrigger>
+                      <SelectContent className="z-[102]">
+                        <SelectItem value="__default__">-- Use Default --</SelectItem>
+                        {ed.availableModels.map((m) => (
+                          <SelectItem key={m} value={m}>
+                            {m}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="w-[100px]">
+                    <Input
+                      value={ed.hbEvery}
+                      onChange={(e) => ed.setHbEvery(e.target.value)}
+                      placeholder="e.g., 30m"
+                      className="h-10 rounded-lg border-primary/10 bg-foreground/[0.035] text-sm shadow-none"
+                    />
+                  </div>
+                </div>
+                <p className="text-[10px] text-muted-foreground/60 mt-1">
+                  Model and interval for periodic heartbeat tasks.
+                </p>
+              </div>
+            )}
+          </AccordionContent>
+        </AccordionItem>
       )}
 
-      {/* ── Runtime (read-only — set at agent creation) ── */}
-      {ed.runtime && (
-        <div>
-          <label className="block text-sm font-medium mb-1.5">Runtime</label>
-          <div className="h-10 px-3 flex items-center rounded-md border bg-muted/40 text-sm text-muted-foreground select-none">
-            {ed.runtime}
+      <AccordionItem value="profile" className="rounded-xl border border-solid border-primary/10 bg-background/45 px-3 shadow-sm">
+        <AccordionTrigger className="py-3 hover:no-underline">
+          <div className="min-w-0 space-y-1 text-left">
+            <div className="flex items-center gap-1.5">
+              <BadgeInfo className="h-3.5 w-3.5 text-primary/60 stroke-[1.8]" />
+              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                Profile details
+              </span>
+            </div>
+            <p className="text-[11px] font-normal leading-5 text-muted-foreground/70">
+              Role, department, and a short description for teammates.
+            </p>
           </div>
-          <p className="text-[10px] text-muted-foreground/60 mt-1">
-            Runtime is set when the agent is created and cannot be changed.
-          </p>
-        </div>
-      )}
-
-      {/* ── Heartbeat — OpenClaw only ────────────── */}
-      {(!runtime || runtime === "openclaw") && <div>
-        <label className="block text-sm font-medium mb-1.5">Heartbeat</label>
-        <div className="flex gap-2">
-          <div className="flex-1">
-            <Select value={ed.hbModel || "__default__"} onValueChange={ed.setHbModel}>
-              <SelectTrigger className="h-10">
-                <SelectValue placeholder="Heartbeat model" />
-              </SelectTrigger>
-              <SelectContent className="z-[102]">
-                <SelectItem value="__default__">-- Use Default --</SelectItem>
-                {ed.availableModels.map((m) => (
-                  <SelectItem key={m} value={m}>
-                    {m}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="w-[100px]">
+        </AccordionTrigger>
+        <AccordionContent className="space-y-4 pb-3 pt-0">
+          <div>
+            <label className="block text-[10px] font-medium uppercase tracking-wide text-muted-foreground/60 mb-1.5">Role</label>
             <Input
-              value={ed.hbEvery}
-              onChange={(e) => ed.setHbEvery(e.target.value)}
-              placeholder="e.g., 30m"
-              className="h-10"
+              value={ed.role}
+              onChange={(e) => ed.setRole(e.target.value)}
+              placeholder="e.g., Code & Automation"
+              className="h-10 rounded-lg border-primary/10 bg-foreground/[0.035] text-sm shadow-none"
             />
           </div>
-        </div>
-        <p className="text-[10px] text-muted-foreground/60 mt-1">
-          Model and interval for periodic heartbeat tasks.
-        </p>
-      </div>}
 
-      {/* ── Name ───────────────────────────────── */}
-      <div>
-        <label className="block text-sm font-medium mb-1.5">Name</label>
-        <Input
-          value={ed.name}
-          onChange={(e) => ed.setName(e.target.value)}
-          placeholder="Agent name"
-        />
-      </div>
+          {ed.departments.length > 0 && (
+            <div>
+              <label className="block text-[10px] font-medium uppercase tracking-wide text-muted-foreground/60 mb-1.5">Department</label>
+              <Select
+                value={ed.department || "__none__"}
+                onValueChange={(v) => ed.setDepartment(v === "__none__" ? "" : v)}
+              >
+                <SelectTrigger className="h-10 rounded-lg border-primary/10 bg-foreground/[0.035] text-sm shadow-none">
+                  <SelectValue placeholder="No department" />
+                </SelectTrigger>
+                <SelectContent className="z-[102]">
+                  <SelectItem value="__none__">-- None --</SelectItem>
+                  {ed.departments.map((d) => (
+                    <SelectItem key={d.id} value={d.id}>
+                      {d.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
 
-      {/* ── Role ───────────────────────────────── */}
-      <div>
-        <label className="block text-sm font-medium mb-1.5">Role</label>
-        <Input
-          value={ed.role}
-          onChange={(e) => ed.setRole(e.target.value)}
-          placeholder="e.g., Code & Automation"
-        />
-      </div>
-
-      {/* ── Department ─────────────────────────── */}
-      {ed.departments.length > 0 && (
-        <div>
-          <label className="block text-sm font-medium mb-1.5">Department</label>
-          <Select
-            value={ed.department || "__none__"}
-            onValueChange={(v) => ed.setDepartment(v === "__none__" ? "" : v)}
-          >
-            <SelectTrigger className="h-10">
-              <SelectValue placeholder="No department" />
-            </SelectTrigger>
-            <SelectContent className="z-[102]">
-              <SelectItem value="__none__">-- None --</SelectItem>
-              {ed.departments.map((d) => (
-                <SelectItem key={d.id} value={d.id}>
-                  {d.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      )}
-
-      {/* ── Description ────────────────────────── */}
-      <div>
-        <label className="block text-sm font-medium mb-1.5">Description</label>
-        <Textarea
-          value={ed.description}
-          onChange={(e) => ed.setDescription(e.target.value)}
-          onInput={(e) => {
-            const el = e.currentTarget;
-            el.style.height = "auto";
-            el.style.height = `${Math.min(el.scrollHeight, 300)}px`;
-          }}
-          ref={(el) => {
-            if (el) {
-              el.style.height = "auto";
-              el.style.height = `${Math.min(el.scrollHeight, 300)}px`;
-            }
-          }}
-          placeholder="What does this agent do?"
-          className="min-h-[60px] max-h-[300px] resize-y overflow-auto"
-          rows={2}
-        />
-      </div>
-    </div>
+          <div>
+            <label className="block text-[10px] font-medium uppercase tracking-wide text-muted-foreground/60 mb-1.5">Description</label>
+            <Textarea
+              value={ed.description}
+              onChange={(e) => ed.setDescription(e.target.value)}
+              onInput={(e) => {
+                const el = e.currentTarget;
+                el.style.height = "auto";
+                el.style.height = `${Math.min(el.scrollHeight, 300)}px`;
+              }}
+              ref={(el) => {
+                if (el) {
+                  el.style.height = "auto";
+                  el.style.height = `${Math.min(el.scrollHeight, 300)}px`;
+                }
+              }}
+              placeholder="What does this agent do?"
+              className="min-h-[72px] max-h-[300px] resize-y overflow-auto rounded-lg border-primary/10 bg-foreground/[0.035] text-sm shadow-none"
+              rows={2}
+            />
+          </div>
+        </AccordionContent>
+      </AccordionItem>
+    </Accordion>
   );
 }
 

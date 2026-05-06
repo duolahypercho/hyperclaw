@@ -108,3 +108,69 @@ func TestGetCronsFromJSONIncludesNextRunFromRunFile(t *testing.T) {
 		t.Fatalf("LastStatus = %q, want ok", jobs[0].LastStatus)
 	}
 }
+
+func TestGetCronsFiltersJobsJSONByAgentAndJob(t *testing.T) {
+	openClawDir := t.TempDir()
+	cronDir := filepath.Join(openClawDir, "cron")
+	if err := os.MkdirAll(cronDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	adaJobID := "11111111-1111-4111-8111-111111111111"
+	bobJobID := "22222222-2222-4222-8222-222222222222"
+	mainJobID := "33333333-3333-4333-8333-333333333333"
+	jobsJSON := `{"version":1,"jobs":[
+		{"id":"11111111-1111-4111-8111-111111111111","agentId":"ada","name":"Ada report","enabled":true,"schedule":{"kind":"cron","expr":"30 * * * *"},"state":{}},
+		{"id":"22222222-2222-4222-8222-222222222222","name":"Bob report","enabled":true,"sessionKey":"agent:bob:cron:nightly","schedule":{"kind":"cron","expr":"0 * * * *"},"state":{}},
+		{"id":"33333333-3333-4333-8333-333333333333","name":"Main report","enabled":true,"schedule":{"kind":"cron","expr":"15 * * * *"},"state":{}}
+	]}`
+	if err := os.WriteFile(filepath.Join(cronDir, "jobs.json"), []byte(jobsJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	b := &BridgeHandler{paths: Paths{OpenClaw: openClawDir}}
+	allResult := b.getCrons(nil)
+	if allResult.err != nil {
+		t.Fatal(allResult.err)
+	}
+	allJobs := allResult.data.([]parsedCronJob)
+	if len(allJobs) != 3 {
+		t.Fatalf("len(allJobs) = %d, want 3", len(allJobs))
+	}
+
+	adaResult := b.getCrons(map[string]interface{}{"agentId": "ada"})
+	if adaResult.err != nil {
+		t.Fatal(adaResult.err)
+	}
+	adaJobs := adaResult.data.([]parsedCronJob)
+	if len(adaJobs) != 1 || adaJobs[0].ID != adaJobID {
+		t.Fatalf("ada jobs = %#v, want only %s", adaJobs, adaJobID)
+	}
+
+	bobResult := b.getCrons(map[string]interface{}{"agentId": "bob"})
+	if bobResult.err != nil {
+		t.Fatal(bobResult.err)
+	}
+	bobJobs := bobResult.data.([]parsedCronJob)
+	if len(bobJobs) != 1 || bobJobs[0].ID != bobJobID {
+		t.Fatalf("bob jobs = %#v, want only %s", bobJobs, bobJobID)
+	}
+
+	mainResult := b.getCrons(map[string]interface{}{"agentId": "main"})
+	if mainResult.err != nil {
+		t.Fatal(mainResult.err)
+	}
+	mainJobs := mainResult.data.([]parsedCronJob)
+	if len(mainJobs) != 1 || mainJobs[0].ID != mainJobID {
+		t.Fatalf("main jobs = %#v, want only %s", mainJobs, mainJobID)
+	}
+
+	mismatchResult := b.getCrons(map[string]interface{}{"agentId": "bob", "jobId": adaJobID})
+	if mismatchResult.err != nil {
+		t.Fatal(mismatchResult.err)
+	}
+	mismatchJobs := mismatchResult.data.([]parsedCronJob)
+	if len(mismatchJobs) != 0 {
+		t.Fatalf("len(mismatchJobs) = %d, want 0", len(mismatchJobs))
+	}
+}

@@ -274,6 +274,12 @@ func (s *Store) ClearPrimarySession(agentID string) error {
 	return err
 }
 
+// ClearPrimarySessionForRuntime removes the primary session pointer for one agent/runtime pair.
+func (s *Store) ClearPrimarySessionForRuntime(agentID, runtime string) error {
+	_, err := s.db.Exec(`DELETE FROM agent_primary_sessions WHERE agent_id = ? AND runtime = ?`, agentID, runtime)
+	return err
+}
+
 // DeleteSessionsByAgent removes all sessions and their messages for an agent.
 func (s *Store) DeleteSessionsByAgent(agentID string) error {
 	// First get all session IDs for this agent

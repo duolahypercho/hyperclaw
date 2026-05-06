@@ -177,8 +177,8 @@ const createMarkdownComponents = (isUser?: boolean): Components => {
         <a
           className={`${isUser
               ? "text-secondary-foreground hover:text-secondary-foreground/80"
-              : "text-secondary hover:text-secondary/80"
-            } underline transition-colors duration-200`}
+              : "text-secondary-foreground hover:text-secondary-foreground/80"
+            } underline transition-colors font-normal duration-200`}
           {...props}
           target="_blank"
           rel="noopener noreferrer"

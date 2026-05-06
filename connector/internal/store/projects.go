@@ -53,6 +53,7 @@ type Project struct {
 	Name                      string          `json:"name"`
 	Description               string          `json:"description"`
 	Emoji                     string          `json:"emoji"`
+	Kind                      string          `json:"kind"`
 	Status                    string          `json:"status"`
 	LeadAgentID               string          `json:"leadAgentId,omitempty"`
 	TeamModeEnabled           bool            `json:"teamModeEnabled"`
@@ -100,10 +101,10 @@ func (s *Store) EnsureInitialProject() error {
 
 	_, err = tx.Exec(`
 		INSERT INTO projects (
-			id, name, description, emoji, status, lead_agent_id,
+			id, name, description, emoji, kind, status, lead_agent_id,
 			team_mode_enabled, default_workflow_template_id, created_at, updated_at
 		)
-		VALUES (?, ?, ?, ?, 'active', '', 1, '', ?, ?)
+		VALUES (?, ?, ?, ?, 'project', 'active', '', 1, '', ?, ?)
 		ON CONFLICT(id) DO NOTHING
 	`, initialProjectID, "Company setup", "Your first operating workspace: profile, channels, agents, and launch workflow.", "🏢", now, now)
 	if err != nil {
@@ -196,16 +197,21 @@ func (s *Store) attachKnownAgentsToInitialProject(tx *sql.Tx, now int64) error {
 }
 
 // CreateProject inserts a new project and returns it with generated ID.
-func (s *Store) CreateProject(name, description, emoji string) (*Project, error) {
+func (s *Store) CreateProject(name, description, emoji string, kind ...string) (*Project, error) {
 	now := time.Now().UnixMilli()
 	if emoji == "" {
 		emoji = "📁"
+	}
+	projectKind := "project"
+	if len(kind) > 0 && kind[0] == "workflow" {
+		projectKind = "workflow"
 	}
 	p := &Project{
 		ID:              newProjectID(),
 		Name:            name,
 		Description:     description,
 		Emoji:           emoji,
+		Kind:            projectKind,
 		Status:          "active",
 		TeamModeEnabled: true,
 		CreatedAt:       now,
@@ -213,11 +219,11 @@ func (s *Store) CreateProject(name, description, emoji string) (*Project, error)
 	}
 	_, err := s.db.Exec(`
 		INSERT INTO projects (
-			id, name, description, emoji, status, lead_agent_id,
+			id, name, description, emoji, kind, status, lead_agent_id,
 			team_mode_enabled, default_workflow_template_id, created_at, updated_at
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, p.ID, p.Name, p.Description, p.Emoji, p.Status, p.LeadAgentID, boolToInt(p.TeamModeEnabled), p.DefaultWorkflowTemplateID, p.CreatedAt, p.UpdatedAt)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, p.ID, p.Name, p.Description, p.Emoji, p.Kind, p.Status, p.LeadAgentID, boolToInt(p.TeamModeEnabled), p.DefaultWorkflowTemplateID, p.CreatedAt, p.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -229,13 +235,13 @@ func (s *Store) GetProject(id string) (*Project, error) {
 	var p Project
 	var teamModeEnabled int
 	err := s.db.QueryRow(`
-		SELECT id, name, description, emoji, status,
+		SELECT id, name, description, emoji, COALESCE(kind, 'project'), status,
 		       COALESCE(lead_agent_id, ''), COALESCE(team_mode_enabled, 0),
 		       COALESCE(default_workflow_template_id, ''),
 		       created_at, updated_at
 		FROM projects WHERE id = ?
 	`, id).Scan(
-		&p.ID, &p.Name, &p.Description, &p.Emoji, &p.Status,
+		&p.ID, &p.Name, &p.Description, &p.Emoji, &p.Kind, &p.Status,
 		&p.LeadAgentID, &teamModeEnabled, &p.DefaultWorkflowTemplateID,
 		&p.CreatedAt, &p.UpdatedAt,
 	)
@@ -263,22 +269,28 @@ func (s *Store) GetProjectWithMembers(id string) (*Project, error) {
 	return p, nil
 }
 
-// ListProjects returns all projects, optionally filtered by status.
-// Pass status="" to return all.
-func (s *Store) ListProjects(status string) ([]Project, error) {
+// ListProjects returns all projects, optionally filtered by status and kind.
+// Pass status="" and kind="" to return all.
+func (s *Store) ListProjects(status string, kind ...string) ([]Project, error) {
 	var rows *sql.Rows
 	var err error
-	if status != "" {
+	projectKind := ""
+	if len(kind) > 0 {
+		projectKind = kind[0]
+	}
+	if status != "" || projectKind != "" {
 		rows, err = s.db.Query(`
-			SELECT id, name, description, emoji, status,
+			SELECT id, name, description, emoji, status, COALESCE(kind, 'project'),
 			       COALESCE(lead_agent_id, ''), COALESCE(team_mode_enabled, 0),
 			       COALESCE(default_workflow_template_id, ''),
 			       created_at, updated_at
-			FROM projects WHERE status = ? ORDER BY updated_at DESC
-		`, status)
+			FROM projects
+			WHERE (? = '' OR status = ?) AND (? = '' OR COALESCE(kind, 'project') = ?)
+			ORDER BY updated_at DESC
+		`, status, status, projectKind, projectKind)
 	} else {
 		rows, err = s.db.Query(`
-			SELECT id, name, description, emoji, status,
+			SELECT id, name, description, emoji, status, COALESCE(kind, 'project'),
 			       COALESCE(lead_agent_id, ''), COALESCE(team_mode_enabled, 0),
 			       COALESCE(default_workflow_template_id, ''),
 			       created_at, updated_at
@@ -296,7 +308,7 @@ func (s *Store) ListProjects(status string) ([]Project, error) {
 		var teamModeEnabled int
 		if err := rows.Scan(
 			&p.ID, &p.Name, &p.Description, &p.Emoji, &p.Status,
-			&p.LeadAgentID, &teamModeEnabled, &p.DefaultWorkflowTemplateID,
+			&p.Kind, &p.LeadAgentID, &teamModeEnabled, &p.DefaultWorkflowTemplateID,
 			&p.CreatedAt, &p.UpdatedAt,
 		); err != nil {
 			continue
@@ -454,7 +466,7 @@ func (s *Store) GetProjectMembers(projectID string) ([]ProjectMember, error) {
 // GetAgentProjects returns all projects an agent belongs to.
 func (s *Store) GetAgentProjects(agentID string) ([]Project, error) {
 	rows, err := s.db.Query(`
-		SELECT p.id, p.name, p.description, p.emoji, p.status,
+		SELECT p.id, p.name, p.description, p.emoji, COALESCE(p.kind, 'project'), p.status,
 		       COALESCE(p.lead_agent_id, ''), COALESCE(p.team_mode_enabled, 0),
 		       COALESCE(p.default_workflow_template_id, ''),
 		       p.created_at, p.updated_at
@@ -473,7 +485,7 @@ func (s *Store) GetAgentProjects(agentID string) ([]Project, error) {
 		var p Project
 		var teamModeEnabled int
 		if err := rows.Scan(
-			&p.ID, &p.Name, &p.Description, &p.Emoji, &p.Status,
+			&p.ID, &p.Name, &p.Description, &p.Emoji, &p.Kind, &p.Status,
 			&p.LeadAgentID, &teamModeEnabled, &p.DefaultWorkflowTemplateID,
 			&p.CreatedAt, &p.UpdatedAt,
 		); err != nil {

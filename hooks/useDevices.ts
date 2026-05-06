@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { hubFetch } from "$/lib/hub-direct";
+import { getBridgeMode, hubFetch } from "$/lib/hub-direct";
 
 export interface Device {
   id: string;
@@ -15,6 +15,21 @@ export interface Device {
   // (runtimes installed, agents provisioned). Used by MainLayout together with
   // status==="online" to decide whether to skip GuidedSetup on a fresh browser.
   onboardingCompletedAt?: string | null;
+}
+
+function localConnectorDevice(): Device {
+  return {
+    id: "local",
+    name: "Local connector",
+    type: "local",
+    status: "online",
+    lastSeenAt: new Date().toISOString(),
+    platform: "local",
+    hostname: "localhost",
+    tags: ["community", "local"],
+    env: "local",
+    onboardingCompletedAt: new Date().toISOString(),
+  };
 }
 
 /**
@@ -44,6 +59,14 @@ export function useDevices(authReady = true) {
     setLoading(true);
     setError(null);
     try {
+      const bridgeMode = await getBridgeMode();
+      if (controller.signal.aborted) return;
+      if (bridgeMode.mode === "local" && bridgeMode.localBridgeAvailable) {
+        const localDevice = localConnectorDevice();
+        setDevices([localDevice]);
+        setFetched(true);
+        return;
+      }
       const res = await hubFetch("/api/devices", { signal: controller.signal });
       if (controller.signal.aborted) return;
       if (!res.ok) {

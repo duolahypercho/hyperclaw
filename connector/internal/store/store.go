@@ -1185,4 +1185,15 @@ var migrations = []migration{
 				('workflow_templates', 'created_by', 'Agent or user identifier that created the workflow template.', 28);
 		`,
 	},
+	{
+		id:   27,
+		name: "project kind for workflow pages",
+		sql: `
+			ALTER TABLE projects ADD COLUMN kind TEXT NOT NULL DEFAULT 'project';
+			CREATE INDEX IF NOT EXISTS idx_projects_kind ON projects(kind);
+
+			INSERT OR REPLACE INTO _schema_doc (table_name, column_name, description, sort_order) VALUES
+				('projects', 'kind', 'Project kind: project for issue workspaces, workflow for reusable automations.', 8);
+		`,
+	},
 }

@@ -5,12 +5,16 @@
  * and use E2E encryption — the Hub never sees plaintext API keys.
  */
 import { encryptForDevice, isValidPubkey } from "./e2e-crypto";
-import { hubFetch, getUserToken } from "./hub-direct";
+import { hubCommand, hubFetch, getUserToken } from "./hub-direct";
 
 // Empty default = Community Edition (local-only). Cloud builds set
 // NEXT_PUBLIC_HUB_API_URL at build time. Callers must check before issuing
 // remote credential operations.
 const HUB_API_URL = process.env.NEXT_PUBLIC_HUB_API_URL || "";
+
+function isLocalCredentialDevice(deviceId: string): boolean {
+  return deviceId === "local";
+}
 
 // --- Types ---
 
@@ -31,7 +35,13 @@ export interface MaskedCredential {
 export interface StoreCredentialResult {
   success: boolean;
   provider?: string;
+  applied?: string[];
+  warning?: string;
   error?: string;
+}
+
+export interface CredentialModelRef {
+  name: string;
 }
 
 // --- Device pubkey ---
@@ -83,6 +93,10 @@ async function deviceBridgeCommand(
   deviceId: string,
   body: Record<string, unknown>
 ): Promise<unknown> {
+  if (isLocalCredentialDevice(deviceId)) {
+    return hubCommand(body);
+  }
+
   const token = await getUserToken();
   if (!token) throw new Error("Not authenticated");
 
@@ -212,16 +226,19 @@ export async function deleteCredential(
  */
 export async function applyCredentials(
   deviceId: string,
-  provider?: string
-): Promise<{ success: boolean; applied?: string[] }> {
+  provider?: string,
+  models?: CredentialModelRef[]
+): Promise<{ success: boolean; applied?: string[]; error?: string }> {
   const result = (await deviceBridgeCommand(deviceId, {
     action: "credentials:apply",
     ...(provider ? { provider } : {}),
+    ...(models && models.length > 0 ? { models } : {}),
   })) as any;
 
   return {
     success: result?.success ?? false,
     applied: result?.applied,
+    error: result?.error,
   };
 }
 
@@ -233,13 +250,21 @@ export async function storeAndApply(
   deviceId: string,
   provider: string,
   type: string,
-  apiKey: string
+  apiKey: string,
+  models?: CredentialModelRef[]
 ): Promise<StoreCredentialResult> {
   const storeResult = await storeCredential(deviceId, provider, type, apiKey);
   if (!storeResult.success) return storeResult;
 
-  // Fire-and-forget apply — don't block on runtime restart
-  applyCredentials(deviceId, provider).catch(() => {});
+  const applyResult = await applyCredentials(deviceId, provider, models);
+  if (!applyResult.success) {
+    return {
+      success: true,
+      provider,
+      warning: applyResult.error || "Credential saved, but failed to apply it to OpenClaw/Hermes.",
+      applied: [],
+    };
+  }
 
-  return storeResult;
+  return { ...storeResult, applied: applyResult.applied };
 }

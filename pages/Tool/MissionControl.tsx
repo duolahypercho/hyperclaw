@@ -61,7 +61,6 @@ function MissionControlPageInner() {
     const schema: AppSchema = {
       header: {
         title: "Workflows",
-        className: "mission-control-site-header",
         centerUI: {
           type: "group",
           className: "min-w-0 gap-2",

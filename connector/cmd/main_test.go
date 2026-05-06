@@ -20,7 +20,7 @@ func TestLocalBridgeRejectsUntrustedOrigins(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- startLocalBridge(ctx, port, nil, nil, nil, nil, nil, nil, nil)
+		errCh <- startLocalBridge(ctx, nil, port, nil, nil, nil, nil, nil, nil, nil)
 	}()
 	waitForLocalBridge(t, port)
 	defer func() {

@@ -31,7 +31,7 @@ Router.events.on("routeChangeComplete", nProgress.done);
 // local guest and never makes /api/auth/session requests.
 const COMMUNITY_LOCAL_MODE = !process.env.NEXT_PUBLIC_HUB_API_URL;
 
-function MyApp({ Component, pageProps, router }: any) {
+function MyApp({ Component, pageProps }: any) {
   const getLayout = Component.getLayout || ((page: NextPage) => page);
 
   // Passing session={null} explicitly tells SessionProvider to skip the

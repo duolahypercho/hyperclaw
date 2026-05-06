@@ -323,6 +323,19 @@ export function isStreamingBridgeAction(action?: string): boolean {
   );
 }
 
+function isLocalAgentStateMutation(action?: string): boolean {
+  return (
+    action === "onboarding-provision-workspace" ||
+    action === "onboarding-configure-workspace" ||
+    action === "onboarding-provision-agent" ||
+    action === "update-agent-config" ||
+    action === "update-agent-identity" ||
+    action === "write-agent-identity-doc" ||
+    action === "write-openclaw-doc" ||
+    action === "write-openclaw-binary"
+  );
+}
+
 export function getLocalBridgeTimeoutMs(action?: string): number {
   if (isLongRunningBridgeAction(action) || isStreamingBridgeAction(action)) return LONG_BRIDGE_TIMEOUT_MS;
   // hermes-health can enable/check the Hermes API and waits up to ~10s in the
@@ -601,6 +614,15 @@ export async function hubCommand(
     return {
       success: false,
       error: "Start the local connector on this machine.",
+      needsSetup: true,
+      localBridgeUnavailable: true,
+    };
+  }
+
+  if (isLocalConnectorContext() && isLocalAgentStateMutation(action)) {
+    return {
+      success: false,
+      error: "Start the local connector on this machine before changing local agent state.",
       needsSetup: true,
       localBridgeUnavailable: true,
     };

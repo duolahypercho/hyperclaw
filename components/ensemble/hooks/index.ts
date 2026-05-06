@@ -7,6 +7,7 @@ export type { EnsembleAgentView } from "./useEnsembleAgents";
 export {
   useAgentStreamingState,
   useWorkingAgentIds,
+  useWorkingSessionKeys,
   __resetAgentStreamingState,
 } from "./useAgentStreamingState";
 export type { AgentStreamingState } from "./useAgentStreamingState";

@@ -152,6 +152,7 @@ export class HyperClawBridge {
           name       TEXT NOT NULL,
           type       TEXT,
           emoji      TEXT,
+          avatar_data TEXT,
           status     TEXT NOT NULL DEFAULT 'active',
           config     TEXT NOT NULL DEFAULT '{}',
           created_at INTEGER NOT NULL,
@@ -217,6 +218,7 @@ export class HyperClawBridge {
       this.addColumnIfMissing(this._db, "issues", "assigned_by TEXT");
       this.addColumnIfMissing(this._db, "issues", "source_file TEXT");
       this.addColumnIfMissing(this._db, "issues", "linear_id TEXT");
+      this.addColumnIfMissing(this._db, "agents", "avatar_data TEXT");
       this.migrateJsonToSqlite();
       return this._db;
     } catch {
@@ -1440,6 +1442,7 @@ export class HyperClawBridge {
     name: string;
     type?: string;
     emoji?: string;
+    avatarData?: string;
     config?: Record<string, unknown>;
     createdBy?: string;
   }): Record<string, unknown> {
@@ -1450,6 +1453,7 @@ export class HyperClawBridge {
       name: params.name,
       type: params.type ?? null,
       emoji: params.emoji ?? null,
+      avatarData: params.avatarData ?? null,
       status: "active",
       config: params.config ?? {},
       created_at: now,
@@ -1458,8 +1462,8 @@ export class HyperClawBridge {
     const db = this.getDb();
     if (db) {
       db.prepare(
-        "INSERT INTO agents (id, name, type, emoji, status, config, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-      ).run(id, params.name, params.type ?? null, params.emoji ?? null, "active", JSON.stringify(params.config ?? {}), now, now);
+        "INSERT INTO agents (id, name, type, emoji, avatar_data, status, config, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+      ).run(id, params.name, params.type ?? null, params.emoji ?? null, params.avatarData ?? null, "active", JSON.stringify(params.config ?? {}), now, now);
     }
     this.emitEvent("agent_added", { agentId: id, name: params.name, type: params.type });
     return agent;
@@ -1468,10 +1472,14 @@ export class HyperClawBridge {
   listAgents(): Record<string, unknown>[] {
     const db = this.getDb();
     if (!db) return [];
-    return (db.prepare("SELECT * FROM agents ORDER BY created_at DESC").all() as any[]).map((r) => ({
-      ...r,
-      config: (() => { try { return JSON.parse(r.config || "{}"); } catch { return {}; } })(),
-    }));
+    return (db.prepare("SELECT * FROM agents ORDER BY created_at DESC").all() as any[]).map((r) => {
+      const { avatar_data: avatarData, ...agent } = r;
+      return {
+        ...agent,
+        avatarData: avatarData ?? null,
+        config: (() => { try { return JSON.parse(r.config || "{}"); } catch { return {}; } })(),
+      };
+    });
   }
 
   // ── Projects ─────────────────────────────────────────────────────────────

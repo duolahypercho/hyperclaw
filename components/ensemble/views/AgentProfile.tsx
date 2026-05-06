@@ -4,7 +4,6 @@ import React, { useCallback, useMemo, useState, useEffect, useRef } from "react"
 import { useRouter } from "next/router";
 import {
   ArrowLeft,
-  Save,
   Loader2,
   UserPlus,
   FileClock,
@@ -13,6 +12,8 @@ import {
   MoreHorizontal,
   UserPen,
   Flame,
+  Database,
+  RadioTower,
 } from "lucide-react";
 import {
   getAgent,
@@ -35,11 +36,14 @@ import {
   HermesTextFileTab,
   type FooterSaveState,
 } from "$/components/Tool/Agents/AgentDetailDialog";
-import AgentOverviewTab, { type OverviewSession } from "$/components/Home/widgets/AgentOverviewTab";
+import AgentOverviewTab, { MemorySearchToggle, type OverviewSession } from "$/components/Home/widgets/AgentOverviewTab";
 import { AgentSkillsTab } from "$/components/Home/widgets/AgentSkillsTab";
 import { AgentMcpsTab } from "$/components/Home/widgets/AgentMcpsTab";
 import { AgentStackAdaptersTab } from "$/components/Home/widgets/AgentStackAdaptersTab";
-import { AgentCronsTab } from "$/components/Home/widgets/AgentChatWidget";
+import {
+  AgentCronsTab,
+  type AgentCronsHeaderState,
+} from "$/components/Home/widgets/AgentChatWidget";
 import { ensureAgenticStackAdapter } from "$/lib/agentic-stack-client";
 import { Button } from "@/components/ui/button";
 import {
@@ -49,18 +53,35 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
 import { DeleteAgentDialog } from "$/components/Tool/Agents/DeleteAgentDialog";
 import { cn } from "$/utils";
+import type { RightContentLayoutType } from "@OS/Layout/RightContentLayout";
 import TeamChannelConfig from "./TeamChannelConfig";
 import { loadAgentOverviewSessions } from "./agent-overview-sessions";
 import { resolveAgentProfileDisplay } from "./agent-profile-display";
 import { getAgentProfileFileTabs } from "./agent-profile-files";
 import { getProfileChannelConfigAgents } from "./team-channel-config-state";
+import type { OpenClawCronJobJson } from "$/types/electron";
 
 type Tab = "files" | "overview" | "config" | "runs" | "skills" | "mcps" | "adapter" | "cost";
 export const OPEN_AGENT_FIRE_EVENT = "ensemble:fire-agent";
 export const OPEN_AGENT_EDIT_EVENT = "ensemble:edit-agent-info";
 const EMPTY_READ_SESSIONS = new Set<string>();
+
+export interface AgentProfileHeaderSaveState {
+  visible: boolean;
+  saving: boolean;
+  saved: boolean;
+  onSave: () => Promise<void>;
+}
+
+export type AgentProfileRunsHeaderState = AgentCronsHeaderState;
 
 /** Tabs after the file tab. */
 const STATIC_TABS: { key: Tab; label: string }[] = [
@@ -145,9 +166,15 @@ function HiringSetupPanel({
 export default function AgentProfile({
   agentId,
   onOpenChat,
+  onHeaderSaveStateChange,
+  onRunsDetailChange,
+  onRunsHeaderStateChange,
 }: {
   agentId: string;
-  onOpenChat?: () => void;
+  onOpenChat?: (sessionKey?: string) => void;
+  onHeaderSaveStateChange?: (state: AgentProfileHeaderSaveState) => void;
+  onRunsDetailChange?: (detail: RightContentLayoutType | undefined) => void;
+  onRunsHeaderStateChange?: (state: AgentProfileRunsHeaderState) => void;
 }) {
   const router = useRouter();
   const [tab, setTab] = useState<Tab>("overview");
@@ -159,7 +186,9 @@ export default function AgentProfile({
     reset: null,
   });
   const channelSaveRef = useRef<(() => Promise<void>) | null>(null);
+  const saveInFlightRef = useRef(false);
   const [channelIsDirty, setChannelIsDirty] = useState(false);
+  const [headerSaving, setHeaderSaving] = useState(false);
   const { activity } = useEnsembleData();
   const ensembleAgents = useEnsembleAgents();
   const liveAgents = useLiveAgents(ensembleAgents, activity);
@@ -170,6 +199,7 @@ export default function AgentProfile({
   const [activeFileKey, setActiveFileKey] = useState<string>("soul");
   const [showDelete, setShowDelete] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
+  const [selectedCronJobId, setSelectedCronJobId] = useState<string | null>(null);
 
   const [autoAdapterError, setAutoAdapterError] = useState<string | null>(null);
   const ensuredAdapterKeysRef = useRef<Set<string>>(new Set());
@@ -179,11 +209,30 @@ export default function AgentProfile({
     window.setTimeout(action, 0);
   }, []);
 
+  const activateTab = useCallback((nextTab: Tab) => {
+    const shouldClearCronSelection =
+      nextTab !== "runs" && (nextTab !== "overview" || tab === "runs");
+    setTab(nextTab);
+    if (shouldClearCronSelection) {
+      setSelectedCronJobId(null);
+    }
+  }, [tab]);
+
+  const openCronJobFromOverview = useCallback((jobId: string) => {
+    setSelectedCronJobId(jobId);
+  }, []);
+
+  const handleSelectedCronJobChange = useCallback((job: OpenClawCronJobJson | null) => {
+    const nextJobId = job?.id ?? null;
+    setSelectedCronJobId((currentJobId) => (currentJobId === nextJobId ? currentJobId : nextJobId));
+  }, []);
+
   // Reset to overview + default file + clean save state when navigating to a different agent
   useEffect(() => {
     setTab("overview");
     setActiveFileKey("soul");
     setActionsOpen(false);
+    setSelectedCronJobId(null);
     setSaveState({ isDirty: false, saving: false, saved: false, save: null, reset: null });
     setAutoAdapterError(null);
   }, [agentId]);
@@ -221,6 +270,32 @@ export default function AgentProfile({
   // Pass the base state into the hook so "hiring" cannot be masked by a live stream.
   const { state } = useAgentStatus(agentId, { state: rawState });
   const isHiring = state === "hiring";
+  const saveIsDirty = saveState.isDirty;
+  const saveSaved = saveState.saved;
+  const saveSaving = saveState.saving;
+  const saveAction = saveState.save;
+
+  const saveCurrentTab = useCallback(async () => {
+    if (isHiring) return;
+    if (saveInFlightRef.current) return;
+    saveInFlightRef.current = true;
+    setHeaderSaving(true);
+    try {
+      if (tab === "config") {
+        if (saveIsDirty) {
+          await saveAction?.();
+        }
+        if (channelIsDirty) {
+          await channelSaveRef.current?.();
+        }
+        return;
+      }
+      await saveAction?.();
+    } finally {
+      saveInFlightRef.current = false;
+      setHeaderSaving(false);
+    }
+  }, [channelIsDirty, isHiring, saveAction, saveIsDirty, tab]);
 
   useEffect(() => {
     if (!isHiring || !HIRING_DISABLED_TABS.has(tab)) return;
@@ -253,6 +328,39 @@ export default function AgentProfile({
     () => getProfileChannelConfigAgents(ensembleAgents, agent),
     [ensembleAgents, agent],
   );
+  const headerSaveVisible = !isHiring
+    && (tab === "files" || tab === "config")
+    && (saveIsDirty || channelIsDirty || saveSaved || headerSaving);
+  const overviewCronDetailActive = !isHiring && tab === "overview" && Boolean(selectedCronJobId);
+
+  useEffect(() => {
+    onHeaderSaveStateChange?.({
+      visible: headerSaveVisible,
+      saving: saveSaving || headerSaving,
+      saved: saveSaved && !saveIsDirty && !channelIsDirty,
+      onSave: saveCurrentTab,
+    });
+  }, [channelIsDirty, headerSaveVisible, headerSaving, onHeaderSaveStateChange, saveCurrentTab, saveIsDirty, saveSaved, saveSaving]);
+
+  useEffect(() => {
+    return () => {
+      onHeaderSaveStateChange?.({
+        visible: false,
+        saving: false,
+        saved: false,
+        onSave: async () => {},
+      });
+    };
+  }, [onHeaderSaveStateChange]);
+
+  useEffect(() => {
+    if (isHiring || tab !== "runs") {
+      onRunsHeaderStateChange?.({ visible: false, refreshing: false });
+    }
+    if (isHiring || (tab !== "runs" && !overviewCronDetailActive)) {
+      onRunsDetailChange?.(undefined);
+    }
+  }, [isHiring, onRunsDetailChange, onRunsHeaderStateChange, overviewCronDetailActive, tab]);
 
   useEffect(() => {
     const onFireAgent = (event: Event) => {
@@ -270,12 +378,12 @@ export default function AgentProfile({
       const detail = (event as CustomEvent<{ agentId?: string }>).detail;
       if (detail?.agentId && detail.agentId !== agentId) return;
       if (isHiring) return;
-      setTab("config");
+      activateTab("config");
     };
 
     window.addEventListener(OPEN_AGENT_EDIT_EVENT, onEditAgentInfo);
     return () => window.removeEventListener(OPEN_AGENT_EDIT_EVENT, onEditAgentInfo);
-  }, [agentId, isHiring]);
+  }, [activateTab, agentId, isHiring]);
 
   // Fetch sessions for the Overview tab based on agent runtime
   useEffect(() => {
@@ -464,7 +572,7 @@ export default function AgentProfile({
                   disabled={!agent || isHiring}
                   onSelect={(event) => {
                     event.preventDefault();
-                    closeActionsThen(() => setTab("config"));
+                    closeActionsThen(() => activateTab("config"));
                   }}
                 >
                   <UserPen className="h-3.5 w-3.5 mr-1" />
@@ -485,42 +593,6 @@ export default function AgentProfile({
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
-          {!isHiring && (tab === "files" || tab === "config") && (saveState.isDirty || channelIsDirty || saveState.saved) && (
-            <div className="flex items-center gap-1.5 whitespace-nowrap">
-              {saveState.saved && !channelIsDirty ? (
-                <span className="text-xs text-emerald-500">Saved</span>
-              ) : (
-                <>
-                  {tab === "files" && (
-                    <Button
-                      variant="ghost"
-                      size="xs"
-                      disabled={saveState.saving}
-                      onClick={() => saveState.reset?.()}
-                    >
-                      Reset
-                    </Button>
-                  )}
-                  <Button
-                    size="xs"
-                    disabled={saveState.saving}
-                    onClick={async () => {
-                      if (tab === "config") {
-                        await saveState.save?.();
-                        await channelSaveRef.current?.();
-                      } else {
-                        await saveState.save?.();
-                      }
-                    }}
-                    className="gap-1"
-                  >
-                    {saveState.saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
-                    {saveState.saving ? "Saving…" : "Save"}
-                  </Button>
-                </>
-              )}
-            </div>
-          )}
         </div>
       </div>
 
@@ -553,7 +625,7 @@ export default function AgentProfile({
                 data-active={tab === t.key ? "true" : "false"}
                 onClick={() => {
                   if (disabled) return;
-                  setTab(t.key);
+                  activateTab(t.key);
                 }}
               >
                 {t.label}
@@ -564,7 +636,7 @@ export default function AgentProfile({
       </div>
 
       {/* ── Body: left content + right sidebar ─────────────────── */}
-      <div className="ens-profile-body">
+      <div className={cn("ens-profile-body", !isHiring && tab === "runs" && "ens-profile-body--runs")}>
         {/* ── Left: tab content ── */}
         <div
           id="agent-profile-panel"
@@ -643,6 +715,22 @@ export default function AgentProfile({
               lastSeenTs={row?.lastActivity ?? 0}
               readSessions={EMPTY_READ_SESSIONS}
               unreadCount={0}
+              onOpenSession={onOpenChat}
+              onOpenCronJob={openCronJobFromOverview}
+              selectedCronJobId={selectedCronJobId}
+            />
+          )}
+
+          {overviewCronDetailActive && (
+            <AgentCronsTab
+              key={`overview-run-detail-${agentId}`}
+              agentId={agentId}
+              runtime={agent.kind}
+              variant="profile"
+              selectedJobId={selectedCronJobId}
+              onSelectedJobChange={handleSelectedCronJobChange}
+              onProfileDetailChange={onRunsDetailChange}
+              renderProfileList={false}
             />
           )}
 
@@ -654,21 +742,68 @@ export default function AgentProfile({
                 agentRuntime={agent.kind}
                 onStateChange={setSaveState}
               />
-              {(agent.kind === "hermes" || agent.kind === "openclaw") && (
-                <div className="mt-6">
-                  <TeamChannelConfig
-                    agents={channelConfigAgents}
-                    saveRef={channelSaveRef}
-                    onDirtyChange={setChannelIsDirty}
-                    hideButton
-                  />
-                </div>
+              {(agent.kind === "openclaw" || agent.kind === "hermes") && (
+                <Accordion type="multiple" className="mt-3 space-y-3">
+                  {agent.kind === "openclaw" && (
+                    <AccordionItem value="memory-search" className="rounded-xl border border-solid border-primary/10 bg-background/45 px-3 shadow-sm">
+                      <AccordionTrigger className="py-3 hover:no-underline">
+                        <div className="min-w-0 space-y-1 text-left">
+                          <div className="flex items-center gap-1.5">
+                            <Database className="h-3.5 w-3.5 text-primary/60 stroke-[1.8]" />
+                            <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                              Memory Search
+                            </span>
+                          </div>
+                          <p className="text-[11px] font-normal leading-5 text-muted-foreground/70">
+                            Semantic recall settings for OpenClaw conversations.
+                          </p>
+                        </div>
+                      </AccordionTrigger>
+                      <AccordionContent className="pb-3 pt-0">
+                        <MemorySearchToggle agentId={agentId} embedded />
+                      </AccordionContent>
+                    </AccordionItem>
+                  )}
+
+                  <AccordionItem value="channels" className="rounded-xl border border-solid border-primary/10 bg-background/45 px-3 shadow-sm">
+                    <AccordionTrigger className="py-3 hover:no-underline">
+                      <div className="min-w-0 space-y-1 text-left">
+                        <div className="flex items-center gap-1.5">
+                          <RadioTower className="h-3.5 w-3.5 text-primary/60 stroke-[1.8]" />
+                          <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                            Channels
+                          </span>
+                        </div>
+                        <p className="text-[11px] font-normal leading-5 text-muted-foreground/70">
+                          Connect messaging destinations for this agent.
+                        </p>
+                      </div>
+                    </AccordionTrigger>
+                    <AccordionContent className="pb-3 pt-0">
+                      <TeamChannelConfig
+                        agents={channelConfigAgents}
+                        saveRef={channelSaveRef}
+                        onDirtyChange={setChannelIsDirty}
+                        hideButton
+                        embedded
+                      />
+                    </AccordionContent>
+                  </AccordionItem>
+                </Accordion>
               )}
             </>
           )}
 
           {!isHiring && tab === "runs" && (
-            <AgentCronsTab agentId={agentId} runtime={agent.kind} />
+            <AgentCronsTab
+              agentId={agentId}
+              runtime={agent.kind}
+              variant="profile"
+              selectedJobId={selectedCronJobId}
+              onSelectedJobChange={handleSelectedCronJobChange}
+              onProfileDetailChange={onRunsDetailChange}
+              onProfileHeaderStateChange={onRunsHeaderStateChange}
+            />
           )}
 
           {!isHiring && tab === "skills" && (
@@ -723,80 +858,82 @@ export default function AgentProfile({
         </div>
 
         {/* ── Right: persistent sidebar ── */}
-        <div>
-          {/* Live stats */}
-          <div className="ens-side-card">
-            <div className="sct">Stats</div>
-            <div className="ens-stat-grid">
-              <div className="ens-stat">
-                <span className="k">Sessions</span>
-                <span className="v">{sessions}</span>
-              </div>
-              <div className="ens-stat">
-                <span className="k">Tokens · mo</span>
-                <span className="v">{formatTokens(tokensMonth)}</span>
-              </div>
-              <div className="ens-stat">
-                <span className="k">Spend · mo</span>
-                <span className="v">{formatUSD(costMonth)}</span>
-              </div>
-              <div className="ens-stat">
-                <span className="k">State</span>
-                <span className="v capitalize">{state}</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Teammates */}
-          {peers.length > 0 && (
+        {(isHiring || tab !== "runs") && (
+          <div>
+            {/* Live stats */}
             <div className="ens-side-card">
-              <div className="sct">Teammates</div>
-              {peers.map((a) => (
-                <button
-                  key={a.id}
-                  type="button"
-                  onClick={() => router.push(`/Tool/Agent/${a.id}`)}
-                  className="flex w-full items-center gap-3 py-2 border-b last:border-b-0 text-left cursor-pointer bg-transparent hover:opacity-70 transition-opacity"
-                  style={{ borderColor: "var(--line)" }}
-                >
-                  <AgentGlyph agent={a} size={24} />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-[13px] font-medium" style={{ color: "var(--ink)" }}>
-                      {a.name}
-                    </div>
-                    <div className="truncate text-[11.5px]" style={{ color: "var(--ink-3)" }}>
-                      {a.title} · {a.runtimeLabel}
-                    </div>
-                  </div>
-                </button>
-              ))}
-            </div>
-          )}
-
-          {/* Bridge */}
-          <div className="ens-side-card">
-            <div className="sct">Bridge</div>
-            <div className="flex items-center gap-3">
-              <AgentGlyph agent={agent} size={28} />
-              <div>
-                <div className="text-[13px] font-medium" style={{ color: "var(--ink)" }}>
-                  {agent.runtimeLabel}
+              <div className="sct">Stats</div>
+              <div className="ens-stat-grid">
+                <div className="ens-stat">
+                  <span className="k">Sessions</span>
+                  <span className="v">{sessions}</span>
                 </div>
-                <div className="font-mono text-[10.5px]" style={{ color: "var(--ink-4)" }}>
-                  connected · {agent.department}
+                <div className="ens-stat">
+                  <span className="k">Tokens · mo</span>
+                  <span className="v">{formatTokens(tokensMonth)}</span>
+                </div>
+                <div className="ens-stat">
+                  <span className="k">Spend · mo</span>
+                  <span className="v">{formatUSD(costMonth)}</span>
+                </div>
+                <div className="ens-stat">
+                  <span className="k">State</span>
+                  <span className="v capitalize">{state}</span>
                 </div>
               </div>
             </div>
-            {identity?.project && (
-              <div
-                className="mt-2 font-mono text-[11px] break-all"
-                style={{ color: "var(--ink-4)" }}
-              >
-                {identity.project}
+
+            {/* Teammates */}
+            {peers.length > 0 && (
+              <div className="ens-side-card">
+                <div className="sct">Teammates</div>
+                {peers.map((a) => (
+                  <button
+                    key={a.id}
+                    type="button"
+                    onClick={() => router.push(`/Tool/Agent/${a.id}`)}
+                    className="flex w-full items-center gap-3 py-2 border-b last:border-b-0 text-left cursor-pointer bg-transparent hover:opacity-70 transition-opacity"
+                    style={{ borderColor: "var(--line)" }}
+                  >
+                    <AgentGlyph agent={a} size={24} />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[13px] font-medium" style={{ color: "var(--ink)" }}>
+                        {a.name}
+                      </div>
+                      <div className="truncate text-[11.5px]" style={{ color: "var(--ink-3)" }}>
+                        {a.title} · {a.runtimeLabel}
+                      </div>
+                    </div>
+                  </button>
+                ))}
               </div>
             )}
+
+            {/* Bridge */}
+            <div className="ens-side-card">
+              <div className="sct">Bridge</div>
+              <div className="flex items-center gap-3">
+                <AgentGlyph agent={agent} size={28} />
+                <div>
+                  <div className="text-[13px] font-medium" style={{ color: "var(--ink)" }}>
+                    {agent.runtimeLabel}
+                  </div>
+                  <div className="font-mono text-[10.5px]" style={{ color: "var(--ink-4)" }}>
+                    connected · {agent.department}
+                  </div>
+                </div>
+              </div>
+              {identity?.project && (
+                <div
+                  className="mt-2 font-mono text-[11px] break-all"
+                  style={{ color: "var(--ink-4)" }}
+                >
+                  {identity.project}
+                </div>
+              )}
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       <DeleteAgentDialog

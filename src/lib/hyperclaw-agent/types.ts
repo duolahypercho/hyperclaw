@@ -55,6 +55,7 @@ export type BridgeAction =
   | 'delete-task'
   // Cron
   | 'get-crons'
+  | 'get-cron-by-id'
   | 'cron-add'
   | 'cron-run'
   | 'cron-edit'

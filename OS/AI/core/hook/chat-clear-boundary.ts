@@ -1,4 +1,5 @@
 import type { GatewayChatMessage } from "./use-gateway-chat";
+import { createAgentPrimarySessionKey } from "$/components/Home/widgets/gateway-chat/sessionKeys";
 
 const CHAT_CLEAR_MARKER_PREFIX = "hyperclaw:chat-clear-marker:v1:";
 
@@ -6,7 +7,7 @@ export function resolveClearedChatSessionKey(
   currentSessionKey: string | undefined,
   agentId: string
 ): string {
-  return currentSessionKey || `agent:${agentId}:main`;
+  return currentSessionKey || createAgentPrimarySessionKey(agentId);
 }
 
 function getMarkerStorageKey(sessionKey: string): string {

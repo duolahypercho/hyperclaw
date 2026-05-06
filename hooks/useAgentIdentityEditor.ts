@@ -429,13 +429,23 @@ export function useAgentIdentityEditor(
 
       setRaw(content);
       setAvatarPath(avatarValue);
-      patchIdentityCache(agentId, {
+      const rawHadRole = !!(parseIdentityField(raw || "", "Role") || "").trim();
+      const rawHadDescription = parseIdentityDescription(raw || "").trim().length > 0;
+      const displayAvatar = avatarPreview || loadedAvatarUri || opts?.identityAvatarUrl;
+      const identityPatch: {
+        name: string;
+        emoji: string;
+        role?: string;
+        description?: string;
+        avatar?: string;
+      } = {
         name,
         emoji,
-        role,
-        description,
-        avatar: avatarPreview || loadedAvatarUri || avatarValue,
-      });
+      };
+      if (role.trim() || rawHadRole) identityPatch.role = role;
+      if (description.trim() || rawHadDescription) identityPatch.description = description;
+      if (displayAvatar) identityPatch.avatar = displayAvatar;
+      patchIdentityCache(agentId, identityPatch);
       if (avatarPreview) setLoadedAvatarUri(avatarPreview);
       setAvatarPreview(null);
       setSaved(true);

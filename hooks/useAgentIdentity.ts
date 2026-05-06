@@ -326,8 +326,35 @@ function isAvatarUrl(value: string): boolean {
   return (
     /^https?:\/\//i.test(value) ||
     /^data:image\//i.test(value) ||
+    rawImageBase64ToDataUri(value) !== undefined ||
     value.startsWith("/") // Relative path served by gateway
   );
+}
+
+function rawImageBase64ToDataUri(value: string): string | undefined {
+  const compact = value.trim().replace(/\s+/g, "");
+  if (!compact || compact.length < 16 || compact.length % 4 !== 0) return undefined;
+  if (typeof globalThis.atob !== "function") return undefined;
+  try {
+    const binary = globalThis.atob(compact);
+    const bytes = Array.from(binary.slice(0, 12), (char) => char.charCodeAt(0));
+    let mime: string | undefined;
+    if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+      mime = "image/jpeg";
+    } else if (
+      bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 &&
+      bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a
+    ) {
+      mime = "image/png";
+    } else if (binary.startsWith("GIF87a") || binary.startsWith("GIF89a")) {
+      mime = "image/gif";
+    } else if (binary.startsWith("RIFF") && binary.slice(8, 12) === "WEBP") {
+      mime = "image/webp";
+    }
+    return mime ? `data:${mime};base64,${compact}` : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -352,6 +379,8 @@ export function resolveAvatarUrl(avatar: string | undefined, gatewayBaseUrl?: st
   if (/^https?:\/\//i.test(trimmed) || /^data:image\//i.test(trimmed)) {
     return trimmed;
   }
+  const rawDataUri = rawImageBase64ToDataUri(trimmed);
+  if (rawDataUri) return rawDataUri;
   // Relative paths and non-URL text (emoji/initials) can't be displayed as image URLs.
   // If a gatewayBaseUrl is explicitly provided (direct local access), resolve against it.
   if (trimmed.startsWith("/") && gatewayBaseUrl) {

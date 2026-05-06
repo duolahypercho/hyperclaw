@@ -114,17 +114,17 @@ function stepStatusColor(status: string): string {
     case "completed":     return "#22c55e";
     case "failed":        return "#ef4444";
     case "waiting_approval": return "#f59e0b";
-    default:              return "var(--muted-foreground, #9ca3af)";
+    default:              return "hsl(var(--muted-foreground))";
   }
 }
 
 function stepStatusBg(status: string): string {
   switch (status) {
-    case "running":          return "rgba(59,130,246,0.10)";
-    case "completed":        return "rgba(34,197,94,0.10)";
-    case "failed":           return "rgba(239,68,68,0.10)";
-    case "waiting_approval": return "rgba(245,158,11,0.10)";
-    default:                 return "rgba(107,114,128,0.08)";
+    case "running":          return "color-mix(in srgb, #3b82f6 13%, transparent)";
+    case "completed":        return "color-mix(in srgb, #22c55e 13%, transparent)";
+    case "failed":           return "color-mix(in srgb, #ef4444 13%, transparent)";
+    case "waiting_approval": return "color-mix(in srgb, #f59e0b 13%, transparent)";
+    default:                 return "color-mix(in srgb, #6b7280 10%, transparent)";
   }
 }
 
@@ -351,9 +351,9 @@ function NodeGraph({ steps, selectedStepId, onSelectStep }: NodeGraphProps) {
               top: pos.y,
               width: NODE_W,
               height: NODE_H,
-              ["--node-status" as string]: color,
-              ["--node-status-bg" as string]: stepStatusBg(step.status),
-            }}>
+              "--node-status": color,
+              "--node-status-bg": stepStatusBg(step.status),
+            } as React.CSSProperties}>
             <span className="ens-node-port in" aria-hidden="true" />
             <span className="ens-node-port out" aria-hidden="true" />
             <div className="ens-run-node-inner">
@@ -1388,7 +1388,7 @@ function Inspector({
         {mode !== "design-step" && tab === "Overview" && project && (
           <section aria-label="Workflow identity">
             <InspLabel>Workflow</InspLabel>
-            <div className="rounded-lg border px-3 py-3" style={{ borderColor: "var(--line)", background: "var(--paper)" }}>
+            <div className="ens-detail-card px-3 py-3">
               <div className="flex items-center gap-2">
                 {project.emoji && <span aria-hidden="true">{project.emoji}</span>}
                 <span className="text-[13px] font-medium truncate" style={{ color: "var(--ink)" }}>
@@ -1410,11 +1410,11 @@ function Inspector({
             <InspLabel>Selected step</InspLabel>
             {selectedStep ? (
               <div
-                className="rounded-lg border px-3 py-3"
+                className="ens-step-detail-card px-3 py-3"
                 style={{
-                  borderColor: stepStatusColor(selectedStep.status) + "66",
-                  background: stepStatusBg(selectedStep.status),
-                }}
+                  "--step-color": stepStatusColor(selectedStep.status),
+                  "--step-bg": stepStatusBg(selectedStep.status),
+                } as React.CSSProperties}
               >
                 <div className="flex items-start gap-2.5">
                   <StepIcon status={selectedStep.status} />
@@ -1432,7 +1432,7 @@ function Inspector({
                   <MiniMetric label="Duration" value={formatStepDuration(selectedStep)} />
                 </div>
                 {selectedStep.metadata && Object.keys(selectedStep.metadata).length > 0 && (
-                  <div className="mt-3 rounded-md border px-2.5 py-2" style={{ borderColor: "var(--line)", background: "var(--paper)" }}>
+                  <div className="ens-detail-card mt-3 px-2.5 py-2">
                     <div
                       className="text-[9px] uppercase tracking-[0.1em]"
                       style={{
@@ -1448,7 +1448,7 @@ function Inspector({
                   </div>
                 )}
                 {chartSpecs.length > 0 && (
-                  <div className="mt-3 rounded-md border px-2.5 py-2" style={{ borderColor: "var(--line)", background: "var(--paper)" }}>
+                  <div className="ens-detail-card mt-3 px-2.5 py-2">
                     <div
                       className="text-[9px] uppercase tracking-[0.1em]"
                       style={{
@@ -1470,7 +1470,7 @@ function Inspector({
                 )}
               </div>
             ) : (
-              <div className="rounded-lg border px-3 py-3" style={{ borderColor: "var(--line)", background: "var(--paper)" }}>
+              <div className="ens-detail-card px-3 py-3">
                 <span className="text-[12px]" style={{ color: "var(--ink-4)" }}>
                   No step selected
                 </span>
@@ -1523,7 +1523,7 @@ function Inspector({
               <div
                 className="ens-run-progress"
                 aria-hidden="true"
-                style={{ ["--run-progress" as string]: `${progressPercent}%` }}
+                style={{ "--run-progress": `${progressPercent}%` } as React.CSSProperties}
               >
                 <span />
               </div>
@@ -1571,11 +1571,11 @@ function Inspector({
                   .map((step) => (
                     <li
                       key={step.id}
-                      className="flex items-start gap-2.5 px-2.5 py-2 rounded-lg border"
+                      className="ens-step-row flex items-start gap-2.5 px-2.5 py-2"
                       style={{
-                        background: stepStatusBg(step.status),
-                        borderColor: stepStatusColor(step.status) + "44",
-                      }}
+                        "--step-color": stepStatusColor(step.status),
+                        "--step-bg": stepStatusBg(step.status),
+                      } as React.CSSProperties}
                     >
                       <StepIcon status={step.status} />
                       <div className="flex-1 min-w-0">
@@ -1616,11 +1616,7 @@ function Inspector({
               {visibleEvents.map((ev) => (
                 <li
                   key={ev.id}
-                  className="text-[11px] px-2 py-1.5 rounded-md font-mono"
-                  style={{
-                    background: "var(--paper-2)",
-                    color: "var(--ink-3)",
-                  }}
+                  className="ens-event-row text-[11px] px-2 py-1.5 font-mono"
                 >
                   <span className="font-medium" style={{ color: "var(--ink-2)" }}>
                     {ev.eventType}
@@ -1670,7 +1666,7 @@ function StepIcon({ status }: { status: string }) {
 
 function MiniMetric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-md border px-2.5 py-2" style={{ borderColor: "var(--line)", background: "var(--paper)" }}>
+    <div className="ens-detail-card px-2.5 py-2">
       <div
         className="text-[9px] uppercase tracking-[0.1em]"
         style={{

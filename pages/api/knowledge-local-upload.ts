@@ -132,7 +132,7 @@ export default async function handler(
   try {
     await mkdir(collectionRoot, { recursive: true });
     const targetPath = await ensureUniquePath(candidatePath);
-    await writeFile(targetPath, buffer);
+    await writeFile(targetPath, new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength));
 
     const written = path.basename(targetPath);
     const relativePath = `${collection}/${written}`;

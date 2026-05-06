@@ -1,0 +1,49 @@
+{
+  "name": "hyperclaw",
+  "version": "0.1.0",
+  "description": "Local-first Hyperclaw cockpit plugin for Codex, Hermes, OpenClaw, Claude Code, and MCP-speaking agents.",
+  "author": {
+    "name": "Hyperclaw",
+    "email": "support@hyperclaw.local",
+    "url": "https://github.com/Hypercho-Inc"
+  },
+  "homepage": "https://github.com/Hypercho-Inc/hyperclaw",
+  "repository": "https://github.com/Hypercho-Inc/hyperclaw",
+  "license": "MIT",
+  "keywords": [
+    "hyperclaw",
+    "connector",
+    "codex",
+    "openclaw",
+    "hermes",
+    "mcp",
+    "ai-agents"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "apps": "./.app.json",
+  "interface": {
+    "displayName": "Hyperclaw",
+    "shortDescription": "Drive the local Hyperclaw connector from every agent runtime.",
+    "longDescription": "Hyperclaw turns Codex, Hermes, OpenClaw, Claude Code, and future MCP-speaking agents into first-class operators inside the local Hyperclaw cockpit. The plugin exposes the connector's live agent, project, workflow, knowledge, task, credential, runtime, and notification surfaces without bypassing the connector boundary.",
+    "developerName": "Hyperclaw",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write",
+      "MCP",
+      "Local"
+    ],
+    "websiteURL": "https://github.com/Hypercho-Inc/hyperclaw",
+    "privacyPolicyURL": "https://github.com/Hypercho-Inc/hyperclaw/blob/main/SECURITY.md",
+    "termsOfServiceURL": "https://github.com/Hypercho-Inc/hyperclaw/blob/main/LICENSE",
+    "defaultPrompt": [
+      "List my Hyperclaw agents and their status.",
+      "Create a project and assign an agent team.",
+      "Show the connector tool catalog."
+    ],
+    "brandColor": "#111827",
+    "screenshots": []
+  }
+}

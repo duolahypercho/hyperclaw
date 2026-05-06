@@ -80,7 +80,7 @@ const RightContentLayout = ({
           >
             <div
               className={cn(
-                "w-full h-full mx-auto bg-card shadow-sm flex flex-col border border-solid border-primary/10 border-t-0 border-r-0 border-b-0 overflow-y-auto customScrollbar2",
+                "w-full h-full mx-auto bg-card shadow-sm flex flex-col border border-solid border-border border-l-1 border-t-0 border-r-0 border-b-0 overflow-y-auto customScrollbar2",
                 className
               )}
             >

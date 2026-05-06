@@ -43,6 +43,9 @@ function RunDetailDialog({
 }) {
   const [fullDetail, setFullDetail] = useState<Record<string, unknown> | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const detailJobId = entry?.job?.id ?? "";
+  const detailRunAtMs = entry?.run?.runAtMs ?? null;
+  const detailSessionId = entry?.run?.sessionId;
 
   useEffect(() => {
     if (!open) {
@@ -51,14 +54,14 @@ function RunDetailDialog({
       return;
     }
     setFullDetail(null);
-    if (entry?.job?.id && entry?.run) {
+    if (detailJobId && detailRunAtMs != null) {
       setDetailLoading(true);
-      fetchCronRunDetail(entry.job.id, entry.run.runAtMs)
+      fetchCronRunDetail(detailJobId, detailRunAtMs, detailSessionId)
         .then((detail) => setFullDetail(detail ?? null))
         .catch(() => setFullDetail(null))
         .finally(() => setDetailLoading(false));
     }
-  }, [open, entry?.job?.id, entry?.run?.runAtMs]);
+  }, [open, detailJobId, detailRunAtMs, detailSessionId]);
 
   if (!entry) return null;
   const { job, slot, run } = entry;

@@ -183,14 +183,17 @@ export const EnhancedMessageBubble = memo(
     }
     const hasTextContent = content.trim();
     const hasAttachments = message.attachments && message.attachments.length > 0;
+    const contentBlocks = message.contentBlocks;
+    const hasRenderableBlocks = Array.isArray(contentBlocks) && contentBlocks.some((block) =>
+      (block?.type === "thinking" && typeof block.thinking === "string" && block.thinking.trim()) ||
+      (block?.type === "text" && typeof block.text === "string" && block.text.trim()) ||
+      block?.type === "toolResult"
+    );
 
     // If no real content, hide the message entirely
-    if (!hasTextContent && !hasAttachments && !systemEvents.length && !isLoading) {
+    if (!hasTextContent && !hasAttachments && !systemEvents.length && !hasRenderableBlocks && !isLoading) {
       return null;
     }
-
-    // Check for content blocks (thinking, tool calls, etc.)
-    const contentBlocks = (message as any).contentBlocks;
 
     const renderContent = () => {
       // Show loading/thinking state
@@ -349,7 +352,7 @@ export const EnhancedMessageBubble = memo(
         )}
 
         {/* User message bubble — only render if there's actual content */}
-        {(hasTextContent || hasAttachments || isLoading) && (
+        {(hasTextContent || hasAttachments || hasRenderableBlocks || isLoading) && (
           <div
             className={cn(
               "flex gap-3 group",
@@ -466,12 +469,19 @@ export const EnhancedMessageBubble = memo(
   (prevProps, nextProps) => {
     return (
       prevProps.message.content === nextProps.message.content &&
+      prevProps.message.contentBlocks === nextProps.message.contentBlocks &&
       prevProps.message.role === nextProps.message.role &&
       prevProps.message.attachments === nextProps.message.attachments &&
       prevProps.isLoading === nextProps.isLoading &&
       prevProps.isLastAssistantMessage === nextProps.isLastAssistantMessage &&
       prevProps.showAvatar === nextProps.showAvatar &&
-      prevProps.userPic?.src === nextProps.userPic?.src
+      prevProps.botPic === nextProps.botPic &&
+      prevProps.userPic?.src === nextProps.userPic?.src &&
+      prevProps.userPic?.fallback === nextProps.userPic?.fallback &&
+      prevProps.assistantAvatar?.src === nextProps.assistantAvatar?.src &&
+      prevProps.assistantAvatar?.fallback === nextProps.assistantAvatar?.fallback
     );
   }
 );
+
+EnhancedMessageBubble.displayName = "EnhancedMessageBubble";

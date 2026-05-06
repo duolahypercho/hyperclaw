@@ -632,15 +632,23 @@ const plugin = {
             description: "Agent type (e.g. 'openclaw', 'hermes', 'claude-code', 'codex')",
           },
           emoji: { type: "string", description: "Emoji avatar for the agent (e.g. '🤖')" },
+          avatarData: { type: "string", description: "Alias for avatarDataUri" },
+          avatarDataUri: { type: "string", description: "Avatar image as a data URI" },
           config: { type: "object", description: "Agent configuration (model, tools, etc.)" },
         },
         required: ["name"],
       },
       async execute(callerId: string, params: any) {
+        const avatarData = typeof params.avatarDataUri === "string" && params.avatarDataUri.trim()
+          ? params.avatarDataUri
+          : typeof params.avatarData === "string" && params.avatarData.trim()
+            ? params.avatarData
+            : undefined;
         const agent = bridge.addAgent({
           name: params.name,
           type: params.type,
           emoji: params.emoji,
+          avatarData,
           config: params.config,
           createdBy: callerId,
         });
@@ -781,6 +789,84 @@ const plugin = {
       },
       async execute(_id: string, params: any) {
         return { content: [{ type: "text", text: JSON.stringify(bridge.listProjects({ kind: params.kind })) }] };
+      },
+    });
+
+    // ── Workflow tools (connector-backed, shared with Codex/Hermes MCP) ───
+    api.registerTool({
+      name: "hyperclaw_list_workflow_templates",
+      description: "List workflow templates, optionally scoped to one workflow project.",
+      parameters: {
+        type: "object",
+        properties: {
+          projectId: { type: "string", description: "Workflow project ID" },
+        },
+      },
+      async execute(_id: string, params: any) {
+        const result = await postBridgeJson(connectorBridgeUrl, {
+          action: "hyperclaw-tool-call",
+          toolName: "hyperclaw.workflows.list_templates",
+          arguments: params?.projectId ? { projectId: params.projectId } : {},
+        });
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+          isError: result?.success === false,
+        };
+      },
+    });
+
+    api.registerTool({
+      name: "hyperclaw_start_workflow_run",
+      description: "Start a workflow run from a template through the Hyperclaw connector.",
+      parameters: {
+        type: "object",
+        properties: {
+          templateId: { type: "string", description: "Workflow template ID to run" },
+          startedBy: { type: "string", description: "Optional actor label" },
+          inputPayload: { type: "object", description: "Optional input payload for the workflow run" },
+        },
+        required: ["templateId"],
+      },
+      async execute(callerId: string, params: any) {
+        const result = await postBridgeJson(connectorBridgeUrl, {
+          action: "hyperclaw-tool-call",
+          toolName: "hyperclaw.workflows.start_run",
+          arguments: {
+            templateId: params.templateId,
+            startedBy: params.startedBy || callerId,
+            inputPayload: params.inputPayload ?? {},
+          },
+        });
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+          isError: result?.success === false,
+        };
+      },
+    });
+
+    api.registerTool({
+      name: "hyperclaw_list_workflow_runs",
+      description: "List workflow runs, optionally scoped to one workflow project.",
+      parameters: {
+        type: "object",
+        properties: {
+          projectId: { type: "string", description: "Workflow project ID" },
+          limit: { type: "number", description: "Maximum runs to return" },
+        },
+      },
+      async execute(_id: string, params: any) {
+        const result = await postBridgeJson(connectorBridgeUrl, {
+          action: "hyperclaw-tool-call",
+          toolName: "hyperclaw.workflows.list_runs",
+          arguments: {
+            ...(params?.projectId ? { projectId: params.projectId } : {}),
+            ...(typeof params?.limit === "number" ? { limit: params.limit } : {}),
+          },
+        });
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+          isError: result?.success === false,
+        };
       },
     });
 

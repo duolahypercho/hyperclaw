@@ -1424,7 +1424,7 @@ func hermesCronMtimeFallback(cronFile string, dataStore *store.Store) {
 
 // seedCronJobs reads cron/jobs.json and upserts into SQLite.
 func seedCronJobs(dataStore *store.Store, paths bridge.Paths) {
-	jobs, err := readCronJobsForSeed(paths)
+	jobs, err := readCronJobsForSeed(paths, openClawAgentIDsForCronInference(dataStore))
 	if err != nil {
 		log.Printf("Cron seeding: no jobs.json yet: %v", err)
 		return
@@ -1440,7 +1440,7 @@ func seedCronJobs(dataStore *store.Store, paths bridge.Paths) {
 }
 
 // readCronJobsForSeed parses jobs.json into SeedCronJob structs.
-func readCronJobsForSeed(paths bridge.Paths) ([]store.SeedCronJob, error) {
+func readCronJobsForSeed(paths bridge.Paths, knownAgentIDs []string) ([]store.SeedCronJob, error) {
 	data, err := os.ReadFile(paths.CronJobsPath())
 	if err != nil {
 		return nil, err
@@ -1456,13 +1456,34 @@ func readCronJobsForSeed(paths bridge.Paths) ([]store.SeedCronJob, error) {
 	seeds := make([]store.SeedCronJob, 0, len(file.Jobs))
 	for _, raw := range file.Jobs {
 		var job struct {
-			ID      string `json:"id"`
-			AgentID string `json:"agentId"`
-			Name    string `json:"name"`
-			Enabled *bool  `json:"enabled"`
+			ID          string `json:"id"`
+			AgentID     string `json:"agentId"`
+			Name        string `json:"name"`
+			Description string `json:"description"`
+			SessionKey  string `json:"sessionKey"`
+			Enabled     *bool  `json:"enabled"`
+			Payload     struct {
+				AgentID     string `json:"agentId"`
+				SessionKey  string `json:"sessionKey"`
+				Message     string `json:"message"`
+				SystemEvent string `json:"systemEvent"`
+			} `json:"payload"`
 		}
 		if err := json.Unmarshal(raw, &job); err != nil {
 			continue
+		}
+		agentID := strings.TrimSpace(job.AgentID)
+		if agentID == "" {
+			agentID = strings.TrimSpace(job.Payload.AgentID)
+		}
+		if agentID == "" {
+			agentID = cronAgentIDFromSessionKey(job.SessionKey)
+		}
+		if agentID == "" {
+			agentID = cronAgentIDFromSessionKey(job.Payload.SessionKey)
+		}
+		if agentID == "" {
+			agentID = inferOpenClawCronAgentID(knownAgentIDs, job.Name, job.Description, job.Payload.Message, job.Payload.SystemEvent)
 		}
 		enabled := true
 		if job.Enabled != nil {
@@ -1471,13 +1492,74 @@ func readCronJobsForSeed(paths bridge.Paths) ([]store.SeedCronJob, error) {
 		seeds = append(seeds, store.SeedCronJob{
 			ID:      job.ID,
 			Runtime: "openclaw",
-			AgentID: job.AgentID,
+			AgentID: agentID,
 			Name:    job.Name,
 			Enabled: enabled,
 			RawJSON: string(raw),
 		})
 	}
 	return seeds, nil
+}
+
+func openClawAgentIDsForCronInference(dataStore *store.Store) []string {
+	if dataStore == nil {
+		return nil
+	}
+	agents, err := dataStore.GetAgents("openclaw")
+	if err != nil {
+		return nil
+	}
+	ids := make([]string, 0, len(agents))
+	for _, agent := range agents {
+		if id := strings.TrimSpace(agent.ID); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+func cronAgentIDFromSessionKey(sessionKey string) string {
+	parts := strings.Split(strings.TrimSpace(sessionKey), ":")
+	if len(parts) >= 2 && parts[0] == "agent" {
+		return strings.TrimSpace(parts[1])
+	}
+	return ""
+}
+
+func inferOpenClawCronAgentID(knownAgentIDs []string, fields ...string) string {
+	if len(knownAgentIDs) == 0 {
+		return ""
+	}
+	text := strings.ToLower(strings.Join(fields, "\n"))
+	matches := make(map[string]bool)
+	for _, rawID := range knownAgentIDs {
+		id := strings.ToLower(strings.TrimSpace(rawID))
+		if id == "" || id == "main" {
+			continue
+		}
+		phrases := []string{
+			"for the " + id + " agent",
+			"for " + id + " agent",
+			id + " agent",
+			"agent:" + id,
+			"browser profile " + id,
+			"--browser-profile " + id,
+			"profile " + id,
+		}
+		for _, phrase := range phrases {
+			if strings.Contains(text, phrase) {
+				matches[rawID] = true
+				break
+			}
+		}
+	}
+	if len(matches) != 1 {
+		return ""
+	}
+	for id := range matches {
+		return id
+	}
+	return ""
 }
 
 // watchCronJobsFile watches ~/.openclaw/cron/ for changes to jobs.json.

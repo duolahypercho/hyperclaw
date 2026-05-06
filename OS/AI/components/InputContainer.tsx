@@ -919,7 +919,7 @@ export const InputContainer: React.FC<InputContainerProps> = ({
                     if (filtered.length === 0) {
                       return (
                         <p className="text-xs text-muted-foreground text-center py-3">
-                          No models match "{modelSearch}"
+                          No models match &quot;{modelSearch}&quot;
                         </p>
                       );
                     }

@@ -8,12 +8,15 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
 )
+
+const maxJavaScriptSafeInteger = int64(1<<53 - 1)
 
 // IntelStore manages the separate intel.db for the intelligence layer.
 type IntelStore struct {
@@ -263,7 +266,7 @@ func (s *IntelStore) Query(sqlStr string) (map[string]interface{}, error) {
 		}
 		row := make(map[string]interface{})
 		for i, col := range cols {
-			row[col] = values[i]
+			row[col] = normalizeIntelQueryValue(values[i])
 		}
 		results = append(results, row)
 	}
@@ -283,6 +286,16 @@ func (s *IntelStore) Query(sqlStr string) (map[string]interface{}, error) {
 		resp["warning"] = "Results truncated to 1000 rows. Use LIMIT/OFFSET for pagination."
 	}
 	return resp, nil
+}
+
+func normalizeIntelQueryValue(value interface{}) interface{} {
+	switch v := value.(type) {
+	case int64:
+		if v > maxJavaScriptSafeInteger || v < -maxJavaScriptSafeInteger {
+			return strconv.FormatInt(v, 10)
+		}
+	}
+	return value
 }
 
 // ---------- Guarded write (DDL + complex writes) ----------
@@ -330,7 +343,7 @@ func (s *IntelStore) Execute(sqlStr string, agentID string) (map[string]interfac
 	lastID, _ := result.LastInsertId()
 	return map[string]interface{}{
 		"changes":         changes,
-		"lastInsertRowid": lastID,
+		"lastInsertRowid": normalizeIntelQueryValue(lastID),
 		"ddl":             isDDL,
 	}, nil
 }
@@ -403,7 +416,7 @@ func (s *IntelStore) Insert(table string, data map[string]interface{}, agentID s
 	changes, _ := result.RowsAffected()
 	idVal := data["id"]
 	if lastID > 0 {
-		idVal = lastID
+		idVal = normalizeIntelQueryValue(lastID)
 	}
 
 	return map[string]interface{}{
@@ -430,6 +443,9 @@ func (s *IntelStore) Update(table string, data map[string]interface{}, where map
 		}
 	}
 	for key := range where {
+		if isInternalRowIDColumn(key) {
+			continue
+		}
 		if _, ok := validCols[key]; !ok {
 			return nil, fmt.Errorf("Column '%s' not found in %s", key, table)
 		}
@@ -451,7 +467,7 @@ func (s *IntelStore) Update(table string, data map[string]interface{}, where map
 
 	whereClauses := make([]string, 0, len(where))
 	for col, val := range where {
-		whereClauses = append(whereClauses, fmt.Sprintf("\"%s\" = ?", col))
+		whereClauses = append(whereClauses, fmt.Sprintf("%s = ?", intelWhereColumnSQL(col)))
 		vals = append(vals, val)
 	}
 
@@ -488,6 +504,9 @@ func (s *IntelStore) Delete(table string, where map[string]interface{}) (map[str
 	}
 
 	for key := range where {
+		if isInternalRowIDColumn(key) {
+			continue
+		}
 		if _, ok := validCols[key]; !ok {
 			return nil, fmt.Errorf("Column '%s' not found in %s", key, table)
 		}
@@ -496,7 +515,7 @@ func (s *IntelStore) Delete(table string, where map[string]interface{}) (map[str
 	whereClauses := make([]string, 0, len(where))
 	vals := make([]interface{}, 0, len(where))
 	for col, val := range where {
-		whereClauses = append(whereClauses, fmt.Sprintf("\"%s\" = ?", col))
+		whereClauses = append(whereClauses, fmt.Sprintf("%s = ?", intelWhereColumnSQL(col)))
 		vals = append(vals, val)
 	}
 
@@ -557,6 +576,17 @@ func (s *IntelStore) getTableColumns(table string) (map[string]bool, error) {
 		cols[name] = true
 	}
 	return cols, nil
+}
+
+func isInternalRowIDColumn(column string) bool {
+	return strings.EqualFold(column, "rowid")
+}
+
+func intelWhereColumnSQL(column string) string {
+	if isInternalRowIDColumn(column) {
+		return "_rowid_"
+	}
+	return fmt.Sprintf("\"%s\"", column)
 }
 
 func (s *IntelStore) backup() {

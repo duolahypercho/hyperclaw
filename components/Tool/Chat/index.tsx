@@ -15,6 +15,7 @@ const STATUS_WIDGET: Widget = {
   icon: <Activity className="w-4 h-4" />,
   component: StatusWidget as React.ComponentType<CustomProps>,
   defaultValue: { w: 8, h: 10, minW: 4, minH: 6, x: 0, y: 0 },
+  config: { layout: "agent-accordion" },
 };
 
 const AGENT_CHAT_WIDGET: Widget = {
@@ -24,7 +25,7 @@ const AGENT_CHAT_WIDGET: Widget = {
   icon: <MessageSquare className="w-4 h-4" />,
   component: AgentChatWidget as React.ComponentType<CustomProps>,
   defaultValue: { w: 16, h: 10, minW: 8, minH: 6, x: 8, y: 0 },
-  config: {},
+  config: { hideTabs: true, hideNewChat: true },
 };
 
 const Chat = () => {

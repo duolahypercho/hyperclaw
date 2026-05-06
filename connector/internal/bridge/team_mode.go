@@ -152,7 +152,7 @@ func syncClaudeTeamMode(paths Paths) store.TeamRuntimeBootstrap {
 	status := store.TeamRuntimeBootstrap{
 		Runtime:    string(RuntimeClaude),
 		ToolMode:   "agentic-stack",
-		AuthStatus: "unknown",
+		AuthStatus: "needs_auth",
 		SyncStatus: "pending",
 		Status:     "missing",
 		ConfigPath: filepath.Join(paths.Home, ".claude", "settings.json"),
@@ -163,6 +163,9 @@ func syncClaudeTeamMode(paths Paths) store.TeamRuntimeBootstrap {
 	}
 	status.Detected = true
 	status.Status = "available"
+	if claudeCliOAuthReady(paths.Home) {
+		status.AuthStatus = "ready"
+	}
 	status.SyncStatus = "configured"
 	status.Message = "Agentic stack owns runtime setup"
 	return status

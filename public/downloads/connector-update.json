@@ -2,7 +2,7 @@
   "mandatory": true,
   "binaries": {
     "darwin-arm64": {
-      "checksum": "sha256:a1e9e9699748eed32b981a487e441c3b79e173f16ce389928347a6d8801df75d"
+      "checksum": "sha256:437a40c65cb197d20d7b7ae830f0fe3ca3c1cdc69e5c34817420318846a7a935"
     }
   },
   "minVersion": "0.5.10",

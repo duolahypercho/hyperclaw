@@ -51,10 +51,7 @@ func (b *BridgeHandler) getAgentIdentity(params map[string]interface{}) actionRe
 		identityContent = f.Content
 	}
 
-	// If avatar_data is empty, try resolving from the IDENTITY.md content.
-	if id.AvatarData == "" && identityContent != "" {
-		id.AvatarData = b.resolveAvatarFromContent(identityContent, agentID)
-	}
+	id.AvatarData = b.normalizeAvatarForResponse(id.AvatarData, identityContent, agentID, id.Runtime)
 
 	// Build response as a map so we can include extra fields not in the DB struct.
 	data := map[string]interface{}{
@@ -72,6 +69,82 @@ func (b *BridgeHandler) getAgentIdentity(params map[string]interface{}) actionRe
 	return okResult(map[string]interface{}{"success": true, "data": data})
 }
 
+func (b *BridgeHandler) normalizeAvatarForResponse(storedAvatar, identityContent, agentID string, runtimeHint ...string) string {
+	runtime := ""
+	if len(runtimeHint) > 0 {
+		runtime = strings.TrimSpace(runtimeHint[0])
+	}
+	trimmed := strings.TrimSpace(storedAvatar)
+	if trimmed != "" {
+		if isRenderableAvatarValue(trimmed) {
+			return trimmed
+		}
+		if uri := rawImageBase64ToDataURI(trimmed); uri != "" {
+			return uri
+		}
+		if uri := b.resolveLocalAvatarFile(agentID, runtime, trimmed); uri != "" {
+			return uri
+		}
+	}
+	if identityContent != "" {
+		if uri := b.resolveAvatarFromContent(identityContent, agentID, runtime); uri != "" {
+			return uri
+		}
+	}
+	return b.resolveConventionalAvatarFile(agentID, runtime)
+}
+
+func isRenderableAvatarValue(value string) bool {
+	lower := strings.ToLower(strings.TrimSpace(value))
+	return strings.HasPrefix(lower, "http://") ||
+		strings.HasPrefix(lower, "https://") ||
+		strings.HasPrefix(lower, "data:image/")
+}
+
+func rawImageBase64ToDataURI(value string) string {
+	compact := strings.Map(func(r rune) rune {
+		switch r {
+		case '\n', '\r', '\t', ' ':
+			return -1
+		default:
+			return r
+		}
+	}, strings.TrimSpace(value))
+	if compact == "" {
+		return ""
+	}
+	data, err := base64.StdEncoding.DecodeString(compact)
+	if err != nil {
+		return ""
+	}
+	mime := imageMimeFromBytes(data)
+	if mime == "" {
+		return ""
+	}
+	return "data:" + mime + ";base64," + compact
+}
+
+func imageMimeFromBytes(data []byte) string {
+	switch {
+	case len(data) >= 3 && data[0] == 0xff && data[1] == 0xd8 && data[2] == 0xff:
+		return "image/jpeg"
+	case len(data) >= 8 &&
+		data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4e && data[3] == 0x47 &&
+		data[4] == 0x0d && data[5] == 0x0a && data[6] == 0x1a && data[7] == 0x0a:
+		return "image/png"
+	case len(data) >= 6 && string(data[:6]) == "GIF87a":
+		return "image/gif"
+	case len(data) >= 6 && string(data[:6]) == "GIF89a":
+		return "image/gif"
+	case len(data) >= 12 && string(data[:4]) == "RIFF" && string(data[8:12]) == "WEBP":
+		return "image/webp"
+	case len(data) >= 4 && strings.Contains(strings.ToLower(strings.TrimSpace(string(data[:min(len(data), 512)]))), "<svg"):
+		return "image/svg+xml"
+	default:
+		return ""
+	}
+}
+
 // resolveProjectPathFromIdentityFile reads the project path from the agent's
 // synced IDENTITY.md (agent_files table). Returns "" if not set.
 func (b *BridgeHandler) resolveProjectPathFromIdentityFile(agentID string) string {
@@ -87,59 +160,139 @@ func (b *BridgeHandler) resolveProjectPathFromIdentityFile(agentID string) strin
 
 // resolveAvatarFromContent resolves an avatar from already-loaded IDENTITY.md content.
 // Reads the avatar filename and returns it as a base64 data URI. Returns "" if anything fails.
-func (b *BridgeHandler) resolveAvatarFromContent(content, agentID string) string {
+func (b *BridgeHandler) resolveAvatarFromContent(content, agentID, runtime string) string {
 	avatarVal := extractIdentityFieldValue(content, "avatar")
 	if avatarVal == "" {
 		return ""
 	}
-	// Skip URLs and data URIs — only handle local filenames
-	lower := strings.ToLower(avatarVal)
-	if strings.HasPrefix(lower, "http") || strings.HasPrefix(lower, "data:") || strings.HasPrefix(lower, "/") {
+	return b.resolveLocalAvatarFile(agentID, runtime, avatarVal)
+}
+
+func (b *BridgeHandler) resolveConventionalAvatarFile(agentID, runtime string) string {
+	for _, filename := range []string{"avatar.png", "avatar.jpg", "avatar.jpeg", "avatar.webp", "avatar.gif", "avatar.svg"} {
+		if uri := b.resolveLocalAvatarFile(agentID, runtime, filename); uri != "" {
+			return uri
+		}
+	}
+	return ""
+}
+
+func (b *BridgeHandler) resolveLocalAvatarFile(agentID, runtime, avatarVal string) string {
+	if err := ValidateAgentID(agentID); err != nil {
 		return ""
 	}
-	// Must have an image extension
-	ext := strings.ToLower(filepath.Ext(avatarVal))
-	var mime string
-	switch ext {
-	case ".png":
-		mime = "image/png"
-	case ".jpg", ".jpeg":
-		mime = "image/jpeg"
-	case ".gif":
-		mime = "image/gif"
-	case ".webp":
-		mime = "image/webp"
-	case ".svg":
-		mime = "image/svg+xml"
-	default:
+	avatarVal = strings.TrimSpace(avatarVal)
+	if avatarVal == "" || !isSafeLocalAvatarPath(avatarVal) || avatarMimeFromPath(avatarVal) == "" {
 		return ""
 	}
-	// Build candidate paths — check Hyperclaw agent dir first, then OpenClaw workspaces.
 	folder := "workspace-" + agentID
 	if agentID == "main" {
 		folder = "workspace"
 	}
-	// Hyperclaw-internal agent dir (claude-code, codex, hyperclaw agents).
+	var candidates []localAvatarCandidate
 	// Try the new runtime-namespaced layout first, then fall back to legacy.
-	candidates := []string{
-		filepath.Join(b.agentDirFor(agentID), avatarVal),
-		filepath.Join(b.paths.LegacyAgentDir(agentID), avatarVal),
+	for _, base := range b.avatarCandidateBaseDirs(agentID, runtime) {
+		candidates = appendAvatarCandidate(candidates, base, avatarVal)
 	}
 	// OpenClaw workspace dirs
 	for _, base := range []string{b.paths.OpenClaw, b.paths.OpenClawAlt} {
 		if base != "" {
-			candidates = append(candidates, filepath.Join(base, folder, avatarVal))
+			candidates = appendAvatarCandidate(candidates, filepath.Join(base, folder), avatarVal)
 		}
 	}
-	for _, path := range candidates {
-		data, readErr := os.ReadFile(path)
+	for _, candidate := range candidates {
+		data, readErr := readAvatarCandidate(candidate)
 		if readErr != nil {
+			continue
+		}
+		mime := imageMimeFromBytes(data)
+		if mime == "" {
 			continue
 		}
 		encoded := base64.StdEncoding.EncodeToString(data)
 		return "data:" + mime + ";base64," + encoded
 	}
 	return ""
+}
+
+func isSafeLocalAvatarPath(value string) bool {
+	lower := strings.ToLower(strings.TrimSpace(value))
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") || strings.HasPrefix(lower, "data:") || filepath.IsAbs(value) {
+		return false
+	}
+	clean := filepath.Clean(value)
+	return clean != "." && clean != ".." && !strings.HasPrefix(clean, ".."+string(filepath.Separator))
+}
+
+func (b *BridgeHandler) avatarCandidateBaseDirs(agentID, runtime string) []string {
+	var bases []string
+	if runtime != "" {
+		if agentDir, err := b.paths.SafeAgentDir(runtime, agentID); err == nil {
+			bases = append(bases, agentDir)
+		}
+		if runtimeDir, err := resolveRuntimeAgentDir(b.paths, runtime, agentID); err == nil {
+			bases = append(bases, runtimeDir)
+		}
+	} else if agentDir := b.agentDirFor(agentID); agentDir != "" {
+		bases = append(bases, agentDir)
+	}
+	if legacyDir, err := b.paths.SafeLegacyAgentDir(agentID); err == nil {
+		bases = append(bases, legacyDir)
+	}
+	return bases
+}
+
+func avatarMimeFromPath(path string) string {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".gif":
+		return "image/gif"
+	case ".webp":
+		return "image/webp"
+	case ".svg":
+		return "image/svg+xml"
+	default:
+		return ""
+	}
+}
+
+type localAvatarCandidate struct {
+	base string
+	path string
+}
+
+func appendAvatarCandidate(candidates []localAvatarCandidate, base, avatarVal string) []localAvatarCandidate {
+	if base == "" {
+		return candidates
+	}
+	target := filepath.Join(base, avatarVal)
+	if err := ensurePathWithinBase(base, target); err != nil {
+		return candidates
+	}
+	for _, existing := range candidates {
+		if existing.path == target {
+			return candidates
+		}
+	}
+	return append(candidates, localAvatarCandidate{base: base, path: target})
+}
+
+func readAvatarCandidate(candidate localAvatarCandidate) ([]byte, error) {
+	realBase, err := filepath.EvalSymlinks(candidate.base)
+	if err != nil {
+		return nil, err
+	}
+	realTarget, err := filepath.EvalSymlinks(candidate.path)
+	if err != nil {
+		return nil, err
+	}
+	if err := ensurePathWithinBase(realBase, realTarget); err != nil {
+		return nil, err
+	}
+	return os.ReadFile(realTarget)
 }
 
 // extractIdentityFieldValue parses a single field value from IDENTITY.md content.
@@ -268,10 +421,14 @@ func (b *BridgeHandler) listAgentIdentities() actionResult {
 	savedChannelConfigs := b.loadSavedAgentChannelConfigs()
 	data := make([]map[string]interface{}, 0, len(agents))
 	for _, agent := range agents {
+		identityContent := ""
+		if f, err := b.store.GetAgentFile(agent.ID, "IDENTITY"); err == nil && f != nil {
+			identityContent = f.Content
+		}
 		row := map[string]interface{}{
 			"id":         agent.ID,
 			"name":       agent.Name,
-			"avatarData": agent.AvatarData,
+			"avatarData": b.normalizeAvatarForResponse(agent.AvatarData, identityContent, agent.ID, agent.Runtime),
 			"emoji":      agent.Emoji,
 			"runtime":    agent.Runtime,
 			"role":       agent.Role,

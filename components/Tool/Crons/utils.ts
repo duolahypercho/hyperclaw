@@ -2,6 +2,7 @@ import { addHours, addMinutes, isBefore, isAfter, startOfDay, endOfDay } from "d
 import cronParser from "cron-parser";
 import type { OpenClawCronJobJson, CronRunRecord } from "$/types/electron";
 import { bridgeInvoke } from "$/lib/hyperclaw-bridge-client";
+import { addRunningJobId } from "$/lib/crons-running-store";
 
 /**
  * Params for adding a cron job (maps to openclaw cron add flags).
@@ -72,10 +73,15 @@ export async function cronRun(jobId: string, options?: { due?: boolean }): Promi
       bridgeInvoke("cron-run", { cronRunJobId: jobId, cronRunDue: options?.due === true }),
       new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 30_000))
     ]) as { success?: boolean; error?: string };
+    if (data?.success === false) {
+      return { success: false, error: data.error || "Cron run failed" };
+    }
+    addRunningJobId(jobId);
     return { success: true, error: undefined };
   } catch (e: unknown) {
     const err = e instanceof Error ? e : new Error(String(e));
     if (err.message === "timeout") {
+      addRunningJobId(jobId);
       return { success: true, error: undefined };
     }
     return { success: false, error: err.message };
@@ -167,6 +173,7 @@ export interface BridgeCron {
   lastRunAtMs?: number;
   lastStatus?: string;
   enabled?: boolean;
+  rawJson?: string;
 }
 
 /** Normalize "every 30 min" / "30m" / "30" to a string we can parse as interval. */
@@ -203,8 +210,71 @@ function parseEveryStep(scheduleStr: string): number | null {
   return num * 60 * 1000;
 }
 
-export function mapBridgeCronsToJobs(bridgeCrons: BridgeCron[]): OpenClawCronJobJson[] {
+function normalizeAgentId(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
+}
+
+function getStringField(record: unknown, key: string): string | undefined {
+  if (!record || typeof record !== "object") return undefined;
+  const value = (record as Record<string, unknown>)[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function parseCronRawJson(rawJson: unknown): OpenClawCronJobJson | undefined {
+  if (typeof rawJson !== "string" || !rawJson.trim()) return undefined;
+  try {
+    const parsed = JSON.parse(rawJson) as OpenClawCronJobJson;
+    return parsed && typeof parsed === "object" && typeof parsed.id === "string" ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function cronTextForAgentInference(job: OpenClawCronJobJson): string {
+  const payload = job.payload && typeof job.payload === "object" ? job.payload : undefined;
+  return [
+    job.name,
+    typeof job.description === "string" ? job.description : "",
+    typeof job.sessionKey === "string" ? job.sessionKey : "",
+    getStringField(payload, "message"),
+    getStringField(payload, "systemEvent"),
+    getStringField(payload, "text"),
+  ].filter(Boolean).join("\n").toLowerCase();
+}
+
+function inferCronAgentId(job: OpenClawCronJobJson): string | undefined {
+  const explicit = normalizeAgentId(job.agentId);
+  if (explicit) return explicit;
+  const payload = job.payload && typeof job.payload === "object" ? job.payload : undefined;
+  const payloadAgent = normalizeAgentId(getStringField(payload, "agentId"));
+  if (payloadAgent) return payloadAgent;
+  const sessionKey = getStringField(job, "sessionKey") ?? getStringField(payload, "sessionKey");
+  const sessionMatch = sessionKey?.trim().match(/^agent:([^:]+)/i);
+  if (sessionMatch?.[1]) return sessionMatch[1].trim().toLowerCase();
+  const text = cronTextForAgentInference(job);
+  for (const pattern of [
+    /\bfor\s+(?:the\s+)?([a-z0-9_-]+)\s+agent\b/i,
+    /\b([a-z0-9_-]+)\s+browser profile\b/i,
+    /\bbrowser profile\s+([a-z0-9_-]+)\b/i,
+    /--browser-profile\s+([a-z0-9_-]+)\b/i,
+  ]) {
+    const match = text.match(pattern);
+    if (match?.[1]) return match[1].trim().toLowerCase();
+  }
+  return undefined;
+}
+
+function cronMatchesAgent(job: OpenClawCronJobJson, agentId: string): boolean {
+  const target = normalizeAgentId(agentId);
+  if (!target) return true;
+  const inferred = inferCronAgentId(job);
+  if (inferred) return inferred === target;
+  return target === "main";
+}
+
+export function mapBridgeCronsToJobs(bridgeCrons: BridgeCron[], options?: { agentId?: string }): OpenClawCronJobJson[] {
   return bridgeCrons.map((c) => {
+    const raw = parseCronRawJson(c.rawJson);
     const nextRunMs =
       c.nextRunAtMs ??
       (typeof c.nextRun === "number"
@@ -212,20 +282,26 @@ export function mapBridgeCronsToJobs(bridgeCrons: BridgeCron[]): OpenClawCronJob
         : typeof c.nextRun === "string"
           ? new Date(c.nextRun).getTime()
           : undefined);
-    return {
+    const job: OpenClawCronJobJson = {
+      ...(raw ?? {}),
       id: c.id,
-      name: c.name,
-      enabled: c.enabled ?? (c.status !== "disabled"),
-      agentId: c.agentId ?? "main",
-      schedule: c.schedule
-        ? { kind: inferScheduleKind(c.schedule), expr: c.schedule }
-        : undefined,
+      name: raw?.name ?? c.name,
+      enabled: c.enabled ?? raw?.enabled ?? (c.status !== "disabled"),
+      agentId: raw?.agentId ?? c.agentId,
+      runtime: raw?.runtime ?? "openclaw",
+      schedule: raw?.schedule ?? (c.schedule ? { kind: inferScheduleKind(c.schedule), expr: c.schedule } : undefined),
       state: {
-        nextRunAtMs: nextRunMs,
-        lastRunAtMs: c.lastRunAtMs,
-        lastStatus: c.lastStatus ?? (c.status === "active" ? "ok" : c.status === "disabled" ? "idle" : "idle"),
+        ...(raw?.state ?? {}),
+        ...(nextRunMs != null ? { nextRunAtMs: nextRunMs } : {}),
+        ...(c.lastRunAtMs != null ? { lastRunAtMs: c.lastRunAtMs } : {}),
+        lastStatus: c.lastStatus ?? raw?.state?.lastStatus ?? (c.status === "active" ? "ok" : c.status === "disabled" ? "idle" : "idle"),
       },
     };
+    const inferred = inferCronAgentId(job);
+    if (!job.agentId && inferred) {
+      job.agentId = inferred;
+    }
+    return job;
   });
 }
 
@@ -292,12 +368,21 @@ export async function fetchCronsFromBridge(options?: FetchCronsOptions): Promise
   const normalizedRuntime = normalizeCronRuntime(runtime);
   if (runtime && !normalizedRuntime) return [];
 
-  // Try unified store first (get-all-crons reads from SQLite)
   try {
     const params: Record<string, string> = {};
     if (agentId) params.agentId = agentId;
     if (normalizedRuntime) params.runtime = normalizedRuntime;
 
+    if (normalizedRuntime === "openclaw") {
+      const legacy = await bridgeInvoke("get-crons", params).catch(() => []) as unknown;
+      if (Array.isArray(legacy)) {
+        const sourceJobs = mapBridgeCronsToJobs(legacy as BridgeCron[], { agentId });
+        const filteredJobs = agentId ? sourceJobs.filter((job) => cronMatchesAgent(job, agentId)) : sourceJobs;
+        return filteredJobs;
+      }
+    }
+
+    // Try unified store for non-OpenClaw runtimes (get-all-crons reads from SQLite).
     const unified = await bridgeInvoke("get-all-crons", params);
     if (Array.isArray(unified) && unified.length > 0) {
       const first = unified[0] as Record<string, unknown>;
@@ -306,7 +391,8 @@ export async function fetchCronsFromBridge(options?: FetchCronsOptions): Promise
         return unified.map((item: Record<string, unknown>) => hydrateUnifiedCronJob(item));
       }
       // Fallback: response is already in BridgeCron format (get-all-crons fell through to get-crons)
-      return mapBridgeCronsToJobs(unified as BridgeCron[]);
+      const sourceJobs = mapBridgeCronsToJobs(unified as BridgeCron[], { agentId });
+      return agentId ? sourceJobs.filter((job) => cronMatchesAgent(job, agentId)) : sourceJobs;
     }
     // If a filter was used and no results matched, return empty (don't fall back).
     if (agentId || normalizedRuntime) return [];
@@ -321,9 +407,15 @@ export async function fetchCronsFromBridge(options?: FetchCronsOptions): Promise
 }
 
 /** Fetch a single cron job by id with full info (payload.message, payload.model, etc.) for editing. */
-export async function fetchCronById(jobId: string): Promise<OpenClawCronJobJson | null> {
+export async function fetchCronById(
+  jobId: string,
+  options?: { agentId?: string },
+): Promise<OpenClawCronJobJson | null> {
   if (!jobId?.trim()) return null;
-  const raw = await bridgeInvoke("get-cron-by-id", { jobId: jobId.trim() });
+  const raw = await bridgeInvoke("get-cron-by-id", {
+    jobId: jobId.trim(),
+    ...(options?.agentId ? { agentId: options.agentId } : {}),
+  });
   if (raw && typeof raw === "object" && "rawJson" in (raw as object)) {
     return hydrateUnifiedCronJob(raw as Record<string, unknown>);
   }
@@ -382,10 +474,11 @@ export type CronRunDetail = CronRunRecord & Record<string, unknown>;
 /** Fetch full run detail for one cron run (full error, summary, and any log fields). */
 export async function fetchCronRunDetail(
   jobId: string,
-  runAtMs: number
+  runAtMs: number,
+  sessionId?: string
 ): Promise<CronRunDetail | null> {
   if (!jobId || runAtMs == null) return null;
-  const data = await bridgeInvoke("get-cron-run-detail", { jobId, runAtMs });
+  const data = await bridgeInvoke("get-cron-run-detail", { jobId, runAtMs, ...(sessionId ? { sessionId } : {}) });
   // Backend returns { error: "Run not found" } when missing; a valid run record also has "error" for the run's message
   if (data && typeof data === "object" && "error" in data && !("runAtMs" in data)) return null;
   if (data && typeof data === "object" && (data as { error?: string }).error === "Run not found") return null;

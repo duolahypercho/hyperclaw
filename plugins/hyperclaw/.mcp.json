@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "hyperclaw": {
+      "command": "node",
+      "args": [
+        "./scripts/hyperclaw-mcp-stdio.mjs"
+      ],
+      "cwd": ".",
+      "env": {
+        "HYPERCLAW_CONNECTOR_URL": "http://127.0.0.1:18790"
+      }
+    }
+  }
+}

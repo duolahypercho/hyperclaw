@@ -25,6 +25,7 @@ const ERROR_STICKY_MS = 10_000;
 const OPTIMISTIC_RUN_TTL_MS = 5 * 60_000;
 
 const activeRuns = new Map<string, string>();         // runId → agentId
+const activeRunSessions = new Map<string, string>();  // runId → sessionKey
 const agentRunCounts = new Map<string, number>();     // agentId → count
 const errorAgents = new Map<string, number>();        // agentId → expire ts
 const optimisticRunTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -75,9 +76,10 @@ function clearOptimisticTimer(runId: string): void {
   optimisticRunTimers.delete(runId);
 }
 
-export function markAgentRunStarted(runId: string, agentId?: string): void {
+export function markAgentRunStarted(runId: string, agentId?: string, sessionKey?: string): void {
   if (!runId || !agentId || activeRuns.has(runId)) return;
   activeRuns.set(runId, agentId);
+  if (sessionKey) activeRunSessions.set(runId, sessionKey);
   incAgent(agentId);
   errorAgents.delete(agentId);
   clearOptimisticTimer(runId);
@@ -94,6 +96,7 @@ export function markAgentRunFinished(runId: string): void {
   if (!runId || !activeRuns.has(runId)) return;
   const agentId = activeRuns.get(runId);
   activeRuns.delete(runId);
+  activeRunSessions.delete(runId);
   clearOptimisticTimer(runId);
   if (agentId) decAgent(agentId);
   notify();
@@ -105,6 +108,7 @@ export function markAgentRunsFinishedForAgent(agentId?: string): number {
   for (const [runId, runAgentId] of activeRuns.entries()) {
     if (runAgentId !== agentId) continue;
     activeRuns.delete(runId);
+    activeRunSessions.delete(runId);
     clearOptimisticTimer(runId);
     cleared += 1;
   }
@@ -135,7 +139,7 @@ function ensureSubscribed(): void {
     if (state === "delta") {
       // First delta for this run → mark working. Subsequent deltas are no-ops.
       if (!activeRuns.has(runId)) {
-        markAgentRunStarted(runId, agentId);
+        markAgentRunStarted(runId, agentId, sessionKey);
       }
       return;
     }
@@ -148,6 +152,7 @@ function ensureSubscribed(): void {
     if (state === "error") {
       if (activeRuns.has(runId)) {
         activeRuns.delete(runId);
+        activeRunSessions.delete(runId);
         clearOptimisticTimer(runId);
         decAgent(agentId);
       }
@@ -171,6 +176,7 @@ export function __resetAgentStreamingState(): void {
   unsubscribe = null;
   subscribed = false;
   activeRuns.clear();
+  activeRunSessions.clear();
   agentRunCounts.clear();
   errorAgents.clear();
   optimisticRunTimers.forEach((timer) => clearTimeout(timer));
@@ -222,5 +228,23 @@ export function useWorkingAgentIds(): ReadonlySet<string> {
   return useMemo(() => {
     void tick;
     return new Set(agentRunCounts.keys());
+  }, [tick]);
+}
+
+export function useWorkingSessionKeys(): ReadonlySet<string> {
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    ensureSubscribed();
+    const l: Listener = () => setTick((t) => t + 1);
+    listeners.add(l);
+    return () => {
+      listeners.delete(l);
+    };
+  }, []);
+
+  return useMemo(() => {
+    void tick;
+    return new Set(activeRunSessions.values());
   }, [tick]);
 }

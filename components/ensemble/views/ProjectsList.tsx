@@ -5,9 +5,11 @@ import { useRouter } from "next/router";
 import {
   AlertCircle,
   ArrowRight,
+  Loader2,
   Library,
   MoreHorizontal,
-  PlusCircle,
+  Pencil,
+  Play,
   RefreshCw,
   Trash2,
 } from "lucide-react";
@@ -116,7 +118,15 @@ function computeCardStats(
 
 function ProjectsListInner() {
   const router = useRouter();
-  const { projects, loading, error, deleteProject, refresh } = useProjects();
+  const {
+    projects,
+    loading,
+    error,
+    deleteProject,
+    listWorkflowTemplates,
+    startWorkflowRun,
+    refresh,
+  } = useProjects();
   const { agents: realAgents } = useHyperclawContext();
   const {
     templates: galleryTemplates,
@@ -129,12 +139,45 @@ function ProjectsListInner() {
   const completed = projects.filter((p) => p.status === "completed");
 
   const { costsByProjectId, hasLiveData } = useProjectCosts(projects);
+  const [runningProjectId, setRunningProjectId] = React.useState<string | null>(null);
+  const [actionError, setActionError] = React.useState<string | null>(null);
 
   const handleAddToActualWorkflow = React.useCallback(
     (project: Project) => {
       router.push(`/Tool/ProjectEditor?id=${encodeURIComponent(project.id)}`);
     },
     [router]
+  );
+
+  const handleRunWorkflow = React.useCallback(
+    async (project: Project) => {
+      if (runningProjectId) return;
+      setActionError(null);
+      setRunningProjectId(project.id);
+      try {
+        const templateId =
+          project.defaultWorkflowTemplateId ??
+          project.workflowTemplates?.[0]?.id ??
+          (await listWorkflowTemplates(project.id))[0]?.id;
+        if (!templateId) {
+          throw new Error("This workflow has no executable template yet. Open it in the editor and save once.");
+        }
+        const run = await startWorkflowRun(
+          templateId,
+          "human:workflows-page",
+          { source: "workflows-page", projectId: project.id },
+          project.id,
+        );
+        if (!run?.id) throw new Error("The connector did not return a workflow run.");
+        await refresh();
+        router.push(buildMissionControlProjectHref(project.id));
+      } catch (e) {
+        setActionError(e instanceof Error ? e.message : "Failed to start workflow run");
+      } finally {
+        setRunningProjectId(null);
+      }
+    },
+    [listWorkflowTemplates, refresh, router, runningProjectId, startWorkflowRun],
   );
 
   const handleDeleteWorkflow = React.useCallback(
@@ -161,7 +204,9 @@ function ProjectsListInner() {
           hasLiveCostData={hasLiveData}
           onClick={() => router.push(buildMissionControlProjectHref(p.id))}
           onAddToActualWorkflow={() => handleAddToActualWorkflow(p)}
+          onRun={() => void handleRunWorkflow(p)}
           onDelete={() => void handleDeleteWorkflow(p)}
+          isRunning={runningProjectId === p.id}
         />
       ))}
     </div>
@@ -209,6 +254,25 @@ function ProjectsListInner() {
           >
             <RefreshCw size={12} />
             Retry
+          </button>
+        </div>
+      )}
+
+      {actionError && (
+        <div
+          className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-[12px]"
+          style={{ color: "var(--ink-2)" }}
+        >
+          <span className="flex min-w-0 items-center gap-2">
+            <AlertCircle size={14} className="shrink-0 text-destructive" />
+            <span className="truncate">{actionError}</span>
+          </span>
+          <button
+            type="button"
+            onClick={() => setActionError(null)}
+            className="inline-flex shrink-0 items-center rounded-lg border border-destructive/20 bg-destructive/10 px-2 py-1 text-[11px] font-medium text-destructive transition-colors hover:bg-destructive/15 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            Dismiss
           </button>
         </div>
       )}
@@ -446,7 +510,9 @@ interface ProjectCardProps {
   hasLiveCostData: boolean;
   onClick: () => void;
   onAddToActualWorkflow: () => void;
+  onRun: () => void;
   onDelete: () => void;
+  isRunning: boolean;
 }
 
 function ProjectCard({
@@ -456,7 +522,9 @@ function ProjectCard({
   hasLiveCostData,
   onClick,
   onAddToActualWorkflow,
+  onRun,
   onDelete,
+  isRunning,
 }: ProjectCardProps) {
   const leadAgent = project.leadAgentId
     ? findAgent(project.leadAgentId, realAgents)
@@ -552,13 +620,52 @@ function ProjectCard({
             <span className="v sans">{stats.ownerName}</span>
           </div>
         </div>
+
+        <div className="wf-card-actions" aria-label={`${project.name} workflow actions`}>
+          <button
+            type="button"
+            className="wf-card-action primary"
+            onClick={(event) => {
+              event.stopPropagation();
+              onRun();
+            }}
+            disabled={isRunning}
+          >
+            {isRunning ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}
+            Run
+          </button>
+          <button
+            type="button"
+            className="wf-card-action"
+            onClick={(event) => {
+              event.stopPropagation();
+              onAddToActualWorkflow();
+            }}
+          >
+            <Pencil size={13} />
+            Edit
+          </button>
+          <button
+            type="button"
+            className="wf-card-action"
+            onClick={(event) => {
+              event.stopPropagation();
+              onClick();
+            }}
+          >
+            <ArrowRight size={13} />
+            Open
+          </button>
+        </div>
       </div>
 
       <div className="absolute right-3 top-3 z-10">
         <WorkflowCardMenu
           workflowName={project.name}
           onAddToActualWorkflow={onAddToActualWorkflow}
+          onRun={onRun}
           onDelete={onDelete}
+          isRunning={isRunning}
         />
       </div>
     </div>
@@ -568,13 +675,17 @@ function ProjectCard({
 interface WorkflowCardMenuProps {
   workflowName: string;
   onAddToActualWorkflow: () => void;
+  onRun: () => void;
   onDelete: () => void;
+  isRunning: boolean;
 }
 
 function WorkflowCardMenu({
   workflowName,
   onAddToActualWorkflow,
+  onRun,
   onDelete,
+  isRunning,
 }: WorkflowCardMenuProps) {
   return (
     <DropdownMenu>
@@ -594,12 +705,26 @@ function WorkflowCardMenu({
       >
         <DropdownMenuItem
           onSelect={() => {
+            onRun();
+          }}
+          disabled={isRunning}
+          className="gap-2 px-2 py-1.5 text-[12px]"
+        >
+          {isRunning ? (
+            <Loader2 size={13} className="animate-spin text-muted-foreground" />
+          ) : (
+            <Play size={13} className="text-muted-foreground" />
+          )}
+          Run workflow
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          onSelect={() => {
             onAddToActualWorkflow();
           }}
           className="gap-2 px-2 py-1.5 text-[12px]"
         >
-          <PlusCircle size={13} className="text-muted-foreground" />
-          Add to actual workflow
+          <Pencil size={13} className="text-muted-foreground" />
+          Edit workflow
         </DropdownMenuItem>
         <DropdownMenuSeparator className="my-1" />
         <DropdownMenuItem

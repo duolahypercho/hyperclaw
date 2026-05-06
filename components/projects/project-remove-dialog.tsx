@@ -81,7 +81,7 @@ export function ProjectRemoveDialog({ project, onClose }: ProjectRemoveDialogPro
           {/* Body uses `text-secondary` per the design tokens — pairs with
               the `border-border` cancel button so the modal sits inside the
               palette instead of leaning on the projects-page `--ink-*` ramp. */}
-          <AlertDialogDescription className="text-[12.5px] leading-relaxed text-secondary">
+          <AlertDialogDescription className="text-[12.5px] leading-relaxed text-secondary-foreground">
             {project ? (
               <>
                 This permanently deletes{" "}

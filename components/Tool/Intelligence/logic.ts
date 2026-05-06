@@ -70,5 +70,8 @@ export function matchesWhere(
   row: Record<string, unknown>,
   where: Record<string, unknown>
 ): boolean {
-  return Object.entries(where).every(([key, value]) => row[key] === value);
+  return Object.entries(where).every(([key, value]) => {
+    const rowKey = key === "rowid" ? "__hyperclaw_rowid" : key;
+    return row[rowKey] === value;
+  });
 }

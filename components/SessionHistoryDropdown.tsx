@@ -10,13 +10,14 @@ import {
   X,
   Search,
   Pin,
+  Archive,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import HyperchoTooltip from "$/components/UI/HyperchoTooltip";
 import { cn } from "$/utils";
 
-interface SessionItem {
+export interface SessionItem {
   key: string;
   label?: string;
   createdAt?: number;
@@ -39,6 +40,8 @@ interface SessionHistoryDropdownProps {
   primarySessionKey?: string;
   /** Callback to designate a session as primary */
   onSetPrimary?: (sessionKey: string) => void;
+  /** Callback to archive a session from the list */
+  onArchiveSession?: (sessionKey: string) => Promise<void> | void;
 }
 
 function formatDate(timestamp?: number) {
@@ -95,10 +98,14 @@ function ChatSessionsContent({
   onClose,
   primarySessionKey,
   onSetPrimary,
+  onArchiveSession,
   disabled = false,
 }: SessionHistoryDropdownProps & { onClose: () => void }) {
   const [query, setQuery] = useState("");
+  const [archivingKey, setArchivingKey] = useState<string | null>(null);
+  const [archiveError, setArchiveError] = useState<string | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const showBlockingLoading = isLoading && sessions.length === 0;
 
   // Filter sessions by query against label, preview, and key (UUID fallback).
   // Kept lightweight — runs in-memory on the already-fetched session list.
@@ -120,6 +127,19 @@ function ChatSessionsContent({
   // Only surface the search bar once the list is large enough to need it.
   // Below 6 the grouped layout already fits in one screen of the dropdown.
   const showSearch = sessions.length > 6;
+
+  const handleArchiveSession = useCallback(async (sessionKey: string) => {
+    if (!onArchiveSession || disabled || archivingKey) return;
+    setArchiveError(null);
+    setArchivingKey(sessionKey);
+    try {
+      await onArchiveSession(sessionKey);
+    } catch (err) {
+      setArchiveError(err instanceof Error ? err.message : "Failed to archive session");
+    } finally {
+      setArchivingKey(null);
+    }
+  }, [archivingKey, disabled, onArchiveSession]);
 
   return (
     <>
@@ -178,15 +198,21 @@ function ChatSessionsContent({
         </div>
       )}
 
+      {archiveError && (
+        <div role="alert" className="px-3 py-2 border-b border-border/40 text-[11px] text-destructive">
+          {archiveError}
+        </div>
+      )}
+
       <div className="max-h-96 overflow-y-auto customScrollbar2">
-        {isLoading ? (
+        {showBlockingLoading ? (
           <div className="p-4 text-center">
             <div className="animate-pulse">
               <div className="h-4 bg-muted rounded w-3/4 mx-auto mb-2" />
               <div className="h-4 bg-muted rounded w-1/2 mx-auto" />
             </div>
           </div>
-        ) : error ? (
+        ) : error && sessions.length === 0 ? (
           <div className="p-4 text-center">
             <div className="w-8 h-8 text-destructive mx-auto mb-2 flex items-center justify-center">
               <svg
@@ -303,6 +329,21 @@ function ChatSessionsContent({
                               <Pin className="w-2.5 h-2.5" />
                             </button>
                           )}
+                          {onArchiveSession && session.key.startsWith("agent:") && (
+                            <button
+                              type="button"
+                              title="Archive session"
+                              aria-label="Archive session"
+                              disabled={disabled || Boolean(archivingKey)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void handleArchiveSession(session.key);
+                              }}
+                              className="shrink-0 opacity-0 group-hover/session:opacity-100 transition-opacity px-1 py-0.5 rounded text-[9px] text-muted-foreground hover:text-destructive hover:bg-destructive/10 disabled:opacity-40"
+                            >
+                              <Archive className="w-2.5 h-2.5" />
+                            </button>
+                          )}
                           <span className="text-[10px] text-muted-foreground flex-shrink-0">
                             {formatDate(session.updatedAt)}
                           </span>
@@ -333,7 +374,12 @@ export const SessionHistoryDropdown: React.FC<SessionHistoryDropdownProps> = (
   const { onFetchSessions } = props;
   const [isOpen, setIsOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
+  const onFetchSessionsRef = useRef(onFetchSessions);
   const [pos, setPos] = useState({ top: 0, right: 0 });
+
+  useEffect(() => {
+    onFetchSessionsRef.current = onFetchSessions;
+  }, [onFetchSessions]);
 
   const updatePosition = useCallback(() => {
     if (!btnRef.current) return;
@@ -347,9 +393,9 @@ export const SessionHistoryDropdown: React.FC<SessionHistoryDropdownProps> = (
   useEffect(() => {
     if (isOpen) {
       updatePosition();
-      onFetchSessions();
+      onFetchSessionsRef.current();
     }
-  }, [isOpen, onFetchSessions, updatePosition]);
+  }, [isOpen, updatePosition]);
 
   return (
     <div className="relative h-6 w-6 inline-block">

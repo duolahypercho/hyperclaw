@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"database/sql"
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -970,6 +971,12 @@ func (b *BridgeHandler) getPrimarySession(params map[string]interface{}) actionR
 	}
 
 	if key != "" {
+		if runtime == "openclaw" && key == "agent:"+agentID+":main" {
+			key = "agent:" + agentID + ":hyperclaw"
+			if err := b.store.SetPrimarySession(agentID, runtime, key); err != nil {
+				log.Printf("getPrimarySession: failed to migrate OpenClaw primary session for agent %q: %v", agentID, err)
+			}
+		}
 		// Verify the session still exists — if not, clear and re-seed.
 		if b.primarySessionExists(key, agentID, runtime) {
 			return okResult(map[string]interface{}{
@@ -981,7 +988,7 @@ func (b *BridgeHandler) getPrimarySession(params map[string]interface{}) actionR
 			})
 		}
 		// Stale — clear it and fall through to lazy-seed.
-		_ = b.store.ClearPrimarySession(agentID)
+		_ = b.store.ClearPrimarySessionForRuntime(agentID, runtime)
 	}
 
 	// Lazy-seed: pick the best candidate session.
@@ -1033,8 +1040,8 @@ func (b *BridgeHandler) lazySeedPrimarySession(agentID, runtime string) string {
 
 	switch runtime {
 	case "openclaw":
-		// For OpenClaw, prefer the well-known ":main" session convention.
-		key = "agent:" + agentID + ":main"
+		// For OpenClaw, prefer the stable Hyperclaw-owned primary session.
+		key = "agent:" + agentID + ":hyperclaw"
 
 	case "claude-code":
 		// Pick the most recent session from SQLite.

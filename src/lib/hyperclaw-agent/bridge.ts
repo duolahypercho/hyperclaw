@@ -90,15 +90,20 @@ export function createTodoOps(conn: HubConnection, deviceId: () => string) {
 
 export function createCronOps(conn: HubConnection, deviceId: () => string) {
   return {
-    list: () => bridge(conn, deviceId, 'get-crons').then(unwrap),
+    list: (params: { agentId?: string; jobId?: string } = {}) =>
+      bridge(conn, deviceId, 'get-crons', params).then(unwrap),
+    listForAgent: (agentId: string) =>
+      bridge(conn, deviceId, 'get-crons', { agentId }).then(unwrap),
+    get: (jobId: string, params: { agentId?: string } = {}) =>
+      bridge(conn, deviceId, 'get-cron-by-id', { ...params, jobId }).then(unwrap),
     add: (cron: Record<string, unknown>) =>
-      bridge(conn, deviceId, 'cron-add', { cron }).then(unwrap),
+      bridge(conn, deviceId, 'cron-add', { cronAddParams: cron }).then(unwrap),
     run: (cronId: string) =>
-      bridge(conn, deviceId, 'cron-run', { cronId }, LONG_TIMEOUT).then(unwrap),
+      bridge(conn, deviceId, 'cron-run', { cronRunJobId: cronId }, LONG_TIMEOUT).then(unwrap),
     edit: (cronId: string, patch: Record<string, unknown>) =>
-      bridge(conn, deviceId, 'cron-edit', { cronId, ...patch }).then(unwrap),
+      bridge(conn, deviceId, 'cron-edit', { cronEditJobId: cronId, cronEditParams: patch }).then(unwrap),
     delete: (cronId: string) =>
-      bridge(conn, deviceId, 'cron-delete', { cronId }).then(unwrap),
+      bridge(conn, deviceId, 'cron-delete', { cronDeleteJobId: cronId }).then(unwrap),
   };
 }
 

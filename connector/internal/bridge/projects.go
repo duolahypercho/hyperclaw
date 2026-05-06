@@ -25,8 +25,9 @@ func (b *BridgeHandler) projectCreate(params map[string]interface{}) actionResul
 	}
 	description, _ := params["description"].(string)
 	emoji, _ := params["emoji"].(string)
+	kind, _ := params["kind"].(string)
 
-	p, err := b.store.CreateProject(name, description, emoji)
+	p, err := b.store.CreateProject(name, description, emoji, kind)
 	if err != nil {
 		return errResultStatus("db error: "+err.Error(), 500)
 	}
@@ -46,7 +47,8 @@ func (b *BridgeHandler) projectList(params map[string]interface{}) actionResult 
 		return errResultStatus("store not available", 503)
 	}
 	status, _ := params["status"].(string)
-	projects, err := b.store.ListProjects(status)
+	kind, _ := params["kind"].(string)
+	projects, err := b.store.ListProjects(status, kind)
 	if err != nil {
 		return errResultStatus("db error: "+err.Error(), 500)
 	}

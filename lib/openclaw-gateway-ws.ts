@@ -77,6 +77,16 @@ export function stripCommittedPrefix(text: string, committedPrefix?: string): st
   return text;
 }
 
+function asNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function extractOpenClawAgentId(sessionKey?: string): string | undefined {
+  if (!sessionKey?.startsWith("agent:")) return undefined;
+  const [, agentId] = sessionKey.split(":");
+  return agentId || undefined;
+}
+
 export function gatewayHttpToWs(httpUrl: string): string {
   return httpUrl.replace(/^http/, "ws");
 }
@@ -109,7 +119,8 @@ export type ChatEventState = "delta" | "final" | "aborted" | "error";
 
 export interface ChatEventPayload {
   runId: string;
-  sessionKey: string;
+  sessionKey?: string;
+  agentId?: string;
   state: ChatEventState;
   message?: unknown;
   errorMessage?: string;
@@ -125,6 +136,24 @@ export interface NotificationPayload {
   duration?: number;   // ms
   timestamp: number;
 }
+
+export interface GatewaySessionListItem {
+  key: string;
+  label?: string;
+  createdAt?: number;
+  updatedAt?: number;
+  status?: string;
+  preview?: string;
+  model?: string;
+  modelProvider?: string;
+  thinkingLevel?: string;
+}
+
+type OpenClawSessionListOptions = {
+  includeDefault?: boolean;
+  cronJobId?: string;
+  cronJobIds?: string[];
+};
 
 export type GatewayConnectOptions = { token?: string | null; hubMode?: boolean; hubDeviceId?: string };
 
@@ -175,6 +204,70 @@ async function requestGatewayViaLocalConnector<T>(
     throw new Error(message);
   }
   return (wrapped && "data" in wrapped ? wrapped.data : result) as T;
+}
+
+async function requestOpenClawLocalHistory(
+  sessionKey: string,
+  limit: number,
+  maxChars?: number,
+): Promise<{ messages?: unknown[] } | undefined> {
+  const localOnly = shouldBlockRemoteHubFallback();
+  if (!localOnly) return undefined;
+  if (!sessionKey.startsWith("agent:")) {
+    throw new Error("Local OpenClaw history requires an agent session key");
+  }
+  const { bridgeInvoke } = await import("$/lib/hyperclaw-bridge-client");
+  const result = await bridgeInvoke("openclaw-local-history", {
+    sessionKey,
+    limit,
+    ...(typeof maxChars === "number" ? { maxChars } : {}),
+  }) as { success?: boolean; error?: string; messages?: unknown[]; source?: string; sessionKey?: string };
+  if (result?.success === false) {
+    throw new Error(result.error || "openclaw-local-history failed");
+  }
+  return result;
+}
+
+async function requestOpenClawLocalSessions(
+  agentId: string,
+  limit: number,
+  options: OpenClawSessionListOptions = {},
+): Promise<{ sessions?: GatewaySessionListItem[]; source?: string } | undefined> {
+  if (!shouldBlockRemoteHubFallback()) return undefined;
+  const { bridgeInvoke } = await import("$/lib/hyperclaw-bridge-client");
+  const result = await bridgeInvoke("openclaw-local-sessions", {
+    agentId,
+    limit,
+    ...(options.cronJobId ? { cronJobId: options.cronJobId } : {}),
+    ...(options.cronJobIds?.length ? { cronJobIds: options.cronJobIds } : {}),
+  }) as { success?: boolean; error?: string; sessions?: GatewaySessionListItem[]; source?: string };
+  if (result?.success === false) {
+    throw new Error(result.error || "openclaw-local-sessions failed");
+  }
+  return result;
+}
+
+type OpenClawLocalSessionArchiveMode = "archive" | "delete";
+
+async function requestOpenClawLocalArchiveSession(
+  sessionKey: string,
+  mode: OpenClawLocalSessionArchiveMode = "archive",
+): Promise<{ sessionKey?: string; agentId?: string; action?: string; source?: string }> {
+  if (!shouldBlockRemoteHubFallback()) {
+    throw new Error("Local OpenClaw archive requires local connector context");
+  }
+  if (!sessionKey.startsWith("agent:")) {
+    throw new Error("Local OpenClaw archive requires an agent session key");
+  }
+  const { bridgeInvoke } = await import("$/lib/hyperclaw-bridge-client");
+  const result = await bridgeInvoke("openclaw-local-archive-session", {
+    sessionKey,
+    mode,
+  }) as { success?: boolean; error?: string; sessionKey?: string; agentId?: string; action?: string; source?: string };
+  if (result?.success === false) {
+    throw new Error(result.error || "openclaw-local-archive-session failed");
+  }
+  return result;
 }
 
 /** Sign a connect challenge using Electron API or server-side API fallback */
@@ -257,6 +350,9 @@ export const gatewayConnection = {
   // the current text buffer is committed here so the hook can create separate
   // text messages interleaved between tool groups.
   _committedSegments: null as Map<string, string> | null,
+  // Agent stream events can omit sessionKey on assistant/tool frames. Cache the
+  // lifecycle metadata by runId so every converted chat event remains scoped.
+  _agentRunMetadata: null as Map<string, { sessionKey?: string; agentId?: string }> | null,
 
   // Local gateway liveness: OpenClaw emits tick/health events, but does not
   // accept browser-level ping frames. Treat any inbound frame as activity.
@@ -512,7 +608,17 @@ export const gatewayConnection = {
 
     // Handle chat events (event type "chat" or "chat.delta", "chat.final", etc.)
     if (msg.type === "event" && typeof msg.event === "string" && (msg.event === "chat" || msg.event.startsWith("chat."))) {
-      const payload = msg.payload as ChatEventPayload;
+      const rawPayload = msg.payload as ChatEventPayload | undefined;
+      const runMetadata = rawPayload?.runId ? this._agentRunMetadata?.get(rawPayload.runId) : undefined;
+      const resolvedSessionKey = rawPayload?.sessionKey || runMetadata?.sessionKey;
+      const resolvedAgentId = rawPayload?.agentId || runMetadata?.agentId || extractOpenClawAgentId(resolvedSessionKey);
+      const payload = rawPayload
+        ? {
+          ...rawPayload,
+          ...(resolvedSessionKey ? { sessionKey: resolvedSessionKey } : {}),
+          ...(resolvedAgentId ? { agentId: resolvedAgentId } : {}),
+        }
+        : undefined;
       if (payload) {
         // Accumulate delta text for chat events — the hook expects full accumulated
         // text (it replaces, not appends), so raw token deltas must be buffered here.
@@ -571,6 +677,7 @@ export const gatewayConnection = {
           this._agentDeltaTimestamps?.delete(payload.runId);
           this._deltaSourceOwner?.delete(payload.runId);
           this._committedSegments?.delete(payload.runId);
+          this._agentRunMetadata?.delete(payload.runId);
           // Delay-release turn-level lock — late chat deltas can arrive after this
           this._scheduleTextSourceClear();
         }
@@ -586,9 +693,18 @@ export const gatewayConnection = {
       // Parse stream/runId from event name as fallback (format: agent.{runId}.{stream}.{seq})
       const eventParts = (msg.event as string).split(".");
       const stream = (payload?.stream as string) || eventParts[2];
-      const sessionKey = payload?.sessionKey as string;
       const runId = (payload?.runId as string) || eventParts[1];
       const data = payload?.data ? (payload.data as Record<string, unknown>) : payload;
+      const directSessionKey = asNonEmptyString(payload?.sessionKey) || asNonEmptyString(data?.sessionKey);
+      const directAgentId = asNonEmptyString(payload?.agentId) || asNonEmptyString(data?.agentId);
+
+      if (!this._agentRunMetadata) this._agentRunMetadata = new Map();
+      const existingRunMetadata = runId ? this._agentRunMetadata.get(runId) : undefined;
+      const sessionKey = directSessionKey || existingRunMetadata?.sessionKey;
+      const agentId = directAgentId || existingRunMetadata?.agentId || extractOpenClawAgentId(sessionKey);
+      if (runId && (sessionKey || agentId)) {
+        this._agentRunMetadata.set(runId, { sessionKey, agentId });
+      }
 
       // Buffer for accumulating delta text
       if (!this.agentDeltaBuffer) {
@@ -645,7 +761,8 @@ export const gatewayConnection = {
           // Send accumulated text (not just delta) so the hook can replace content correctly
           const chatPayload: ChatEventPayload = {
             runId,
-            sessionKey,
+            ...(sessionKey ? { sessionKey } : {}),
+            ...(agentId ? { agentId } : {}),
             state: "delta",
             message: { role: "assistant", content: [{ type: "text", text: cappedBuffer }] },
           };
@@ -686,13 +803,15 @@ export const gatewayConnection = {
           const finalText = strippedText || bufferedText;
           const chatPayload: ChatEventPayload = {
             runId,
-            sessionKey,
+            ...(sessionKey ? { sessionKey } : {}),
+            ...(agentId ? { agentId } : {}),
             state: "final",
             message: finalText
               ? { role: "assistant", content: [{ type: "text", text: finalText }], timestamp: Date.now() }
               : undefined,
           };
           this.chatEventListeners.forEach((handler) => handler(chatPayload));
+          this._agentRunMetadata?.delete(runId);
         } else if (phase === "error") {
           this.agentDeltaBuffer.delete(runId);
           this._agentDeltaTimestamps?.delete(runId);
@@ -702,11 +821,13 @@ export const gatewayConnection = {
           const errorMsg = (data?.error || data?.errorMessage) as string | undefined;
           const chatPayload: ChatEventPayload = {
             runId,
-            sessionKey,
+            ...(sessionKey ? { sessionKey } : {}),
+            ...(agentId ? { agentId } : {}),
             state: "error",
             errorMessage: errorMsg || "Agent error",
           };
           this.chatEventListeners.forEach((handler) => handler(chatPayload));
+          this._agentRunMetadata?.delete(runId);
         }
       }
 
@@ -714,7 +835,7 @@ export const gatewayConnection = {
       //   phase "start"  → show tool card with spinner (executing)
       //   phase "update" → ignored (partial output with empty content causes premature completion)
       //   phase "result" → show completed result
-      if (stream === "tool" && runId) {
+      if ((stream === "tool" || stream === "item" || stream === "command_output") && runId) {
         const phase = (data?.phase as string) || "";
         const toolName = (data?.name || data?.toolName || data?.tool_name) as string | undefined;
         const toolCallId = (data?.callId || data?.id || data?.toolCallId || data?.tool_call_id) as string | undefined;
@@ -722,14 +843,21 @@ export const gatewayConnection = {
         // "result" phase uses data.result, "update" phase uses data.partialResult
         const rawOutput = data?.output !== undefined ? data.output
           : (data?.result !== undefined ? data.result
-          : data?.partialResult);
+          : (data?.partialResult !== undefined ? data.partialResult
+          : (data?.summary !== undefined ? data.summary : data?.error)));
         const toolError = (data?.error || data?.errorMessage) as string | undefined;
         const isError = data?.isError === true || !!toolError;
         const toolInput = rawInput !== undefined ? (typeof rawInput === "string" ? rawInput : JSON.stringify(rawInput)) : undefined;
         const toolOutput = rawOutput !== undefined ? (typeof rawOutput === "string" ? rawOutput : JSON.stringify(rawOutput)) : undefined;
+        const normalizedPhase =
+          phase === "start"
+            ? "start"
+            : phase === "result" || phase === "end"
+              ? "result"
+              : phase;
 
         if (toolCallId && toolName) {
-          if (phase === "start") {
+          if (normalizedPhase === "start") {
             // Commit current text buffer as a completed segment before starting
             // the tool. This lets the hook create separate text messages between
             // tool groups (matching OpenClaw's chatStreamSegments approach).
@@ -749,7 +877,8 @@ export const gatewayConnection = {
             // Tool execution started — show card with spinner
             const chatPayload: ChatEventPayload = {
               runId,
-              sessionKey,
+              ...(sessionKey ? { sessionKey } : {}),
+              ...(agentId ? { agentId } : {}),
               state: "delta",
               message: {
                 role: "assistant",
@@ -761,13 +890,14 @@ export const gatewayConnection = {
               },
             };
             this.chatEventListeners.forEach((handler) => handler(chatPayload));
-          } else if (phase === "result") {
+          } else if (normalizedPhase === "result") {
             // Tool completed — show final result.
             // Skipping phase:"update" events: they carry partial/empty output that would
             // prematurely mark the tool as "completed" in useUnifiedToolState.
             const chatPayload: ChatEventPayload = {
               runId,
-              sessionKey,
+              ...(sessionKey ? { sessionKey } : {}),
+              ...(agentId ? { agentId } : {}),
               state: "delta",
               message: {
                 role: "toolResult",
@@ -916,6 +1046,14 @@ export const gatewayConnection = {
     }
     this._deltaSourceOwner?.clear();
     this._committedSegments?.clear();
+    const runId = asNonEmptyString(params.idempotencyKey);
+    if (runId) {
+      if (!this._agentRunMetadata) this._agentRunMetadata = new Map();
+      this._agentRunMetadata.set(runId, {
+        sessionKey: params.sessionKey,
+        agentId: extractOpenClawAgentId(params.sessionKey),
+      });
+    }
     this.invalidateChatHistoryCache(params.sessionKey);
 
     return this.request("chat.send", {
@@ -944,6 +1082,17 @@ export const gatewayConnection = {
   _chatHistoryCache: new Map<string, { data: { messages?: unknown[] }; ts: number }>(),
   _chatHistoryCacheGeneration: new Map<string, number>(),
   _chatHistoryCacheTTL: 30000, // 30s TTL — chat history is mostly append-only
+  isHostedHubConnection(): boolean {
+    if (!this.hubMode || !this.wsUrl) return false;
+    try {
+      return new URL(this.wsUrl).hostname === "hub.hypercho.com";
+    } catch {
+      return this.wsUrl.includes("hub.hypercho.com");
+    }
+  },
+  shouldCacheChatHistory(): boolean {
+    return this.isHostedHubConnection();
+  },
   invalidateChatHistoryCache(sessionKey: string): void {
     for (const key of this._chatHistoryCache.keys()) {
       if (key.startsWith(`${sessionKey}::`)) {
@@ -965,9 +1114,14 @@ export const gatewayConnection = {
     this.invalidateChatHistoryCache(params.sessionKey);
     return this.request("chat.clear", { sessionKey: params.sessionKey }, 30_000);
   },
-  getChatHistory(sessionKey: string, limit: number = 200): Promise<{ messages?: unknown[] }> {
-    const cacheKey = `${sessionKey}::${limit}`;
-    const cached = this._chatHistoryCache.get(cacheKey);
+  getChatHistory(
+    sessionKey: string,
+    limit: number = 200,
+    options?: { maxChars?: number; cache?: boolean },
+  ): Promise<{ messages?: unknown[] }> {
+    const cacheKey = `${sessionKey}::${limit}::${options?.maxChars ?? "default"}`;
+    const useCache = options?.cache ?? this.shouldCacheChatHistory();
+    const cached = useCache ? this._chatHistoryCache.get(cacheKey) : undefined;
     if (cached && Date.now() - cached.ts < this._chatHistoryCacheTTL) {
       return Promise.resolve(cached.data);
     }
@@ -977,11 +1131,21 @@ export const gatewayConnection = {
       return inflight;
     }
 
-    // 60s timeout — chat.history reads large JSONL session files (3-8MB) and the
-    // response traverses a 4-hop relay chain (dashboard→hub→connector→gateway).
     const generation = this._chatHistoryCacheGeneration.get(cacheKey) || 0;
-    const req = this.request<{ messages?: unknown[] }>("chat.history", { sessionKey, limit }, 60_000)
+    const req = (requestOpenClawLocalHistory(sessionKey, limit, options?.maxChars)
+      .then((localResult) => localResult ?? this.request<{ messages?: unknown[] }>(
+        "chat.history",
+        {
+          sessionKey,
+          limit,
+          ...(typeof options?.maxChars === "number" ? { maxChars: options.maxChars } : {}),
+        },
+        60_000,
+      )))
       .then((result) => {
+        if (!useCache) {
+          return result;
+        }
         const now = Date.now();
         if ((this._chatHistoryCacheGeneration.get(cacheKey) || 0) !== generation) {
           return result;
@@ -1059,6 +1223,17 @@ export const gatewayConnection = {
     return this.request("sessions.reset", { key, reason: "new" });
   },
 
+  /** Archive a local OpenClaw session so it no longer appears in lists. */
+  async archiveOpenClawLocalSession(
+    sessionKey: string,
+    mode: OpenClawLocalSessionArchiveMode = "archive",
+  ): Promise<{ sessionKey?: string; agentId?: string; action?: string; source?: string }> {
+    const result = await requestOpenClawLocalArchiveSession(sessionKey, mode);
+    this._sessionsListCache = null;
+    this._sessionsListInflight = null;
+    return result;
+  },
+
   /** In-flight + short-lived cache for `sessions.list` — every caller sends
    * the same `{ limit: 200 }` request and filters client-side, so a single
    * WS round-trip can satisfy many concurrent callers. */
@@ -1066,12 +1241,48 @@ export const gatewayConnection = {
   _sessionsListCache: null as { data: { sessions?: Array<{ key: string; label?: string; createdAt?: number; updatedAt?: number; status?: string; preview?: string; model?: string; modelProvider?: string; thinkingLevel?: string }> }; ts: number } | null,
   _sessionsListCacheTTL: 30000, // 30s TTL — sessions don't change that often
 
+  /** Read local OpenClaw sessions directly from connector-managed session indexes. */
+  async listOpenClawLocalSessions(
+    agentId: string = "",
+    limit: number = 50,
+    options: OpenClawSessionListOptions = {},
+  ): Promise<{ sessions?: GatewaySessionListItem[]; source?: string } | undefined> {
+    const localSessions = await requestOpenClawLocalSessions(agentId, limit, options);
+    if (!localSessions?.sessions) return localSessions;
+    return {
+      ...localSessions,
+      sessions: localSessions.sessions
+        .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+        .slice(0, limit),
+    };
+  },
+
   /** Get list of sessions for an agent */
   async listSessions(
     agentId: string,
     limit: number = 50,
-    options: { includeDefault?: boolean } = {}
+    options: OpenClawSessionListOptions = {}
   ): Promise<{ sessions?: Array<{ key: string; label?: string; createdAt?: number; updatedAt?: number; status?: string; preview?: string; model?: string; modelProvider?: string; thinkingLevel?: string }> }> {
+    const cronJobIds = [
+      ...(options.cronJobId ? [options.cronJobId] : []),
+      ...(options.cronJobIds ?? []),
+    ].map((id) => id.trim()).filter(Boolean);
+    const hasCronFilter = cronJobIds.length > 0;
+    const localSessions = await requestOpenClawLocalSessions(agentId, limit, {
+      ...options,
+      cronJobIds,
+    });
+    if (localSessions?.sessions) {
+      if (agentId && localSessions.sessions.length === 0 && options.includeDefault !== false && !hasCronFilter) {
+        return { sessions: [{ key: `agent:${agentId}:hyperclaw`, createdAt: Date.now(), updatedAt: Date.now() }] };
+      }
+      return {
+        sessions: localSessions.sessions
+          .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+          .slice(0, limit),
+      };
+    }
+
     // Deduplicate: reuse in-flight request or short-lived cache
     let allSessions: { sessions?: Array<{ key: string; label?: string; createdAt?: number; updatedAt?: number; status?: string; preview?: string; model?: string; modelProvider?: string; thinkingLevel?: string }> };
     const cached = this._sessionsListCache;
@@ -1097,14 +1308,22 @@ export const gatewayConnection = {
     }
     // Filter to only sessions for this agent
     const prefix = `agent:${agentId}:`;
-    const agentSessions = allSessions.sessions.filter(s => s.key.startsWith(prefix));
+    let agentSessions = allSessions.sessions.filter(s => s.key.startsWith(prefix));
+    if (hasCronFilter) {
+      const cronJobSet = new Set(cronJobIds);
+      agentSessions = agentSessions.filter((session) => {
+        const parts = session.key.split(":");
+        return parts.length >= 4 && parts[2] === "cron" && cronJobSet.has(parts[3]);
+      });
+    }
     if (agentSessions.length === 0) {
-      if (options.includeDefault === false) {
+      if (options.includeDefault === false || hasCronFilter) {
         return { sessions: [] };
       }
-      // No sessions for this agent yet — return a default "main" session so callers have something to work with
-      console.debug(`[Gateway WS] No sessions found for agent "${agentId}", returning default main session`);
-      return { sessions: [{ key: `agent:${agentId}:main`, createdAt: Date.now(), updatedAt: Date.now() }] };
+      // No sessions for this agent yet — return the stable Hyperclaw primary
+      // session so callers have something to work with.
+      console.debug(`[Gateway WS] No sessions found for agent "${agentId}", returning default Hyperclaw session`);
+      return { sessions: [{ key: `agent:${agentId}:hyperclaw`, createdAt: Date.now(), updatedAt: Date.now() }] };
     }
     // Sort by updatedAt descending (most recent first)
     agentSessions.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
@@ -1208,10 +1427,13 @@ export const gatewayConnection = {
     }
     this.agentDeltaBuffer?.clear();
     this.agentDeltaBuffer = null;
+    this._agentDeltaTimestamps?.clear();
+    this._agentDeltaTimestamps = null;
     this._activeTextSource = null;
     if (this._activeTextSourceTimer) { clearTimeout(this._activeTextSourceTimer); this._activeTextSourceTimer = null; }
     this._deltaSourceOwner?.clear();
     this._committedSegments?.clear();
+    this._agentRunMetadata?.clear();
 
     this.wsUrl = wsUrl;
     this.token = token;
@@ -1371,6 +1593,8 @@ export const gatewayConnection = {
     this.hubDeviceId = null;
     this.agentDeltaBuffer?.clear();
     this.agentDeltaBuffer = null;
+    this._agentDeltaTimestamps?.clear();
+    this._agentDeltaTimestamps = null;
     this._activeTextSource = null;
     if (this._activeTextSourceTimer) { clearTimeout(this._activeTextSourceTimer); this._activeTextSourceTimer = null; }
     this._sessionsListInflight = null;
@@ -1379,6 +1603,8 @@ export const gatewayConnection = {
     this._deltaSourceOwner = null;
     this._committedSegments?.clear();
     this._committedSegments = null;
+    this._agentRunMetadata?.clear();
+    this._agentRunMetadata = null;
     this.setState(false, null);
   },
 
@@ -1403,6 +1629,7 @@ export const gatewayConnection = {
         // stale entries in _deltaSourceOwner and _committedSegments forever.
         this._deltaSourceOwner?.delete(runId);
         this._committedSegments?.delete(runId);
+        this._agentRunMetadata?.delete(runId);
       }
     }
   },
@@ -1563,12 +1790,16 @@ const LOCAL_CONNECTOR_HEALTH_URL = "http://127.0.0.1:18790/bridge/health";
 const LOCAL_CONNECTOR_HEALTH_FAST_TIMEOUT_MS = 800;
 
 async function probeLocalConnectorHealthDirect(): Promise<ConnectorHealth | null> {
-  if (!isLocalConnectorContext()) return null;
+  if (!isLocalConnectorContext()) {
+    return null;
+  }
   try {
     const res = await fetch(LOCAL_CONNECTOR_HEALTH_URL, {
       signal: AbortSignal.timeout(LOCAL_CONNECTOR_HEALTH_FAST_TIMEOUT_MS),
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      return null;
+    }
     const json = (await res.json()) as unknown;
     return normalizeConnectorHealth(json);
   } catch {
@@ -1731,7 +1962,9 @@ export async function getGatewayConfig(): Promise<{ gatewayUrl: string; token: s
   }
 
   // Short-circuit hub mode when auth is expired — avoid spamming 401 requests.
-  if (authExpired) return { gatewayUrl: "", token: null };
+  if (authExpired) {
+    return { gatewayUrl: "", token: null };
+  }
 
   let hubUrl: string | null = null;
   let token: string | null = null;
@@ -1766,7 +1999,9 @@ export async function getGatewayConfig(): Promise<{ gatewayUrl: string; token: s
     } catch { /* ok */ }
   }
 
-  if (!hubUrl) return { gatewayUrl: "", token: null };
+  if (!hubUrl) {
+    return { gatewayUrl: "", token: null };
+  }
 
   // Step 3: Always resolve device ID dynamically to pick the active online device
   try {

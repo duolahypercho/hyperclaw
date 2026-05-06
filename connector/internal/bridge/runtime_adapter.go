@@ -167,13 +167,7 @@ func registerOpenClawAgent(paths Paths, agentId, workspaceDir string) error {
 			log.Printf("[openclaw-adapter] agents add %q exit nonzero but config now contains the agent; treating as success (stderr=%q)", agentId, strings.TrimSpace(stderr))
 			return nil
 		}
-		msg := strings.TrimSpace(stderr)
-		if msg == "" {
-			msg = strings.TrimSpace(stdout)
-		}
-		if msg == "" {
-			msg = err.Error()
-		}
+		msg := openClawCommandFailureMessage(stdout, stderr, err)
 		// OpenClaw refuses every config-mutating command when openclaw.json
 		// fails schema validation (e.g. a stale channel/plugin entry from an
 		// earlier release). The CLI's own error already names the offending
