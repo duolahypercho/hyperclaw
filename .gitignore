@@ -9,6 +9,11 @@
 
 # testing
 /coverage
+**/*_test.go
+**/*.test.ts
+**/*.test.tsx
+**/*.spec.ts
+**/*.spec.tsx
 
 # next.js
 /.next/
